@@ -1,4 +1,5 @@
 import Map from './Game/Map/World.tsx'
+import UI from './Game/GameUI/main.tsx'
 
 
 function App() {
@@ -10,9 +11,12 @@ function App() {
   };
 
   return (
+    <>
     <div style={ColorEffects}>
     <Map />
     </div>
+    <UI />
+    </>
   )
 }
 
