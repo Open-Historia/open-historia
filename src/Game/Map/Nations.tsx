@@ -33,9 +33,10 @@ const WorldMap = () => {
     }, [colorMap]);
 
     return (
+        <>
         <Source
         type="vector"
-        url="pmtiles:///assets/world.pmtiles"
+        url="pmtiles:///assets/regions.pmtiles"
         >
 
         <Layer
@@ -48,20 +49,39 @@ const WorldMap = () => {
         type="line"
         source-layer="world"
         paint={{
-            'line-color': 'black',
+            'line-color': '#000',
             'line-width': [
                 'interpolate', ['linear'], ['zoom'],
                 3.25, 0,
-                10, 3
+                10, 1.5
             ],
             'line-opacity': [
                 'interpolate', ['linear'], ['zoom'],
                 3.25, 0.25,
-                10, 0.5
+                10, 1
             ],
         }}
         />
         </Source>
+
+        <Source
+        id="countries-source"
+        type="vector"
+        url="pmtiles:///assets/countries.pmtiles"
+        >
+        <Layer
+        id="countries-outline"
+        type="line"
+
+        source-layer="countries"
+        paint={{
+            'line-color': '#000',
+            'line-width': 1.5,
+            'line-opacity': 1
+        }}
+        />
+        </Source>
+        </>
     );
 };
 

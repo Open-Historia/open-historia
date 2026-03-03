@@ -37,7 +37,7 @@ function App() {
 
         terrain={{
             source: 'terrain-source',
-            exaggeration: 25
+            exaggeration: 30
         }}
 
         mapStyle={{
