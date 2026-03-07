@@ -3,19 +3,24 @@ import Map from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import WorldMap from "./Nations";
-import UI from "../GameUI/main.tsx";
+import UI from "../GameUI/main.jsx";
 
 function App() {
-  const [projection, setProjection] = useState<"mercator" | "globe">(() => {
+  // Odstranili smo <"mercator" | "globe">
+  const [projection, setProjection] = useState(() => {
     const saved = localStorage.getItem("Globe");
     return saved === "true" ? "globe" : "mercator";
   });
+
   useEffect(() => {
     const handleStorageChange = () => {
       const saved = localStorage.getItem("Globe");
       setProjection(saved === "true" ? "globe" : "mercator");
     };
+
     window.addEventListener("storage", handleStorageChange);
+
+    // Preverjamo na 500ms, če se je kaj spremenilo v localStorage
     const interval = setInterval(handleStorageChange, 500);
 
     return () => {
@@ -35,21 +40,17 @@ function App() {
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
-
         maxBounds={[
           [-Infinity, -80],
           [Infinity, 85],
         ]}
-
         cursor="default"
         attributionControl={false}
         dragRotate={false}
         touchPitch={false}
         pitchWithRotate={false}
         dragPan={true}
-
         projection={projection}
-
         reuseMaps
         fadeDuration={0}
         collectResourceTiming={false}
@@ -77,7 +78,6 @@ function App() {
               maxzoom: 5,
             },
           },
-
           layers: [
             {
               id: "satellite-layer",
@@ -92,8 +92,7 @@ function App() {
                 "hillshade-shadow-color": "#000",
                 "hillshade-exaggeration": 0.1,
               },
-            }
-
+            },
           ],
         }}
       >

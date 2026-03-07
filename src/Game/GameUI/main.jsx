@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 
-const baseStyle: React.CSSProperties = {
+const baseStyle = {
   position: "fixed",
   backgroundColor: "rgba(17, 24, 39, 0.9)",
   backdropFilter: "blur(4px)",
@@ -17,15 +17,7 @@ const baseStyle: React.CSSProperties = {
   boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
 };
 
-const Toggle = ({
-  label,
-  enabled,
-  onToggle,
-}: {
-  label: string;
-  enabled: boolean;
-  onToggle: () => void;
-}) => (
+const Toggle = ({ label, enabled, onToggle }) => (
   <div
     style={{
       display: "flex",
@@ -64,19 +56,22 @@ const Toggle = ({
     </button>
   </div>
 );
+
 dayjs.extend(advancedFormat);
 
-const main: React.FC = () => {
+const Main = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(() => {
     const saved = localStorage.getItem("Fullscreen");
     return saved !== null ? JSON.parse(saved) : false;
   });
+
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {
     const saved = localStorage.getItem("Globe");
     return saved !== null ? JSON.parse(saved) : false;
   });
+
   const [isTerrainEnabled, setIsTerrainEnabled] = useState(() => {
     const saved = localStorage.getItem("Terrain");
     return saved !== null ? JSON.parse(saved) : false;
@@ -85,20 +80,24 @@ const main: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
   }, [isFullscreenEnabled]);
+
   useEffect(() => {
     localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled));
   }, [isGlobeEnabled]);
+
   useEffect(() => {
     localStorage.setItem("Terrain", JSON.stringify(isTerrainEnabled));
   }, [isTerrainEnabled]);
 
-  // FULLSCREEN
-  const toggleFullscreen = (shouldBeFull: boolean) => {
+  // FULLSCREEN FUNKCIJA
+  const toggleFullscreen = (shouldBeFull) => {
     if (shouldBeFull) {
       if (!document.fullscreenElement) {
         document.documentElement
           .requestFullscreen()
-          .catch((e) => console.error("Couldn't enable fullscreen", e));
+          .catch((e) =>
+            console.error("Napaka pri vklopu celozaslonskega načina", e),
+          );
       }
     } else {
       if (document.fullscreenElement && document.exitFullscreen) {
@@ -109,13 +108,12 @@ const main: React.FC = () => {
 
   return (
     <>
-      {/* Date */}
+      {/* Datum */}
       <div
         style={{
           ...baseStyle,
           top: "0.5rem",
           right: "0.5rem",
-
           height: "4rem",
           width: "18rem",
         }}
@@ -123,33 +121,30 @@ const main: React.FC = () => {
         {dayjs().format("MMMM Do, YYYY")}
       </div>
 
-      {/* Other */}
+      {/* Prazen blok (Other) */}
       <div
         style={{
           ...baseStyle,
           bottom: "0.5rem",
           left: "0.5rem",
-
           height: "4rem",
           width: "8.75rem",
         }}
       />
 
-      {/* Advisor */}
+      {/* Advisor gumb */}
       <button
         style={{
           ...baseStyle,
           bottom: "0.5rem",
           right: "0.5rem",
-
           height: "4rem",
           width: "4rem",
-
           cursor: "pointer",
         }}
       />
 
-      {/* Settings */}
+      {/* Nastavitve gumb */}
       <button
         onClick={() => setIsSettingsOpen(!isSettingsOpen)}
         style={{
@@ -165,7 +160,7 @@ const main: React.FC = () => {
         ⚙️
       </button>
 
-      {/* Settings Menu */}
+      {/* Meni za nastavitve */}
       {isSettingsOpen && (
         <div
           style={{
@@ -194,8 +189,9 @@ const main: React.FC = () => {
             label="Fullscreen"
             enabled={isFullscreenEnabled}
             onToggle={() => {
-              setIsFullscreenEnabled(!isFullscreenEnabled);
-              toggleFullscreen(!isFullscreenEnabled);
+              const newState = !isFullscreenEnabled;
+              setIsFullscreenEnabled(newState);
+              toggleFullscreen(newState);
             }}
           />
 
@@ -216,4 +212,4 @@ const main: React.FC = () => {
   );
 };
 
-export default main;
+export default Main;
