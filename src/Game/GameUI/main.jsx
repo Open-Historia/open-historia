@@ -63,8 +63,7 @@ const Main = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(() => {
-    const saved = localStorage.getItem("Fullscreen");
-    return saved !== null ? JSON.parse(saved) : false;
+    return false;
   });
 
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {

@@ -21,25 +21,21 @@ const Cities = () => {
     const PMTILES_URL = "pmtiles:///assets/cities.pmtiles";
 
     const populationFilter = [
-        "all",
-        // Show 0 cities if zoom is more than 3
-        [">", ["zoom"], 3],
+        "any",
+        // Capitals
+        ["==", ["get", "capital"], "primary"],
 
-        // Show capitals then relative of population
+        // Relative to pop.
         [
-            "any",
-            ["==", ["get", "capital"], "primary"],
+            ">",
+            ["get", "population"],
             [
-                ">",
-                ["get", "population"],
-                [
-                    "step", ["zoom"],
-                    2500000,
-                    5, 1000000,
-                    6, 500000,
-                    7, 250000,
-                    8, 100000,
-                ]
+                "step", ["zoom"],
+                2500000,
+                5, 1000000,
+                6, 500000,
+                7, 250000,
+                8, 100000,
             ]
         ]
     ];
@@ -51,6 +47,7 @@ const Cities = () => {
         id="cities-shapes"
         type="symbol"
         source-layer="cities"
+        minzoom={3.4}
         filter={populationFilter}
         layout={{
             'text-field': [
@@ -99,14 +96,15 @@ const Cities = () => {
         id="cities-labels"
         type="symbol"
         source-layer="cities"
+        minzoom={3.4}
         filter={populationFilter}
         layout={{
             'text-field': ['get', 'city'],
             'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
             'text-size': [
                 'interpolate', ['linear'], ['zoom'],
-                3, 8,
-                10, 10
+            3, 8,
+            10, 10
             ],
             'symbol-sort-key': ['-', ['get', 'population']],
             'text-variable-anchor': ['top', 'bottom', 'left', 'right'],
