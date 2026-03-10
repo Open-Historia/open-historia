@@ -5,8 +5,6 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import Nations from "./Nations";
 import Cities from "./Cities";
 
-import UI from "../GameUI/main.jsx";
-
 function App() {
   const [projection, setProjection] = useState(() => {
     const savedGlobe = localStorage.getItem("Globe");
@@ -126,8 +124,6 @@ function App() {
         <Cities />
 
       </Map>
-
-      <UI />
     </div>
   );
 }
