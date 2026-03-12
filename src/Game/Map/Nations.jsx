@@ -1,31 +1,198 @@
-import { useEffect, useState, useMemo } from "react";
-import { Protocol } from "pmtiles";
+import React, { useEffect, useState, useMemo } from "react";
+import { Protocol, PMTiles } from "pmtiles";
 import * as maplibregl from "maplibre-gl";
 import { Source, Layer } from "react-map-gl/maplibre";
 
-const protocol = new Protocol();
-maplibregl.addProtocol("pmtiles", protocol.tile);
+let pmtilesAdded = false;
+
+const setupProtocol = () => {
+  if (!pmtilesAdded) {
+    const protocol = new Protocol();
+    maplibregl.addProtocol("pmtiles", protocol.tile);
+    pmtilesAdded = true;
+  }
+};
+
+const decodeTile = async (data) => {
+  const { VectorTile } = await import("@mapbox/vector-tile");
+  const Pbf = (await import("pbf")).default;
+  const tile = new VectorTile(new Pbf(data));
+  return tile;
+};
+
+const calculateArea = (ring) => {
+  let area = 0;
+  if (!ring || ring.length < 3) return 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    area += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+  }
+  return Math.abs(area / 2);
+};
+
+const getCentroid = (ring) => {
+  let x = 0, y = 0, area = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const p1 = ring[i];
+    const p2 = ring[j];
+    const f = p1[0] * p2[1] - p2[0] * p1[1];
+    area += f;
+    x += (p1[0] + p2[0]) * f;
+    y += (p1[1] + p2[1]) * f;
+  }
+  const s = (area * 3) || 1;
+  return { cx: x / s, cy: y / s };
+};
+
+// Tile space: x=east, y=south (down).
+// Principal axis of a wide east-west shape → along x → atan2 ≈ 0°
+// MapLibre text-rotate: 0° = horizontal (east-west text), matches perfectly.
+// No offset needed — just normalize to -90..90.
+const getPrincipalAxisAngle = (ring) => {
+  if (!ring || ring.length < 3) return 0;
+
+  let mx = 0, my = 0;
+  for (const p of ring) { mx += p[0]; my += p[1]; }
+  mx /= ring.length;
+  my /= ring.length;
+
+  let cxx = 0, cxy = 0, cyy = 0;
+  for (const p of ring) {
+    const dx = p[0] - mx;
+    const dy = p[1] - my;
+    cxx += dx * dx;
+    cxy += dx * dy;
+    cyy += dy * dy;
+  }
+
+  // Angle of principal eigenvector (radians from x-axis, clockwise in tile space)
+  const angleRad = Math.atan2(2 * cxy, cxx - cyy) / 2;
+  let deg = angleRad * (180 / Math.PI);
+
+  // Normalize to -90..90 so text never renders upside-down
+  if (deg > 90) deg -= 180;
+  if (deg < -90) deg += 180;
+
+  return deg;
+};
+
+const tileToLngLat = (px, py, extent = 4096) => {
+  const lng = (px / extent) * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * py) / extent)));
+  const lat = latRad * (180 / Math.PI);
+  return [lng, lat];
+};
+
+const ringToLngLat = (ring, extent = 4096) =>
+ring.map(([px, py]) => tileToLngLat(px, py, extent));
 
 const WorldMap = () => {
   const [colorMap, setColorMap] = useState({});
+  const [labelData, setLabelData] = useState({ type: "FeatureCollection", features: [] });
 
   useEffect(() => {
+    setupProtocol();
     fetch("/assets/colors.json")
-    .then((res) => res.json())
-    .then((colors) => {
-      setColorMap(colors);
+    .then((res) => {
+      if (!res.ok) throw new Error("Colors not found");
+      return res.json();
     })
-    .catch((err) => console.error("Error reading colors:", err));
+    .then(setColorMap)
+    .catch((err) => console.error("Error loading colors:", err));
   }, []);
 
-  // Country fill
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const pmtiles = new PMTiles(`${window.location.origin}/assets/countries.pmtiles`);
+        const tileData = await pmtiles.getZxy(0, 0, 0);
+        if (!tileData || !tileData.data) {
+          console.error("No tile data at zoom 0");
+          return;
+        }
+
+        const tile = await decodeTile(tileData.data);
+        const layer = tile.layers["countries"];
+        if (!layer) {
+          console.error("No countries layer in tile. Available layers:", Object.keys(tile.layers));
+          return;
+        }
+
+        const extent = layer.extent || 4096;
+        const registry = new Map();
+
+        if (layer.length > 0) {
+          console.log("Sample feature properties:", layer.feature(0).properties);
+        }
+
+        for (let i = 0; i < layer.length; i++) {
+          const feature = layer.feature(i);
+          const props = feature.properties;
+
+          const name = props?.Country || props?.NAME || props?.name || props?.COUNTRY;
+          if (!name) continue;
+
+          const geom = feature.loadGeometry();
+
+          let bestRingTile = null, bestAreaTile = -1;
+          for (const ring of geom) {
+            const arr = ring.map(p => [p.x, p.y]);
+            const area = calculateArea(arr);
+            if (area > bestAreaTile) {
+              bestAreaTile = area;
+              bestRingTile = arr;
+            }
+          }
+
+          if (!bestRingTile) continue;
+
+          // Area in lng/lat to avoid Mercator size distortion
+          const bestRingLngLat = ringToLngLat(bestRingTile, extent);
+          const areaLngLat = calculateArea(bestRingLngLat);
+
+          const existing = registry.get(name);
+          if (existing && areaLngLat <= existing.areaLngLat) continue;
+
+          // Centroid from tile coords for correct visual placement on Mercator map
+          const { cx, cy } = getCentroid(bestRingTile);
+          const [lng, lat] = tileToLngLat(cx, cy, extent);
+
+          const areaScale = Math.sqrt(areaLngLat) * 15000;
+
+          // Rotation from tile pixel coords — matches Mercator screen orientation
+          const rotation = getPrincipalAxisAngle(bestRingTile);
+
+          registry.set(name, {
+            areaLngLat,
+            feature: {
+              type: "Feature",
+              id: i,
+              geometry: { type: "Point", coordinates: [lng, lat] },
+              properties: { name: name.toUpperCase(), areaScale, rotation }
+            }
+          });
+        }
+
+        console.log(`Loaded ${registry.size} country labels`);
+
+        setLabelData({
+          type: "FeatureCollection",
+          features: Array.from(registry.values()).map(v => v.feature)
+        });
+
+      } catch (err) {
+        console.error("Failed to load pmtiles geometry:", err);
+      }
+    };
+
+    load();
+  }, []);
+
   const fillStyle = useMemo(() => {
-    const stops = Object.entries(colorMap).map(([iso, rgb]) => [
-      iso,
-      `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
+    const stops = Object.entries(colorMap).flatMap(([iso, rgb]) => [
+      iso, `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
     ]);
 
-    const fallbackColor = [
+    const fallback = [
       "rgb",
       ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 0, 1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
       ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 2, 3], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
@@ -33,54 +200,72 @@ const WorldMap = () => {
     ];
 
     return {
-      "fill-color":
-      stops.length > 0
-      ? [
-        "match",
-        ["get", "GID_0"],
-        ...stops.flat(),
-                            fallbackColor,
-      ]
-      : 'white',
+      "fill-color": stops.length > 0 ? ["match", ["get", "GID_0"], ...stops, fallback] : fallback,
       "fill-opacity": 0.5,
     };
   }, [colorMap]);
 
+  const labelLayerLayout = useMemo(() => ({
+    "text-field": ["get", "name"],
+    "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+    "text-size": [
+      "interpolate", ["exponential", 2], ["zoom"],
+      0,  ["*", ["get", "areaScale"], ["^", 2, -16]],
+      4,  ["*", ["get", "areaScale"], ["^", 2, -12]],
+      8,  ["*", ["get", "areaScale"], ["^", 2,  -8]],
+      12, ["*", ["get", "areaScale"], ["^", 2,  -4]],
+      16, ["*", ["get", "areaScale"], ["^", 2,   0]],
+      20, ["*", ["get", "areaScale"], ["^", 2,   4]],
+      24, ["*", ["get", "areaScale"], ["^", 2,   8]],
+    ],
+    "text-rotate": ["get", "rotation"],
+    "text-anchor": "center",
+    "text-allow-overlap": true,
+    "text-pitch-alignment": "map",
+    "text-rotation-alignment": "map",
+    "text-keep-upright": false
+  }), []);
+
+  const labelLayerPaint = useMemo(() => ({
+    "text-color": "#FFFFFF",
+    "text-halo-color": "rgba(0, 0, 0, 0.5)",
+                                         "text-halo-width": 1,
+                                         "text-opacity": [
+                                           "interpolate", ["linear"], ["zoom"],
+                                           4, 0.6,
+                                           7, 0
+                                         ]
+  }), []);
+
   return (
     <>
-    {/* Regions */}
-      <Source type="vector" url="pmtiles:///assets/regions.pmtiles">
-        <Layer
-          type="line"
-          source-layer="regions"
-          paint={{
-            "line-color": "#0F0F0F",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 3.25, 0, 10, 7],
-            "line-opacity": ["interpolate", ["linear"], ["zoom"], 3.25, 0.33, 10, 1]
-          }}
-        />
-      </Source>
+    <Source
+    id="countries-source"
+    type="vector"
+    url={`pmtiles://${window.location.origin}/assets/countries.pmtiles`}
+    >
+    <Layer
+    id="countries-fill"
+    type="fill"
+    source-layer="countries"
+    paint={fillStyle}
+    />
+    <Layer
+    id="countries-outline"
+    type="line"
+    source-layer="countries"
+    paint={{ "line-color": "#000", "line-width": 0.5 }}
+    />
+    </Source>
 
-      {/* Nations */}
-      <Source id="countries-source" type="vector" url="pmtiles:///assets/countries.pmtiles">
-      <Layer
-        id="countries-fill"
-        type="fill"
-        source-layer="countries"
-        paint={fillStyle}
-      />
-
-      <Layer
-        id="countries-outline"
-        type="line"
-        source-layer="countries"
-        paint={{
-          "line-color": "#000",
-          "line-width": 1.5,
-          "line-opacity": 1,
-        }}
-      />
-      </Source>
+    <Source id="label-source" type="geojson" data={labelData}>
+    <Layer
+    id="country-labels"
+    type="symbol"
+    layout={labelLayerLayout}
+    paint={labelLayerPaint}
+    />
+    </Source>
     </>
   );
 };

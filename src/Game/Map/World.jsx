@@ -118,6 +118,16 @@ function App() {
               },
             },
           ],
+          sky: {
+            'atmosphere-blend': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+                0, 1,
+                5, 1,
+                7, 0
+            ]
+          }
         }}
       >
         <Nations />
