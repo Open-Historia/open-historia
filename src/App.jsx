@@ -1,5 +1,6 @@
 import Map from "./Game/Map/World.jsx";
 import UI from "./Game/GameUI/main.jsx";
+import { sendMessage, startChat } from "./Game/AI/main.jsx";
 
 const ColorEffects = {
   filter: "saturate(0.75) contrast(1.4) brightness(0.75) hue-rotate(20deg)",

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 
 const baseStyle = {
     position: "fixed",
@@ -49,9 +49,44 @@ const Toggle = ({ label, enabled, onToggle }) => (
         borderRadius: "50%",
         transition: "0.3s",
         boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+        pointerEvents: "none",
     }}
     />
     </button>
+    </div>
+);
+
+const GeminiApiKeyInput = ({ apiKey, onKeyChange }) => (
+    <div style={{ marginBottom: "1rem" }}>
+    <label
+    style={{
+        display: "block",
+        fontSize: "0.9rem",
+        marginBottom: "0.5rem",
+        color: "white",
+        cursor: "text",
+    }}
+    >
+    Gemini API Key
+    </label>
+    <input
+    type="password"
+    value={apiKey}
+    onChange={(e) => onKeyChange(e.target.value)}
+    placeholder="Enter API Key..."
+    style={{
+        width: "100%",
+        padding: "0.6rem",
+        borderRadius: "6px",
+        border: "1px solid rgba(255,255,255,0.2)",
+                                                        backgroundColor: "rgba(0,0,0,0.2)",
+                                                        color: "white",
+                                                        fontSize: "0.85rem",
+                                                        outline: "none",
+                                                        boxSizing: "border-box",
+                                                        cursor: "text",
+    }}
+    />
     </div>
 );
 
@@ -79,20 +114,34 @@ const SettingsMenu = ({
     onToggleFullscreen,
     onToggleGlobe,
     onToggleTerrain,
-}) => (
-    <div
-    style={{
-        ...baseStyle,
-        top: "4.75rem",
-        left: "0.5rem",
-        width: "15rem",
-        padding: "1rem",
-        flexDirection: "column",
-        alignItems: "stretch",
-        justifyContent: "flex-start",
-        height: "auto",
-    }}
-    >
+    geminiKey,
+    onGeminiKeyChange,
+}) => {
+    useEffect(() => {
+        const savedKey = localStorage.getItem("gemini_api_key");
+        if (savedKey && !geminiKey) {
+            onGeminiKeyChange(savedKey);
+        }
+    }, [geminiKey, onGeminiKeyChange]);
+    const handleKeyUpdate = (newKey) => {
+        onGeminiKeyChange(newKey);
+        localStorage.setItem("gemini_api_key", newKey);
+    };
+
+    return (
+        <div
+        style={{
+            ...baseStyle,
+            top: "4.75rem",
+            left: "0.5rem",
+            width: "15rem",
+            padding: "1rem",
+            flexDirection: "column",
+            alignItems: "stretch",
+            justifyContent: "flex-start",
+            height: "auto",
+        }}
+        >
         <h3 style={{
             margin: "0 -1rem 1rem -1rem",
             padding: "0 1rem 1rem 1rem",
@@ -100,14 +149,19 @@ const SettingsMenu = ({
             textAlign: "left",
             borderBottom: "1px solid rgba(255,255,255,0.1)"
         }}>
-        Map Settings
+        Game Settings
         </h3>
 
+        <GeminiApiKeyInput
+        apiKey={geminiKey}
+        onKeyChange={handleKeyUpdate}
+        />
 
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
         <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
-    </div>
-);
+        </div>
+    );
+};
 
-export { Toggle, SettingsButton, SettingsMenu };
+export { Toggle, SettingsButton, SettingsMenu, GeminiApiKeyInput };

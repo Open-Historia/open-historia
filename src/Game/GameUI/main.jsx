@@ -9,6 +9,10 @@ const Main = () => {
 
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
 
+  const [geminiKey, setGeminiKey] = useState(() => {
+    return localStorage.getItem("gemini_api_key") || "";
+  });
+
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {
     const saved = localStorage.getItem("Globe");
     return saved !== null ? JSON.parse(saved) : false;
@@ -30,6 +34,10 @@ const Main = () => {
   useEffect(() => {
     localStorage.setItem("Terrain", JSON.stringify(isTerrainEnabled));
   }, [isTerrainEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("gemini_api_key", geminiKey);
+  }, [geminiKey]);
 
   const toggleFullscreen = (shouldBeFull) => {
     if (shouldBeFull) {
@@ -70,6 +78,8 @@ const Main = () => {
     <SettingsButton onToggle={() => setIsSettingsOpen(!isSettingsOpen)} />
     {isSettingsOpen && (
       <SettingsMenu
+      geminiKey={geminiKey}
+      onGeminiKeyChange={setGeminiKey}
       isFullscreenEnabled={isFullscreenEnabled}
       isGlobeEnabled={isGlobeEnabled}
       isTerrainEnabled={isTerrainEnabled}
