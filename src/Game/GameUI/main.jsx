@@ -2,22 +2,19 @@ import React, { useState, useEffect } from "react";
 import { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel } from "./advisor";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { DateWidget, Other } from "./other";
+import { Search } from "./search";
 
-const Main = () => {
+const Main = ({ mapRef }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
-
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
-
   const [geminiKey, setGeminiKey] = useState(() => {
     return localStorage.getItem("gemini_api_key") || "";
   });
-
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {
     const saved = localStorage.getItem("Globe");
     return saved !== null ? JSON.parse(saved) : false;
   });
-
   const [isTerrainEnabled, setIsTerrainEnabled] = useState(() => {
     const saved = localStorage.getItem("Terrain");
     return saved !== null ? JSON.parse(saved) : true;
@@ -67,14 +64,13 @@ const Main = () => {
     <>
     <DateWidget rightShift={rightShift} />
     <Other />
-
+    <Search mapRef={mapRef} rightShift={rightShift} />
     <AdvisorButton
     isAdvisorOpen={isAdvisorOpen}
     rightShift={rightShift}
     onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
     />
     <AdvisorPanel isAdvisorOpen={isAdvisorOpen} />
-
     <SettingsButton onToggle={() => setIsSettingsOpen(!isSettingsOpen)} />
     {isSettingsOpen && (
       <SettingsMenu
