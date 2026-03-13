@@ -41,19 +41,23 @@ function World({ mapRef }) {
     minZoom={2.25}
     maxZoom={16}
     doubleClickZoom={false}
+
     maxBounds={[
       [-Infinity, -80],
       [Infinity, 85],
     ]}
+
     cursor="default"
     attributionControl={false}
     dragRotate={false}
     touchPitch={false}
     pitchWithRotate={false}
     dragPan={true}
+
     reuseMaps
     fadeDuration={0}
     collectResourceTiming={false}
+
     projection={projection}
     terrain={
       terrainEnabled

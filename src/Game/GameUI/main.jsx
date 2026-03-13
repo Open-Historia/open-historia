@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel } from "./advisor";
 import { SettingsButton, SettingsMenu } from "./settings";
-import { DateWidget, Other } from "./other";
+import { DateWidget } from "./time";
+import { Other } from "./other";
 import { Search } from "./search";
 
 const Main = ({ mapRef }) => {
@@ -63,7 +64,7 @@ const Main = ({ mapRef }) => {
   return (
     <>
     <DateWidget rightShift={rightShift} />
-    <Other />
+    <Other onOpenAdvisor={() => setIsAdvisorOpen(true)} />
     <Search mapRef={mapRef} rightShift={rightShift} />
     <AdvisorButton
     isAdvisorOpen={isAdvisorOpen}

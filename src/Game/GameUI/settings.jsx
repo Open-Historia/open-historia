@@ -134,7 +134,7 @@ const SettingsMenu = ({
             ...baseStyle,
             top: "4.75rem",
             left: "0.5rem",
-            width: "15rem",
+            width: "16rem",
             padding: "1rem",
             flexDirection: "column",
             alignItems: "stretch",
