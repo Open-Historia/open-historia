@@ -232,8 +232,8 @@ const WorldMap = () => {
                                          "text-halo-width": 1,
                                          "text-opacity": [
                                            "interpolate", ["linear"], ["zoom"],
-                                           4, 0.6,
-                                           7, 0
+                                           5, 0.75,
+                                           8, 0
                                          ]
   }), []);
 

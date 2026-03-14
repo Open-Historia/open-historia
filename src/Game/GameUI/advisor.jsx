@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { sendMessage, startChat } from "../AI/main.jsx";
-
+import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 
 const ADVISOR_PANEL_WIDTH = "20rem";
 
@@ -51,6 +50,24 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
     </button>
 );
 
+const saveMessages = async (messages) => {
+    await fetch('/saves/save0/storage/advisor.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(messages),
+    });
+};
+
+const loadMessages = async () => {
+    try {
+        const res = await fetch('/saves/save0/storage/advisor.json');
+        if (!res.ok) return [];
+        return await res.json();
+    } catch {
+        return [];
+    }
+};
+
 const AdvisorPanel = ({ isAdvisorOpen }) => {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
@@ -58,7 +75,14 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
     const messagesEndRef = useRef(null);
 
     useEffect(() => {
-        startChat();
+        loadMessages().then((saved) => {
+            if (saved.length > 0) {
+                setMessages(saved);
+                loadHistory(saved);
+            } else {
+                startChat();
+            }
+        });
     }, []);
 
     useEffect(() => {
@@ -69,15 +93,29 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         const text = input.trim();
         if (!text || isLoading) return;
 
+        const { gameDate } = await fetch('/saves/save0/game.json').then(res => res.json());
+
+        const userMessage = { role: "user", text, time: gameDate };
+
         setInput("");
-        setMessages((prev) => [...prev, { role: "user", text }]);
+        setMessages((prev) => [...prev, userMessage]);
         setIsLoading(true);
 
         try {
             const reply = await sendMessage(text);
-            setMessages((prev) => [...prev, { role: "advisor", text: reply }]);
+            const advisorMessage = { role: "advisor", text: reply, time: gameDate };
+            setMessages((prev) => {
+                const updated = [...prev, advisorMessage];
+                saveMessages(updated);
+                return updated;
+            });
         } catch (err) {
-            setMessages((prev) => [...prev, { role: "error", text: err.message }]);
+            const errorMessage = { role: "error", text: err.message, time: gameDate };
+            setMessages((prev) => {
+                const updated = [...prev, errorMessage];
+                saveMessages(updated);
+                return updated;
+            });
         } finally {
             setIsLoading(false);
         }
@@ -88,6 +126,12 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
             e.preventDefault();
             handleSend();
         }
+    };
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return "";
+        const date = new Date(dateStr);
+        return date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
     };
 
     return (
@@ -124,9 +168,30 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         }}
         >
         <span style={{ fontSize: "1.5rem" }}>🧭</span>
-        <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
+        <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, flex: 1 }}>
         Advisor
         </h2>
+        <button
+        onClick={async () => {
+            setMessages([]);
+            startChat();
+            await saveMessages([]);
+        }}
+        title="Clear chat"
+        style={{
+            background: "none",
+            border: "none",
+            color: "rgba(255,255,255,0.4)",
+            cursor: "pointer",
+            fontSize: "1.5rem",
+            lineHeight: 1,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+        }}
+        >
+        🗑
+        </button>
         </div>
 
         {/* Messages */}
@@ -163,6 +228,11 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
             >
             {msg.role === "user" ? msg.text : <div className="advisor-markdown"><ReactMarkdown>{msg.text}</ReactMarkdown></div>}
             </div>
+            {msg.time && msg.role !== "user" && (
+                <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+                {formatDate(msg.time)}
+                </span>
+            )}
             </div>
         ))}
         {isLoading && (

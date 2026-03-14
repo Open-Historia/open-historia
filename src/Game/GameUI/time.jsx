@@ -1,8 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 dayjs.extend(advancedFormat);
-
 const baseStyle = {
     position: "fixed",
     backgroundColor: "rgba(17, 24, 39, 0.9)",
@@ -17,7 +16,6 @@ const baseStyle = {
     border: "1px solid rgba(255,255,255,0.1)",
     boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
 };
-
 const arrowButtonStyle = {
     background: "none",
     border: "none",
@@ -37,13 +35,29 @@ const arrowButtonStyle = {
 };
 
 const DateWidget = ({ rightShift }) => {
-    const [offset, setOffset] = useState(0); // offset in days (unused for now)
+    const [gameData, setGameData] = useState(null);
 
-    const handleBack = () => {
+    useEffect(() => {
+        fetch('/saves/save0/game.json')
+        .then(res => res.json())
+        .then(data => setGameData(data));
+    }, []);
+
+    const changeDate = async (delta) => {
+        if (!gameData) return;
+        const newDate = dayjs(gameData.gameDate).add(delta, 'day').format("YYYY-MM-DD");
+        const updated = { ...gameData, gameDate: newDate };
+        await fetch('/saves/save0/game.json', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated, null, 2),
+        });
+        setGameData(updated);
     };
 
-    const handleForward = () => {
-    };
+    const displayDate = gameData
+    ? dayjs(gameData.gameDate).format("MMMM Do, YYYY")
+    : "Loading...";
 
     return (
         <div
@@ -60,21 +74,18 @@ const DateWidget = ({ rightShift }) => {
         >
         <button
         style={arrowButtonStyle}
-        onClick={handleBack}
         onMouseEnter={e => (e.currentTarget.style.color = "white")}
         onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.6)")}
         title="Go back"
         >
         {"«"}
         </button>
-
         <span style={{ flex: 1, textAlign: "center", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
-        {dayjs().format("MMMM Do, YYYY")}
+        {displayDate}
         </span>
-
         <button
         style={arrowButtonStyle}
-        onClick={handleForward}
+        onClick={() => changeDate(30)}
         onMouseEnter={e => (e.currentTarget.style.color = "white")}
         onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.6)")}
         title="Go forward"
@@ -84,5 +95,4 @@ const DateWidget = ({ rightShift }) => {
         </div>
     );
 };
-
 export { DateWidget };
