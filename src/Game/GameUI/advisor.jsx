@@ -51,11 +51,15 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
 );
 
 const saveMessages = async (messages) => {
-    await fetch('/saves/save0/storage/advisor.json', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(messages),
-    });
+    try {
+        await fetch('/saves/save0/storage/advisor.json', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(messages),
+        });
+    } catch (err) {
+        console.error("Failed to save messages:", err);
+    }
 };
 
 const loadMessages = async () => {

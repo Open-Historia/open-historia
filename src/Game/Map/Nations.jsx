@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { Protocol, PMTiles } from "pmtiles";
-import * as maplibregl from "maplibre-gl";
+import { addProtocol } from "maplibre-gl";
 import { Source, Layer } from "react-map-gl/maplibre";
 
 let pmtilesAdded = false;
@@ -8,10 +8,13 @@ let pmtilesAdded = false;
 const setupProtocol = () => {
   if (!pmtilesAdded) {
     const protocol = new Protocol();
-    maplibregl.addProtocol("pmtiles", protocol.tile);
+    addProtocol("pmtiles", protocol.tile.bind(protocol));
     pmtilesAdded = true;
   }
 };
+
+const COUNTRIES_URL = `pmtiles://${window.location.origin}/assets/countries.pmtiles`;
+const COUNTRIES_HTTP_URL = `${window.location.origin}/assets/countries.pmtiles`;
 
 const decodeTile = async (data) => {
   const { VectorTile } = await import("@mapbox/vector-tile");
@@ -43,10 +46,6 @@ const getCentroid = (ring) => {
   return { cx: x / s, cy: y / s };
 };
 
-// Tile space: x=east, y=south (down).
-// Principal axis of a wide east-west shape → along x → atan2 ≈ 0°
-// MapLibre text-rotate: 0° = horizontal (east-west text), matches perfectly.
-// No offset needed — just normalize to -90..90.
 const getPrincipalAxisAngle = (ring) => {
   if (!ring || ring.length < 3) return 0;
 
@@ -64,11 +63,9 @@ const getPrincipalAxisAngle = (ring) => {
     cyy += dy * dy;
   }
 
-  // Angle of principal eigenvector (radians from x-axis, clockwise in tile space)
   const angleRad = Math.atan2(2 * cxy, cxx - cyy) / 2;
   let deg = angleRad * (180 / Math.PI);
 
-  // Normalize to -90..90 so text never renders upside-down
   if (deg > 90) deg -= 180;
   if (deg < -90) deg += 180;
 
@@ -103,7 +100,7 @@ const WorldMap = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const pmtiles = new PMTiles(`${window.location.origin}/assets/countries.pmtiles`);
+        const pmtiles = new PMTiles(COUNTRIES_HTTP_URL);
         const tileData = await pmtiles.getZxy(0, 0, 0);
         if (!tileData || !tileData.data) {
           console.error("No tile data at zoom 0");
@@ -119,10 +116,6 @@ const WorldMap = () => {
 
         const extent = layer.extent || 4096;
         const registry = new Map();
-
-        if (layer.length > 0) {
-          console.log("Sample feature properties:", layer.feature(0).properties);
-        }
 
         for (let i = 0; i < layer.length; i++) {
           const feature = layer.feature(i);
@@ -145,20 +138,16 @@ const WorldMap = () => {
 
           if (!bestRingTile) continue;
 
-          // Area in lng/lat to avoid Mercator size distortion
           const bestRingLngLat = ringToLngLat(bestRingTile, extent);
           const areaLngLat = calculateArea(bestRingLngLat);
 
           const existing = registry.get(name);
           if (existing && areaLngLat <= existing.areaLngLat) continue;
 
-          // Centroid from tile coords for correct visual placement on Mercator map
           const { cx, cy } = getCentroid(bestRingTile);
           const [lng, lat] = tileToLngLat(cx, cy, extent);
 
           const areaScale = Math.sqrt(areaLngLat) * 15000;
-
-          // Rotation from tile pixel coords — matches Mercator screen orientation
           const rotation = getPrincipalAxisAngle(bestRingTile);
 
           registry.set(name, {
@@ -171,8 +160,6 @@ const WorldMap = () => {
             }
           });
         }
-
-        console.log(`Loaded ${registry.size} country labels`);
 
         setLabelData({
           type: "FeatureCollection",
@@ -239,11 +226,7 @@ const WorldMap = () => {
 
   return (
     <>
-    <Source
-    id="countries-source"
-    type="vector"
-    url={`pmtiles://${window.location.origin}/assets/countries.pmtiles`}
-    >
+    <Source id="countries-source" type="vector" url={COUNTRIES_URL}>
     <Layer
     id="countries-fill"
     type="fill"

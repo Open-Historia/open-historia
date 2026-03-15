@@ -3,6 +3,7 @@ import { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel } from "./advisor";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { DateWidget } from "./time";
 import { Other } from "./other";
+import { Actions } from "./actions";
 import { Search } from "./search";
 
 const Main = ({ mapRef }) => {
@@ -64,7 +65,8 @@ const Main = ({ mapRef }) => {
   return (
     <>
     <DateWidget rightShift={rightShift} />
-    <Other onOpenAdvisor={() => setIsAdvisorOpen(true)} />
+    <Actions onOpenAdvisor={() => setIsAdvisorOpen(true)} />
+    <Other />
     <Search mapRef={mapRef} rightShift={rightShift} />
     <AdvisorButton
     isAdvisorOpen={isAdvisorOpen}

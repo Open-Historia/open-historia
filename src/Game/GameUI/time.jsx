@@ -45,14 +45,21 @@ const DateWidget = ({ rightShift }) => {
 
     const changeDate = async (delta) => {
         if (!gameData) return;
+
         const newDate = dayjs(gameData.gameDate).add(delta, 'day').format("YYYY-MM-DD");
         const updated = { ...gameData, gameDate: newDate };
-        await fetch('/saves/save0/game.json', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updated, null, 2),
-        });
-        setGameData(updated);
+
+        try {
+            await fetch('/saves/save0/game.json', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updated, null, 2),
+            });
+
+            setGameData(updated);
+        } catch (err) {
+            console.error("Failed to update game date:", err);
+        }
     };
 
     const displayDate = gameData
