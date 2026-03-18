@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import Map from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import Nations from "./Nations";
+import RegionPopup from "../Selection/Regions";
 import Cities from "./Cities";
 
 function World({ mapRef }) {
@@ -126,6 +127,7 @@ function World({ mapRef }) {
     >
     <Nations />
     <Cities />
+    <RegionPopup />
     </Map>
     </div>
   );
