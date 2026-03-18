@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { Protocol, PMTiles } from "pmtiles";
 import { addProtocol } from "maplibre-gl";
-import { Source, Layer } from "react-map-gl/maplibre";
+import { Source, Layer, useMap } from "react-map-gl/maplibre";
+import { onRegionSelected } from "../Selection/Regions";
 
 let pmtilesAdded = false;
 
@@ -15,6 +16,7 @@ const setupProtocol = () => {
 
 const COUNTRIES_URL = `pmtiles://${window.location.origin}/assets/countries.pmtiles`;
 const COUNTRIES_HTTP_URL = `${window.location.origin}/assets/countries.pmtiles`;
+const REGIONS_URL = `pmtiles://${window.location.origin}/assets/regions.pmtiles`;
 
 const decodeTile = async (data) => {
   const { VectorTile } = await import("@mapbox/vector-tile");
@@ -83,8 +85,23 @@ const ringToLngLat = (ring, extent = 4096) =>
 ring.map(([px, py]) => tileToLngLat(px, py, extent));
 
 const WorldMap = () => {
+  const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [labelData, setLabelData] = useState({ type: "FeatureCollection", features: [] });
+
+  const handleRegionClick = useCallback((e) => {
+    const features = map.queryRenderedFeatures(e.point, { layers: ["regions-fill"] });
+    if (!features.length) return;
+    // Pull GID_0 alongside the existing props
+    const { COUNTRY, NAME_1, GID_0 } = features[0].properties;
+    onRegionSelected({ COUNTRY, NAME_1, GID_0, lngLat: e.lngLat });
+  }, [map]);
+
+  useEffect(() => {
+    if (!map) return;
+    map.on("click", handleRegionClick);
+    return () => map.off("click", handleRegionClick);
+  }, [map, handleRegionClick]);
 
   useEffect(() => {
     setupProtocol();
@@ -147,7 +164,7 @@ const WorldMap = () => {
           const { cx, cy } = getCentroid(bestRingTile);
           const [lng, lat] = tileToLngLat(cx, cy, extent);
 
-          const areaScale = Math.sqrt(areaLngLat) * 15000;
+          const areaScale = Math.sqrt(areaLngLat) * 17500;
           const rotation = getPrincipalAxisAngle(bestRingTile);
 
           registry.set(name, {
@@ -188,7 +205,7 @@ const WorldMap = () => {
 
     return {
       "fill-color": stops.length > 0 ? ["match", ["get", "GID_0"], ...stops, fallback] : fallback,
-      "fill-opacity": 0.5,
+      "fill-opacity": 0.66,
     };
   }, [colorMap]);
 
@@ -238,6 +255,37 @@ const WorldMap = () => {
     type="line"
     source-layer="countries"
     paint={{ "line-color": "#000", "line-width": 0.5 }}
+    />
+    </Source>
+
+    {/* Region borders — only visible when zoomed in */}
+    <Source id="regions-source" type="vector" url={REGIONS_URL}>
+    {/* Invisible fill used for click hit-testing */}
+    <Layer
+    id="regions-fill"
+    type="fill"
+    source-layer="regions"
+    paint={{ "fill-color": "transparent", "fill-opacity": 0 }}
+    />
+    <Layer
+    id="regions-outline"
+    type="line"
+    source-layer="regions"
+    paint={{
+      "line-color": "#000",
+      "line-width": [
+        "interpolate", ["linear"], ["zoom"],
+        3, 0.2,
+        8, 0.6,
+        12, 1.0
+      ],
+      "line-opacity": [
+        "interpolate", ["linear"], ["zoom"],
+        3, 0,
+        4, 0.4,
+        8, 0.7
+      ]
+    }}
     />
     </Source>
 

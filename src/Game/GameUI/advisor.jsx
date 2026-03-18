@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
+import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
+
+Chart.register(...registerables);
 
 const ADVISOR_PANEL_WIDTH = "20rem";
 
@@ -32,6 +35,211 @@ const ThinkingDots = () => {
     );
 };
 
+// Parses a message's text into { text, chartConfig }
+// Strips the ```chart ... ``` block from display text and extracts JSON config
+const parseMessage = (rawText) => {
+    const chartRegex = /```chart\s*([\s\S]*?)```/;
+    const match = rawText.match(chartRegex);
+    if (!match) return { text: rawText, chartConfig: null };
+    let chartConfig = null;
+    try {
+        chartConfig = JSON.parse(match[1].trim());
+    } catch {
+        chartConfig = null;
+    }
+    const text = rawText.replace(chartRegex, "").trim();
+    return { text, chartConfig };
+};
+
+// Color palette that pops on the dark panel background
+const CHART_COLORS = [
+    "#60a5fa", // blue
+"#34d399", // green
+"#f472b6", // pink
+"#fbbf24", // amber
+"#a78bfa", // purple
+"#f87171", // red
+"#38bdf8", // sky
+];
+
+// Renders a Chart.js chart inside a canvas with a custom HTML legend
+const AdvisorChart = ({ config }) => {
+    const canvasRef = useRef(null);
+    const chartRef = useRef(null);
+    const isCartesian = config.type !== "pie" && config.type !== "doughnut";
+    const isPieOrDoughnut = config.type === "pie" || config.type === "doughnut";
+    const isPercent = config.options?.unit === "percent";
+
+    // Inject default colors into datasets if none are provided
+    const coloredConfig = {
+        ...config,
+        data: {
+            ...config.data,
+            datasets: config.data.datasets.map((ds, i) => {
+                const color = CHART_COLORS[i % CHART_COLORS.length];
+                const pieColors = (config.data.labels || []).map(
+                    (_, j) => CHART_COLORS[j % CHART_COLORS.length]
+                );
+                return {
+                    borderColor: isPieOrDoughnut ? undefined : color,
+                    backgroundColor: isPieOrDoughnut
+                    ? pieColors
+                    : config.type === "line"
+                    ? `${color}26`
+                    : color,
+                    borderWidth: 2,
+                    pointRadius: config.type === "line" ? 3 : undefined,
+                    pointHoverRadius: config.type === "line" ? 5 : undefined,
+                    tension: config.type === "line" ? 0.4 : undefined,
+                    ...ds,
+                };
+            }),
+        },
+    };
+
+    // Build legend items from the colored config
+    const legendItems = (() => {
+        if (!coloredConfig?.data?.datasets) return [];
+        if (isPieOrDoughnut) {
+            const labels = coloredConfig.data.labels || [];
+            const colors = coloredConfig.data.datasets[0]?.backgroundColor || [];
+            return labels.map((label, i) => ({
+                label,
+                color: Array.isArray(colors)
+                ? colors[i]
+                : CHART_COLORS[i % CHART_COLORS.length],
+            }));
+        }
+        return coloredConfig.data.datasets.map((ds, i) => ({
+            label: ds.label || "",
+            color: Array.isArray(ds.borderColor)
+            ? ds.borderColor[0]
+            : ds.borderColor || CHART_COLORS[i % CHART_COLORS.length],
+        }));
+    })();
+
+    useEffect(() => {
+        if (!canvasRef.current || !coloredConfig) return;
+        if (chartRef.current) chartRef.current.destroy();
+        const ctx = canvasRef.current.getContext("2d");
+        chartRef.current = new Chart(ctx, {
+            ...coloredConfig,
+            options: {
+                ...coloredConfig.options,
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 4, bottom: 4 } },
+                plugins: {
+                    ...coloredConfig.options?.plugins,
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: "rgba(10, 15, 28, 0.95)",
+                                     borderColor: "rgba(255,255,255,0.12)",
+                                     borderWidth: 1,
+                                     titleColor: "rgba(255,255,255,0.85)",
+                                     bodyColor: "rgba(255,255,255,0.6)",
+                                     padding: 10,
+                                     cornerRadius: 8,
+                                     ...coloredConfig.options?.plugins?.tooltip,
+                                     callbacks: {
+                                         label: (ctx) => {
+                                             const val = ctx.parsed.y ?? ctx.parsed;
+                                             return ` ${val}${isPercent ? "%" : ""}`;
+                                         },
+                                         ...coloredConfig.options?.plugins?.tooltip?.callbacks,
+                                     },
+                    },
+                },
+                scales: isCartesian
+                ? {
+                    x: {
+                        ticks: {
+                            color: "rgba(255,255,255,0.45)",
+                                     font: { size: 10, family: "sans-serif" },
+                        },
+                        grid: { color: "rgba(255,255,255,0.06)" },
+                                     border: { color: "rgba(255,255,255,0.08)" },
+                                     ...coloredConfig.options?.scales?.x,
+                    },
+                    y: {
+                        ticks: {
+                            color: "rgba(255,255,255,0.45)",
+                                     font: { size: 10, family: "sans-serif" },
+                                     callback: (val) =>
+                                     `${val}${isPercent ? "%" : ""}`,
+                        },
+                        grid: { color: "rgba(255,255,255,0.06)" },
+                                     border: { color: "rgba(255,255,255,0.08)" },
+                                     ...coloredConfig.options?.scales?.y,
+                    },
+                }
+                : undefined,
+            },
+        });
+        return () => {
+            if (chartRef.current) chartRef.current.destroy();
+        };
+    }, [config]);
+
+    return (
+        <div
+        style={{
+            marginTop: "0.75rem",
+            width: "100%",
+            boxSizing: "border-box",
+        }}
+        >
+        {/* Legend row above chart */}
+        {legendItems.length > 0 && (
+            <div
+            style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.4rem 0.85rem",
+                marginBottom: "0.5rem",
+            }}
+            >
+            {legendItems.map((item, i) => (
+                <span
+                key={i}
+                style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    fontSize: "0.72rem",
+                    color: "rgba(255,255,255,0.5)",
+                }}
+                >
+                <span
+                style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "2px",
+                    backgroundColor:
+                    item.color || "#60a5fa",
+                    flexShrink: 0,
+                }}
+                />
+                {item.label}
+                </span>
+            ))}
+            </div>
+        )}
+
+        {/* Canvas */}
+        <div
+        style={{
+            position: "relative",
+            width: "100%",
+            height: "175px",
+        }}
+        >
+        <canvas ref={canvasRef} />
+        </div>
+        </div>
+    );
+};
+
 const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
     <button
     onClick={onToggle}
@@ -52,9 +260,9 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
 
 const saveMessages = async (messages) => {
     try {
-        await fetch('/saves/save0/storage/advisor.json', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+        await fetch("/saves/save0/storage/advisor.json", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(messages),
         });
     } catch (err) {
@@ -64,7 +272,7 @@ const saveMessages = async (messages) => {
 
 const loadMessages = async () => {
     try {
-        const res = await fetch('/saves/save0/storage/advisor.json');
+        const res = await fetch("/saves/save0/storage/advisor.json");
         if (!res.ok) return [];
         return await res.json();
     } catch {
@@ -97,7 +305,9 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         const text = input.trim();
         if (!text || isLoading) return;
 
-        const { gameDate } = await fetch('/saves/save0/game.json').then(res => res.json());
+        const { gameDate } = await fetch("/saves/save0/game.json").then(
+            (res) => res.json()
+        );
 
         const userMessage = { role: "user", text, time: gameDate };
 
@@ -107,14 +317,22 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
 
         try {
             const reply = await sendMessage(text);
-            const advisorMessage = { role: "advisor", text: reply, time: gameDate };
+            const advisorMessage = {
+                role: "advisor",
+                text: reply,
+                time: gameDate,
+            };
             setMessages((prev) => {
                 const updated = [...prev, advisorMessage];
                 saveMessages(updated);
                 return updated;
             });
         } catch (err) {
-            const errorMessage = { role: "error", text: err.message, time: gameDate };
+            const errorMessage = {
+                role: "error",
+                text: err.message,
+                time: gameDate,
+            };
             setMessages((prev) => {
                 const updated = [...prev, errorMessage];
                 saveMessages(updated);
@@ -135,7 +353,11 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
     const formatDate = (dateStr) => {
         if (!dateStr) return "";
         const date = new Date(dateStr);
-        return date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+        return date.toLocaleDateString([], {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+        });
     };
 
     return (
@@ -145,7 +367,9 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         style={{
             position: "fixed",
             top: 0,
-            right: isAdvisorOpen ? 0 : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
+            right: isAdvisorOpen
+            ? 0
+            : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
             width: ADVISOR_PANEL_WIDTH,
             height: "100vh",
             backgroundColor: "rgba(17, 24, 39, 0.95)",
@@ -172,7 +396,14 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         }}
         >
         <span style={{ fontSize: "1.5rem" }}>🧭</span>
-        <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, flex: 1 }}>
+        <h2
+        style={{
+            margin: 0,
+            fontSize: "1.1rem",
+            fontWeight: 600,
+            flex: 1,
+        }}
+        >
         Advisor
         </h2>
         <button
@@ -199,50 +430,135 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         </div>
 
         {/* Messages */}
-        <div style={{ padding: "1.25rem", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div
+        style={{
+            padding: "0.75rem",
+            flex: 1,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+            scrollbarWidth: "none",
+        }}
+        >
         {messages.length === 0 && (
-            <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
+            <p
+            style={{
+                fontSize: "0.85rem",
+                color: "rgba(255,255,255,0.5)",
+                                   marginTop: 0,
+            }}
+            >
             No messages yet. Ask your advisor something!
             </p>
         )}
-        {messages.map((msg, i) => (
-            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-            {msg.role !== "user" && (
-                <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
-                {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
-                </span>
-            )}
+        {messages.map((msg, i) => {
+            const { text, chartConfig } =
+            msg.role === "advisor"
+            ? parseMessage(msg.text)
+            : { text: msg.text, chartConfig: null };
+
+            return (
+                <div
+                key={i}
+                style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems:
+                    msg.role === "user"
+                    ? "flex-end"
+                    : "flex-start",
+                }}
+                >
+                {msg.role !== "user" && (
+                    <span
+                    style={{
+                        fontSize: "0.7rem",
+                        color: "rgba(255,255,255,0.4)",
+                                         marginBottom: "0.25rem",
+                    }}
+                    >
+                    {msg.role === "error"
+                        ? "⚠️ Error"
+                        : "🧭 Advisor"}
+                        </span>
+                )}
+                <div
+                style={{
+                    maxWidth: "90%",
+                    width: chartConfig ? "90%" : undefined,
+                    padding: "0.6rem 0.85rem",
+                    borderRadius:
+                    msg.role === "user"
+                    ? "12px 12px 2px 12px"
+                    : "12px 12px 12px 2px",
+                    backgroundColor:
+                    msg.role === "user"
+                    ? "#3b82f6"
+                    : msg.role === "error"
+                    ? "rgba(239,68,68,0.2)"
+                    : "rgba(255,255,255,0.08)",
+                    fontSize: "0.85rem",
+                    lineHeight: "1.5",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    border:
+                    msg.role === "error"
+                    ? "1px solid rgba(239,68,68,0.3)"
+                    : "none",
+                    boxSizing: "border-box",
+                }}
+                >
+                {msg.role === "user" ? (
+                    text
+                ) : (
+                    <div className="advisor-markdown">
+                    <ReactMarkdown>{text}</ReactMarkdown>
+                    </div>
+                )}
+                {chartConfig && (
+                    <AdvisorChart config={chartConfig} />
+                )}
+                </div>
+                {msg.time && msg.role !== "user" && (
+                    <span
+                    style={{
+                        fontSize: "0.65rem",
+                        color: "rgba(255,255,255,0.3)",
+                                                     marginTop: "0.25rem",
+                    }}
+                    >
+                    {formatDate(msg.time)}
+                    </span>
+                )}
+                </div>
+            );
+        })}
+        {isLoading && (
             <div
             style={{
-                maxWidth: "90%",
-                padding: "0.6rem 0.85rem",
-                borderRadius: msg.role === "user" ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-                backgroundColor:
-                msg.role === "user"
-                ? "#3b82f6"
-                : msg.role === "error"
-                ? "rgba(239,68,68,0.2)"
-                : "rgba(255,255,255,0.08)",
-                                   fontSize: "0.85rem",
-                                   lineHeight: "1.5",
-                                   whiteSpace: "pre-wrap",
-                                   wordBreak: "break-word",
-                                   border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
+                display: "flex",
+                alignItems: "flex-start",
+                flexDirection: "column",
+                gap: "0.25rem",
             }}
             >
-            {msg.role === "user" ? msg.text : <div className="advisor-markdown"><ReactMarkdown>{msg.text}</ReactMarkdown></div>}
-            </div>
-            {msg.time && msg.role !== "user" && (
-                <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
-                {formatDate(msg.time)}
-                </span>
-            )}
-            </div>
-        ))}
-        {isLoading && (
-            <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
-            <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+            <span
+            style={{
+                fontSize: "0.7rem",
+                color: "rgba(255,255,255,0.4)",
+            }}
+            >
+            🧭 Advisor
+            </span>
+            <div
+            style={{
+                padding: "0.6rem 0.85rem",
+                borderRadius: "12px 12px 12px 4px",
+                backgroundColor: "rgba(255,255,255,0.08)",
+                       fontSize: "0.85rem",
+            }}
+            >
             <ThinkingDots />
             </div>
             </div>
@@ -284,14 +600,23 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
             overflowY: "hidden",
             transition: "border-color 0.2s",
         }}
-        onFocus={(e) => (e.target.style.borderColor = "rgba(59,130,246,0.6)")}
-        onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.15)")}
+        onFocus={(e) =>
+            (e.target.style.borderColor =
+            "rgba(59,130,246,0.6)")
+        }
+        onBlur={(e) =>
+            (e.target.style.borderColor =
+            "rgba(255,255,255,0.15)")
+        }
         />
         <button
         onClick={handleSend}
         disabled={isLoading || !input.trim()}
         style={{
-            backgroundColor: isLoading || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6",
+            backgroundColor:
+            isLoading || !input.trim()
+            ? "rgba(59,130,246,0.4)"
+            : "#3b82f6",
             border: "none",
             borderRadius: "10px",
             width: "2.5rem",
@@ -299,13 +624,24 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            cursor: isLoading || !input.trim() ? "not-allowed" : "pointer",
+            cursor:
+            isLoading || !input.trim()
+            ? "not-allowed"
+            : "pointer",
             flexShrink: 0,
             fontSize: "1rem",
             transition: "background-color 0.2s",
         }}
-        onMouseEnter={(e) => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-        onMouseLeave={(e) => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
+        onMouseEnter={(e) => {
+            if (!isLoading && input.trim())
+                e.currentTarget.style.backgroundColor =
+                "#2563eb";
+        }}
+        onMouseLeave={(e) => {
+            if (!isLoading && input.trim())
+                e.currentTarget.style.backgroundColor =
+                "#3b82f6";
+        }}
         >
         🚀
         </button>

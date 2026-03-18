@@ -43,7 +43,7 @@ const ActionItem = ({ action, onDelete }) => {
             backgroundColor: hovered ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
             border: "1px solid rgba(255,255,255,0.07)",
             color: "rgba(255,255,255,0.85)",
-            lineHeight: "1.4",
+            lineHeight: "1.75",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -208,6 +208,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, country, date }) => {
             gap: "0.4rem",
             height: "calc(100vh - 48rem)",
             overflowY: "auto",
+            scrollbarWidth: "none",
         }}>
         {actions.length === 0 && (
             <p style={{ margin: 0, fontSize: "0.8rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>
