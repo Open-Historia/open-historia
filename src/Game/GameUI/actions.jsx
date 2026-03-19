@@ -30,6 +30,28 @@ const SendIcon = () => (
     </svg>
 );
 
+const saveActions = async (actions) => {
+    try {
+        await fetch("/saves/save0/storage/actions.json", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(actions),
+        });
+    } catch (err) {
+        console.error("Failed to save actions:", err);
+    }
+};
+
+const loadActions = async () => {
+    try {
+        const res = await fetch("/saves/save0/storage/actions.json");
+        if (!res.ok) return [];
+        return await res.json();
+    } catch {
+        return [];
+    }
+};
+
 const ActionItem = ({ action, onDelete }) => {
     const [hovered, setHovered] = React.useState(false);
 
@@ -81,16 +103,50 @@ const ActionItem = ({ action, onDelete }) => {
 };
 
 /* ── Actions Panel ── */
-const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, country, date }) => {
+const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
+    const [country, setCountry] = React.useState("your nation");
+    const [gameDate, setGameDate] = React.useState("the current date");
     const inputRef = React.useRef(null);
+
+    React.useEffect(() => {
+        loadActions().then((saved) => {
+            if (saved.length > 0) setActions(saved);
+        });
+
+            const fetchGameData = () => {
+                fetch("/saves/save0/game.json")
+                .then(res => res.json())
+                .then(data => {
+                    if (data.country) setCountry(data.country);
+                    if (data.gameDate) setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
+                })
+                .catch(() => {});
+            };
+
+            fetchGameData();
+            const interval = setInterval(fetchGameData, 3000);
+            return () => clearInterval(interval);
+    }, []);
 
     const handleSubmit = () => {
         const trimmed = inputValue.trim();
         if (!trimmed) return;
-        setActions(prev => [...prev, trimmed]);
+        setActions(prev => {
+            const updated = [...prev, trimmed];
+            saveActions(updated);
+            return updated;
+        });
         setInputValue("");
+    };
+
+    const handleDelete = (index) => {
+        setActions(prev => {
+            const updated = prev.filter((_, j) => j !== index);
+            saveActions(updated);
+            return updated;
+        });
     };
 
     const handleKeyDown = (e) => {
@@ -164,7 +220,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, country, date }) => {
             lineHeight: "1.55",
             color: "rgba(255,255,255,0.75)",
         }}>
-        Submit actions for your nation for the current dae. Your actions will affect how the game world responds.
+        Submit actions for {country} for {gameDate}. Your actions will affect how the game world responds.
         </p>
 
         {/* Help brainstorm button */}
@@ -206,7 +262,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, country, date }) => {
             display: "flex",
             flexDirection: "column",
             gap: "0.4rem",
-            height: "calc(100vh - 48rem)",
+            height: "calc(100vh - 50rem)",
             overflowY: "auto",
             scrollbarWidth: "none",
         }}>
@@ -219,7 +275,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, country, date }) => {
             <ActionItem
             key={i}
             action={action}
-            onDelete={() => setActions(prev => prev.filter((_, j) => j !== i))}
+            onDelete={() => handleDelete(i)}
             />
         ))}
         </div>

@@ -14,10 +14,12 @@ const promptsReady = fetch('/saves/save0/prompts.json')
 async function buildSystemPrompt() {
     await promptsReady;
     const gameData = await fetch('/saves/save0/game.json').then(res => res.json());
+    const actionData = await fetch('/saves/save0/storage/actions.json').then(res => res.json());
     return advisorTemplate
     .replace(/\$\{country\}/g, gameData.country)
     .replace(/\$\{startdate\}/g, gameData.startDate)
-    .replace(/\$\{date\}/g, gameData.gameDate);
+    .replace(/\$\{date\}/g, gameData.gameDate)
+    .replace(/\$\{actions\}/g, actionData.join('\n'));
 }
 
 let conversationHistory = [];

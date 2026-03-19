@@ -77,6 +77,8 @@ const Main = ({ mapRef }) => {
     <SettingsButton onToggle={() => setIsSettingsOpen(!isSettingsOpen)} />
     {isSettingsOpen && (
       <SettingsMenu
+      discordUrl="https://discord.gg/C3AVwHacZ4"
+      githubUrl="https://github.com/Tommi-K/pax-historia"
       geminiKey={geminiKey}
       onGeminiKeyChange={setGeminiKey}
       isFullscreenEnabled={isFullscreenEnabled}

@@ -28,14 +28,14 @@ function Other() {
             ...baseStyle,
             top: "0.5rem",
             left: "4.75rem",
-            height: "2.5rem",
-            width: "13.75rem",
+            height: "2.75rem",
+            width: "16rem",
             boxSizing: "border-box",
         }}
         >
         <span
         style={{
-            fontSize: "13px",
+            fontSize: "15px",
             fontWeight: "700",
             letterSpacing: "0.05em",
             textTransform: "uppercase",
