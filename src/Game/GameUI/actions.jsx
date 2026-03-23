@@ -3,21 +3,6 @@ import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 dayjs.extend(advancedFormat);
 
-const baseStyle = {
-    position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
-    backdropFilter: "blur(4px)",
-    zIndex: 9999,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "white",
-    fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
-};
-
 const SparkleIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/>
@@ -102,7 +87,6 @@ const ActionItem = ({ action, onDelete }) => {
     );
 };
 
-/* ── Actions Panel ── */
 const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
@@ -160,8 +144,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         <div
         style={{
             position: "fixed",
-            bottom: isOpen ? "5.25rem" : "-30rem",
-            left: "0.5rem",
+            bottom: isOpen ? "4.25rem" : "-30rem",
+            left: "0rem",
             width: "26.25rem",
             maxWidth: "calc(100vw - 1rem)",
             backgroundColor: "rgba(17, 24, 39, 0.95)",
@@ -213,7 +197,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         {/* Body */}
         <div style={{ padding: "0.875rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-        {/* Description */}
         <p style={{
             margin: 0,
             fontSize: "0.82rem",
@@ -223,7 +206,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         Submit actions for {country} for {gameDate}. Your actions will affect how the game world responds.
         </p>
 
-        {/* Help brainstorm button */}
         <button
         style={{
             width: "100%",
@@ -245,7 +227,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         Help brainstorm actions
         </button>
 
-        {/* Submitted Actions */}
         <div>
         <p style={{
             margin: "0 0 0.5rem 0",
@@ -326,7 +307,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </span>
         </div>
 
-        {/* Send button */}
         <button
         onClick={handleSubmit}
         disabled={!inputValue.trim()}
@@ -354,15 +334,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     );
 };
 
-/* ── Main Other component ── */
-const Actions = ({ onOpenAdvisor }) => {
-    const [hovered, setHovered] = React.useState(null);
+const Actions = ({ onOpenAdvisor, hovered, setHovered, isActive }) => {
     const [actionsOpen, setActionsOpen] = React.useState(false);
-
-    const buttons = [
-        { icon: "💬", label: "Chat", onClick: () => {} },
-        { icon: "⚡", label: "Action", onClick: () => setActionsOpen(o => !o) },
-    ];
 
     return (
         <>
@@ -371,60 +344,42 @@ const Actions = ({ onOpenAdvisor }) => {
         onClose={() => setActionsOpen(false)}
         onOpenAdvisor={onOpenAdvisor}
         />
-
-        <div
+        <button
+        title="Action"
         style={{
-            ...baseStyle,
-            bottom: "0.5rem",
-            left: "0.5rem",
-            height: "4rem",
-            width: "8.5rem",
-            gap: "0.75rem",
-            padding: "0 0.1rem",
-            backgroundColor: "rgba(17, 24, 39, 0.9)",
-            borderRadius: "14px",
-            border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)",
+            width: "3.3rem",
+            height: "3.3rem",
+            borderRadius: "10px",
+            border: hovered
+            ? "1px solid rgba(255,255,255,0.2)"
+            : actionsOpen
+            ? "1px solid rgba(139,92,246,0.5)"
+            : "1px solid rgba(255,255,255,0.1)",
+            background: actionsOpen
+            ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
+            : hovered
+            ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
+            : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            transition: "all 0.12s ease",
+            boxShadow: hovered
+            ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
+            : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
+            fontSize: "1.2rem",
+            outline: "none",
+            transform: hovered ? "translateY(-1px)" : "translateY(0)",
+            color: "white",
+            fontFamily: "sans-serif",
         }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={() => setActionsOpen(o => !o)}
         >
-        {buttons.map((btn, i) => (
-            <button
-            key={btn.label}
-            title={btn.label}
-            style={{
-                width: "3.3rem",
-                height: "3.3rem",
-                borderRadius: "10px",
-                border: hovered === i
-                ? "1px solid rgba(255,255,255,0.2)"
-                : (i === 1 && actionsOpen)
-                ? "1px solid rgba(139,92,246,0.5)"
-                : "1px solid rgba(255,255,255,0.1)",
-                                  background: (i === 1 && actionsOpen)
-                                  ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
-                                  : hovered === i
-                                  ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-                                  : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  cursor: "pointer",
-                                  transition: "all 0.12s ease",
-                                  boxShadow: hovered === i
-                                  ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
-                                  : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
-                                  fontSize: "1.2rem",
-                                  outline: "none",
-                                  transform: hovered === i ? "translateY(-1px)" : "translateY(0)",
-            }}
-            onMouseEnter={() => setHovered(i)}
-            onMouseLeave={() => setHovered(null)}
-            onClick={btn.onClick}
-            >
-            {btn.icon}
-            </button>
-        ))}
-        </div>
+        ⚡
+        </button>
         </>
     );
 };

@@ -15,7 +15,7 @@ const setupProtocol = () => {
 
 setupProtocol();
 
-const PMTILES_URL = `pmtiles://${window.location.origin}/assets/cities.pmtiles`;
+const PMTILES_URL = `pmtiles://${window.location.origin}/saves/save0/cities.pmtiles`;
 
 const populationFilter = [
     "any",

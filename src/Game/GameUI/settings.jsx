@@ -226,7 +226,7 @@ const SettingsMenu = ({
         <div
         style={{
             ...baseStyle,
-            top: "4.75rem",
+            top: "4.5rem",
             left: "0.5rem",
             width: "18rem",
             padding: "1rem",

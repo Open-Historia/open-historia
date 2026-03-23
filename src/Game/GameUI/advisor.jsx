@@ -28,98 +28,62 @@ const ThinkingDots = () => {
         const interval = setInterval(() => setDots(d => (d + 1) % 4), 500);
         return () => clearInterval(interval);
     }, []);
-    return (
-        <span style={{ opacity: 0.6 }}>
-        Thinking{".".repeat(dots)}&nbsp;
-        </span>
-    );
+    return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
 };
 
-// Parses a message's text into { text, chartConfig }
-// Strips the ```chart ... ``` block from display text and extracts JSON config
 const parseMessage = (rawText) => {
     const chartRegex = /```chart\s*([\s\S]*?)```/;
     const match = rawText.match(chartRegex);
     if (!match) return { text: rawText, chartConfig: null };
     let chartConfig = null;
-    try {
-        chartConfig = JSON.parse(match[1].trim());
-    } catch {
-        chartConfig = null;
-    }
-    const text = rawText.replace(chartRegex, "").trim();
-    return { text, chartConfig };
+    try { chartConfig = JSON.parse(match[1].trim()); } catch { chartConfig = null; }
+    return { text: rawText.replace(chartRegex, "").trim(), chartConfig };
 };
 
-// Color palette that pops on the dark panel background
-const CHART_COLORS = [
-    "#60a5fa", // blue
-"#34d399", // green
-"#f472b6", // pink
-"#fbbf24", // amber
-"#a78bfa", // purple
-"#f87171", // red
-"#38bdf8", // sky
-];
+const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#a78bfa","#f87171","#38bdf8"];
 
-// Renders a Chart.js chart inside a canvas with a custom HTML legend
 const AdvisorChart = ({ config }) => {
     const canvasRef = useRef(null);
-    const chartRef = useRef(null);
-    const isCartesian = config.type !== "pie" && config.type !== "doughnut";
-    const isPieOrDoughnut = config.type === "pie" || config.type === "doughnut";
-    const isPercent = config.options?.unit === "percent";
+    const chartRef  = useRef(null);
+    const isCartesian     = config.type !== "pie" && config.type !== "doughnut";
+    const isPieOrDoughnut = config.type === "pie"  || config.type === "doughnut";
+    const isPercent       = config.options?.unit === "percent";
 
-    // Inject default colors into datasets if none are provided
     const coloredConfig = {
         ...config,
         data: {
             ...config.data,
             datasets: config.data.datasets.map((ds, i) => {
-                const color = CHART_COLORS[i % CHART_COLORS.length];
-                const pieColors = (config.data.labels || []).map(
-                    (_, j) => CHART_COLORS[j % CHART_COLORS.length]
-                );
+                const color     = CHART_COLORS[i % CHART_COLORS.length];
+                const pieColors = (config.data.labels || []).map((_, j) => CHART_COLORS[j % CHART_COLORS.length]);
                 return {
-                    borderColor: isPieOrDoughnut ? undefined : color,
-                    backgroundColor: isPieOrDoughnut
-                    ? pieColors
-                    : config.type === "line"
-                    ? `${color}26`
-                    : color,
+                    borderColor:      isPieOrDoughnut ? undefined : color,
+                    backgroundColor:  isPieOrDoughnut ? pieColors : config.type === "line" ? `${color}26` : color,
                     borderWidth: 2,
-                    pointRadius: config.type === "line" ? 3 : undefined,
+                    pointRadius:      config.type === "line" ? 3 : undefined,
                     pointHoverRadius: config.type === "line" ? 5 : undefined,
-                    tension: config.type === "line" ? 0.4 : undefined,
+                    tension:          config.type === "line" ? 0.4 : undefined,
                     ...ds,
                 };
             }),
         },
     };
 
-    // Build legend items from the colored config
     const legendItems = (() => {
         if (!coloredConfig?.data?.datasets) return [];
         if (isPieOrDoughnut) {
             const labels = coloredConfig.data.labels || [];
             const colors = coloredConfig.data.datasets[0]?.backgroundColor || [];
-            return labels.map((label, i) => ({
-                label,
-                color: Array.isArray(colors)
-                ? colors[i]
-                : CHART_COLORS[i % CHART_COLORS.length],
-            }));
+            return labels.map((label, i) => ({ label, color: Array.isArray(colors) ? colors[i] : CHART_COLORS[i % CHART_COLORS.length] }));
         }
         return coloredConfig.data.datasets.map((ds, i) => ({
             label: ds.label || "",
-            color: Array.isArray(ds.borderColor)
-            ? ds.borderColor[0]
-            : ds.borderColor || CHART_COLORS[i % CHART_COLORS.length],
+            color: Array.isArray(ds.borderColor) ? ds.borderColor[0] : ds.borderColor || CHART_COLORS[i % CHART_COLORS.length],
         }));
     })();
 
     useEffect(() => {
-        if (!canvasRef.current || !coloredConfig) return;
+        if (!canvasRef.current) return;
         if (chartRef.current) chartRef.current.destroy();
         const ctx = canvasRef.current.getContext("2d");
         chartRef.current = new Chart(ctx, {
@@ -133,107 +97,39 @@ const AdvisorChart = ({ config }) => {
                     ...coloredConfig.options?.plugins,
                     legend: { display: false },
                     tooltip: {
-                        backgroundColor: "rgba(10, 15, 28, 0.95)",
-                                     borderColor: "rgba(255,255,255,0.12)",
-                                     borderWidth: 1,
-                                     titleColor: "rgba(255,255,255,0.85)",
-                                     bodyColor: "rgba(255,255,255,0.6)",
-                                     padding: 10,
-                                     cornerRadius: 8,
+                        backgroundColor: "rgba(10,15,28,0.95)",
+                                     borderColor: "rgba(255,255,255,0.12)", borderWidth: 1,
+                                     titleColor: "rgba(255,255,255,0.85)", bodyColor: "rgba(255,255,255,0.6)",
+                                     padding: 10, cornerRadius: 8,
                                      ...coloredConfig.options?.plugins?.tooltip,
                                      callbacks: {
-                                         label: (ctx) => {
-                                             const val = ctx.parsed.y ?? ctx.parsed;
-                                             return ` ${val}${isPercent ? "%" : ""}`;
-                                         },
-                                         ...coloredConfig.options?.plugins?.tooltip?.callbacks,
+                                         label: (ctx) => ` ${ctx.parsed.y ?? ctx.parsed}${isPercent ? "%" : ""}`,
+                                     ...coloredConfig.options?.plugins?.tooltip?.callbacks,
                                      },
                     },
                 },
-                scales: isCartesian
-                ? {
-                    x: {
-                        ticks: {
-                            color: "rgba(255,255,255,0.45)",
-                                     font: { size: 10, family: "sans-serif" },
-                        },
-                        grid: { color: "rgba(255,255,255,0.06)" },
-                                     border: { color: "rgba(255,255,255,0.08)" },
-                                     ...coloredConfig.options?.scales?.x,
-                    },
-                    y: {
-                        ticks: {
-                            color: "rgba(255,255,255,0.45)",
-                                     font: { size: 10, family: "sans-serif" },
-                                     callback: (val) =>
-                                     `${val}${isPercent ? "%" : ""}`,
-                        },
-                        grid: { color: "rgba(255,255,255,0.06)" },
-                                     border: { color: "rgba(255,255,255,0.08)" },
-                                     ...coloredConfig.options?.scales?.y,
-                    },
-                }
-                : undefined,
+                scales: isCartesian ? {
+                    x: { ticks: { color: "rgba(255,255,255,0.45)", font: { size: 10, family: "sans-serif" } }, grid: { color: "rgba(255,255,255,0.06)" }, border: { color: "rgba(255,255,255,0.08)" }, ...coloredConfig.options?.scales?.x },
+                                     y: { ticks: { color: "rgba(255,255,255,0.45)", font: { size: 10, family: "sans-serif" }, callback: val => `${val}${isPercent ? "%" : ""}` }, grid: { color: "rgba(255,255,255,0.06)" }, border: { color: "rgba(255,255,255,0.08)" }, ...coloredConfig.options?.scales?.y },
+                } : undefined,
             },
         });
-        return () => {
-            if (chartRef.current) chartRef.current.destroy();
-        };
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
     }, [config]);
 
     return (
-        <div
-        style={{
-            marginTop: "0.75rem",
-            width: "100%",
-            boxSizing: "border-box",
-        }}
-        >
-        {/* Legend row above chart */}
+        <div style={{ marginTop: "0.75rem", width: "100%", boxSizing: "border-box" }}>
         {legendItems.length > 0 && (
-            <div
-            style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "0.4rem 0.85rem",
-                marginBottom: "0.5rem",
-            }}
-            >
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.85rem", marginBottom: "0.5rem" }}>
             {legendItems.map((item, i) => (
-                <span
-                key={i}
-                style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.35rem",
-                    fontSize: "0.72rem",
-                    color: "rgba(255,255,255,0.5)",
-                }}
-                >
-                <span
-                style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "2px",
-                    backgroundColor:
-                    item.color || "#60a5fa",
-                    flexShrink: 0,
-                }}
-                />
+                <span key={i} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.5)" }}>
+                <span style={{ width: "8px", height: "8px", borderRadius: "2px", backgroundColor: item.color || "#60a5fa", flexShrink: 0 }} />
                 {item.label}
                 </span>
             ))}
             </div>
         )}
-
-        {/* Canvas */}
-        <div
-        style={{
-            position: "relative",
-            width: "100%",
-            height: "175px",
-        }}
-        >
+        <div style={{ position: "relative", width: "100%", height: "175px" }}>
         <canvas ref={canvasRef} />
         </div>
         </div>
@@ -241,21 +137,13 @@ const AdvisorChart = ({ config }) => {
 };
 
 const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
-    <button
-    onClick={onToggle}
-    style={{
+    <button onClick={onToggle} style={{
         ...baseStyle,
-        bottom: "0.5rem",
-        right: rightShift,
-        height: "4rem",
-        width: "4rem",
-        cursor: "pointer",
-        fontSize: "1.5rem",
+        bottom: "0.5rem", right: rightShift,
+        height: "4rem", width: "4rem",
+        cursor: "pointer", fontSize: "1.5rem",
         transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    }}
-    >
-    🧭
-    </button>
+    }}>🧭</button>
 );
 
 const saveMessages = async (messages) => {
@@ -265,9 +153,7 @@ const saveMessages = async (messages) => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(messages),
         });
-    } catch (err) {
-        console.error("Failed to save messages:", err);
-    }
+    } catch (err) { console.error("Failed to save messages:", err); }
 };
 
 const loadMessages = async () => {
@@ -275,24 +161,22 @@ const loadMessages = async () => {
         const res = await fetch("/saves/save0/storage/advisor.json");
         if (!res.ok) return [];
         return await res.json();
-    } catch {
-        return [];
-    }
+    } catch { return []; }
 };
 
 const AdvisorPanel = ({ isAdvisorOpen }) => {
-    const [messages, setMessages] = useState([]);
-    const [input, setInput] = useState("");
+    const [messages, setMessages]   = useState([]);
+    const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const messagesEndRef = useRef(null);
+    const messagesEndRef            = useRef(null);
 
     useEffect(() => {
         loadMessages().then((saved) => {
             if (saved.length > 0) {
                 setMessages(saved);
-                loadHistory(saved);
+                loadHistory(saved);   // restore advisor history — no prompt arg = advisor mode
             } else {
-                startChat();
+                startChat();          // fresh start — no prompt arg = advisor mode
             }
         });
     }, []);
@@ -305,35 +189,26 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         const text = input.trim();
         if (!text || isLoading) return;
 
-        const { gameDate } = await fetch("/saves/save0/game.json").then(
-            (res) => res.json()
-        );
+        const { gameDate } = await fetch("/saves/save0/game.json")
+        .then(res => res.json())
+        .catch(() => ({ gameDate: null }));
 
         const userMessage = { role: "user", text, time: gameDate };
-
         setInput("");
-        setMessages((prev) => [...prev, userMessage]);
+        setMessages(prev => [...prev, userMessage]);
         setIsLoading(true);
 
         try {
-            const reply = await sendMessage(text);
-            const advisorMessage = {
-                role: "advisor",
-                text: reply,
-                time: gameDate,
-            };
-            setMessages((prev) => {
+            const reply = await sendMessage(text);  // uses advisor prompt automatically
+            const advisorMessage = { role: "advisor", text: reply, time: gameDate };
+            setMessages(prev => {
                 const updated = [...prev, advisorMessage];
                 saveMessages(updated);
                 return updated;
             });
         } catch (err) {
-            const errorMessage = {
-                role: "error",
-                text: err.message,
-                time: gameDate,
-            };
-            setMessages((prev) => {
+            const errorMessage = { role: "error", text: err.message, time: gameDate };
+            setMessages(prev => {
                 const updated = [...prev, errorMessage];
                 saveMessages(updated);
                 return updated;
@@ -344,221 +219,85 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
     };
 
     const handleKeyDown = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
     const formatDate = (dateStr) => {
         if (!dateStr) return "";
-        const date = new Date(dateStr);
-        return date.toLocaleDateString([], {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-        });
+        return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
     };
 
     return (
         <>
         <MarkdownStyleInjector />
-        <div
-        style={{
-            position: "fixed",
-            top: 0,
-            right: isAdvisorOpen
-            ? 0
-            : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
-            width: ADVISOR_PANEL_WIDTH,
-            height: "100vh",
-            backgroundColor: "rgba(17, 24, 39, 0.95)",
-            backdropFilter: "blur(8px)",
-            zIndex: 9998,
-            borderLeft: "1px solid rgba(255,255,255,0.1)",
+        <div style={{
+            position: "fixed", top: 0,
+            right: isAdvisorOpen ? 0 : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
+            width: ADVISOR_PANEL_WIDTH, height: "100vh",
+            backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
+            zIndex: 9998, borderLeft: "1px solid rgba(255,255,255,0.1)",
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
             transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-            display: "flex",
-            flexDirection: "column",
-            color: "white",
-            fontFamily: "sans-serif",
-            overflow: "hidden",
-        }}
-        >
-        {/* Panel Header */}
-        <div
-        style={{
-            padding: "1.5rem 1.25rem 1rem",
-            borderBottom: "1px solid rgba(255,255,255,0.1)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.75rem",
-        }}
-        >
+            display: "flex", flexDirection: "column",
+            color: "white", fontFamily: "sans-serif", overflow: "hidden",
+        }}>
+        {/* Header */}
+        <div style={{ padding: "1.5rem 1.25rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.75rem" }}>
         <span style={{ fontSize: "1.5rem" }}>🧭</span>
-        <h2
-        style={{
-            margin: 0,
-            fontSize: "1.1rem",
-            fontWeight: 600,
-            flex: 1,
-        }}
-        >
-        Advisor
-        </h2>
+        <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, flex: 1 }}>Advisor</h2>
         <button
-        onClick={async () => {
-            setMessages([]);
-            startChat();
-            await saveMessages([]);
-        }}
+        onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
         title="Clear chat"
-        style={{
-            background: "none",
-            border: "none",
-            color: "rgba(255,255,255,0.4)",
-            cursor: "pointer",
-            fontSize: "1.5rem",
-            lineHeight: 1,
-            padding: 0,
-            display: "flex",
-            alignItems: "center",
-        }}
-        >
-        🗑
-        </button>
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.5rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+        >🗑</button>
         </div>
 
         {/* Messages */}
-        <div
-        style={{
-            padding: "0.75rem",
-            flex: 1,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-            scrollbarWidth: "none",
-        }}
-        >
+        <div style={{ padding: "0.75rem", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
         {messages.length === 0 && (
-            <p
-            style={{
-                fontSize: "0.85rem",
-                color: "rgba(255,255,255,0.5)",
-                                   marginTop: 0,
-            }}
-            >
+            <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
             No messages yet. Ask your advisor something!
             </p>
         )}
+
         {messages.map((msg, i) => {
-            const { text, chartConfig } =
-            msg.role === "advisor"
+            const { text, chartConfig } = msg.role === "advisor"
             ? parseMessage(msg.text)
             : { text: msg.text, chartConfig: null };
-
             return (
-                <div
-                key={i}
-                style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems:
-                    msg.role === "user"
-                    ? "flex-end"
-                    : "flex-start",
-                }}
-                >
+                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
                 {msg.role !== "user" && (
-                    <span
-                    style={{
-                        fontSize: "0.7rem",
-                        color: "rgba(255,255,255,0.4)",
-                                         marginBottom: "0.25rem",
-                    }}
-                    >
-                    {msg.role === "error"
-                        ? "⚠️ Error"
-                        : "🧭 Advisor"}
-                        </span>
+                    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
+                    {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
+                    </span>
                 )}
-                <div
-                style={{
-                    maxWidth: "90%",
-                    width: chartConfig ? "90%" : undefined,
+                <div style={{
+                    maxWidth: "90%", width: chartConfig ? "90%" : undefined,
                     padding: "0.6rem 0.85rem",
-                    borderRadius:
-                    msg.role === "user"
-                    ? "12px 12px 2px 12px"
-                    : "12px 12px 12px 2px",
-                    backgroundColor:
-                    msg.role === "user"
-                    ? "#3b82f6"
-                    : msg.role === "error"
-                    ? "rgba(239,68,68,0.2)"
-                    : "rgba(255,255,255,0.08)",
-                    fontSize: "0.85rem",
-                    lineHeight: "1.5",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    border:
-                    msg.role === "error"
-                    ? "1px solid rgba(239,68,68,0.3)"
-                    : "none",
+                    borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                    backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
+                    fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
                     boxSizing: "border-box",
-                }}
-                >
-                {msg.role === "user" ? (
-                    text
-                ) : (
-                    <div className="advisor-markdown">
-                    <ReactMarkdown>{text}</ReactMarkdown>
-                    </div>
+                }}>
+                {msg.role === "user" ? text : (
+                    <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
                 )}
-                {chartConfig && (
-                    <AdvisorChart config={chartConfig} />
-                )}
+                {chartConfig && <AdvisorChart config={chartConfig} />}
                 </div>
                 {msg.time && msg.role !== "user" && (
-                    <span
-                    style={{
-                        fontSize: "0.65rem",
-                        color: "rgba(255,255,255,0.3)",
-                                                     marginTop: "0.25rem",
-                    }}
-                    >
+                    <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
                     {formatDate(msg.time)}
                     </span>
                 )}
                 </div>
             );
         })}
+
         {isLoading && (
-            <div
-            style={{
-                display: "flex",
-                alignItems: "flex-start",
-                flexDirection: "column",
-                gap: "0.25rem",
-            }}
-            >
-            <span
-            style={{
-                fontSize: "0.7rem",
-                color: "rgba(255,255,255,0.4)",
-            }}
-            >
-            🧭 Advisor
-            </span>
-            <div
-            style={{
-                padding: "0.6rem 0.85rem",
-                borderRadius: "12px 12px 12px 4px",
-                backgroundColor: "rgba(255,255,255,0.08)",
-                       fontSize: "0.85rem",
-            }}
-            >
+            <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
+            <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
             <ThinkingDots />
             </div>
             </div>
@@ -566,85 +305,24 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
-        <div
-        style={{
-            padding: "1rem",
-            borderTop: "1px solid rgba(255,255,255,0.1)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-        }}
-        >
+        {/* Input */}
+        <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <textarea
         placeholder="Ask your advisor..."
-        rows={1}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
+        rows={1} value={input}
+        onChange={e => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
-        onInput={(e) => {
-            e.target.style.height = "auto";
-        }}
-        style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.2)",
-            border: "1px solid rgba(255,255,255,0.15)",
-            borderRadius: "10px",
-            color: "white",
-            fontSize: "0.875rem",
-            padding: "0.6rem 0.75rem",
-            resize: "none",
-            outline: "none",
-            fontFamily: "sans-serif",
-            lineHeight: "1.5",
-            overflowY: "hidden",
-            transition: "border-color 0.2s",
-        }}
-        onFocus={(e) =>
-            (e.target.style.borderColor =
-            "rgba(59,130,246,0.6)")
-        }
-        onBlur={(e) =>
-            (e.target.style.borderColor =
-            "rgba(255,255,255,0.15)")
-        }
+        onInput={e => { e.target.style.height = "auto"; }}
+        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "hidden", transition: "border-color 0.2s" }}
+        onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
+        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
         />
         <button
-        onClick={handleSend}
-        disabled={isLoading || !input.trim()}
-        style={{
-            backgroundColor:
-            isLoading || !input.trim()
-            ? "rgba(59,130,246,0.4)"
-            : "#3b82f6",
-            border: "none",
-            borderRadius: "10px",
-            width: "2.5rem",
-            height: "2.5rem",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor:
-            isLoading || !input.trim()
-            ? "not-allowed"
-            : "pointer",
-            flexShrink: 0,
-            fontSize: "1rem",
-            transition: "background-color 0.2s",
-        }}
-        onMouseEnter={(e) => {
-            if (!isLoading && input.trim())
-                e.currentTarget.style.backgroundColor =
-                "#2563eb";
-        }}
-        onMouseLeave={(e) => {
-            if (!isLoading && input.trim())
-                e.currentTarget.style.backgroundColor =
-                "#3b82f6";
-        }}
-        >
-        🚀
-        </button>
+        onClick={handleSend} disabled={isLoading || !input.trim()}
+        style={{ backgroundColor: isLoading || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
+        onMouseEnter={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
+        onMouseLeave={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
+        >🚀</button>
         </div>
         </div>
         </>
@@ -666,8 +344,7 @@ const markdownStyles = `
 
 const MarkdownStyleInjector = () => {
     useEffect(() => {
-        const el = document.getElementById("advisor-md-styles");
-        if (!el) {
+        if (!document.getElementById("advisor-md-styles")) {
             const style = document.createElement("style");
             style.id = "advisor-md-styles";
             style.textContent = markdownStyles;

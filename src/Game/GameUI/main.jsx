@@ -3,13 +3,63 @@ import { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel } from "./advisor";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { DateWidget } from "./time";
 import { Other } from "./other";
-import { Actions } from "./actions";
+import { Toolbar } from "./chat";
 import { Search } from "./search";
+
+const checkWebGL = () => {
+  try {
+    const canvas = document.createElement("canvas");
+    return !!(
+      window.WebGLRenderingContext &&
+      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+    );
+  } catch {
+    return false;
+  }
+};
+
+const WebGLWarningPopup = ({ onDismiss }) => (
+  <div style={{
+    position: "fixed",
+    inset: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              zIndex: 9999,
+  }}>
+  <div style={{
+    backgroundColor: "#1a1a2e",
+    border: "1px solid #e94560",
+    borderRadius: "12px",
+    padding: "2rem",
+    maxWidth: "420px",
+    width: "90%",
+    color: "#eaeaea",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+                                              textAlign: "center",
+  }}>
+  <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>⚠️</div>
+  <h2 style={{ margin: "0 0 0.75rem", fontSize: "1.3rem", color: "#e94560" }}>
+  WebGL Not Available
+  </h2>
+  <p style={{ margin: "0 0 0.5rem", lineHeight: 1.6, color: "#ccc", fontSize: "0.95rem" }}>
+  This application requires <strong style={{ color: "#eaeaea" }}>WebGL</strong> to render
+  the map, but it doesn't appear to be supported or enabled in your browser.
+  </p>
+  <p style={{ margin: "0 0 1.5rem", lineHeight: 1.6, color: "#999", fontSize: "0.85rem" }}>
+  Try enabling hardware acceleration in your browser settings, updating your graphics
+  drivers, or switching to a WebGL-supported browser such as Chrome or Firefox.
+  </p>
+  </div>
+  </div>
+);
 
 const Main = ({ mapRef }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
+  const [showWebGLWarning, setShowWebGLWarning] = useState(false);
   const [geminiKey, setGeminiKey] = useState(() => {
     return localStorage.getItem("gemini_api_key") || "";
   });
@@ -23,17 +73,20 @@ const Main = ({ mapRef }) => {
   });
 
   useEffect(() => {
+    if (!checkWebGL()) {
+      setShowWebGLWarning(true);
+    }
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
   }, [isFullscreenEnabled]);
-
   useEffect(() => {
     localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled));
   }, [isGlobeEnabled]);
-
   useEffect(() => {
     localStorage.setItem("Terrain", JSON.stringify(isTerrainEnabled));
   }, [isTerrainEnabled]);
-
   useEffect(() => {
     localStorage.setItem("gemini_api_key", geminiKey);
   }, [geminiKey]);
@@ -64,8 +117,9 @@ const Main = ({ mapRef }) => {
 
   return (
     <>
+    {showWebGLWarning && <WebGLWarningPopup />}
     <DateWidget rightShift={rightShift} />
-    <Actions onOpenAdvisor={() => setIsAdvisorOpen(true)} />
+    <Toolbar onOpenAdvisor={() => setIsAdvisorOpen(true)} />
     <Other />
     <Search mapRef={mapRef} rightShift={rightShift} />
     <AdvisorButton

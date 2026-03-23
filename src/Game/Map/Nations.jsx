@@ -14,9 +14,9 @@ const setupProtocol = () => {
   }
 };
 
-const COUNTRIES_URL = `pmtiles://${window.location.origin}/assets/countries.pmtiles`;
-const COUNTRIES_HTTP_URL = `${window.location.origin}/assets/countries.pmtiles`;
-const REGIONS_URL = `pmtiles://${window.location.origin}/assets/regions.pmtiles`;
+const COUNTRIES_URL = `pmtiles://${window.location.origin}/saves/save0/countries.pmtiles`;
+const COUNTRIES_HTTP_URL = `${window.location.origin}/saves/save0/countries.pmtiles`;
+const REGIONS_URL = `pmtiles://${window.location.origin}/saves/save0/regions.pmtiles`;
 
 const decodeTile = async (data) => {
   const { VectorTile } = await import("@mapbox/vector-tile");

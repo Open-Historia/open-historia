@@ -49,10 +49,18 @@ const TimelinePanel = ({ isOpen, onClose, currentDate, onJump }) => {
     return (
         <div style={{
             position: "fixed",
-            bottom: isOpen ? "5.25rem" : "-36rem",
+            bottom: isOpen ? "5.25rem" : "-30rem",
             left: "0.5rem",
+
             width: "26.25rem",
             height: "calc(100vh - 33.25rem)",
+
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.4rem",
+            overflowY: "auto",
+            scrollbarWidth: "none",
+
             backgroundColor: "rgba(17, 24, 39, 0.95)",
             backdropFilter: "blur(8px)",
             borderRadius: "16px",
