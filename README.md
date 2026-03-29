@@ -11,7 +11,7 @@
 This project is not yet in a playable state. To see the current progress, run the following:
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/pax-historia.git
+git clone https://github.com/Tommi-K/pax-historia.git
 
 # Navigate into the project directory
 cd pax-historia
