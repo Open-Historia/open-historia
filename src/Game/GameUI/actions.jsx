@@ -334,14 +334,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     );
 };
 
-const Actions = ({ onOpenAdvisor, hovered, setHovered, isActive }) => {
-    const [actionsOpen, setActionsOpen] = React.useState(false);
-
+const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
     return (
         <>
         <ActionsPanel
-        isOpen={actionsOpen}
-        onClose={() => setActionsOpen(false)}
+        isOpen={isOpen}
+        onClose={onToggle}
         onOpenAdvisor={onOpenAdvisor}
         />
         <button
@@ -352,10 +350,10 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isActive }) => {
             borderRadius: "10px",
             border: hovered
             ? "1px solid rgba(255,255,255,0.2)"
-            : actionsOpen
+            : isOpen
             ? "1px solid rgba(139,92,246,0.5)"
             : "1px solid rgba(255,255,255,0.1)",
-            background: actionsOpen
+            background: isOpen
             ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
             : hovered
             ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
@@ -376,7 +374,7 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isActive }) => {
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        onClick={() => setActionsOpen(o => !o)}
+        onClick={onToggle}
         >
         ⚡
         </button>
