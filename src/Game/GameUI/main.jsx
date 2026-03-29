@@ -5,6 +5,12 @@ import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
+import {
+  getStoredProvider,
+  loadProviderSettingsFormState,
+  normalizeProvider,
+  persistProviderSetting,
+} from "../AI/providerConfig.js";
 
 const checkWebGL = () => {
   try {
@@ -62,9 +68,8 @@ const Main = ({ mapRef }) => {
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
 
   // API provider state
-  const [apiProvider, setApiProvider] = useState(() => localStorage.getItem("api_provider") || "gemini");
-  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("gemini_api_key") || "");
-  const [customApiEndpoint, setCustomApiEndpoint] = useState(() => localStorage.getItem("custom_api_endpoint") || "http://localhost:11434/v1");
+  const [apiProvider, setApiProvider] = useState(() => getStoredProvider());
+  const [providerSettings, setProviderSettings] = useState(() => loadProviderSettingsFormState());
 
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {
     const saved = localStorage.getItem("Globe");
@@ -82,9 +87,18 @@ const Main = ({ mapRef }) => {
     useEffect(() => { localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled)); }, [isFullscreenEnabled]);
     useEffect(() => { localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled)); }, [isGlobeEnabled]);
     useEffect(() => { localStorage.setItem("Terrain", JSON.stringify(isTerrainEnabled)); }, [isTerrainEnabled]);
-    useEffect(() => { localStorage.setItem("gemini_api_key", geminiKey); }, [geminiKey]);
-    useEffect(() => { localStorage.setItem("custom_api_endpoint", customApiEndpoint); }, [customApiEndpoint]);
-    useEffect(() => { localStorage.setItem("api_provider", apiProvider); }, [apiProvider]);
+    useEffect(() => { localStorage.setItem("api_provider", normalizeProvider(apiProvider)); }, [apiProvider]);
+    useEffect(() => {
+      if (isSettingsOpen) {
+        setApiProvider(getStoredProvider());
+        setProviderSettings(loadProviderSettingsFormState());
+      }
+    }, [isSettingsOpen]);
+
+    const handleProviderSettingChange = (key, value) => {
+      setProviderSettings((prev) => ({ ...prev, [key]: value }));
+      persistProviderSetting(key, value);
+    };
 
     const toggleFullscreen = (shouldBeFull) => {
       if (shouldBeFull) {
@@ -105,11 +119,6 @@ const Main = ({ mapRef }) => {
       document.addEventListener("fullscreenchange", handleFullscreenChange);
       return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
     }, []);
-
-    // Derive the active config for use anywhere in the app
-    const activeApiConfig = apiProvider === "gemini"
-    ? { provider: "gemini", apiKey: geminiKey, endpoint: null }
-    : { provider: "custom", apiKey: null, endpoint: customApiEndpoint };
 
     const rightShift = isAdvisorOpen ? `calc(${ADVISOR_PANEL_WIDTH} + 0.5rem)` : "0.5rem";
 
@@ -143,10 +152,8 @@ const Main = ({ mapRef }) => {
         onToggleTerrain={() => setIsTerrainEnabled(!isTerrainEnabled)}
         apiProvider={apiProvider}
         onApiProviderChange={setApiProvider}
-        geminiKey={geminiKey}
-        onGeminiKeyChange={setGeminiKey}
-        customApiEndpoint={customApiEndpoint}
-        onCustomApiEndpointChange={setCustomApiEndpoint}
+        providerSettings={providerSettings}
+        onProviderSettingChange={handleProviderSettingChange}
         />
       )}
       </>
