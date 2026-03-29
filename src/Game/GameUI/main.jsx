@@ -154,6 +154,7 @@ const Main = ({
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
@@ -215,12 +216,26 @@ const Main = ({
   }, []);
 
   const rightShift = isAdvisorOpen ? `calc(${ADVISOR_PANEL_WIDTH} + 0.5rem)` : "0.5rem";
+  const toggleBottomPanel = useCallback((panelName) => {
+    setActiveBottomPanel((currentPanel) => (
+      currentPanel === panelName ? null : panelName
+    ));
+  }, []);
 
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
-      <DateWidget rightShift={rightShift} />
-      <Toolbar onOpenAdvisor={openAdvisor} />
+      <DateWidget
+        rightShift={rightShift}
+        isTimelineOpen={activeBottomPanel === "timeline"}
+        onToggleTimeline={() => toggleBottomPanel("timeline")}
+        onCloseTimeline={() => setActiveBottomPanel((panel) => (panel === "timeline" ? null : panel))}
+      />
+      <Toolbar
+        onOpenAdvisor={openAdvisor}
+        activePanel={activeBottomPanel}
+        onTogglePanel={toggleBottomPanel}
+      />
       <Other />
       <Search mapRef={mapRef} />
       <AdvisorButton
