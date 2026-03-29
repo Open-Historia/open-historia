@@ -4,6 +4,12 @@ import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
+import {
+  getStoredProvider,
+  loadProviderSettingsFormState,
+  normalizeProvider,
+  persistProviderSetting,
+} from "../AI/providerConfig.js";
 
 const ADVISOR_PANEL_WIDTH = "20rem";
 const LazyAdvisorPanel = lazy(() =>
@@ -159,15 +165,8 @@ const Main = ({
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
 
-  const [apiProvider, setApiProvider] = useState(
-    () => localStorage.getItem("api_provider") || "gemini",
-  );
-  const [geminiKey, setGeminiKey] = useState(
-    () => localStorage.getItem("gemini_api_key") || "",
-  );
-  const [customApiEndpoint, setCustomApiEndpoint] = useState(
-    () => localStorage.getItem("custom_api_endpoint") || "http://localhost:11434/v1",
-  );
+  const [apiProvider, setApiProvider] = useState(() => getStoredProvider());
+  const [providerSettings, setProviderSettings] = useState(() => loadProviderSettingsFormState());
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -182,16 +181,20 @@ const Main = ({
   }, [isFullscreenEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("gemini_api_key", geminiKey);
-  }, [geminiKey]);
-
-  useEffect(() => {
-    localStorage.setItem("custom_api_endpoint", customApiEndpoint);
-  }, [customApiEndpoint]);
-
-  useEffect(() => {
-    localStorage.setItem("api_provider", apiProvider);
+    localStorage.setItem("api_provider", normalizeProvider(apiProvider));
   }, [apiProvider]);
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      setApiProvider(getStoredProvider());
+      setProviderSettings(loadProviderSettingsFormState());
+    }
+  }, [isSettingsOpen]);
+
+  const handleProviderSettingChange = (key, value) => {
+    setProviderSettings((prev) => ({ ...prev, [key]: value }));
+    persistProviderSetting(key, value);
+  };
 
   const toggleFullscreen = (shouldBeFull) => {
     if (shouldBeFull) {
@@ -263,10 +266,8 @@ const Main = ({
           onToggleTerrain={() => setIsTerrainEnabled(!isTerrainEnabled)}
           apiProvider={apiProvider}
           onApiProviderChange={setApiProvider}
-          geminiKey={geminiKey}
-          onGeminiKeyChange={setGeminiKey}
-          customApiEndpoint={customApiEndpoint}
-          onCustomApiEndpointChange={setCustomApiEndpoint}
+          providerSettings={providerSettings}
+          onProviderSettingChange={handleProviderSettingChange}
         />
       )}
     </>
