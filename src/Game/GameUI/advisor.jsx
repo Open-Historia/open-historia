@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 
 Chart.register(...registerables);
 
@@ -148,19 +149,13 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
 
 const saveMessages = async (messages) => {
     try {
-        await fetch("/saves/save0/storage/advisor.json", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(messages),
-        });
+        await writeJson(JSON_URLS.advisor, messages);
     } catch (err) { console.error("Failed to save messages:", err); }
 };
 
 const loadMessages = async () => {
     try {
-        const res = await fetch("/saves/save0/storage/advisor.json");
-        if (!res.ok) return [];
-        return await res.json();
+        return await readJson(JSON_URLS.advisor, { defaultValue: [] });
     } catch { return []; }
 };
 
@@ -169,17 +164,28 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef            = useRef(null);
+    const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
+    const [hasBootstrapped, setHasBootstrapped] = useState(false);
 
     useEffect(() => {
+        if (isAdvisorOpen) setHasOpened(true);
+    }, [isAdvisorOpen]);
+
+    useEffect(() => {
+        if (!isAdvisorOpen || hasBootstrapped) return;
+        let cancelled = false;
         loadMessages().then((saved) => {
+            if (cancelled) return;
             if (saved.length > 0) {
                 setMessages(saved);
                 loadHistory(saved);   // restore advisor history — no prompt arg = advisor mode
             } else {
                 startChat();          // fresh start — no prompt arg = advisor mode
             }
+            setHasBootstrapped(true);
         });
-    }, []);
+        return () => { cancelled = true; };
+    }, [hasBootstrapped, isAdvisorOpen]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -189,9 +195,10 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         const text = input.trim();
         if (!text || isLoading) return;
 
-        const { gameDate } = await fetch("/saves/save0/game.json")
-        .then(res => res.json())
-        .catch(() => ({ gameDate: null }));
+        const { gameDate } = await readJson(JSON_URLS.game, {
+            defaultValue: { gameDate: null },
+            force: true,
+        }).catch(() => ({ gameDate: null }));
 
         const userMessage = { role: "user", text, time: gameDate };
         setInput("");
@@ -226,6 +233,8 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         if (!dateStr) return "";
         return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
     };
+
+    if (!hasOpened) return null;
 
     return (
         <>

@@ -1,60 +1,34 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
-import { PMTiles } from "pmtiles";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { Actions } from "./actions";
+import {
+    JSON_URLS,
+    getNationColors,
+    loadCountryNames as loadCachedCountryNames,
+    readJson,
+    writeJson,
+} from "../../runtime/assets.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
-const STORAGE_URL = "/saves/save0/storage/chat.json";
-
 const saveAllChats = async (chats) => {
     try {
-        await fetch(STORAGE_URL, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(chats),
-        });
+        await writeJson(JSON_URLS.chat, chats);
     } catch (err) { console.error("Failed to save chats:", err); }
 };
 
 const loadAllChats = async () => {
     try {
-        const res = await fetch(STORAGE_URL);
-        if (!res.ok) return [];
-        return await res.json();
+        return await readJson(JSON_URLS.chat, { defaultValue: [] });
     } catch { return []; }
 };
 
 // ── PMTiles country loader ────────────────────────────────────────────────────
 
-const COUNTRIES_HTTP_URL = `${window.location.origin}/saves/save0/countries.pmtiles`;
-
 const loadCountryNames = async () => {
-    try {
-        const { VectorTile } = await import("@mapbox/vector-tile");
-        const Pbf = (await import("pbf")).default;
-        const pmtiles  = new PMTiles(COUNTRIES_HTTP_URL);
-        const tileData = await pmtiles.getZxy(0, 0, 0);
-        if (!tileData?.data) return [];
-        const tile  = new VectorTile(new Pbf(tileData.data));
-        const layer = tile.layers["countries"];
-        if (!layer) return [];
-        const seen = new Map();
-        for (let i = 0; i < layer.length; i++) {
-            const props = layer.feature(i).properties;
-            const name  = props?.Country || props?.NAME || props?.name || props?.COUNTRY;
-            const code  = props?.GID_0   || props?.gid_0 || props?.ISO_A3 || props?.iso_a3 || "";
-            if (name && !seen.has(name)) seen.set(name, code);
-        }
-        return Array.from(seen.entries())
-        .map(([name, code]) => ({ name, code }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    } catch (err) {
-        console.error("Failed to load country names:", err);
-        return [];
-    }
+    return loadCachedCountryNames();
 };
 
 // ── Flag cache ────────────────────────────────────────────────────────────────
@@ -181,29 +155,6 @@ const nationColorFromCode = (code, map) => {
     }
     return null;
 };
-
-let _nationColorsCache = null;
-let _nationColorsCallbacks = [];
-
-const getNationColors = () => {
-    if (_nationColorsCache) return Promise.resolve(_nationColorsCache);
-    return new Promise((resolve) => {
-        _nationColorsCallbacks.push(resolve);
-        if (_nationColorsCallbacks.length === 1) {
-            fetch("/assets/colors.json")
-            .then(r => r.ok ? r.json() : {})
-            .catch(() => ({}))
-            .then(data => {
-                _nationColorsCache = data;
-                _nationColorsCallbacks.forEach(cb => cb(data));
-                _nationColorsCallbacks = [];
-            });
-        }
-    });
-};
-
-// Kick off the fetch immediately at module load
-getNationColors();
 
 const useNationColor = (code) => {
     const [color, setColor] = useState(null);
@@ -761,17 +712,49 @@ const ChatPanel = ({ isOpen, onClose }) => {
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
+    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
 
-    useEffect(() => { loadCountryNames().then(list => { setCountries(list); setLoadingCountries(false); }); }, []);
-    useEffect(() => { loadAllChats().then(saved => { if (saved.length > 0) setChats(saved); }); }, []);
     useEffect(() => {
-        const go = () => fetch("/saves/save0/game.json").then(r => r.json())
-        .then(d => { if (d.country) setPlayerCountry(d.country); if (d.gameDate) setGameDate(d.gameDate); })
+        if (!isOpen || hasLoadedInitialData) return;
+
+        let cancelled = false;
+        Promise.all([loadCountryNames(), loadAllChats()])
+        .then(([countryList, savedChats]) => {
+            if (cancelled) return;
+            setCountries(countryList);
+            setLoadingCountries(false);
+            if (savedChats.length > 0) setChats(savedChats);
+            setHasLoadedInitialData(true);
+        })
+        .catch(() => {
+            if (!cancelled) {
+                setLoadingCountries(false);
+                setHasLoadedInitialData(true);
+            }
+        });
+
+        return () => { cancelled = true; };
+    }, [hasLoadedInitialData, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        let cancelled = false;
+        const go = () => readJson(JSON_URLS.game, { defaultValue: {}, force: true })
+        .then((data) => {
+            if (cancelled) return;
+            if (data.country) setPlayerCountry(data.country);
+            if (data.gameDate) setGameDate(data.gameDate);
+        })
         .catch(() => {});
+
         go();
-        const iv = setInterval(go, 3000);
-        return () => clearInterval(iv);
-    }, []);
+        const iv = setInterval(go, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(iv);
+        };
+    }, [isOpen]);
 
     const availableCountries = useMemo(
         () => countries.filter(c => c.name.toLowerCase() !== playerCountry.toLowerCase()),
@@ -839,9 +822,14 @@ const ChatPanel = ({ isOpen, onClose }) => {
 
 const Chat = ({ hovered, setHovered }) => {
     const [chatOpen, setChatOpen] = useState(false);
+    const [hasOpened, setHasOpened] = useState(false);
+
+    useEffect(() => {
+        if (chatOpen) setHasOpened(true);
+    }, [chatOpen]);
     return (
         <>
-        <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+        {hasOpened && <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />}
         <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : chatOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: chatOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
         onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
         onClick={() => setChatOpen(o => !o)}>💬</button>
@@ -851,7 +839,7 @@ const Chat = ({ hovered, setHovered }) => {
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
-const Toolbar = ({ onOpenAdvisor }) => {
+const Toolbar = memo(({ onOpenAdvisor }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     return (
@@ -860,6 +848,6 @@ const Toolbar = ({ onOpenAdvisor }) => {
         <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} />
         </div>
     );
-};
+});
 
 export { Toolbar, Chat, ChatPanel };

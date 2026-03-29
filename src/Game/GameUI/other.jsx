@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
 const baseStyle = {
     position: "fixed",
     backgroundColor: "rgba(17, 24, 39, 0.9)",
@@ -13,11 +14,10 @@ const baseStyle = {
     border: "1px solid rgba(255,255,255,0.1)",
     boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
 };
-function Other() {
+const Other = memo(function Other() {
     const [country, setCountry] = useState(null);
     useEffect(() => {
-        fetch("/saves/save0/game.json")
-        .then((res) => res.json())
+        readJson(JSON_URLS.game, { defaultValue: {} })
         .then((data) => setCountry(data.country))
         .catch((err) => console.error("Failed to load game.json:", err));
     }, []);
@@ -48,5 +48,5 @@ function Other() {
         </span>
         </div>
     );
-}
+});
 export { Other };
