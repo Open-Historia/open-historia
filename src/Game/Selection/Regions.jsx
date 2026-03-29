@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 
@@ -162,12 +162,34 @@ const RegionPopup = () => {
                 if (cosAngle < 0) { setScreenPos(null); return; }
 
                 const point = map.project(selection.lngLat);
-                setScreenPos({ x: point.x, y: point.y });
+                setScreenPos((prev) => {
+                    if (
+                        prev &&
+                        Math.abs(prev.x - point.x) < 0.5 &&
+                        Math.abs(prev.y - point.y) < 0.5
+                    ) {
+                        return prev;
+                    }
+
+                    return { x: point.x, y: point.y };
+                });
+            };
+
+            let frameId = 0;
+            const scheduleUpdate = () => {
+                if (frameId) return;
+                frameId = requestAnimationFrame(() => {
+                    frameId = 0;
+                    update();
+                });
             };
 
             update();
-            map.on("move", update);
-            return () => map.off("move", update);
+            map.on("move", scheduleUpdate);
+            return () => {
+                if (frameId) cancelAnimationFrame(frameId);
+                map.off("move", scheduleUpdate);
+            };
         }, [map, selection]);
 
         if (!selection || !screenPos) return null;
