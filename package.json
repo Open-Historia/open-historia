@@ -13,6 +13,7 @@
     "chart.js": "^4.5.1",
     "d3-geo": "^3.1.1",
     "dayjs": "^1.11.19",
+    "express": "^5.1.0",
     "eslint": "^9.39.3",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.26",
