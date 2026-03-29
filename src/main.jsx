@@ -1,9 +1,10 @@
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { configureMapRuntime } from "./runtime/assets.js";
 import App from "./App.jsx";
+import "./styles.css";
+
+configureMapRuntime();
 
 createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  <App />,
 );

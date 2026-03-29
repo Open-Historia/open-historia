@@ -1,6 +1,7 @@
 import React from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
+import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 dayjs.extend(advancedFormat);
 
 const SparkleIcon = () => (
@@ -17,11 +18,7 @@ const SendIcon = () => (
 
 const saveActions = async (actions) => {
     try {
-        await fetch("/saves/save0/storage/actions.json", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(actions),
-        });
+        await writeJson(JSON_URLS.actions, actions);
     } catch (err) {
         console.error("Failed to save actions:", err);
     }
@@ -29,9 +26,7 @@ const saveActions = async (actions) => {
 
 const loadActions = async () => {
     try {
-        const res = await fetch("/saves/save0/storage/actions.json");
-        if (!res.ok) return [];
-        return await res.json();
+        return await readJson(JSON_URLS.actions, { defaultValue: [] });
     } catch {
         return [];
     }
@@ -95,24 +90,30 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const inputRef = React.useRef(null);
 
     React.useEffect(() => {
+        if (!isOpen) return;
+
+        let cancelled = false;
         loadActions().then((saved) => {
-            if (saved.length > 0) setActions(saved);
+            if (!cancelled && saved.length > 0) setActions(saved);
         });
 
-            const fetchGameData = () => {
-                fetch("/saves/save0/game.json")
-                .then(res => res.json())
-                .then(data => {
-                    if (data.country) setCountry(data.country);
-                    if (data.gameDate) setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
-                })
-                .catch(() => {});
-            };
+        const fetchGameData = () => {
+            readJson(JSON_URLS.game, { defaultValue: {}, force: true })
+            .then((data) => {
+                if (cancelled) return;
+                if (data.country) setCountry(data.country);
+                if (data.gameDate) setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
+            })
+            .catch(() => {});
+        };
 
-            fetchGameData();
-            const interval = setInterval(fetchGameData, 3000);
-            return () => clearInterval(interval);
-    }, []);
+        fetchGameData();
+        const interval = setInterval(fetchGameData, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [isOpen]);
 
     const handleSubmit = () => {
         const trimmed = inputValue.trim();
@@ -336,14 +337,19 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
 const Actions = ({ onOpenAdvisor, hovered, setHovered, isActive }) => {
     const [actionsOpen, setActionsOpen] = React.useState(false);
+    const [hasOpened, setHasOpened] = React.useState(false);
+
+    React.useEffect(() => {
+        if (actionsOpen) setHasOpened(true);
+    }, [actionsOpen]);
 
     return (
         <>
-        <ActionsPanel
+        {hasOpened && <ActionsPanel
         isOpen={actionsOpen}
         onClose={() => setActionsOpen(false)}
         onOpenAdvisor={onOpenAdvisor}
-        />
+        />}
         <button
         title="Action"
         style={{
