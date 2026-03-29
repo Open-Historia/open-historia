@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
-
+import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 dayjs.extend(advancedFormat);
 
 const baseStyle = {
@@ -192,8 +192,7 @@ const DateWidget = ({
     const [gameData, setGameData] = useState(null);
 
     useEffect(() => {
-        fetch("/saves/save0/game.json")
-        .then((res) => res.json())
+        readJson(JSON_URLS.game, { defaultValue: {} })
         .then((data) => setGameData(data));
     }, []);
 
@@ -204,11 +203,7 @@ const DateWidget = ({
         const updated = { ...gameData, gameDate: newDate };
 
         try {
-            await fetch("/saves/save0/game.json", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(updated, null, 2),
-            });
+            await writeJson(JSON_URLS.game, updated, { pretty: true });
             setGameData(updated);
         } catch (err) {
             console.error("Failed to update game date:", err);

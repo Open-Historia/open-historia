@@ -2,6 +2,8 @@
 // Supports Gemini and custom OpenAI-compatible endpoints (e.g. Ollama)
 // Usage: import { sendMessage, sendDiplomaticMessage, startChat, startDiplomaticChat, loadHistory, loadDiplomaticHistory, buildDiplomaticSystemPrompt } from './main.jsx'
 
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
+
 // ── Provider detection ────────────────────────────────────────────────────────
 
 function getProvider() {
@@ -120,22 +122,36 @@ async function callAI(systemPrompt, history, opts) {
 
 let advisorTemplate = "";
 let leaderTemplate  = "";
+let promptsReady = null;
 
-const promptsReady = fetch("/saves/save0/prompts.json")
-.then(res => res.json())
-.then(data => {
-    advisorTemplate = data.advisor ?? "";
-    leaderTemplate  = data.leader  ?? "";
-})
-.catch(() => { console.warn("Could not load prompts.json"); });
+async function ensurePromptsLoaded() {
+    if (!promptsReady) {
+        promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
+        .then((data) => {
+            advisorTemplate = data.advisor ?? "";
+            leaderTemplate  = data.leader  ?? "";
+            return data;
+        })
+        .catch((error) => {
+            console.warn("Could not load prompts.json", error);
+            advisorTemplate = "";
+            leaderTemplate = "";
+            return {};
+        });
+    }
+
+    await promptsReady;
+}
 
 // ── Advisor prompt builder ────────────────────────────────────────────────────
 
 async function buildAdvisorSystemPrompt() {
-    await promptsReady;
-    const gameData   = await fetch("/saves/save0/game.json").then(res => res.json());
-    const actionData = await fetch("/saves/save0/storage/actions.json").then(res => res.json()).catch(() => []);
-    const chatData   = await fetch("/saves/save0/storage/chat.json").then(res => res.json()).catch(() => []);
+    await ensurePromptsLoaded();
+    const [gameData, actionData, chatData] = await Promise.all([
+        readJson(JSON_URLS.game, { defaultValue: {} }),
+        readJson(JSON_URLS.actions, { defaultValue: [] }),
+        readJson(JSON_URLS.chat, { defaultValue: [] }),
+    ]);
 
     return advisorTemplate
     .replace(/\$\{country\}/g,   gameData.country)
@@ -148,11 +164,13 @@ async function buildAdvisorSystemPrompt() {
 // ── Diplomatic prompt builder ─────────────────────────────────────────────────
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, gameDate) {
-    await promptsReady;
+    await ensurePromptsLoaded();
     const participantList = countries.map(c => `- ${c}`).join("\n");
-    const gameData   = await fetch("/saves/save0/game.json").then(res => res.json());
-    const actionData = await fetch("/saves/save0/storage/actions.json").then(res => res.json()).catch(() => []);
-    const chatData   = await fetch("/saves/save0/storage/chat.json").then(res => res.json()).catch(() => []);
+    const [gameData, actionData, chatData] = await Promise.all([
+        readJson(JSON_URLS.game, { defaultValue: {} }),
+        readJson(JSON_URLS.actions, { defaultValue: [] }),
+        readJson(JSON_URLS.chat, { defaultValue: [] }),
+    ]);
 
     return leaderTemplate
     .replace(/\$\{participantList\}/g, participantList)
