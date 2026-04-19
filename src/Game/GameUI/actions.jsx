@@ -1,336 +1,649 @@
 import React from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
-import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplay.js";
+import {
+    buildActionDisplayText,
+    normalizeActionEntry,
+    readActionsState,
+    writeActionsState,
+} from "../../runtime/gameState.js";
+
 dayjs.extend(advancedFormat);
 
+const ACTIONS_SPINNER_STYLE_ID = "actions-spinner-style";
+
+const ensureSpinnerStyles = () => {
+    if (typeof document === "undefined" || document.getElementById(ACTIONS_SPINNER_STYLE_ID)) {
+        return;
+    }
+
+    const style = document.createElement("style");
+    style.id = ACTIONS_SPINNER_STYLE_ID;
+    style.textContent = `
+      @keyframes actions-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+};
+
 const SparkleIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z" />
     </svg>
 );
 
 const SendIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
     </svg>
 );
 
-const saveActions = async (actions) => {
-    try {
-        await writeJson(JSON_URLS.actions, actions);
-    } catch (err) {
-        console.error("Failed to save actions:", err);
-    }
+const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
+    React.useEffect(() => {
+        ensureSpinnerStyles();
+    }, []);
+
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+            style={{ animation: "actions-spin 0.7s linear infinite" }}
+        >
+            <circle cx="12" cy="12" r="8" stroke="rgba(255,255,255,0.2)" strokeWidth="2.2" />
+            <path d="M12 4a8 8 0 0 1 8 8" stroke={tone} strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+    );
 };
 
-const loadActions = async () => {
-    try {
-        return await readJson(JSON_URLS.actions, { defaultValue: [] });
-    } catch {
-        return [];
-    }
-};
+const saveActions = async (actions) => writeActionsState(actions);
+const loadActions = async () => readActionsState();
+
+const createManualAction = (input) =>
+    normalizeActionEntry({
+        kind: "action",
+        rawInput: input,
+        source: "manual",
+        status: "planned",
+        text: input,
+        title: input,
+    });
+
+const normalizeSuggestionAction = (action) =>
+    normalizeActionEntry({
+        ...action,
+        source: "suggested",
+        status: "planned",
+    });
 
 const ActionItem = ({ action, onDelete }) => {
     const [hovered, setHovered] = React.useState(false);
+    const normalized = normalizeActionEntry(action);
+
+    if (!normalized) {
+        return null;
+    }
+
+    const label = buildActionDisplayText(normalized);
+    const showTitle = normalized.title && normalized.title !== label;
 
     return (
         <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-            padding: "0.55rem 0.85rem",
-            borderRadius: "10px",
-            backgroundColor: hovered ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.07)",
-            color: "rgba(255,255,255,0.85)",
-            lineHeight: "1.75",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.5rem",
-            transition: "background 0.15s",
-        }}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            style={{
+                alignItems: "center",
+                backgroundColor: hovered ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: "10px",
+                color: "rgba(255,255,255,0.85)",
+                display: "flex",
+                gap: "0.5rem",
+                justifyContent: "space-between",
+                lineHeight: "1.75",
+                padding: "0.55rem 0.85rem",
+                transition: "background 0.15s",
+            }}
         >
-        <span style={{ flex: 1, fontSize: "0.82rem" }}>{action}</span>
-        <button
-        onClick={onDelete}
-        title="Delete action"
-        style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "0.1rem 0.2rem",
-            borderRadius: "6px",
-            color: "rgba(239,68,68,0.8)",
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-            fontSize: "0.9rem",
-            lineHeight: 1,
-            opacity: hovered ? 1 : 0,
-            pointerEvents: hovered ? "auto" : "none",
-            transition: "opacity 0.15s, color 0.15s, background 0.15s",
-        }}
-        onMouseEnter={e => { e.currentTarget.style.color = "rgba(239,68,68,0.95)"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
-        onMouseLeave={e => { e.currentTarget.style.color = "rgba(239,68,68,0.8)"; e.currentTarget.style.background = "none"; }}
-        >
-        🗑
-        </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                {showTitle && (
+                    <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
+                        {normalized.title}
+                    </div>
+                )}
+                <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {label}
+                </div>
+                <div
+                    style={{
+                        color: "rgba(255,255,255,0.38)",
+                        fontSize: "0.68rem",
+                        letterSpacing: "0.06em",
+                        marginTop: "0.25rem",
+                        textTransform: "uppercase",
+                    }}
+                >
+                    {normalized.kind} • {normalized.status}
+                </div>
+            </div>
+            <button
+                type="button"
+                onClick={onDelete}
+                title="Delete action"
+                style={{
+                    alignItems: "center",
+                    background: hovered ? "rgba(239,68,68,0.1)" : "none",
+                    border: "none",
+                    borderRadius: "6px",
+                    color: hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexShrink: 0,
+                    fontSize: "1rem",
+                    lineHeight: 1,
+                    opacity: hovered ? 1 : 0,
+                    padding: "0.18rem 0.3rem",
+                    pointerEvents: hovered ? "auto" : "none",
+                    transition: "opacity 0.15s, color 0.15s, background 0.15s",
+                }}
+            >
+                {"\u2715"}
+            </button>
         </div>
     );
 };
+
+const SuggestionCard = ({ topic, onQueue }) => (
+    <div
+        style={{
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.55rem",
+            padding: "0.7rem 0.8rem",
+        }}
+    >
+        <div>
+            <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.8rem", fontWeight: 700 }}>{topic.title}</div>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem", lineHeight: "1.5", marginTop: "0.2rem" }}>
+                {topic.description}
+            </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {topic.actions.map((action) => (
+                <button
+                    key={action.id}
+                    type="button"
+                    onClick={() => onQueue(action)}
+                    style={{
+                        background: "rgba(109,40,217,0.12)",
+                        border: "1px solid rgba(139,92,246,0.24)",
+                        borderRadius: "10px",
+                        color: "rgba(255,255,255,0.9)",
+                        cursor: "pointer",
+                        fontFamily: "sans-serif",
+                        padding: "0.55rem 0.7rem",
+                        textAlign: "left",
+                    }}
+                >
+                    <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>{action.title}</div>
+                    <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
+                        {action.text}
+                    </div>
+                </button>
+            ))}
+        </div>
+    </div>
+);
 
 const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
     const [country, setCountry] = React.useState("your nation");
     const [gameDate, setGameDate] = React.useState("the current date");
+    const [suggestions, setSuggestions] = React.useState([]);
+    const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const [isImproving, setIsImproving] = React.useState(false);
+    const [isSuggesting, setIsSuggesting] = React.useState(false);
     const inputRef = React.useRef(null);
 
     React.useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen) {
+            return undefined;
+        }
 
         let cancelled = false;
+        setSuggestions([]);
+        setHasRequestedSuggestions(false);
+
         loadActions().then((saved) => {
-            if (!cancelled && saved.length > 0) setActions(saved);
+            if (!cancelled) {
+                setActions(saved);
+            }
         });
 
         const fetchGameData = () => {
             readJson(JSON_URLS.game, { defaultValue: {}, force: true })
-            .then((data) => {
-                if (cancelled) return;
-                if (data.country) setCountry(data.country);
-                if (data.gameDate) setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
-            })
-            .catch(() => {});
+                .then((data) => {
+                    if (cancelled) {
+                        return;
+                    }
+
+                    if (data.country) {
+                        setCountry(data.country);
+                    }
+
+                    if (data.gameDate) {
+                        setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
+                    }
+                })
+                .catch(() => {});
         };
 
         fetchGameData();
         const interval = setInterval(fetchGameData, 5000);
+
         return () => {
             cancelled = true;
             clearInterval(interval);
         };
     }, [isOpen]);
 
-    const handleSubmit = () => {
+    const persistActions = async (nextActions) => {
+        setActions(nextActions);
+        try {
+            await saveActions(nextActions);
+        } catch (error) {
+            console.error("Failed to save actions:", error);
+        }
+    };
+
+    const submittedActions = React.useMemo(
+        () =>
+            actions
+                .map((action, index) => ({
+                    normalized: normalizeActionEntry(action, index),
+                    originalIndex: index,
+                }))
+                .filter(({ normalized }) => normalized?.status === "planned"),
+        [actions],
+    );
+
+    const handleSubmit = async () => {
         const trimmed = inputValue.trim();
-        if (!trimmed) return;
-        setActions(prev => {
-            const updated = [...prev, trimmed];
-            saveActions(updated);
-            return updated;
-        });
-        setInputValue("");
+        if (!trimmed || isSubmitting || isImproving) {
+            return;
+        }
+
+        const nextAction = createManualAction(trimmed);
+        if (!nextAction) {
+            return;
+        }
+
+        setIsSubmitting(true);
+        try {
+            await persistActions([...actions, nextAction]);
+            setInputValue("");
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
-    const handleDelete = (index) => {
-        setActions(prev => {
-            const updated = prev.filter((_, j) => j !== index);
-            saveActions(updated);
-            return updated;
-        });
+    const handleImprove = async () => {
+        const trimmed = inputValue.trim();
+        if (!trimmed || isImproving || isSubmitting) {
+            return;
+        }
+
+        setIsImproving(true);
+        try {
+            const refined = await refinePlayerAction(trimmed, { persist: false });
+            const improvedText = refined?.text || buildActionDisplayText(refined) || trimmed;
+            setInputValue(improvedText);
+            inputRef.current?.focus();
+        } catch (error) {
+            console.error("Failed to improve action:", error);
+        } finally {
+            setIsImproving(false);
+        }
     };
 
-    const handleKeyDown = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
+    const handleDelete = async (index) => {
+        await persistActions(actions.filter((_, actionIndex) => actionIndex !== index));
+    };
+
+    const handleQueueSuggestion = async (action) => {
+        const queuedAction = normalizeSuggestionAction(action);
+        if (!queuedAction) {
+            return;
+        }
+
+        await persistActions([...actions, queuedAction]);
+    };
+
+    const refreshSuggestions = async () => {
+        if (isSuggesting) {
+            return;
+        }
+
+        setHasRequestedSuggestions(true);
+        setIsSuggesting(true);
+        try {
+            const topics = await generateActionSuggestions({ force: true });
+            setSuggestions(topics);
+        } catch (error) {
+            console.error("Failed to generate suggestions:", error);
+            setSuggestions([]);
+        } finally {
+            setIsSuggesting(false);
+        }
+    };
+
+    const handleKeyDown = (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
             handleSubmit();
         }
     };
 
+    const suggestionButtonLabel = hasRequestedSuggestions
+        ? (isSuggesting ? "Refreshing AI suggestions..." : "Refresh AI suggestions")
+        : (isSuggesting ? "Loading AI suggestions..." : "Get AI suggestions");
+
     return (
         <div
-        style={{
-            position: "fixed",
-            bottom: isOpen ? "4.25rem" : "-30rem",
-            left: "0rem",
-            width: "26.25rem",
-            maxWidth: "calc(100vw - 1rem)",
-            backgroundColor: "rgba(17, 24, 39, 0.95)",
-            backdropFilter: "blur(8px)",
-            borderRadius: "16px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
-            zIndex: 9998,
-            overflow: "hidden",
-            transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
-            opacity: isOpen ? 1 : 0,
-            pointerEvents: isOpen ? "auto" : "none",
-            fontFamily: "sans-serif",
-            color: "white",
-            display: "flex",
-            flexDirection: "column",
-        }}
+            style={{
+                backdropFilter: "blur(8px)",
+                backgroundColor: "rgba(17, 24, 39, 0.95)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "16px",
+                bottom: isOpen ? "4.25rem" : "-30rem",
+                boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
+                color: "white",
+                display: "flex",
+                flexDirection: "column",
+                fontFamily: "sans-serif",
+                left: "0rem",
+                maxWidth: "calc(100vw - 1rem)",
+                opacity: isOpen ? 1 : 0,
+                overflow: "hidden",
+                pointerEvents: isOpen ? "auto" : "none",
+                position: "fixed",
+                transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
+                width: "26.25rem",
+                zIndex: 9998,
+            }}
         >
-        {/* Header */}
-        <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "1rem 1.25rem 0.75rem",
-            borderBottom: "1px solid rgba(255,255,255,0.07)",
-        }}>
-        <span style={{ fontWeight: 700, fontSize: "1rem", letterSpacing: "0.01em" }}>
-        Actions
-        </span>
-        <button
-        onClick={onClose}
-        style={{
-            background: "none",
-            border: "none",
-            color: "rgba(255,255,255,0.5)",
-            cursor: "pointer",
-            fontSize: "1.1rem",
-            lineHeight: 1,
-            padding: "0.15rem 0.3rem",
-            borderRadius: "6px",
-            transition: "color 0.15s, background 0.15s",
-        }}
-        onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-        onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}
-        >
-        ✕
-        </button>
-        </div>
+            <div
+                style={{
+                    alignItems: "center",
+                    borderBottom: "1px solid rgba(255,255,255,0.07)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "1rem 1.25rem 0.75rem",
+                }}
+            >
+                <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>Actions</span>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    style={{
+                        background: "none",
+                        border: "none",
+                        borderRadius: "6px",
+                        color: "rgba(255,255,255,0.5)",
+                        cursor: "pointer",
+                        fontSize: "1.1rem",
+                        lineHeight: 1,
+                        padding: "0.15rem 0.3rem",
+                        transition: "color 0.15s, background 0.15s",
+                    }}
+                    onMouseEnter={(event) => {
+                        event.currentTarget.style.color = "white";
+                        event.currentTarget.style.background = "rgba(255,255,255,0.08)";
+                    }}
+                    onMouseLeave={(event) => {
+                        event.currentTarget.style.color = "rgba(255,255,255,0.5)";
+                        event.currentTarget.style.background = "none";
+                    }}
+                >
+                    {"\u2715"}
+                </button>
+            </div>
 
-        {/* Body */}
-        <div style={{ padding: "0.875rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-        <p style={{
-            margin: 0,
-            fontSize: "0.82rem",
-            lineHeight: "1.55",
-            color: "rgba(255,255,255,0.75)",
-        }}>
-        Submit actions for {country} for {gameDate}. Your actions will affect how the game world responds.
-        </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem" }}>
+                <p
+                    style={{
+                        color: "rgba(255,255,255,0.75)",
+                        fontSize: "0.82rem",
+                        lineHeight: "1.55",
+                        margin: 0,
+                    }}
+                >
+                    Submit actions for {country} for {gameDate}. Your actions will affect how the game world responds.
+                </p>
 
-        <button
-        style={{
-            width: "100%",
-            padding: "0.55rem 1rem",
-            borderRadius: "10px",
-            border: "1px solid rgba(139, 92, 246, 0.4)",
-            background: "rgba(109, 40, 217, 0.15)",
-            color: "rgba(196, 165, 255, 0.95)",
-            fontSize: "0.82rem",
-            fontWeight: 500,
-            cursor: "pointer",
-            transition: "background 0.15s, border-color 0.15s",
-            letterSpacing: "0.01em",
-        }}
-        onMouseEnter={e => { e.currentTarget.style.background = "rgba(109, 40, 217, 0.28)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.65)"; }}
-        onMouseLeave={e => { e.currentTarget.style.background = "rgba(109, 40, 217, 0.15)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.4)"; }}
-        onClick={onOpenAdvisor}
-        >
-        Help brainstorm actions
-        </button>
+                <button
+                    type="button"
+                    onClick={onOpenAdvisor}
+                    style={{
+                        background: "rgba(109, 40, 217, 0.15)",
+                        border: "1px solid rgba(139, 92, 246, 0.4)",
+                        borderRadius: "10px",
+                        color: "rgba(196, 165, 255, 0.95)",
+                        cursor: "pointer",
+                        fontSize: "0.82rem",
+                        fontWeight: 500,
+                        letterSpacing: "0.01em",
+                        padding: "0.55rem 1rem",
+                        transition: "background 0.15s, border-color 0.15s",
+                        width: "100%",
+                    }}
+                    onMouseEnter={(event) => {
+                        event.currentTarget.style.background = "rgba(109, 40, 217, 0.28)";
+                        event.currentTarget.style.borderColor = "rgba(139,92,246,0.65)";
+                    }}
+                    onMouseLeave={(event) => {
+                        event.currentTarget.style.background = "rgba(109, 40, 217, 0.15)";
+                        event.currentTarget.style.borderColor = "rgba(139,92,246,0.4)";
+                    }}
+                >
+                    Help brainstorm actions
+                </button>
 
-        <div>
-        <p style={{
-            margin: "0 0 0.5rem 0",
-            fontSize: "0.78rem",
-            fontWeight: 700,
-            color: "rgba(255,255,255,0.9)",
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-        }}>
-        Your Submitted Actions
-        </p>
+                <button
+                    type="button"
+                    onClick={refreshSuggestions}
+                    style={{
+                        alignItems: "center",
+                        background: "rgba(255,255,255,0.05)",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        borderRadius: "10px",
+                        color: "rgba(255,255,255,0.82)",
+                        cursor: "pointer",
+                        display: "flex",
+                        fontSize: "0.8rem",
+                        gap: "0.5rem",
+                        justifyContent: "center",
+                        padding: "0.52rem 1rem",
+                        transition: "background 0.15s, border-color 0.15s",
+                        width: "100%",
+                    }}
+                    onMouseEnter={(event) => {
+                        event.currentTarget.style.background = "rgba(255,255,255,0.09)";
+                        event.currentTarget.style.borderColor = "rgba(255,255,255,0.18)";
+                    }}
+                    onMouseLeave={(event) => {
+                        event.currentTarget.style.background = "rgba(255,255,255,0.05)";
+                        event.currentTarget.style.borderColor = "rgba(255,255,255,0.12)";
+                    }}
+                >
+                    {isSuggesting && <SpinnerRing size={14} />}
+                    <span>{suggestionButtonLabel}</span>
+                </button>
 
-        <div style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.4rem",
-            height: "calc(100vh - 50rem)",
-            overflowY: "auto",
-            scrollbarWidth: "none",
-        }}>
-        {actions.length === 0 && (
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>
-            No actions submitted yet.
-            </p>
-        )}
-        {actions.map((action, i) => (
-            <ActionItem
-            key={i}
-            action={action}
-            onDelete={() => handleDelete(i)}
-            />
-        ))}
-        </div>
-        </div>
-        </div>
+                {(hasRequestedSuggestions || isSuggesting || suggestions.length > 0) && (
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.5rem",
+                            maxHeight: "13rem",
+                            overflowY: "auto",
+                            scrollbarWidth: "none",
+                        }}
+                    >
+                        {hasRequestedSuggestions && !isSuggesting && suggestions.length === 0 && (
+                            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.78rem", fontStyle: "italic", margin: 0 }}>
+                                No AI suggestions generated yet.
+                            </p>
+                        )}
+                        {suggestions.map((topic) => (
+                            <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} />
+                        ))}
+                    </div>
+                )}
 
-        {/* Input bar */}
-        <div style={{
-            padding: "0.75rem 1rem",
-            borderTop: "1px solid rgba(255,255,255,0.07)",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            backgroundColor: "rgba(0,0,0,0.2)",
-        }}>
-        <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center" }}>
-        <input
-        ref={inputRef}
-        type="text"
-        placeholder="Enter your action..."
-        value={inputValue}
-        onChange={e => setInputValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        style={{
-            width: "100%",
-            padding: "0.55rem 2.5rem 0.55rem 0.85rem",
-            borderRadius: "10px",
-            border: "1px solid rgba(255,255,255,0.15)",
-            background: "rgba(0,0,0,0.2)",
-            color: "white",
-            fontSize: "0.82rem",
-            outline: "none",
-            boxSizing: "border-box",
-            fontFamily: "sans-serif",
-            transition: "border-color 0.2s",
-        }}
-        onFocus={e => e.target.style.borderColor = "rgba(139,92,246,0.5)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.12)"}
-        />
-        <span style={{
-            position: "absolute",
-            right: "0.6rem",
-            color: "rgba(196,165,255,0.6)",
-            display: "flex",
-            pointerEvents: "none",
-        }}>
-        <SparkleIcon />
-        </span>
-        </div>
+                <div>
+                    <p
+                        style={{
+                            color: "rgba(255,255,255,0.9)",
+                            fontSize: "0.78rem",
+                            fontWeight: 700,
+                            letterSpacing: "0.06em",
+                            margin: "0 0 0.5rem 0",
+                            textTransform: "uppercase",
+                        }}
+                    >
+                        Your Submitted Actions
+                    </p>
 
-        <button
-        onClick={handleSubmit}
-        disabled={!inputValue.trim()}
-        style={{
-            width: "2.2rem",
-            height: "2.2rem",
-            borderRadius: "10px",
-            border: "none",
-            background: inputValue.trim() ? "#3b82f6" : "rgba(59,130,246,0.3)",
-            color: "white",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: inputValue.trim() ? "pointer" : "not-allowed",
-            flexShrink: 0,
-            transition: "background 0.15s",
-        }}
-        onMouseEnter={e => { if (inputValue.trim()) e.currentTarget.style.background = "#2563eb"; }}
-        onMouseLeave={e => { if (inputValue.trim()) e.currentTarget.style.background = "#3b82f6"; }}
-        >
-        <SendIcon />
-        </button>
-        </div>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.4rem",
+                            height: "calc(100vh - 50rem)",
+                            overflowY: "auto",
+                            scrollbarWidth: "none",
+                        }}
+                    >
+                        {submittedActions.length === 0 && (
+                            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.8rem", fontStyle: "italic", margin: 0 }}>
+                                No actions submitted yet.
+                            </p>
+                        )}
+                        {submittedActions.map(({ normalized, originalIndex }) => (
+                            <ActionItem key={normalized.id || originalIndex} action={normalized} onDelete={() => handleDelete(originalIndex)} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            <div
+                style={{
+                    alignItems: "center",
+                    backgroundColor: "rgba(0,0,0,0.2)",
+                    borderTop: "1px solid rgba(255,255,255,0.07)",
+                    display: "flex",
+                    gap: "0.5rem",
+                    padding: "0.75rem 1rem",
+                }}
+            >
+                <div style={{ alignItems: "center", display: "flex", flex: 1, position: "relative" }}>
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        placeholder="Enter your action..."
+                        value={inputValue}
+                        onChange={(event) => setInputValue(event.target.value)}
+                        onKeyDown={handleKeyDown}
+                        style={{
+                            background: "rgba(0,0,0,0.2)",
+                            border: "1px solid rgba(255,255,255,0.15)",
+                            borderRadius: "10px",
+                            boxSizing: "border-box",
+                            color: "white",
+                            fontFamily: "sans-serif",
+                            fontSize: "0.82rem",
+                            outline: "none",
+                            padding: "0.55rem 2.8rem 0.55rem 0.85rem",
+                            transition: "border-color 0.2s",
+                            width: "100%",
+                        }}
+                        onFocus={(event) => {
+                            event.target.style.borderColor = "rgba(139,92,246,0.5)";
+                        }}
+                        onBlur={(event) => {
+                            event.target.style.borderColor = "rgba(255,255,255,0.12)";
+                        }}
+                    />
+                    <button
+                        type="button"
+                        onClick={handleImprove}
+                        title="Improve action text"
+                        aria-label="Improve action text"
+                        style={{
+                            alignItems: "center",
+                            background: "none",
+                            border: "none",
+                            borderRadius: "8px",
+                            color: inputValue.trim() ? "rgba(196,165,255,0.78)" : "rgba(196,165,255,0.35)",
+                            cursor: inputValue.trim() ? "pointer" : "default",
+                            display: "flex",
+                            height: "1.8rem",
+                            justifyContent: "center",
+                            padding: 0,
+                            position: "absolute",
+                            right: "0.45rem",
+                            width: "1.8rem",
+                        }}
+                    >
+                        {isImproving ? <SpinnerRing size={14} tone="rgba(196,165,255,0.9)" /> : <SparkleIcon />}
+                    </button>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={!inputValue.trim() || isSubmitting || isImproving}
+                    style={{
+                        alignItems: "center",
+                        background: inputValue.trim() && !isSubmitting && !isImproving ? "#3b82f6" : "rgba(59,130,246,0.3)",
+                        border: "none",
+                        borderRadius: "10px",
+                        color: "white",
+                        cursor: inputValue.trim() && !isSubmitting && !isImproving ? "pointer" : "not-allowed",
+                        display: "flex",
+                        flexShrink: 0,
+                        height: "2.2rem",
+                        justifyContent: "center",
+                        transition: "background 0.15s",
+                        width: "2.2rem",
+                    }}
+                    onMouseEnter={(event) => {
+                        if (inputValue.trim() && !isSubmitting && !isImproving) {
+                            event.currentTarget.style.background = "#2563eb";
+                        }
+                    }}
+                    onMouseLeave={(event) => {
+                        if (inputValue.trim() && !isSubmitting && !isImproving) {
+                            event.currentTarget.style.background = "#3b82f6";
+                        }
+                    }}
+                >
+                    {isSubmitting ? <SpinnerRing size={14} /> : <SendIcon />}
+                </button>
+            </div>
         </div>
     );
 };
@@ -339,52 +652,57 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = React.useState(false);
 
     React.useEffect(() => {
-        if (isOpen) setHasOpened(true);
+        if (isOpen) {
+            setHasOpened(true);
+        }
     }, [isOpen]);
 
     return (
         <>
-        {hasOpened && <ActionsPanel
-        isOpen={isOpen}
-        onClose={onToggle}
-        onOpenAdvisor={onOpenAdvisor}
-        />}
-        <button
-        title="Action"
-        style={{
-            width: "3.3rem",
-            height: "3.3rem",
-            borderRadius: "10px",
-            border: hovered
-            ? "1px solid rgba(255,255,255,0.2)"
-            : isOpen
-            ? "1px solid rgba(139,92,246,0.5)"
-            : "1px solid rgba(255,255,255,0.1)",
-            background: isOpen
-            ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
-            : hovered
-            ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-            : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            transition: "all 0.12s ease",
-            boxShadow: hovered
-            ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
-            : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
-            fontSize: "1.2rem",
-            outline: "none",
-            transform: hovered ? "translateY(-1px)" : "translateY(0)",
-            color: "white",
-            fontFamily: "sans-serif",
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onClick={onToggle}
-        >
-        ⚡
-        </button>
+            {hasOpened && (
+                <ActionsPanel
+                    isOpen={isOpen}
+                    onClose={onToggle}
+                    onOpenAdvisor={onOpenAdvisor}
+                />
+            )}
+            <button
+                type="button"
+                title="Actions"
+                style={{
+                    alignItems: "center",
+                    background: isOpen
+                        ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
+                        : hovered
+                        ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
+                        : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
+                    border: hovered
+                        ? "1px solid rgba(255,255,255,0.2)"
+                        : isOpen
+                        ? "1px solid rgba(139,92,246,0.5)"
+                        : "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: "10px",
+                    boxShadow: hovered
+                        ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
+                        : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
+                    color: "white",
+                    cursor: "pointer",
+                    display: "flex",
+                    fontFamily: "sans-serif",
+                    fontSize: "1.2rem",
+                    height: "3.3rem",
+                    justifyContent: "center",
+                    outline: "none",
+                    transform: hovered ? "translateY(-1px)" : "translateY(0)",
+                    transition: "all 0.12s ease",
+                    width: "3.3rem",
+                }}
+                onMouseEnter={() => setHovered(true)}
+                onMouseLeave={() => setHovered(false)}
+                onClick={onToggle}
+            >
+                <SparkleIcon />
+            </button>
         </>
     );
 };

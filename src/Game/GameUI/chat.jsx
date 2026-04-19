@@ -2,6 +2,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
+import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
 import { Actions } from "./actions";
 import {
     JSON_URLS,
@@ -549,6 +550,31 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             return [...chat.countries.slice(s), ...chat.countries.slice(0, s)];
         };
 
+        const buildResponsiveQueue = async (updatedMessages) => {
+            const rotatedQueue = buildRoundQueue();
+            const suggestedSpeaker = await chooseNextDiplomaticSpeaker({
+                chat: {
+                    ...chat,
+                    messages: updatedMessages,
+                },
+                excludeSpeaker: updatedMessages.at(-1)?.speaker || updatedMessages.at(-1)?.role || "",
+            }).catch(() => "");
+
+            if (!suggestedSpeaker) {
+                return rotatedQueue;
+            }
+
+            const suggestedCountry = rotatedQueue.find((country) => country.name.toLowerCase() === suggestedSpeaker.toLowerCase());
+            if (!suggestedCountry) {
+                return rotatedQueue;
+            }
+
+            return [
+                suggestedCountry,
+                ...rotatedQueue.filter((country) => country.name !== suggestedCountry.name),
+            ];
+        };
+
         const offerNextCountry = (queue) => {
             const [next, ...rest] = queue;
             nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % chat.countries.length;
@@ -561,9 +587,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             const text = playerInput.trim();
             if (!text || isLoading) return;
             lastPlayerMessage.current = text;
-            pushMessages([...messagesRef.current, { role: "user", speaker: playerCountry, text, time: gameDate }]);
+            const nextMessages = [...messagesRef.current, { role: "user", speaker: playerCountry, text, time: gameDate }];
+            pushMessages(nextMessages);
             setPlayerInput("");
-            const queue = buildRoundQueue();
+            const queue = await buildResponsiveQueue(nextMessages);
             if (isGroup) {
                 offerNextCountry(queue);
             } else {

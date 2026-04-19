@@ -495,12 +495,12 @@ const SocialLinks = ({ discordUrl, githubUrl }) => (
     </div>
 );
 
-const SettingsButton = ({ onToggle }) => (
+const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
     <button
     onClick={onToggle}
     style={{
         ...baseStyle,
-        top: "0.5rem",
+        top: topOffset,
         left: "0.5rem",
         height: "4rem",
         width: "4rem",
@@ -513,6 +513,7 @@ const SettingsButton = ({ onToggle }) => (
 );
 
 const SettingsMenu = ({
+    topOffset = "0.5rem",
     isFullscreenEnabled,
     isGlobeEnabled,
     isTerrainEnabled,
@@ -532,7 +533,7 @@ const SettingsMenu = ({
         <div
         style={{
             ...baseStyle,
-            top: "4.75rem",
+            top: `calc(${topOffset} + 4.25rem)`,
             left: "0.5rem",
             width: "22rem",
             maxWidth: "calc(100vw - 1rem)",

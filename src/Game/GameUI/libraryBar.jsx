@@ -1,0 +1,1439 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  PROMPT_SECTION_DEFINITIONS,
+  normalizePromptPack,
+  serializePromptPack,
+} from "../AI/gameplayPrompts.js";
+import {
+  activateGame,
+  clearGameAsset,
+  clearScenarioAsset,
+  createGame,
+  createScenario,
+  ensureLibraryCatalog,
+  exportScenarioBundle,
+  importScenarioBundle,
+  loadGameDetails,
+  loadScenarioDetails,
+  refreshLibraryCatalog,
+  removeGame,
+  removeScenario,
+  saveGame,
+  saveScenario,
+  selectScenario,
+  uploadGameAsset,
+  uploadScenarioAsset,
+  useLibraryState,
+} from "../../runtime/library.js";
+
+const BAR_HEIGHT = 64;
+const TOP_BAR_OFFSET = "4.75rem";
+
+const surfaceStyle = {
+  background:
+    "linear-gradient(180deg, rgba(8, 10, 17, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
+  backdropFilter: "blur(18px)",
+  WebkitBackdropFilter: "blur(18px)",
+};
+
+const actionButtonStyle = {
+  alignItems: "center",
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "999px",
+  color: "rgba(244,246,255,0.92)",
+  cursor: "pointer",
+  display: "inline-flex",
+  fontSize: "0.82rem",
+  fontWeight: 600,
+  gap: "0.4rem",
+  justifyContent: "center",
+  minHeight: "2.1rem",
+  padding: "0 0.95rem",
+  transition: "background 0.18s ease, border-color 0.18s ease, transform 0.18s ease",
+};
+
+const fieldLabelStyle = {
+  color: "rgba(255,255,255,0.72)",
+  display: "block",
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  marginBottom: "0.45rem",
+  textTransform: "uppercase",
+};
+
+const inputStyle = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: "12px",
+  color: "#f8fafc",
+  fontSize: "0.9rem",
+  outline: "none",
+  padding: "0.8rem 0.9rem",
+  width: "100%",
+};
+
+const textareaStyle = {
+  ...inputStyle,
+  minHeight: "8rem",
+  resize: "vertical",
+};
+
+const IMAGE_UPLOAD_ACCEPT = ".avif,.gif,.jpeg,.jpg,.png,.webp";
+
+const scenarioBadgeLabels = {
+  cities: "Cities PMTiles",
+  colors: "Colors JSON",
+  countries: "Countries PMTiles",
+  regions: "Regions PMTiles",
+};
+
+const scenarioAssetLabels = {
+  cover: "Cover Image",
+  ...scenarioBadgeLabels,
+};
+
+const scenarioAssetAccept = {
+  cover: IMAGE_UPLOAD_ACCEPT,
+  cities: ".pmtiles",
+  colors: ".json",
+  countries: ".pmtiles",
+  regions: ".pmtiles",
+};
+
+const gameAssetLabels = {
+  cover: "Cover Image",
+};
+
+const gameAssetAccept = {
+  cover: IMAGE_UPLOAD_ACCEPT,
+};
+
+const editorSectionLabels = {
+  assets: "Assets",
+  bundles: "Bundles",
+  overview: "Overview",
+  prompts: "Prompts",
+  world: "World",
+};
+
+const normalizeString = (value) => String(value ?? "").trim();
+
+const formatCountryOverrides = (overrides) => {
+  if (!overrides || typeof overrides !== "object") {
+    return "";
+  }
+
+  return Object.entries(overrides)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key} = ${value}`)
+    .join("\n");
+};
+
+const parseCountryOverrides = (value) => {
+  const trimmed = normalizeString(value);
+  if (!trimmed) {
+    return {};
+  }
+
+  if (trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Country overrides must be an object.");
+    }
+    return parsed;
+  }
+
+  const overrides = {};
+
+  for (const line of trimmed.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (!entry || entry.startsWith("#") || entry.startsWith("//")) {
+      continue;
+    }
+
+    const separatorIndex = entry.includes("=") ? entry.indexOf("=") : entry.indexOf(":");
+    if (separatorIndex <= 0) {
+      throw new Error("Use `CODE = New Name` or JSON for country overrides.");
+    }
+
+    const key = entry.slice(0, separatorIndex).trim();
+    const resolvedValue = entry.slice(separatorIndex + 1).trim();
+    if (!key || !resolvedValue) {
+      throw new Error("Country override rows must include both key and value.");
+    }
+
+    overrides[key] = resolvedValue;
+  }
+
+  return overrides;
+};
+
+const buildScenarioEditorState = (details) => {
+  const scenario = details?.scenario ?? {};
+  const game = details?.data?.game ?? {};
+  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const world = details?.data?.world ?? {};
+
+  return {
+    accentColor: scenario.accentColor ?? "#7c3aed",
+    country: game.country ?? "",
+    countryOverridesText: formatCountryOverrides(scenario.countryNameOverrides),
+    description: scenario.description ?? "",
+    difficulty: game.difficulty ?? world.difficulty ?? "standard",
+    eyebrow: scenario.eyebrow ?? "",
+    gameDate: game.gameDate ?? "",
+    heroSubtitle: scenario.heroSubtitle ?? "",
+    heroTitle: scenario.heroTitle ?? "",
+    language: game.language ?? world.language ?? "English",
+    name: scenario.name ?? "",
+    prompts,
+    simulationRules: world.simulationRules ?? "",
+    startingTimelineText: world.startingTimelineText ?? "",
+    subtitle: scenario.subtitle ?? "",
+  };
+};
+
+const buildGameEditorState = (details) => {
+  const gameMeta = details?.game ?? {};
+  const game = details?.data?.game ?? {};
+  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const world = details?.data?.world ?? {};
+
+  return {
+    accentColor: gameMeta.accentColor ?? "#7c3aed",
+    country: game.country ?? "",
+    description: gameMeta.description ?? "",
+    difficulty: game.difficulty ?? world.difficulty ?? "standard",
+    eyebrow: gameMeta.eyebrow ?? "",
+    gameDate: game.gameDate ?? "",
+    heroSubtitle: gameMeta.heroSubtitle ?? "",
+    heroTitle: gameMeta.heroTitle ?? "",
+    language: game.language ?? world.language ?? "English",
+    name: gameMeta.name ?? "",
+    prompts,
+    simulationRules: world.simulationRules ?? "",
+    startingTimelineText: world.startingTimelineText ?? "",
+    subtitle: gameMeta.subtitle ?? "",
+  };
+};
+
+const saveJsonBundleToDisk = (bundle, fileName) => {
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+};
+
+const AssetBadgeRow = ({ badges }) =>
+  badges.length > 0 ? (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.85rem" }}>
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          style={{
+            background: "rgba(255,255,255,0.14)",
+            borderRadius: "999px",
+            color: "rgba(255,255,255,0.9)",
+            fontSize: "0.7rem",
+            padding: "0.28rem 0.55rem",
+          }}
+        >
+          {badge}
+        </span>
+      ))}
+    </div>
+  ) : null;
+
+const PromptSectionEditor = ({
+  onChangeHelper,
+  onChangePrompt,
+  promptPack,
+  promptSectionKey,
+  setPromptSectionKey,
+}) => {
+  const currentSection =
+    PROMPT_SECTION_DEFINITIONS.find((section) => section.key === promptSectionKey) ??
+    PROMPT_SECTION_DEFINITIONS[0];
+  const currentValue =
+    currentSection.type === "root"
+      ? promptPack[currentSection.key]
+      : promptPack.tasks[currentSection.key];
+
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: "18px",
+        padding: "0.9rem",
+      }}
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.85rem" }}>
+        {PROMPT_SECTION_DEFINITIONS.map((section) => (
+          <button
+            key={section.key}
+            onClick={() => setPromptSectionKey(section.key)}
+            style={{
+              ...actionButtonStyle,
+              background:
+                section.key === currentSection.key ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+              borderColor:
+                section.key === currentSection.key ? "rgba(124,58,237,0.42)" : "rgba(255,255,255,0.08)",
+              minHeight: "2rem",
+              padding: "0 0.8rem",
+            }}
+            type="button"
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.82rem", marginBottom: "0.75rem" }}>
+        {currentSection.description}
+      </div>
+
+      <div style={{ marginBottom: "0.9rem" }}>
+        <label style={fieldLabelStyle}>{currentSection.label} Prompt</label>
+        <textarea
+          style={{ ...textareaStyle, minHeight: "16rem" }}
+          value={currentValue}
+          onChange={(event) => onChangePrompt(currentSection, event.target.value)}
+        />
+      </div>
+
+      <div style={{ display: "grid", gap: "0.8rem" }}>
+        {currentSection.helpers.map((helperKey) => (
+          <div key={helperKey}>
+            <label style={fieldLabelStyle}>{helperKey}</label>
+            <textarea
+              style={{ ...textareaStyle, minHeight: "5.5rem", fontFamily: "Consolas, monospace" }}
+              value={promptPack.helpers[helperKey] ?? ""}
+              onChange={(event) => onChangeHelper(helperKey, event.target.value)}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, scenario, selected }) => {
+  const isBuiltIn = scenario.id === "default";
+  const assetBadges = Object.entries(scenarioBadgeLabels)
+    .filter(([key]) => scenario.assetStatus?.[key])
+    .map(([, label]) => label.replace(" PMTiles", "").replace(" JSON", ""));
+  const cardImageUrl = scenario.coverImageUrl || "/loading_screen.jpg";
+
+  return (
+    <div
+      style={{
+        ...surfaceStyle,
+        borderColor: selected ? `${scenario.accentColor}66` : "rgba(255,255,255,0.08)",
+        borderRadius: "24px",
+        flex: "0 0 21rem",
+        minHeight: "15rem",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      <button
+        onClick={() => onSelect(scenario.id)}
+        style={{
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          inset: 0,
+          padding: 0,
+          position: "absolute",
+          zIndex: 1,
+        }}
+        type="button"
+      />
+      <div
+        style={{
+          background:
+            `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
+            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
+            `url("${cardImageUrl}") center/cover`,
+          inset: 0,
+          opacity: 0.92,
+          position: "absolute",
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          justifyContent: "space-between",
+          padding: "1.2rem",
+          position: "relative",
+          zIndex: 2,
+        }}
+      >
+        <div>
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+              <span
+                style={{
+                  background: selected ? `${scenario.accentColor}66` : "rgba(255,255,255,0.12)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  borderRadius: "999px",
+                  color: "rgba(248,250,252,0.94)",
+                  display: "inline-flex",
+                  fontSize: "0.69rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  padding: "0.35rem 0.6rem",
+                  textTransform: "uppercase",
+                }}
+              >
+                {scenario.eyebrow || "Scenario"}
+              </span>
+              {isBuiltIn && (
+                <span
+                  style={{
+                    background: "rgba(255,255,255,0.18)",
+                    border: "1px solid rgba(255,255,255,0.22)",
+                    borderRadius: "999px",
+                    color: "#fff",
+                    display: "inline-flex",
+                    fontSize: "0.69rem",
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    padding: "0.35rem 0.6rem",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Built-In
+                </span>
+              )}
+            </div>
+            <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.74rem" }}>
+              {scenario.gameCount} game{scenario.gameCount === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div style={{ marginTop: "4rem" }}>
+            <div
+              style={{
+                color: "#fff",
+                fontSize: "2rem",
+                fontWeight: 800,
+                letterSpacing: "-0.03em",
+                lineHeight: 1,
+              }}
+            >
+              {scenario.heroTitle || scenario.name}
+            </div>
+            <div
+              style={{
+                color: "rgba(240,244,255,0.7)",
+                fontSize: "0.92rem",
+                lineHeight: 1.45,
+                marginTop: "0.65rem",
+                maxWidth: "16rem",
+              }}
+            >
+              {scenario.heroSubtitle || scenario.description || scenario.subtitle}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.8rem", marginBottom: "0.7rem" }}>
+            {scenario.subtitle}
+          </div>
+          <AssetBadgeRow badges={assetBadges} />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+            <button
+              onClick={() => onPlay(scenario)}
+              style={{
+                ...actionButtonStyle,
+                background: `${scenario.accentColor}cc`,
+                borderColor: `${scenario.accentColor}dd`,
+                color: "#fff",
+                flex: 1,
+              }}
+              type="button"
+            >
+              New Game
+            </button>
+            <button onClick={() => onEdit(scenario.id)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
+              Edit
+            </button>
+            <button onClick={() => onClone(scenario)} style={{ ...actionButtonStyle, flexBasis: "100%" }} type="button">
+              Clone Scenario
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const GameCard = ({ active, game, onActivate, onClone, onEdit }) => {
+  const cardImageUrl = game.coverImageUrl || "/loading_screen.jpg";
+
+  return (
+    <div
+      style={{
+        ...surfaceStyle,
+        borderColor: active ? `${game.accentColor}66` : "rgba(255,255,255,0.08)",
+        borderRadius: "24px",
+        flex: "0 0 21rem",
+        minHeight: "14rem",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      <div
+        style={{
+          background:
+            `linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.72) 100%), ` +
+            `radial-gradient(circle at 16% 20%, ${game.accentColor}aa, transparent 32%), ` +
+            `url("${cardImageUrl}") center/cover`,
+          inset: 0,
+          opacity: 0.96,
+          position: "absolute",
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          justifyContent: "space-between",
+          padding: "1.2rem",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <div>
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+            <span
+              style={{
+                background: active ? `${game.accentColor}66` : "rgba(255,255,255,0.12)",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: "999px",
+                color: "rgba(248,250,252,0.94)",
+                display: "inline-flex",
+                fontSize: "0.69rem",
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                padding: "0.35rem 0.6rem",
+                textTransform: "uppercase",
+              }}
+            >
+              {active ? "Current Game" : game.eyebrow || "Game"}
+            </span>
+            <span style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.76rem" }}>
+              {game.scenarioName}
+            </span>
+          </div>
+
+          <div style={{ marginTop: "2rem" }}>
+            <div style={{ color: "#fff", fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+              {game.name}
+            </div>
+            <div style={{ color: "rgba(240,244,255,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
+              {game.country || "No player country"} / {game.currentDate || "No date"} / Round {game.round || 1}
+            </div>
+            <div style={{ color: "rgba(240,244,255,0.58)", fontSize: "0.84rem", marginTop: "0.5rem", lineHeight: 1.45 }}>
+              {game.description || "Playable campaign session."}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.8rem", marginBottom: "0.75rem" }}>
+            {game.pendingActions} pending action{game.pendingActions === 1 ? "" : "s"} / {game.eventCount} event{game.eventCount === 1 ? "" : "s"}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+            <button
+              onClick={() => onActivate(game.id)}
+              style={{
+                ...actionButtonStyle,
+                background: active ? "rgba(255,255,255,0.16)" : `${game.accentColor}cc`,
+                borderColor: active ? "rgba(255,255,255,0.22)" : `${game.accentColor}dd`,
+                color: "#fff",
+                flex: 1,
+              }}
+              type="button"
+            >
+              {active ? "Current" : "Play"}
+            </button>
+            <button onClick={() => onEdit(game.id)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
+              Edit
+            </button>
+            <button onClick={() => onClone(game)} style={{ ...actionButtonStyle, flexBasis: "100%" }} type="button">
+              Clone Game
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const SectionTabs = ({ currentSection, sections, setSection }) => (
+  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
+    {sections.map((sectionKey) => (
+      <button
+        key={sectionKey}
+        onClick={() => setSection(sectionKey)}
+        style={{
+          ...actionButtonStyle,
+          background:
+            currentSection === sectionKey ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+          borderColor:
+            currentSection === sectionKey ? "rgba(124,58,237,0.42)" : "rgba(255,255,255,0.08)",
+          minHeight: "2rem",
+          padding: "0 0.8rem",
+        }}
+        type="button"
+      >
+        {editorSectionLabels[sectionKey] || sectionKey}
+      </button>
+    ))}
+  </div>
+);
+
+const EditorDrawer = ({
+  details,
+  editorError,
+  editorSection,
+  fileInputsRef,
+  formState,
+  isBusy,
+  kind,
+  onChange,
+  onChangeHelper,
+  onChangePrompt,
+  onClearAsset,
+  onClose,
+  onDelete,
+  onExportBundle,
+  onFileSelect,
+  onOpenFileDialog,
+  onSave,
+  promptSectionKey,
+  setEditorSection,
+  setPromptSectionKey,
+}) => {
+  if (!details || !formState) {
+    return null;
+  }
+
+  const record = kind === "scenario" ? details.scenario : details.game;
+  const visibleSections =
+    kind === "scenario"
+      ? ["overview", "world", "prompts", "assets", "bundles"]
+      : ["overview", "world", "prompts", "assets"];
+
+  return (
+    <div
+      style={{
+        ...surfaceStyle,
+        borderRadius: "26px",
+        bottom: "0.85rem",
+        color: "#fff",
+        maxHeight: `calc(100vh - ${BAR_HEIGHT + 32}px)`,
+        overflow: "auto",
+        padding: "1.05rem",
+        position: "fixed",
+        right: "0.85rem",
+        top: `calc(${TOP_BAR_OFFSET} + 3.5rem)`,
+        width: "min(34rem, calc(100vw - 1.2rem))",
+        zIndex: 10031,
+      }}
+    >
+      <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            {kind === "scenario" ? "Scenario" : "Game"} Editor
+          </div>
+          <div style={{ fontSize: "1.35rem", fontWeight: 800, letterSpacing: "-0.03em", marginTop: "0.2rem" }}>
+            {record.name}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.04)", minWidth: "2.35rem", padding: 0 }}
+          type="button"
+        >
+          X
+        </button>
+      </div>
+
+      <SectionTabs currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} />
+
+      {editorSection === "overview" && (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
+          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Name</label>
+              <input style={inputStyle} value={formState.name} onChange={(event) => onChange("name", event.target.value)} />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Eyebrow</label>
+              <input style={inputStyle} value={formState.eyebrow} onChange={(event) => onChange("eyebrow", event.target.value)} />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Accent</label>
+              <input style={{ ...inputStyle, height: "3.1rem", padding: "0.25rem 0.3rem" }} type="color" value={formState.accentColor} onChange={(event) => onChange("accentColor", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Subtitle</label>
+              <input style={inputStyle} value={formState.subtitle} onChange={(event) => onChange("subtitle", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Description</label>
+              <textarea style={{ ...textareaStyle, minHeight: "6rem" }} value={formState.description} onChange={(event) => onChange("description", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Hero Title</label>
+              <input style={inputStyle} value={formState.heroTitle} onChange={(event) => onChange("heroTitle", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Hero Subtitle</label>
+              <textarea style={{ ...textareaStyle, minHeight: "5rem" }} value={formState.heroSubtitle} onChange={(event) => onChange("heroSubtitle", event.target.value)} />
+            </div>
+            {kind === "scenario" && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={fieldLabelStyle}>Country Name Overrides</label>
+                <textarea
+                  style={{ ...textareaStyle, minHeight: "6rem" }}
+                  placeholder={"DEU = German Empire\nRUS = Russian State"}
+                  value={formState.countryOverridesText}
+                  onChange={(event) => onChange("countryOverridesText", event.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {editorSection === "world" && (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
+          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+            <div>
+              <label style={fieldLabelStyle}>Player Country</label>
+              <input style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Game Date</label>
+              <input style={inputStyle} value={formState.gameDate} onChange={(event) => onChange("gameDate", event.target.value)} />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Language</label>
+              <input style={inputStyle} value={formState.language} onChange={(event) => onChange("language", event.target.value)} />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Difficulty</label>
+              <input style={inputStyle} value={formState.difficulty} onChange={(event) => onChange("difficulty", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>World Before Round One</label>
+              <textarea style={{ ...textareaStyle, minHeight: "8rem" }} value={formState.startingTimelineText} onChange={(event) => onChange("startingTimelineText", event.target.value)} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={fieldLabelStyle}>Simulation Rules</label>
+              <textarea style={{ ...textareaStyle, minHeight: "8rem" }} value={formState.simulationRules} onChange={(event) => onChange("simulationRules", event.target.value)} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editorSection === "prompts" && (
+        <PromptSectionEditor
+          onChangeHelper={onChangeHelper}
+          onChangePrompt={onChangePrompt}
+          promptPack={formState.prompts}
+          promptSectionKey={promptSectionKey}
+          setPromptSectionKey={setPromptSectionKey}
+        />
+      )}
+
+      {editorSection === "assets" && (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
+          <div style={{ display: "grid", gap: "0.7rem" }}>
+            {Object.entries(kind === "scenario" ? scenarioAssetLabels : gameAssetLabels).map(([assetKey, label]) => {
+              const isCoverAsset = assetKey === "cover";
+              const hasOwnAsset = Boolean(details.assetStatus?.[assetKey]);
+              const previewUrl = isCoverAsset
+                ? kind === "scenario"
+                  ? details.scenario?.coverImageUrl
+                  : details.game?.coverImageUrl || details.scenario?.coverImageUrl
+                : null;
+              const fallbackText =
+                kind === "scenario"
+                  ? isCoverAsset
+                    ? "Displayed on this scenario card."
+                    : "Using default/base asset"
+                  : details.scenario?.coverImageUrl
+                    ? "Using the linked scenario cover image."
+                    : "No custom cover image.";
+
+              return (
+                <div key={assetKey} style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "14px", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.72rem 0.78rem" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{label}</div>
+                    <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", marginTop: "0.15rem" }}>
+                      {hasOwnAsset
+                        ? isCoverAsset
+                          ? kind === "scenario"
+                            ? "Stored in this scenario."
+                            : "Stored in this session."
+                          : "Stored in this scenario bundle"
+                        : fallbackText}
+                    </div>
+                    {isCoverAsset && previewUrl && (
+                      <img
+                        alt={`${record.name} cover`}
+                        src={previewUrl}
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          borderRadius: "12px",
+                          display: "block",
+                          height: "4.8rem",
+                          marginTop: "0.7rem",
+                          objectFit: "cover",
+                          width: "8.6rem",
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.45rem" }}>
+                    <button onClick={() => onOpenFileDialog(assetKey)} style={actionButtonStyle} type="button">
+                      Upload
+                    </button>
+                    <button
+                      onClick={() => onClearAsset(assetKey)}
+                      style={{
+                        ...actionButtonStyle,
+                        background: "rgba(255,255,255,0.03)",
+                        color: hasOwnAsset ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.35)",
+                      }}
+                      disabled={!hasOwnAsset}
+                      type="button"
+                    >
+                      Reset
+                    </button>
+                    <input
+                      ref={(node) => {
+                        fileInputsRef.current[assetKey] = node;
+                      }}
+                      accept={(kind === "scenario" ? scenarioAssetAccept : gameAssetAccept)[assetKey]}
+                      onChange={(event) => onFileSelect(assetKey, event)}
+                      style={{ display: "none" }}
+                      type="file"
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {editorSection === "bundles" && kind === "scenario" && (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
+          <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.82rem", lineHeight: 1.5, marginBottom: "0.85rem" }}>
+            Download the scenario as one JSON file. Use the lightweight export for quick sharing on default assets, or embed PMTiles when you want a fully portable bundle.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+            <button onClick={() => onExportBundle("light")} style={actionButtonStyle} type="button">
+              Download JSON
+            </button>
+            <button
+              onClick={() => onExportBundle("full")}
+              style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(124,58,237,0.36)" }}
+              type="button"
+            >
+              Download JSON + PMTiles
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editorError && (
+        <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "14px", color: "#fecaca", marginBottom: "0.9rem", padding: "0.8rem 0.9rem" }}>
+          {editorError}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+        <button
+          onClick={onSave}
+          style={{ ...actionButtonStyle, background: `${record.accentColor}cc`, borderColor: `${record.accentColor}dd`, color: "#fff", minWidth: "7.2rem" }}
+          type="button"
+        >
+          {isBusy ? "Saving..." : "Save"}
+        </button>
+        {record.canDelete && (
+          <button
+            onClick={onDelete}
+            style={{ ...actionButtonStyle, background: "rgba(127,29,29,0.34)", borderColor: "rgba(248,113,113,0.28)", color: "#fecaca" }}
+            type="button"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const LibraryTopBar = () => {
+  const {
+    activeGame,
+    activeGameId,
+    error,
+    games,
+    loaded,
+    loading,
+    scenarios,
+    selectedScenarioId,
+  } = useLibraryState();
+  const [activeTab, setActiveTab] = useState("games");
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [editorKind, setEditorKind] = useState(null);
+  const [editorDetails, setEditorDetails] = useState(null);
+  const [editorState, setEditorState] = useState(null);
+  const [editorError, setEditorError] = useState(null);
+  const [editorSection, setEditorSection] = useState("overview");
+  const [promptSectionKey, setPromptSectionKey] = useState("leader");
+  const [isBusy, setIsBusy] = useState(false);
+  const assetFileInputsRef = useRef({});
+  const importScenarioInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!loaded) {
+      ensureLibraryCatalog().catch(() => {});
+    }
+  }, [loaded]);
+
+  const resetEditor = () => {
+    setEditorKind(null);
+    setEditorDetails(null);
+    setEditorState(null);
+    setEditorError(null);
+    setEditorSection("overview");
+    setPromptSectionKey("leader");
+  };
+
+  const openScenarioEditor = async (scenarioId) => {
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details = await loadScenarioDetails(scenarioId);
+      setEditorKind("scenario");
+      setEditorDetails(details);
+      setEditorState(buildScenarioEditorState(details));
+      setEditorSection("overview");
+      setPromptSectionKey("leader");
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const openGameEditor = async (gameId) => {
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details = await loadGameDetails(gameId);
+      setEditorKind("game");
+      setEditorDetails(details);
+      setEditorState(buildGameEditorState(details));
+      setEditorSection("overview");
+      setPromptSectionKey("leader");
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleScenarioPlay = async (scenario) => {
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details = await createGame({
+        name: `${scenario.name} Session`,
+        scenarioId: scenario.id,
+        setActive: true,
+      });
+      await openGameEditor(details.game.id);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleScenarioClone = async (scenario) => {
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details = await createScenario({
+        accentColor: scenario.accentColor,
+        name: `${scenario.name} Copy`,
+        seedScenarioId: scenario.id,
+        setActive: true,
+        subtitle: scenario.subtitle,
+      });
+      await openScenarioEditor(details.scenario.id);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleGameClone = async (game) => {
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details = await createGame({
+        name: `${game.name} Copy`,
+        seedGameId: game.id,
+        setActive: true,
+      });
+      await openGameEditor(details.game.id);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleEditorChange = (field, value) => {
+    setEditorState((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const handlePromptChange = (section, value) => {
+    setEditorState((current) => ({
+      ...current,
+      prompts:
+        section.type === "root"
+          ? {
+              ...current.prompts,
+              [section.key]: value,
+            }
+          : {
+              ...current.prompts,
+              tasks: {
+                ...current.prompts.tasks,
+                [section.key]: value,
+              },
+            },
+    }));
+  };
+
+  const handleHelperChange = (helperKey, value) => {
+    setEditorState((current) => ({
+      ...current,
+      prompts: {
+        ...current.prompts,
+        helpers: {
+          ...current.prompts.helpers,
+          [helperKey]: value,
+        },
+      },
+    }));
+  };
+
+  const handleSave = async () => {
+    if (!editorKind || !editorDetails || !editorState) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const prompts = serializePromptPack(editorState.prompts);
+      if (editorKind === "scenario") {
+        const currentGame = editorDetails.data?.game ?? {};
+        const currentWorld = editorDetails.data?.world ?? {};
+        const details = await saveScenario(editorDetails.scenario.id, {
+          accentColor: editorState.accentColor,
+          countryNameOverrides: parseCountryOverrides(editorState.countryOverridesText),
+          description: editorState.description,
+          eyebrow: editorState.eyebrow,
+          game: {
+            ...currentGame,
+            country: editorState.country,
+            difficulty: editorState.difficulty,
+            gameDate: editorState.gameDate,
+            language: editorState.language,
+          },
+          heroSubtitle: editorState.heroSubtitle,
+          heroTitle: editorState.heroTitle,
+          name: editorState.name,
+          prompts,
+          subtitle: editorState.subtitle,
+          world: {
+            ...currentWorld,
+            difficulty: editorState.difficulty,
+            language: editorState.language,
+            simulationRules: editorState.simulationRules,
+            startingTimelineText: editorState.startingTimelineText,
+          },
+        });
+        setEditorDetails(details);
+        setEditorState(buildScenarioEditorState(details));
+      } else {
+        const currentGame = editorDetails.data?.game ?? {};
+        const currentWorld = editorDetails.data?.world ?? {};
+        const details = await saveGame(editorDetails.game.id, {
+          accentColor: editorState.accentColor,
+          description: editorState.description,
+          eyebrow: editorState.eyebrow,
+          game: {
+            ...currentGame,
+            country: editorState.country,
+            difficulty: editorState.difficulty,
+            gameDate: editorState.gameDate,
+            language: editorState.language,
+          },
+          heroSubtitle: editorState.heroSubtitle,
+          heroTitle: editorState.heroTitle,
+          name: editorState.name,
+          prompts,
+          subtitle: editorState.subtitle,
+          world: {
+            ...currentWorld,
+            difficulty: editorState.difficulty,
+            language: editorState.language,
+            simulationRules: editorState.simulationRules,
+            startingTimelineText: editorState.startingTimelineText,
+          },
+        });
+        setEditorDetails(details);
+        setEditorState(buildGameEditorState(details));
+      }
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!editorDetails || !editorKind) {
+      return;
+    }
+
+    const record = editorKind === "scenario" ? editorDetails.scenario : editorDetails.game;
+    if (!record?.canDelete) {
+      return;
+    }
+
+    if (!window.confirm(`Delete ${editorKind} "${record.name}"?`)) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      if (editorKind === "scenario") {
+        await removeScenario(record.id);
+      } else {
+        await removeGame(record.id);
+      }
+      resetEditor();
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleEditorAssetSelect = async (assetKey, event) => {
+    const [file] = Array.from(event.target.files ?? []);
+    event.target.value = "";
+
+    if (!file || !editorKind || !editorDetails) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details =
+        editorKind === "scenario"
+          ? await uploadScenarioAsset(editorDetails.scenario.id, assetKey, file)
+          : await uploadGameAsset(editorDetails.game.id, assetKey, file);
+      setEditorDetails(details);
+      setEditorState(
+        editorKind === "scenario"
+          ? buildScenarioEditorState(details)
+          : buildGameEditorState(details),
+      );
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleEditorAssetClear = async (assetKey) => {
+    if (!editorKind || !editorDetails?.assetStatus?.[assetKey]) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const details =
+        editorKind === "scenario"
+          ? await clearScenarioAsset(editorDetails.scenario.id, assetKey)
+          : await clearGameAsset(editorDetails.game.id, assetKey);
+      setEditorDetails(details);
+      setEditorState(
+        editorKind === "scenario"
+          ? buildScenarioEditorState(details)
+          : buildGameEditorState(details),
+      );
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleExportBundle = async (mode) => {
+    if (editorKind !== "scenario" || !editorDetails) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const bundle = await exportScenarioBundle(editorDetails.scenario.id, mode);
+      saveJsonBundleToDisk(bundle, `${editorDetails.scenario.id}-${mode}.json`);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleImportScenarioFile = async (event) => {
+    const [file] = Array.from(event.target.files ?? []);
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      const details = await importScenarioBundle(bundle);
+      setActiveTab("scenarios");
+      setIsPanelOpen(true);
+      await openScenarioEditor(details.scenario.id);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const summaryText = useMemo(() => {
+    if (activeGame) {
+      return `${activeGame.name} / ${activeGame.country || "No country"} / ${activeGame.currentDate || "No date"}`;
+    }
+
+    return "No active game";
+  }, [activeGame]);
+
+  const handleTabToggle = (tab) => {
+    if (activeTab === tab) {
+      setIsPanelOpen((open) => !open);
+      return;
+    }
+
+    setActiveTab(tab);
+    setIsPanelOpen(true);
+  };
+
+  return (
+    <>
+      <div
+        style={{
+          ...surfaceStyle,
+          alignItems: "center",
+          borderLeft: "none",
+          borderRadius: 0,
+          borderRight: "none",
+          borderTop: "none",
+          display: "grid",
+          gap: "0.9rem",
+          gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+          height: `${BAR_HEIGHT}px`,
+          left: 0,
+          padding: "0 1rem",
+          position: "fixed",
+          right: 0,
+          top: 0,
+          zIndex: 10030,
+        }}
+      >
+        <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
+          <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
+            <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+              Pax Historia
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
+              {summaryText}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center", justifySelf: "center" }}>
+          {["games", "scenarios"].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => handleTabToggle(tab)}
+              style={{
+                ...actionButtonStyle,
+                background: activeTab === tab ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.05)",
+                borderColor: activeTab === tab ? "rgba(124,58,237,0.38)" : "rgba(255,255,255,0.08)",
+                minWidth: "6.6rem",
+              }}
+              type="button"
+            >
+              {tab === "games" ? "Games" : "Scenarios"}
+            </button>
+          ))}
+        </div>
+
+        <div />
+      </div>
+
+      <input
+        ref={importScenarioInputRef}
+        accept=".json,application/json"
+        onChange={handleImportScenarioFile}
+        style={{ display: "none" }}
+        type="file"
+      />
+
+      {isPanelOpen && (
+        <div
+          style={{
+            ...surfaceStyle,
+            borderRadius: "0 0 28px 28px",
+            left: "0.85rem",
+            maxWidth: "calc(100vw - 1.7rem)",
+            padding: "1rem",
+            position: "fixed",
+            right: "0.85rem",
+            top: `${BAR_HEIGHT}px`,
+            zIndex: 10029,
+          }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "flex-end", marginBottom: "0.9rem" }}>
+            <button onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})} style={actionButtonStyle} type="button">
+              Refresh
+            </button>
+            {activeTab === "scenarios" && (
+              <button onClick={() => importScenarioInputRef.current?.click()} style={actionButtonStyle} type="button">
+                Import JSON
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.15rem", scrollbarWidth: "thin" }}>
+            {activeTab === "games"
+              ? games.map((game) => (
+                  <GameCard
+                    key={game.id}
+                    active={game.id === activeGameId}
+                    game={game}
+                    onActivate={activateGame}
+                    onClone={handleGameClone}
+                    onEdit={openGameEditor}
+                  />
+                ))
+              : scenarios.map((scenario) => (
+                  <ScenarioCard
+                    key={scenario.id}
+                    onClone={handleScenarioClone}
+                    onEdit={openScenarioEditor}
+                    onPlay={handleScenarioPlay}
+                    onSelect={selectScenario}
+                    scenario={scenario}
+                    selected={scenario.id === selectedScenarioId}
+                  />
+                ))}
+          </div>
+        </div>
+      )}
+
+      <EditorDrawer
+        details={editorDetails}
+        editorError={editorError || error}
+        editorSection={editorSection}
+        fileInputsRef={assetFileInputsRef}
+        formState={editorState}
+        isBusy={isBusy || loading}
+        kind={editorKind}
+        onChange={handleEditorChange}
+        onChangeHelper={handleHelperChange}
+        onChangePrompt={handlePromptChange}
+        onClearAsset={handleEditorAssetClear}
+        onClose={resetEditor}
+        onDelete={handleDelete}
+        onExportBundle={handleExportBundle}
+        onFileSelect={handleEditorAssetSelect}
+        onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}
+        onSave={handleSave}
+        promptSectionKey={promptSectionKey}
+        setEditorSection={setEditorSection}
+        setPromptSectionKey={setPromptSectionKey}
+      />
+
+      {!loaded && (
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.82rem", position: "fixed", right: "1.25rem", top: "4.35rem", zIndex: 10028 }}>
+          Loading games and scenarios...
+        </div>
+      )}
+    </>
+  );
+};
+
+export { LibraryTopBar, TOP_BAR_OFFSET };

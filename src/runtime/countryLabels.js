@@ -3,6 +3,7 @@ import {
   decodeVectorTile,
   getPmtilesArchive,
   readRuntimeJson,
+  resolveCountryDisplayName,
   writeRuntimeJson,
 } from "./assets.js";
 
@@ -446,7 +447,7 @@ const getCountriesTileData = async () => {
   return pmtiles.getZxy(0, 0, 0);
 };
 
-const computeCountryLabelCacheKey = (buffer) => {
+const computeCountryLabelCacheKey = (buffer, archiveUrl) => {
   const bytes = new Uint8Array(buffer);
   let hash = 2166136261;
 
@@ -455,7 +456,7 @@ const computeCountryLabelCacheKey = (buffer) => {
     hash = Math.imul(hash, 16777619);
   }
 
-  return `${COUNTRY_LABELS_CACHE_KEY}-${bytes.byteLength}-${(hash >>> 0).toString(36)}`;
+  return `${COUNTRY_LABELS_CACHE_KEY}-${bytes.byteLength}-${(hash >>> 0).toString(36)}-${encodeURIComponent(archiveUrl)}`;
 };
 
 const buildCountryLabelCollections = async (tileData) => {
@@ -475,7 +476,11 @@ const buildCountryLabelCollections = async (tileData) => {
   for (let index = 0; index < layer.length; index += 1) {
     const feature = layer.feature(index);
     const props = feature.properties;
-    const name = props?.Country || props?.NAME || props?.name || props?.COUNTRY;
+    const code = props?.GID_0 || props?.gid_0 || props?.ISO_A3 || props?.iso_a3 || "";
+    const name = resolveCountryDisplayName(
+      props?.Country || props?.NAME || props?.name || props?.COUNTRY,
+      code,
+    );
     if (!name) continue;
 
     const geometry = feature.loadGeometry();
@@ -563,7 +568,7 @@ const isCountryLabelPayload = (value) =>
 export const loadCountryLabelCollections = async ({ force = false } = {}) => {
   const tileData = await getCountriesTileData();
   const cacheKey = tileData?.data
-    ? computeCountryLabelCacheKey(tileData.data)
+    ? computeCountryLabelCacheKey(tileData.data, PMTILES_ARCHIVES.countries)
     : COUNTRY_LABELS_CACHE_KEY;
 
   if (!force && countryLabelsValue && countryLabelsValueKey === cacheKey) {

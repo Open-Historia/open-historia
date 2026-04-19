@@ -14,7 +14,7 @@ const baseStyle = {
     border: "1px solid rgba(255,255,255,0.1)",
     boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
 };
-const Other = memo(function Other() {
+const Other = memo(function Other({ topOffset = "0.5rem" }) {
     const [country, setCountry] = useState(null);
     useEffect(() => {
         readJson(JSON_URLS.game, { defaultValue: {} })
@@ -26,7 +26,7 @@ const Other = memo(function Other() {
         <div
         style={{
             ...baseStyle,
-            top: "0.5rem",
+            top: topOffset,
             left: "4.75rem",
             height: "2.75rem",
             width: "16rem",

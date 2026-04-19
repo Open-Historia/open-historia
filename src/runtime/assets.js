@@ -1,23 +1,47 @@
-import { addProtocol, setMaxParallelImageRequests, setWorkerCount } from "maplibre-gl";
+import mapLibreGl from "maplibre-gl";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
+
+const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
 const PRELOAD_CACHE_NAME = "pax-historia-preload-v1";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const FALLBACK_THREADS = 4;
 const remoteValueCache = new Map();
 const remoteRequestCache = new Map();
-
-export const JSON_URLS = {
-  advisor: "/saves/save0/storage/advisor.json",
-  actions: "/saves/save0/storage/actions.json",
-  chat: "/saves/save0/storage/chat.json",
-  colors: "/assets/colors.json",
-  events: "/saves/save0/storage/events.json",
-  game: "/saves/save0/game.json",
-  prompts: "/saves/save0/prompts.json",
-};
+let runtimeAssetToken = "";
+let countryNameResolver = (name) => name;
 
 const origin = typeof window !== "undefined" ? window.location.origin : "";
+
+const withRuntimeToken = (pathname) => {
+  if (!runtimeAssetToken) {
+    return pathname;
+  }
+
+  if (!origin) {
+    return `${pathname}?v=${encodeURIComponent(runtimeAssetToken)}`;
+  }
+
+  const url = new URL(pathname, origin);
+  url.searchParams.set("v", runtimeAssetToken);
+  return `${url.pathname}${url.search}`;
+};
+
+const buildAbsoluteUrl = (pathname) => {
+  const relativePath = withRuntimeToken(pathname);
+  return origin ? new URL(relativePath, origin).toString() : relativePath;
+};
+
+export const JSON_URLS = {
+  advisor: "",
+  actions: "",
+  chat: "",
+  colors: "",
+  events: "",
+  game: "",
+  prompts: "",
+  world: "",
+};
 
 export const SATELLITE_TILE_TEMPLATE =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
@@ -25,14 +49,16 @@ export const TERRAIN_TILE_TEMPLATE =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
 export const PMTILES_ARCHIVES = {
-  cities: `${origin}/saves/save0/cities.pmtiles`,
-  countries: `${origin}/saves/save0/countries.pmtiles`,
-  regions: `${origin}/saves/save0/regions.pmtiles`,
+  cities: "",
+  countries: "",
+  regions: "",
 };
 
-export const PMTILES_PROTOCOL_URLS = Object.fromEntries(
-  Object.entries(PMTILES_ARCHIVES).map(([key, url]) => [key, `pmtiles://${url}`]),
-);
+export const PMTILES_PROTOCOL_URLS = {
+  cities: "",
+  countries: "",
+  regions: "",
+};
 
 const jsonValueCache = new Map();
 const jsonRequestCache = new Map();
@@ -46,9 +72,42 @@ const pmtilesCache = new SharedPromiseCache(256);
 const pmtilesProtocol = new Protocol();
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
+let nationColorsPromiseKey = "";
 let countryNamesPromise = null;
+let countryNamesPromiseKey = "";
+let regionCatalogPromise = null;
+let regionCatalogPromiseKey = "";
 let mapRuntimeConfigured = false;
 let vectorTileModulesPromise = null;
+
+export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
+  runtimeAssetToken = String(token ?? "").trim();
+
+  JSON_URLS.advisor = withRuntimeToken("/api/runtime/json/advisor");
+  JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
+  JSON_URLS.chat = withRuntimeToken("/api/runtime/json/chat");
+  JSON_URLS.colors = withRuntimeToken("/api/runtime/json/colors");
+  JSON_URLS.events = withRuntimeToken("/api/runtime/json/events");
+  JSON_URLS.game = withRuntimeToken("/api/runtime/json/game");
+  JSON_URLS.prompts = withRuntimeToken("/api/runtime/json/prompts");
+  JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
+
+  PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");
+  PMTILES_ARCHIVES.countries = buildAbsoluteUrl("/api/runtime/pmtiles/countries");
+  PMTILES_ARCHIVES.regions = buildAbsoluteUrl("/api/runtime/pmtiles/regions");
+
+  PMTILES_PROTOCOL_URLS.cities = `pmtiles://${PMTILES_ARCHIVES.cities}`;
+  PMTILES_PROTOCOL_URLS.countries = `pmtiles://${PMTILES_ARCHIVES.countries}`;
+  PMTILES_PROTOCOL_URLS.regions = `pmtiles://${PMTILES_ARCHIVES.regions}`;
+};
+
+export const setCountryNameResolver = (resolver) => {
+  countryNameResolver = typeof resolver === "function" ? resolver : (name) => name;
+};
+
+export const resolveCountryDisplayName = (name, code) => countryNameResolver(name, code);
+
+setRuntimeAssetEndpoints();
 
 const cloneJson = (value) => {
   if (value == null) return value;
@@ -455,7 +514,10 @@ export const decodeVectorTile = async (data) => {
 };
 
 export const getNationColors = async () => {
-  if (!nationColorsPromise) {
+  const cacheKey = JSON_URLS.colors;
+
+  if (!nationColorsPromise || nationColorsPromiseKey !== cacheKey) {
+    nationColorsPromiseKey = cacheKey;
     nationColorsPromise = readJson(JSON_URLS.colors, { defaultValue: {} });
   }
 
@@ -463,10 +525,13 @@ export const getNationColors = async () => {
 };
 
 export const loadCountryNames = async ({ force = false } = {}) => {
-  if (!force && countryNamesPromise) {
+  const cacheKey = PMTILES_ARCHIVES.countries;
+
+  if (!force && countryNamesPromise && countryNamesPromiseKey === cacheKey) {
     return countryNamesPromise;
   }
 
+  countryNamesPromiseKey = cacheKey;
   countryNamesPromise = (async () => {
     try {
       const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.countries);
@@ -480,16 +545,41 @@ export const loadCountryNames = async ({ force = false } = {}) => {
       const seen = new Map();
       for (let index = 0; index < layer.length; index += 1) {
         const props = layer.feature(index).properties;
-        const name = props?.Country || props?.NAME || props?.name || props?.COUNTRY;
         const code = props?.GID_0 || props?.gid_0 || props?.ISO_A3 || props?.iso_a3 || "";
+        const name = resolveCountryDisplayName(
+          props?.Country || props?.NAME || props?.name || props?.COUNTRY,
+          code,
+        );
         if (name && !seen.has(name)) {
           seen.set(name, code);
         }
       }
 
-      return Array.from(seen.entries())
+      const countries = Array.from(seen.entries())
         .map(([name, code]) => ({ code, name }))
         .sort((left, right) => left.name.localeCompare(right.name));
+
+      try {
+        const world = await readJson(JSON_URLS.world, { defaultValue: {} });
+        const merged = new Map(countries.map((entry) => [entry.code || entry.name, entry]));
+
+        for (const [code, polity] of Object.entries(world?.polityOverrides ?? {})) {
+          const resolvedCode = polity?.code || code;
+          const resolvedName = polity?.name || code;
+          if (!resolvedCode || !resolvedName) {
+            continue;
+          }
+
+          merged.set(resolvedCode, {
+            code: resolvedCode,
+            name: resolvedName,
+          });
+        }
+
+        return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name));
+      } catch {
+        return countries;
+      }
     } catch (error) {
       console.error("Failed to load country names:", error);
       return [];
@@ -497,4 +587,65 @@ export const loadCountryNames = async ({ force = false } = {}) => {
   })();
 
   return countryNamesPromise;
+};
+
+export const loadRegionCatalog = async ({ force = false } = {}) => {
+  const cacheKey = PMTILES_ARCHIVES.regions;
+
+  if (!force && regionCatalogPromise && regionCatalogPromiseKey === cacheKey) {
+    return regionCatalogPromise;
+  }
+
+  regionCatalogPromiseKey = cacheKey;
+  regionCatalogPromise = (async () => {
+    try {
+      const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
+      const tileData = await pmtiles.getZxy(0, 0, 0);
+      if (!tileData?.data) return [];
+
+      const tile = await decodeVectorTile(tileData.data);
+      const layer = tile.layers.regions;
+      if (!layer) return [];
+
+      const seen = new Map();
+      for (let index = 0; index < layer.length; index += 1) {
+        const props = layer.feature(index).properties;
+        const id = props?.GID_1 || props?.gid_1 || props?.HASC_1 || props?.fid;
+        const name = props?.NAME_1 || props?.name_1 || props?.NAME || props?.name;
+        const countryCode = props?.GID_0 || props?.gid_0 || "";
+        const country = resolveCountryDisplayName(
+          props?.COUNTRY || props?.Country || props?.country,
+          countryCode,
+        );
+
+        if (!id || !name) {
+          continue;
+        }
+
+        const key = String(id);
+        if (!seen.has(key)) {
+          seen.set(key, {
+            country,
+            countryCode,
+            id: key,
+            name: String(name),
+          });
+        }
+      }
+
+      return Array.from(seen.values()).sort((left, right) => {
+        const countrySort = left.country.localeCompare(right.country);
+        if (countrySort !== 0) {
+          return countrySort;
+        }
+
+        return left.name.localeCompare(right.name);
+      });
+    } catch (error) {
+      console.error("Failed to load region catalog:", error);
+      return [];
+    }
+  })();
+
+  return regionCatalogPromise;
 };

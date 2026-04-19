@@ -91,6 +91,7 @@ const STARTUP_TASKS = [
         warmJson(JSON_URLS.chat, { defaultValue: [], signal }),
         warmJson(JSON_URLS.advisor, { defaultValue: [], signal }),
         warmJson(JSON_URLS.events, { defaultValue: [], signal }),
+        warmJson(JSON_URLS.world, { defaultValue: {}, signal }),
       ]),
   },
   {

@@ -7,6 +7,7 @@ import {
   createInitialStartupState,
   runStartupPreload,
 } from "./runtime/preload.js";
+import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
 
 const WorldShell = {
   backgroundColor: "#000",
@@ -43,6 +44,7 @@ function App() {
     const saved = localStorage.getItem("Terrain");
     return saved !== null ? JSON.parse(saved) : true;
   });
+  const { token: libraryToken } = useLibraryState();
 
   useEffect(() => {
     localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled));
@@ -90,24 +92,37 @@ function App() {
 
     frameId = requestAnimationFrame(frame);
 
-    runStartupPreload({
-      onProgress: (nextState) => {
-        if (!isActive) return;
-        setStartupState((current) => ({ ...current, ...nextState }));
-      },
-    }).finally(() => {
-      preloadFinishedRef.current = true;
-      if (!isActive) return;
+    setStartupState((current) => ({
+      ...current,
+      stage: "Syncing games and scenarios",
+    }));
 
-      if (worldIdleRef.current) {
-        setIsReady(true);
-      } else {
-        setStartupState((current) => ({
-          ...current,
-          done: true,
-        }));
-      }
-    });
+    ensureLibraryCatalog()
+      .catch((error) => {
+        console.warn("Failed to load library catalog before startup preload:", error);
+      })
+      .finally(() => {
+        if (!isActive) return;
+
+        runStartupPreload({
+          onProgress: (nextState) => {
+            if (!isActive) return;
+            setStartupState((current) => ({ ...current, ...nextState }));
+          },
+        }).finally(() => {
+          preloadFinishedRef.current = true;
+          if (!isActive) return;
+
+          if (worldIdleRef.current) {
+            setIsReady(true);
+          } else {
+            setStartupState((current) => ({
+              ...current,
+              done: true,
+            }));
+          }
+        });
+      });
 
     return () => {
       isActive = false;
@@ -141,6 +156,7 @@ function App() {
     <>
     <div style={WorldShell}>
     <Map
+    key={`map-${libraryToken || "default"}`}
     mapRef={mapRef}
     projection={isGlobeEnabled ? "globe" : "mercator"}
     terrainEnabled={isTerrainEnabled}
@@ -150,6 +166,7 @@ function App() {
     </div>
     {isReady && (
       <UI
+      key={`ui-${libraryToken || "default"}`}
       isGlobeEnabled={isGlobeEnabled}
       isTerrainEnabled={isTerrainEnabled}
       mapRef={mapRef}

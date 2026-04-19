@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { SettingsButton, SettingsMenu } from "./settings";
+import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
 import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
@@ -180,18 +181,21 @@ const Main = ({
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
+      <LibraryTopBar />
       <DateWidget
+        activePanel={activeBottomPanel}
+        mapRef={mapRef}
+        onSetPanel={setActiveBottomPanel}
+        onTogglePanel={toggleBottomPanel}
         rightShift={rightShift}
-        isTimelineOpen={activeBottomPanel === "timeline"}
-        onToggleTimeline={() => toggleBottomPanel("timeline")}
-        onCloseTimeline={() => setActiveBottomPanel((panel) => (panel === "timeline" ? null : panel))}
+        topOffset={TOP_BAR_OFFSET}
       />
       <Toolbar
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
       />
-      <Other />
+      <Other topOffset={TOP_BAR_OFFSET} />
       <Search mapRef={mapRef} />
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
@@ -201,11 +205,15 @@ const Main = ({
       <Suspense fallback={null}>
         {shouldLoadAdvisor && <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} />}
       </Suspense>
-      <SettingsButton onToggle={() => setIsSettingsOpen(!isSettingsOpen)} />
+      <SettingsButton
+        topOffset={TOP_BAR_OFFSET}
+        onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
+      />
       {isSettingsOpen && (
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
           githubUrl="https://github.com/Tommi-K/pax-historia"
+          topOffset={TOP_BAR_OFFSET}
           isFullscreenEnabled={isFullscreenEnabled}
           isGlobeEnabled={isGlobeEnabled}
           isTerrainEnabled={isTerrainEnabled}

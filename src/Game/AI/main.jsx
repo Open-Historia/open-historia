@@ -5,6 +5,14 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { normalizePromptPack } from "./gameplayPrompts.js";
+import {
+    buildActionDisplayText,
+    normalizeActionEntry,
+    normalizeChats,
+    normalizeEvents,
+    normalizeWorldState,
+} from "../../runtime/gameState.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -422,7 +430,7 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     }
 }
 
-async function callAI(systemPrompt, history, opts) {
+export async function callAI(systemPrompt, history, opts) {
     switch (getStoredProvider()) {
     case "openai":
         return callOpenAI(systemPrompt, history, opts);
@@ -436,61 +444,252 @@ async function callAI(systemPrompt, history, opts) {
     }
 }
 
-let advisorTemplate = "";
-let leaderTemplate = "";
+let promptPack = normalizePromptPack({});
 let promptsReady = null;
+let promptsReadyKey = "";
+
+const renderTemplate = (template, variables) =>
+    String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
+        const value = variables[key];
+        return value == null ? "" : String(value);
+    });
+
+const resolveHelperValues = (helperTemplates, variables) => {
+    let resolved = {};
+
+    for (let pass = 0; pass < 2; pass += 1) {
+        resolved = Object.fromEntries(
+            Object.entries(helperTemplates).map(([key, template]) => [
+                key,
+                renderTemplate(template, { ...variables, ...resolved }),
+            ]),
+        );
+    }
+
+    return resolved;
+};
+
+function formatActionsForPrompt(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+        return "";
+    }
+
+    return actions
+    .map((entry) => {
+        if (typeof entry === "string") {
+            return entry.trim();
+        }
+
+        const normalized = normalizeActionEntry(entry);
+        if (!normalized) {
+            return "";
+        }
+
+        return `- ${normalized.title}: ${buildActionDisplayText(normalized)}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 async function ensurePromptsLoaded() {
-    if (!promptsReady) {
+    const cacheKey = JSON_URLS.prompts;
+
+    if (!promptsReady || promptsReadyKey !== cacheKey) {
+        promptsReadyKey = cacheKey;
         promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
         .then((data) => {
-            advisorTemplate = data.advisor ?? "";
-            leaderTemplate = data.leader ?? "";
-            return data;
+            promptPack = normalizePromptPack(data);
+            return promptPack;
         })
         .catch((error) => {
             console.warn("Could not load prompts.json", error);
-            advisorTemplate = "";
-            leaderTemplate = "";
-            return {};
+            promptPack = normalizePromptPack({});
+            return promptPack;
         });
     }
 
     await promptsReady;
 }
 
-async function buildAdvisorSystemPrompt() {
-    await ensurePromptsLoaded();
-    const [gameData, actionData, chatData] = await Promise.all([
-        readJson(JSON_URLS.game, { defaultValue: {} }),
-        readJson(JSON_URLS.actions, { defaultValue: [] }),
-        readJson(JSON_URLS.chat, { defaultValue: [] }),
-    ]);
+function buildChatHistoryText(chats) {
+    const normalizedChats = normalizeChats(chats);
+    if (normalizedChats.length === 0) {
+        return "No chats occurred in these rounds.";
+    }
 
-    return advisorTemplate
-    .replace(/\$\{country\}/g, gameData.country)
-    .replace(/\$\{startdate\}/g, gameData.startDate)
-    .replace(/\$\{date\}/g, gameData.gameDate)
-    .replace(/\$\{actions\}/g, actionData.join("\n"))
-    .replace(/\$\{chat\}/g, JSON.stringify(chatData));
+    return normalizedChats
+    .slice(0, 8)
+    .map((chat, index) => {
+        const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
+        const body = chat.messages.length > 0
+            ? chat.messages.slice(-10).map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
+            : "No messages yet.";
+        return `${header}\n${body}`;
+    })
+    .join("\n\n");
 }
 
-export async function buildDiplomaticSystemPrompt(countries, playerCountry, gameDate) {
+function buildEventHistoryText(events) {
+    const normalizedEvents = normalizeEvents(events);
+    if (normalizedEvents.length === 0) {
+        return "No prior events have been recorded yet.";
+    }
+
+    return normalizedEvents
+    .slice(-16)
+    .map((event) => `- ${event.date || "undated"}: ${event.title}${event.description ? ` - ${event.description}` : ""}`)
+    .join("\n");
+}
+
+function buildAdvisorHistoryText(messages) {
+    const normalizedMessages = Array.isArray(messages)
+        ? messages
+            .map((entry) => {
+                if (!entry || typeof entry !== "object") {
+                    return "";
+                }
+
+                const role = (entry.role || entry.speaker || "message").toString().trim();
+                const text = (entry.text || entry.content || entry.message || "").toString().trim();
+                return role && text ? `${role}: ${text}` : "";
+            })
+            .filter(Boolean)
+        : [];
+
+    return normalizedMessages.length > 0
+        ? normalizedMessages.slice(-18).join("\n")
+        : "No advisor messages are currently recorded.";
+}
+
+function buildWorldSummary(gameData, worldData, eventData) {
+    const world = normalizeWorldState(worldData);
+    return [
+        `Player polity: ${gameData.country || "Unknown polity"}`,
+        `Current date: ${gameData.gameDate || "unknown"}`,
+        `Difficulty: ${gameData.difficulty || "standard"}`,
+        `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
+        `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
+        `Recent events:`,
+        buildEventHistoryText(eventData),
+    ].join("\n");
+}
+
+function buildPromptVariables({
+    actionData,
+    advisorData,
+    chatData,
+    eventData,
+    gameData,
+    speakingAs = "",
+    worldData,
+}) {
+    const actionText = formatActionsForPrompt(actionData);
+    const worldSummary = buildWorldSummary(gameData, worldData, eventData);
+    const normalizedChats = normalizeChats(chatData);
+    const currentChat = normalizedChats[0] ?? null;
+
+    return {
+        actionInput: "",
+        actions: actionText,
+        advisorMessages: buildAdvisorHistoryText(advisorData),
+        allActions: actionText,
+        chat: JSON.stringify(chatData ?? []),
+        chatHistory: currentChat
+            ? currentChat.messages.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
+            : "No chat history.",
+        chatHistoryLong: buildChatHistoryText(chatData),
+        chatParticipants: currentChat
+            ? currentChat.countries.map((country) => country.name).join(", ")
+            : "",
+        date: gameData.gameDate ?? "",
+        difficulty: gameData.difficulty ?? "standard",
+        difficultyGuidanceChats: "Diplomatic flexibility should reflect the configured difficulty.",
+        gameMasterRequest: "",
+        language: worldData.language ?? gameData.language ?? "English",
+        lastSpeaker: currentChat?.messages?.at(-1)?.speaker ?? "",
+        plannedActions: actionText || "No planned actions are currently queued.",
+        playerPolity: gameData.country ?? "",
+        recentEvents: buildEventHistoryText(eventData),
+        recentEventsLong: buildEventHistoryText(eventData),
+        respondingPolityName: speakingAs,
+        simulationRules: worldData.simulationRules ?? "",
+        startDate: gameData.startDate ?? "",
+        targetDate: gameData.gameDate ?? "",
+        worldBeforeRoundOne: worldData.startingTimelineText ?? "",
+        worldSummary,
+        worldSummaryNoCity: worldSummary,
+
+        ALL_ADVISOR_MESSAGES: "${advisorMessages}",
+        ALL_EVENTS_WITH_CONSOLIDATION: "${recentEventsLong}",
+        ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS: "${recentEventsLong}",
+        CHATS_NON_CONSOLIDATED_ROUNDS: "${chatHistoryLong}",
+        CHAT_PARTICIPANTS: "${chatParticipants}",
+        DIFFICULTY_DESCRIPTION_CHATS: "${difficultyGuidanceChats}",
+        GRAND_MAP_DESCRIPTION: "${worldSummary}",
+        GRAND_MAP_DESCRIPTION_NO_CITY: "${worldSummaryNoCity}",
+        HISTORICAL_PRESET_SIMULATION_RULES: "${simulationRules}",
+        ORIGIN_ROUND_DATE: "${date}",
+        PLAYER_ACTIONS_THIS_ROUND: "${plannedActions}",
+        PLAYER_POLITY: "${playerPolity}",
+        RESPONDING_POLITY_NAME: "${respondingPolityName}",
+        STARTING_ROUND_DATE: "${startDate}",
+        THIS_CHATS_MOST_RECENT_SPEAKER: "${lastSpeaker}",
+        THIS_CHAT_HISTORY: "${chatHistory}",
+        WORLD_BEFORE_ROUND_ONE_TEXT: "${worldBeforeRoundOne}",
+    };
+}
+
+async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
-    const participantList = countries.map((country) => `- ${country}`).join("\n");
-    const [gameData, actionData, chatData] = await Promise.all([
+    const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
         readJson(JSON_URLS.game, { defaultValue: {} }),
         readJson(JSON_URLS.actions, { defaultValue: [] }),
         readJson(JSON_URLS.chat, { defaultValue: [] }),
+        readJson(JSON_URLS.world, { defaultValue: {} }),
+        readJson(JSON_URLS.events, { defaultValue: [] }),
+        readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
-    return leaderTemplate
-    .replace(/\$\{participantList\}/g, participantList)
-    .replace(/\$\{country\}/g, gameData.country)
-    .replace(/\$\{startdate\}/g, gameData.startDate)
-    .replace(/\$\{date\}/g, gameData.gameDate)
-    .replace(/\$\{actions\}/g, actionData.join("\n"))
-    .replace(/\$\{chat\}/g, JSON.stringify(chatData));
+    const variables = buildPromptVariables({
+        actionData,
+        advisorData,
+        chatData,
+        eventData,
+        gameData,
+        worldData,
+    });
+    const helperValues = resolveHelperValues(promptPack.helpers, variables);
+
+    return renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+}
+
+export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
+    await ensurePromptsLoaded();
+    const participantList = countries.map((country) => `- ${country}`).join("\n");
+    const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
+        readJson(JSON_URLS.game, { defaultValue: {} }),
+        readJson(JSON_URLS.actions, { defaultValue: [] }),
+        readJson(JSON_URLS.chat, { defaultValue: [] }),
+        readJson(JSON_URLS.world, { defaultValue: {} }),
+        readJson(JSON_URLS.events, { defaultValue: [] }),
+        readJson(JSON_URLS.advisor, { defaultValue: [] }),
+    ]);
+
+    const variables = {
+        ...buildPromptVariables({
+            actionData,
+            advisorData,
+            chatData,
+            eventData,
+            gameData,
+            speakingAs: countries.find((country) => country !== playerCountry) || "",
+            worldData,
+        }),
+        chatParticipants: participantList || "",
+    };
+    const helperValues = resolveHelperValues(promptPack.helpers, variables);
+
+    return renderTemplate(promptPack.leader, { ...variables, ...helperValues });
 }
 
 let advisorHistory = [];
