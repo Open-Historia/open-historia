@@ -15,6 +15,7 @@ const GAME_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "game-manifest.json");
 const DEFAULT_BASE_SAVE_ID = "save0";
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
+const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
 const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle";
 const SCENARIO_BUNDLE_VERSION = 1;
 
@@ -482,6 +483,18 @@ const readBaseSaveJsonAsset = (baseSaveId, assetKey) =>
 
 const normalizeSnapshotString = (value) => String(value ?? "").trim();
 
+const normalizeRecordValue = (value) =>
+  value && typeof value === "object" && !Array.isArray(value) ? value : {};
+
+const shouldBackfillSeedDatePair = ({
+  baseGameDate,
+  baseStartDate,
+  currentGameDate,
+  currentStartDate,
+}) =>
+  (!currentStartDate || currentStartDate === baseStartDate) &&
+  (!currentGameDate || currentGameDate === baseGameDate || currentGameDate === currentStartDate);
+
 const scenarioLooksLikeRuntimeSnapshot = ({ actions, chat, game, world }) => {
   const hasResolvedActions = Array.isArray(actions)
     ? actions.some((entry) => normalizeSnapshotString(entry?.status).toLowerCase() === "resolved")
@@ -502,12 +515,18 @@ const buildFreshGameSeedFromScenario = ({ baseGame, scenarioGame }) => {
   const baseStartDate = normalizeSnapshotString(baseGame?.startDate);
   const baseGameDate = normalizeSnapshotString(baseGame?.gameDate);
   const scenarioStartDate = normalizeSnapshotString(scenarioGame?.startDate);
+  const scenarioGameDate = normalizeSnapshotString(scenarioGame?.gameDate);
   const hasCustomStartDate = Boolean(scenarioStartDate) && scenarioStartDate !== baseStartDate;
-  const nextStartDate = scenarioStartDate || baseStartDate;
+  const hasCustomGameDate = Boolean(scenarioGameDate) && scenarioGameDate !== baseGameDate;
+  const nextStartDate =
+    (hasCustomStartDate ? scenarioStartDate : "") ||
+    (hasCustomGameDate ? scenarioGameDate : "") ||
+    scenarioStartDate ||
+    baseStartDate;
   const nextGameDate =
+    (hasCustomGameDate ? scenarioGameDate : "") ||
     (hasCustomStartDate ? scenarioStartDate : "") ||
     baseGameDate ||
-    normalizeSnapshotString(scenarioGame?.gameDate) ||
     nextStartDate;
 
   return {
@@ -541,6 +560,77 @@ const buildFreshWorldSeedFromScenario = ({ baseWorld, scenarioWorld }) => {
   }
 
   return nextWorld;
+};
+
+const syncBuiltInScenarioSeedDate = () => {
+  const targetPath = getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game");
+  const baseGame = normalizeRecordValue(readBaseSaveJsonAsset(DEFAULT_BASE_SAVE_ID, "game"));
+  const currentGame = normalizeRecordValue(readJsonFile(targetPath, {}));
+  const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
+  const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
+
+  if (
+    !shouldBackfillSeedDatePair({
+      baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
+      baseStartDate: normalizeSnapshotString(baseGame?.startDate),
+      currentGameDate,
+      currentStartDate,
+    })
+  ) {
+    return;
+  }
+
+  writeJsonFile(targetPath, {
+    ...cloneJson(currentGame),
+    gameDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
+    startDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
+  });
+};
+
+const syncBuiltInDefaultGameDate = () => {
+  const gameDataPath = getGameJsonPath(DEFAULT_GAME_ID, "game");
+  const currentGame = normalizeRecordValue(readJsonFile(gameDataPath, {}));
+  const snapshot = {
+    actions: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "actions"), []),
+    chat: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "chat"), []),
+    events: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "events"), []),
+    game: currentGame,
+    world: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "world"), {}),
+  };
+
+  if (
+    scenarioLooksLikeRuntimeSnapshot(snapshot) ||
+    (Array.isArray(snapshot.events) && snapshot.events.length > 0) ||
+    Number(currentGame?.round ?? 1) > 1
+  ) {
+    return;
+  }
+
+  const baseGame = normalizeRecordValue(readBaseSaveJsonAsset(DEFAULT_BASE_SAVE_ID, "game"));
+  const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
+  const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
+
+  if (
+    !shouldBackfillSeedDatePair({
+      baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
+      baseStartDate: normalizeSnapshotString(baseGame?.startDate),
+      currentGameDate,
+      currentStartDate,
+    })
+  ) {
+    return;
+  }
+
+  const scenarioGame = normalizeRecordValue(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game"), {}));
+  const startDate =
+    normalizeSnapshotString(scenarioGame?.startDate) || BUILT_IN_SCENARIO_DEFAULT_DATE;
+  const gameDate = normalizeSnapshotString(scenarioGame?.gameDate) || startDate;
+
+  writeJsonFile(gameDataPath, {
+    ...cloneJson(currentGame),
+    ...(gameDate ? { gameDate } : {}),
+    ...(startDate ? { startDate } : {}),
+  });
 };
 
 const seedScenarioJsonFilesFromBaseSave = (scenarioId, baseSaveId) => {
@@ -714,6 +804,8 @@ const ensureDefaultScenario = () => {
     }
   }
 
+  syncBuiltInScenarioSeedDate();
+
   const manifest = getScenarioManifest();
   if (!manifest.order.includes(DEFAULT_SCENARIO_ID)) {
     manifest.order.unshift(DEFAULT_SCENARIO_ID);
@@ -754,6 +846,10 @@ const ensureDefaultGame = () => {
       seedGameJsonFilesFromScenario(DEFAULT_GAME_ID, DEFAULT_SCENARIO_ID);
       break;
     }
+  }
+
+  if (readGameMeta(DEFAULT_GAME_ID).scenarioId === DEFAULT_SCENARIO_ID) {
+    syncBuiltInDefaultGameDate();
   }
 
   const manifest = getGameManifest();

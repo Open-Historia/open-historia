@@ -1087,6 +1087,7 @@ const LibraryTopBar = () => {
             difficulty: editorState.difficulty,
             gameDate: editorState.gameDate,
             language: editorState.language,
+            startDate: editorState.gameDate || currentGame.startDate || "",
           },
           heroSubtitle: editorState.heroSubtitle,
           heroTitle: editorState.heroTitle,
