@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:smoke:gameplay": "node scripts/gameplay-smoke.mjs",
+    "test:smoke:scenario": "node scripts/scenario-smoke.mjs",
+    "test:smoke:openai": "node scripts/openai-smoke.mjs",
+    "test:smoke:local": "npm run test:smoke:scenario && npm run test:smoke:gameplay && npm run test:smoke:openai"
   },
   "dependencies": {
     "chart.js": "^4.5.1",

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
+import { resolveCountryDisplayName } from "../../runtime/assets.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -259,6 +260,7 @@ const RegionPopup = () => {
     if (!selection || !screenPos) return null;
 
     const { COUNTRY, NAME_1 } = selection;
+    const displayCountry = resolveCountryDisplayName(COUNTRY, selection.GID_0);
     const POPUP_WIDTH = 210;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
     const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
@@ -296,7 +298,7 @@ const RegionPopup = () => {
         {showFlagImage ? (
             <img
             src={flagState.imageUrl}
-            alt={COUNTRY}
+            alt={displayCountry}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}
             />
@@ -360,11 +362,11 @@ const RegionPopup = () => {
         <div style={{ display: "flex", alignItems: "center", gap: "7px", minWidth: 0 }}>
         <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#3b82f6", flexShrink: 0, boxShadow: "0 0 6px rgba(59,130,246,0.6)" }} />
         <span style={{ color: "rgba(255,255,255,0.95)", fontWeight: 600, fontSize: "13px", lineHeight: 1.3, wordBreak: "break-word" }}>
-        {COUNTRY}
+        {displayCountry}
         </span>
         </div>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <IconBtn title="Copy country name" onClick={() => navigator.clipboard?.writeText(COUNTRY)}>{"\u29C9"}</IconBtn>
+        <IconBtn title="Copy country name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
         <IconBtn title="Country info">{"\u24D8"}</IconBtn>
         </div>
         </div>

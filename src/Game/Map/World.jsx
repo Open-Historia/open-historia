@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo, useRef } from "react";
 import Map from "react-map-gl/maplibre";
-import "maplibre-gl/dist/maplibre-gl.css";
 import Nations from "./Nations";
 import RegionPopup from "../Selection/Regions";
 import Cities from "./Cities";
@@ -42,6 +41,15 @@ const WORLD_STYLE = {
       maxzoom: 5,
       tileSize: 256,
     },
+    "hillshade-source": {
+      type: "raster-dem",
+      tiles: [
+        TERRAIN_TILE_TEMPLATE,
+      ],
+      encoding: "terrarium",
+      maxzoom: 5,
+      tileSize: 256,
+    },
   },
   layers: [
     {
@@ -59,7 +67,7 @@ const WORLD_STYLE = {
     {
       id: "hills",
       type: "hillshade",
-      source: "terrain-source",
+      source: "hillshade-source",
       paint: {
         "hillshade-exaggeration": 0.1,
         "hillshade-shadow-color": "#000",

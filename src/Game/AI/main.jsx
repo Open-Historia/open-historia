@@ -5,6 +5,7 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { buildActionDisplayText, normalizeActionEntry } from "../../runtime/gameState.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -422,7 +423,7 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     }
 }
 
-async function callAI(systemPrompt, history, opts) {
+export async function callAI(systemPrompt, history, opts) {
     switch (getStoredProvider()) {
     case "openai":
         return callOpenAI(systemPrompt, history, opts);
@@ -439,9 +440,35 @@ async function callAI(systemPrompt, history, opts) {
 let advisorTemplate = "";
 let leaderTemplate = "";
 let promptsReady = null;
+let promptsReadyKey = "";
+
+function formatActionsForPrompt(actions) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+        return "";
+    }
+
+    return actions
+    .map((entry) => {
+        if (typeof entry === "string") {
+            return entry.trim();
+        }
+
+        const normalized = normalizeActionEntry(entry);
+        if (!normalized) {
+            return "";
+        }
+
+        return `- ${normalized.title}: ${buildActionDisplayText(normalized)}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 async function ensurePromptsLoaded() {
-    if (!promptsReady) {
+    const cacheKey = JSON_URLS.prompts;
+
+    if (!promptsReady || promptsReadyKey !== cacheKey) {
+        promptsReadyKey = cacheKey;
         promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
         .then((data) => {
             advisorTemplate = data.advisor ?? "";
@@ -471,7 +498,7 @@ async function buildAdvisorSystemPrompt() {
     .replace(/\$\{country\}/g, gameData.country)
     .replace(/\$\{startdate\}/g, gameData.startDate)
     .replace(/\$\{date\}/g, gameData.gameDate)
-    .replace(/\$\{actions\}/g, actionData.join("\n"))
+    .replace(/\$\{actions\}/g, formatActionsForPrompt(actionData))
     .replace(/\$\{chat\}/g, JSON.stringify(chatData));
 }
 
@@ -489,7 +516,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, game
     .replace(/\$\{country\}/g, gameData.country)
     .replace(/\$\{startdate\}/g, gameData.startDate)
     .replace(/\$\{date\}/g, gameData.gameDate)
-    .replace(/\$\{actions\}/g, actionData.join("\n"))
+    .replace(/\$\{actions\}/g, formatActionsForPrompt(actionData))
     .replace(/\$\{chat\}/g, JSON.stringify(chatData));
 }
 

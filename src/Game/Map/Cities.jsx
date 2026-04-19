@@ -4,8 +4,6 @@ import { PMTILES_PROTOCOL_URLS, ensurePmtilesProtocol } from "../../runtime/asse
 
 ensurePmtilesProtocol();
 
-const PMTILES_URL = PMTILES_PROTOCOL_URLS.cities;
-
 const populationFilter = [
     "any",
     ["==", ["get", "capital"], "primary"],
@@ -24,8 +22,10 @@ const populationFilter = [
 ];
 
 const Cities = () => {
+    const pmtilesUrl = PMTILES_PROTOCOL_URLS.cities;
+
     return (
-        <Source id="cities-source" type="vector" url={PMTILES_URL}>
+        <Source id="cities-source" type="vector" url={pmtilesUrl}>
         <Layer
         id="cities-shapes"
         type="symbol"
