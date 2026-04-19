@@ -186,7 +186,7 @@ const WorldMap = () => {
           id="countries-outline"
           type="line"
           source-layer="countries"
-          paint={{ "line-color": "#000", "line-width": 0.5 }}
+          paint={{ "line-color": "#000", "line-width": 1 }}
         />
       </Source>
 

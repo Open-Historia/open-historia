@@ -242,7 +242,7 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         <div style={{
             position: "fixed", top: 0,
             right: isAdvisorOpen ? 0 : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
-            width: ADVISOR_PANEL_WIDTH, height: "100vh",
+            width: ADVISOR_PANEL_WIDTH, height: "calc(100vh - 64px)",
             backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
             zIndex: 9998, borderLeft: "1px solid rgba(255,255,255,0.1)",
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
