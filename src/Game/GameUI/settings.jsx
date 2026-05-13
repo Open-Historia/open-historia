@@ -206,7 +206,7 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
             }}
             />
 
-            <div style={{ maxHeight: "12rem", overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.7rem" }}>
+            <div style={{ maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "none", display: "flex", flexDirection: "column", gap: "0.7rem" }}>
             {groupedProviders.length > 0 ? groupedProviders.map((group) => (
                 <div key={group.name}>
                 <div style={{ marginBottom: "0.35rem", fontSize: "0.68rem", fontWeight: 700, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
