@@ -180,7 +180,7 @@ const WorldMap = () => {
           id="countries-fill"
           type="fill"
           source-layer="countries"
-          paint={{ "fill-color": "#000000", "fill-opacity": 0 }}
+          paint={fillStyle}
         />
         <Layer
           id="countries-outline"
@@ -195,7 +195,7 @@ const WorldMap = () => {
           id="regions-fill"
           type="fill"
           source-layer="regions"
-          paint={fillStyle}
+          paint={{ "fill-opacity": 0 }}
         />
         <Layer
           id="regions-outline"
