@@ -12,7 +12,8 @@ const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
 const SCENARIO_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
 const GAME_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "game-manifest.json");
 
-const DEFAULT_BASE_SAVE_ID = "save0";
+const PMTILES_ASSETS_DIR = path.join(PUBLIC_DIR, "assets");
+
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
 const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
@@ -21,7 +22,6 @@ const SCENARIO_BUNDLE_VERSION = 1;
 
 const DEFAULT_SCENARIO_META = {
   accentColor: "#7c3aed",
-  baseSaveId: DEFAULT_BASE_SAVE_ID,
   description: "Server-backed base scenario",
   eyebrow: "Scenario",
   heroSubtitle: "Editable server-backed scenario template.",
@@ -32,7 +32,6 @@ const DEFAULT_SCENARIO_META = {
 
 const DEFAULT_GAME_META = {
   accentColor: "#7c3aed",
-  baseSaveId: DEFAULT_BASE_SAVE_ID,
   description: "Active playable game",
   eyebrow: "Game",
   heroSubtitle: "Playable campaign session",
@@ -103,20 +102,18 @@ const JSON_ASSET_DEFAULTS = {
 
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "difficulty",
-  "language",
-  "notes",
-  "polityOverrides",
-  "regionOwnershipOverrides",
-  "simulationRules",
-  "startingTimelineText",
+"language",
+"notes",
+"polityOverrides",
+"regionOwnershipOverrides",
+"simulationRules",
+"startingTimelineText",
 ];
 
-const BASE_ASSET_CANDIDATES = {
-  colors: [
-    path.join(DIST_DIR, "assets", "colors.json"),
-    path.join(PUBLIC_DIR, "assets", "colors.json"),
-  ],
-};
+const COLORS_ASSET_CANDIDATES = [
+  path.join(DIST_DIR, "assets", "colors.json"),
+  path.join(PUBLIC_DIR, "assets", "colors.json"),
+];
 
 const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
   "image/avif",
@@ -133,10 +130,10 @@ const ensureDirectory = (targetPath) => {
 const cloneJson = (value) => JSON.parse(JSON.stringify(value));
 
 const normalizeContentType = (value) =>
-  String(value ?? "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
+String(value ?? "")
+.split(";")[0]
+.trim()
+.toLowerCase();
 
 const readStoredImageContentType = (value) => {
   const normalized = normalizeContentType(value);
@@ -172,10 +169,10 @@ const writeJsonFile = (targetPath, value) => {
 
 const normalizeId = (rawValue, prefix) => {
   const value = String(rawValue ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
 
   return value || `${prefix}-${Date.now().toString(36)}`;
 };
@@ -183,44 +180,8 @@ const normalizeId = (rawValue, prefix) => {
 const normalizeScenarioId = (rawValue) => normalizeId(rawValue, "scenario");
 const normalizeGameId = (rawValue) => normalizeId(rawValue, "game");
 
-const listBaseSaveIds = () => {
-  const candidates = [path.join(DIST_DIR, "saves"), path.join(PUBLIC_DIR, "saves")];
-  const seen = new Set();
-
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-
-    for (const entry of fs.readdirSync(candidate, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        seen.add(entry.name);
-      }
-    }
-  }
-
-  return Array.from(seen).sort((left, right) => left.localeCompare(right));
-};
-
-const resolveBaseSaveFile = (baseSaveId, relativePath) => {
-  const candidates = [
-    path.join(DIST_DIR, "saves", baseSaveId, relativePath),
-    path.join(PUBLIC_DIR, "saves", baseSaveId, relativePath),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-};
-
-const resolveBaseAssetFile = (assetKey) => {
-  const candidates = BASE_ASSET_CANDIDATES[assetKey] ?? [];
-
-  for (const candidate of candidates) {
+const resolveColorsAssetFile = () => {
+  for (const candidate of COLORS_ASSET_CANDIDATES) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -256,32 +217,32 @@ const removeFileIfPresent = (targetPath) => {
 const getScenarioDirectory = (scenarioId) => path.join(SCENARIOS_DIR, scenarioId);
 const getScenarioMetaPath = (scenarioId) => path.join(getScenarioDirectory(scenarioId), "scenario.json");
 const getScenarioJsonPath = (scenarioId, assetKey) =>
-  path.join(
-    getScenarioDirectory(scenarioId),
-    JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey],
-  );
+path.join(
+  getScenarioDirectory(scenarioId),
+          JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey],
+);
 const getScenarioUploadPath = (scenarioId, assetKey) =>
-  path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
+path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
 
 const getGameDirectory = (gameId) => path.join(GAMES_DIR, gameId);
 const getGameMetaPath = (gameId) => path.join(getGameDirectory(gameId), "game-instance.json");
 const getGameJsonPath = (gameId, assetKey) =>
-  path.join(
-    getGameDirectory(gameId),
-    JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey],
-  );
+path.join(
+  getGameDirectory(gameId),
+          JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey],
+);
 const getGameUploadPath = (gameId, assetKey) =>
-  path.join(getGameDirectory(gameId), UPLOADABLE_GAME_ASSET_FILES[assetKey]);
+path.join(getGameDirectory(gameId), UPLOADABLE_GAME_ASSET_FILES[assetKey]);
 
 const buildScenarioAssetUrl = (scenarioId, assetKey, cacheToken) =>
-  `/api/scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}?v=${encodeURIComponent(
-    cacheToken ?? "",
-  )}`;
+`/api/scenarios/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}?v=${encodeURIComponent(
+  cacheToken ?? "",
+)}`;
 
 const buildGameAssetUrl = (gameId, assetKey, cacheToken) =>
-  `/api/games/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}?v=${encodeURIComponent(
-    cacheToken ?? "",
-  )}`;
+`/api/games/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}?v=${encodeURIComponent(
+  cacheToken ?? "",
+)}`;
 
 const getScenarioManifest = () => {
   const manifest = readJsonFile(SCENARIO_MANIFEST_PATH, null);
@@ -290,8 +251,8 @@ const getScenarioManifest = () => {
     return {
       order: manifest.order,
       selectedScenarioId:
-        String(manifest.selectedScenarioId ?? manifest.activeScenarioId ?? "").trim() ||
-        DEFAULT_SCENARIO_ID,
+      String(manifest.selectedScenarioId ?? manifest.activeScenarioId ?? "").trim() ||
+      DEFAULT_SCENARIO_ID,
       version: 2,
     };
   }
@@ -307,8 +268,8 @@ const saveScenarioManifest = (manifest) => {
   writeJsonFile(SCENARIO_MANIFEST_PATH, {
     activeScenarioId: manifest.selectedScenarioId,
     order: Array.from(new Set(manifest.order ?? [DEFAULT_SCENARIO_ID])),
-    selectedScenarioId: manifest.selectedScenarioId,
-    version: 2,
+                selectedScenarioId: manifest.selectedScenarioId,
+                version: 2,
   });
 };
 
@@ -334,7 +295,7 @@ const saveGameManifest = (manifest) => {
   writeJsonFile(GAME_MANIFEST_PATH, {
     activeGameId: manifest.activeGameId,
     order: Array.from(new Set(manifest.order ?? [DEFAULT_GAME_ID])),
-    version: 2,
+                version: 2,
   });
 };
 
@@ -346,12 +307,11 @@ const readScenarioMeta = (scenarioId) => {
 
   return {
     accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
-    baseSaveId: String(raw?.baseSaveId ?? "").trim() || DEFAULT_BASE_SAVE_ID,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     countryNameOverrides:
-      raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object"
-        ? raw.countryNameOverrides
-        : {},
+    raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object"
+    ? raw.countryNameOverrides
+    : {},
     createdAt: raw?.createdAt ?? new Date().toISOString(),
     description,
     eyebrow: String(raw?.eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
@@ -369,17 +329,16 @@ const writeScenarioMeta = (scenarioId, updates) => {
   const next = {
     ...current,
     ...updates,
-    baseSaveId: String(updates?.baseSaveId ?? current.baseSaveId).trim() || current.baseSaveId,
     coverImageContentType:
-      updates?.coverImageContentType === null
-        ? null
-        : typeof updates?.coverImageContentType === "string"
-          ? readStoredImageContentType(updates.coverImageContentType)
-          : current.coverImageContentType,
+    updates?.coverImageContentType === null
+    ? null
+    : typeof updates?.coverImageContentType === "string"
+    ? readStoredImageContentType(updates.coverImageContentType)
+    : current.coverImageContentType,
     countryNameOverrides:
-      updates?.countryNameOverrides && typeof updates.countryNameOverrides === "object"
-        ? updates.countryNameOverrides
-        : current.countryNameOverrides,
+    updates?.countryNameOverrides && typeof updates.countryNameOverrides === "object"
+    ? updates.countryNameOverrides
+    : current.countryNameOverrides,
     id: scenarioId,
     updatedAt: new Date().toISOString(),
   };
@@ -396,7 +355,6 @@ const readGameMeta = (gameId) => {
 
   return {
     accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_GAME_META.accentColor,
-    baseSaveId: String(raw?.baseSaveId ?? "").trim() || DEFAULT_BASE_SAVE_ID,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? new Date().toISOString(),
     description,
@@ -416,13 +374,12 @@ const writeGameMeta = (gameId, updates) => {
   const next = {
     ...current,
     ...updates,
-    baseSaveId: String(updates?.baseSaveId ?? current.baseSaveId).trim() || current.baseSaveId,
     coverImageContentType:
-      updates?.coverImageContentType === null
-        ? null
-        : typeof updates?.coverImageContentType === "string"
-          ? readStoredImageContentType(updates.coverImageContentType)
-          : current.coverImageContentType,
+    updates?.coverImageContentType === null
+    ? null
+    : typeof updates?.coverImageContentType === "string"
+    ? readStoredImageContentType(updates.coverImageContentType)
+    : current.coverImageContentType,
     id: gameId,
     scenarioId: String(updates?.scenarioId ?? current.scenarioId).trim() || current.scenarioId,
     updatedAt: new Date().toISOString(),
@@ -465,26 +422,28 @@ const normalizeBaseSaveSeedAsset = (assetKey, value) => {
 
   if (assetKey in CORE_JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES) {
     return value && typeof value === "object" && !Array.isArray(value)
-      ? value
-      : cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
+    ? value
+    : cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
   }
 
   return cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
 };
 
-const readBaseSaveJsonAsset = (baseSaveId, assetKey) =>
-  normalizeBaseSaveSeedAsset(
-    assetKey,
-    readJsonFile(
-      resolveBaseSaveFile(baseSaveId, JSON_ASSET_FILES[assetKey]),
-      cloneJson(JSON_ASSET_DEFAULTS[assetKey]),
-    ),
-  );
+// Reads a "clean" seed asset from the default scenario — used when resetting a
+// dirty (runtime-snapshot) scenario/game back to a fresh state.
+const readDefaultScenarioJsonAsset = (assetKey) =>
+normalizeBaseSaveSeedAsset(
+  assetKey,
+  readJsonFile(
+    getScenarioJsonPath(DEFAULT_SCENARIO_ID, assetKey),
+               cloneJson(JSON_ASSET_DEFAULTS[assetKey]),
+  ),
+);
 
 const normalizeSnapshotString = (value) => String(value ?? "").trim();
 
 const normalizeRecordValue = (value) =>
-  value && typeof value === "object" && !Array.isArray(value) ? value : {};
+value && typeof value === "object" && !Array.isArray(value) ? value : {};
 
 const shouldBackfillSeedDatePair = ({
   baseGameDate,
@@ -492,21 +451,21 @@ const shouldBackfillSeedDatePair = ({
   currentGameDate,
   currentStartDate,
 }) =>
-  (!currentStartDate || currentStartDate === baseStartDate) &&
-  (!currentGameDate || currentGameDate === baseGameDate || currentGameDate === currentStartDate);
+(!currentStartDate || currentStartDate === baseStartDate) &&
+(!currentGameDate || currentGameDate === baseGameDate || currentGameDate === currentStartDate);
 
 const scenarioLooksLikeRuntimeSnapshot = ({ actions, chat, game, world }) => {
   const hasResolvedActions = Array.isArray(actions)
-    ? actions.some((entry) => normalizeSnapshotString(entry?.status).toLowerCase() === "resolved")
-    : false;
+  ? actions.some((entry) => normalizeSnapshotString(entry?.status).toLowerCase() === "resolved")
+  : false;
   const hasChatTranscript = Array.isArray(chat)
-    ? chat.some((entry) => Array.isArray(entry?.messages) && entry.messages.length > 0)
-    : false;
+  ? chat.some((entry) => Array.isArray(entry?.messages) && entry.messages.length > 0)
+  : false;
   const hasTimelineProgress =
-    Boolean(normalizeSnapshotString(world?.lastJumpMode)) ||
-    Boolean(normalizeSnapshotString(world?.lastJumpSummary)) ||
-    Boolean(normalizeSnapshotString(world?.lastJumpTargetDate)) ||
-    (Array.isArray(world?.simulationHistory) && world.simulationHistory.length > 0);
+  Boolean(normalizeSnapshotString(world?.lastJumpMode)) ||
+  Boolean(normalizeSnapshotString(world?.lastJumpSummary)) ||
+  Boolean(normalizeSnapshotString(world?.lastJumpTargetDate)) ||
+  (Array.isArray(world?.simulationHistory) && world.simulationHistory.length > 0);
 
   return hasResolvedActions || hasChatTranscript || hasTimelineProgress;
 };
@@ -519,27 +478,27 @@ const buildFreshGameSeedFromScenario = ({ baseGame, scenarioGame }) => {
   const hasCustomStartDate = Boolean(scenarioStartDate) && scenarioStartDate !== baseStartDate;
   const hasCustomGameDate = Boolean(scenarioGameDate) && scenarioGameDate !== baseGameDate;
   const nextStartDate =
-    (hasCustomStartDate ? scenarioStartDate : "") ||
-    (hasCustomGameDate ? scenarioGameDate : "") ||
-    scenarioStartDate ||
-    baseStartDate;
+  (hasCustomStartDate ? scenarioStartDate : "") ||
+  (hasCustomGameDate ? scenarioGameDate : "") ||
+  scenarioStartDate ||
+  baseStartDate;
   const nextGameDate =
-    (hasCustomGameDate ? scenarioGameDate : "") ||
-    (hasCustomStartDate ? scenarioStartDate : "") ||
-    baseGameDate ||
-    nextStartDate;
+  (hasCustomGameDate ? scenarioGameDate : "") ||
+  (hasCustomStartDate ? scenarioStartDate : "") ||
+  baseGameDate ||
+  nextStartDate;
 
   return {
     ...cloneJson(baseGame ?? {}),
     ...(normalizeSnapshotString(scenarioGame?.country)
-      ? { country: normalizeSnapshotString(scenarioGame.country) }
-      : {}),
+    ? { country: normalizeSnapshotString(scenarioGame.country) }
+    : {}),
     ...(normalizeSnapshotString(scenarioGame?.difficulty)
-      ? { difficulty: normalizeSnapshotString(scenarioGame.difficulty) }
-      : {}),
+    ? { difficulty: normalizeSnapshotString(scenarioGame.difficulty) }
+    : {}),
     ...(normalizeSnapshotString(scenarioGame?.language)
-      ? { language: normalizeSnapshotString(scenarioGame.language) }
-      : {}),
+    ? { language: normalizeSnapshotString(scenarioGame.language) }
+    : {}),
     ...(nextStartDate ? { startDate: nextStartDate } : {}),
     ...(nextGameDate ? { gameDate: nextGameDate } : {}),
     round: 1,
@@ -564,7 +523,7 @@ const buildFreshWorldSeedFromScenario = ({ baseWorld, scenarioWorld }) => {
 
 const syncBuiltInScenarioSeedDate = () => {
   const targetPath = getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game");
-  const baseGame = normalizeRecordValue(readBaseSaveJsonAsset(DEFAULT_BASE_SAVE_ID, "game"));
+  const baseGame = normalizeRecordValue(readDefaultScenarioJsonAsset("game"));
   const currentGame = normalizeRecordValue(readJsonFile(targetPath, {}));
   const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
   const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
@@ -572,9 +531,9 @@ const syncBuiltInScenarioSeedDate = () => {
   if (
     !shouldBackfillSeedDatePair({
       baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
-      baseStartDate: normalizeSnapshotString(baseGame?.startDate),
-      currentGameDate,
-      currentStartDate,
+                                baseStartDate: normalizeSnapshotString(baseGame?.startDate),
+                                currentGameDate,
+                                currentStartDate,
     })
   ) {
     return;
@@ -582,8 +541,8 @@ const syncBuiltInScenarioSeedDate = () => {
 
   writeJsonFile(targetPath, {
     ...cloneJson(currentGame),
-    gameDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
-    startDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
+                gameDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
+                startDate: BUILT_IN_SCENARIO_DEFAULT_DATE,
   });
 };
 
@@ -606,16 +565,16 @@ const syncBuiltInDefaultGameDate = () => {
     return;
   }
 
-  const baseGame = normalizeRecordValue(readBaseSaveJsonAsset(DEFAULT_BASE_SAVE_ID, "game"));
+  const baseGame = normalizeRecordValue(readDefaultScenarioJsonAsset("game"));
   const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
   const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
 
   if (
     !shouldBackfillSeedDatePair({
       baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
-      baseStartDate: normalizeSnapshotString(baseGame?.startDate),
-      currentGameDate,
-      currentStartDate,
+                                baseStartDate: normalizeSnapshotString(baseGame?.startDate),
+                                currentGameDate,
+                                currentStartDate,
     })
   ) {
     return;
@@ -623,25 +582,17 @@ const syncBuiltInDefaultGameDate = () => {
 
   const scenarioGame = normalizeRecordValue(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game"), {}));
   const startDate =
-    normalizeSnapshotString(scenarioGame?.startDate) || BUILT_IN_SCENARIO_DEFAULT_DATE;
+  normalizeSnapshotString(scenarioGame?.startDate) || BUILT_IN_SCENARIO_DEFAULT_DATE;
   const gameDate = normalizeSnapshotString(scenarioGame?.gameDate) || startDate;
 
   writeJsonFile(gameDataPath, {
     ...cloneJson(currentGame),
-    ...(gameDate ? { gameDate } : {}),
-    ...(startDate ? { startDate } : {}),
+                ...(gameDate ? { gameDate } : {}),
+                ...(startDate ? { startDate } : {}),
   });
 };
 
-const seedScenarioJsonFilesFromBaseSave = (scenarioId, baseSaveId) => {
-  for (const [assetKey, relativePath] of Object.entries(JSON_ASSET_FILES)) {
-    const sourcePath = resolveBaseSaveFile(baseSaveId, relativePath);
-    copyJsonFile(sourcePath, getScenarioJsonPath(scenarioId, assetKey), JSON_ASSET_DEFAULTS[assetKey]);
-  }
-};
-
 const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
-  const scenarioMeta = readScenarioMeta(sourceScenarioId);
   const scenarioSnapshot = {
     actions: readJsonFile(getScenarioJsonPath(sourceScenarioId, "actions"), []),
     advisor: readJsonFile(getScenarioJsonPath(sourceScenarioId, "advisor"), []),
@@ -656,8 +607,8 @@ const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
     for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
       copyJsonFile(
         getScenarioJsonPath(sourceScenarioId, assetKey),
-        getScenarioJsonPath(scenarioId, assetKey),
-        JSON_ASSET_DEFAULTS[assetKey],
+                   getScenarioJsonPath(scenarioId, assetKey),
+                   JSON_ASSET_DEFAULTS[assetKey],
       );
     }
 
@@ -665,15 +616,15 @@ const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
     return;
   }
 
-  const baseSaveId = normalizeSnapshotString(scenarioMeta.baseSaveId) || DEFAULT_BASE_SAVE_ID;
+  // Source scenario has runtime state — seed from the default scenario's clean data instead
   const baseSnapshot = {
-    actions: readBaseSaveJsonAsset(baseSaveId, "actions"),
-    advisor: readBaseSaveJsonAsset(baseSaveId, "advisor"),
-    chat: readBaseSaveJsonAsset(baseSaveId, "chat"),
-    events: readBaseSaveJsonAsset(baseSaveId, "events"),
-    game: readBaseSaveJsonAsset(baseSaveId, "game"),
-    prompts: readBaseSaveJsonAsset(baseSaveId, "prompts"),
-    world: readBaseSaveJsonAsset(baseSaveId, "world"),
+    actions: readDefaultScenarioJsonAsset("actions"),
+    advisor: readDefaultScenarioJsonAsset("advisor"),
+    chat: readDefaultScenarioJsonAsset("chat"),
+    events: readDefaultScenarioJsonAsset("events"),
+    game: readDefaultScenarioJsonAsset("game"),
+    prompts: readDefaultScenarioJsonAsset("prompts"),
+    world: readDefaultScenarioJsonAsset("world"),
   };
 
   writeJsonFile(getScenarioJsonPath(scenarioId, "actions"), cloneJson(baseSnapshot.actions));
@@ -682,32 +633,31 @@ const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
   writeJsonFile(getScenarioJsonPath(scenarioId, "events"), cloneJson(baseSnapshot.events));
   writeJsonFile(
     getScenarioJsonPath(scenarioId, "game"),
-    buildFreshGameSeedFromScenario({
-      baseGame: baseSnapshot.game,
-      scenarioGame: scenarioSnapshot.game,
-    }),
+                buildFreshGameSeedFromScenario({
+                  baseGame: baseSnapshot.game,
+                  scenarioGame: scenarioSnapshot.game,
+                }),
   );
   writeJsonFile(
     getScenarioJsonPath(scenarioId, "prompts"),
-    cloneJson(
-      scenarioSnapshot.prompts && typeof scenarioSnapshot.prompts === "object"
-        ? scenarioSnapshot.prompts
-        : baseSnapshot.prompts,
-    ),
+                cloneJson(
+                  scenarioSnapshot.prompts && typeof scenarioSnapshot.prompts === "object"
+                  ? scenarioSnapshot.prompts
+                  : baseSnapshot.prompts,
+                ),
   );
   writeJsonFile(
     getScenarioJsonPath(scenarioId, "world"),
-    buildFreshWorldSeedFromScenario({
-      baseWorld: baseSnapshot.world,
-      scenarioWorld: scenarioSnapshot.world,
-    }),
+                buildFreshWorldSeedFromScenario({
+                  baseWorld: baseSnapshot.world,
+                  scenarioWorld: scenarioSnapshot.world,
+                }),
   );
 
   copyScenarioOptionalAssets(scenarioId, sourceScenarioId);
 };
 
 const seedGameJsonFilesFromScenario = (gameId, scenarioId) => {
-  const scenarioMeta = readScenarioMeta(scenarioId);
   const scenarioSnapshot = {
     actions: readJsonFile(getScenarioJsonPath(scenarioId, "actions"), []),
     advisor: readJsonFile(getScenarioJsonPath(scenarioId, "advisor"), []),
@@ -722,22 +672,22 @@ const seedGameJsonFilesFromScenario = (gameId, scenarioId) => {
     for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
       copyJsonFile(
         getScenarioJsonPath(scenarioId, assetKey),
-        getGameJsonPath(gameId, assetKey),
-        JSON_ASSET_DEFAULTS[assetKey],
+                   getGameJsonPath(gameId, assetKey),
+                   JSON_ASSET_DEFAULTS[assetKey],
       );
     }
     return;
   }
 
-  const baseSaveId = normalizeSnapshotString(scenarioMeta.baseSaveId) || DEFAULT_BASE_SAVE_ID;
+  // Scenario has runtime state — seed game from the default scenario's clean data instead
   const baseSnapshot = {
-    actions: readBaseSaveJsonAsset(baseSaveId, "actions"),
-    advisor: readBaseSaveJsonAsset(baseSaveId, "advisor"),
-    chat: readBaseSaveJsonAsset(baseSaveId, "chat"),
-    events: readBaseSaveJsonAsset(baseSaveId, "events"),
-    game: readBaseSaveJsonAsset(baseSaveId, "game"),
-    prompts: readBaseSaveJsonAsset(baseSaveId, "prompts"),
-    world: readBaseSaveJsonAsset(baseSaveId, "world"),
+    actions: readDefaultScenarioJsonAsset("actions"),
+    advisor: readDefaultScenarioJsonAsset("advisor"),
+    chat: readDefaultScenarioJsonAsset("chat"),
+    events: readDefaultScenarioJsonAsset("events"),
+    game: readDefaultScenarioJsonAsset("game"),
+    prompts: readDefaultScenarioJsonAsset("prompts"),
+    world: readDefaultScenarioJsonAsset("world"),
   };
 
   writeJsonFile(getGameJsonPath(gameId, "actions"), cloneJson(baseSnapshot.actions));
@@ -746,25 +696,25 @@ const seedGameJsonFilesFromScenario = (gameId, scenarioId) => {
   writeJsonFile(getGameJsonPath(gameId, "events"), cloneJson(baseSnapshot.events));
   writeJsonFile(
     getGameJsonPath(gameId, "game"),
-    buildFreshGameSeedFromScenario({
-      baseGame: baseSnapshot.game,
-      scenarioGame: scenarioSnapshot.game,
-    }),
+                buildFreshGameSeedFromScenario({
+                  baseGame: baseSnapshot.game,
+                  scenarioGame: scenarioSnapshot.game,
+                }),
   );
   writeJsonFile(
     getGameJsonPath(gameId, "prompts"),
-    cloneJson(
-      scenarioSnapshot.prompts && typeof scenarioSnapshot.prompts === "object"
-        ? scenarioSnapshot.prompts
-        : baseSnapshot.prompts,
-    ),
+                cloneJson(
+                  scenarioSnapshot.prompts && typeof scenarioSnapshot.prompts === "object"
+                  ? scenarioSnapshot.prompts
+                  : baseSnapshot.prompts,
+                ),
   );
   writeJsonFile(
     getGameJsonPath(gameId, "world"),
-    buildFreshWorldSeedFromScenario({
-      baseWorld: baseSnapshot.world,
-      scenarioWorld: scenarioSnapshot.world,
-    }),
+                buildFreshWorldSeedFromScenario({
+                  baseWorld: baseSnapshot.world,
+                  scenarioWorld: scenarioSnapshot.world,
+                }),
   );
 };
 
@@ -772,8 +722,8 @@ const seedGameJsonFilesFromGame = (gameId, sourceGameId) => {
   for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
     copyJsonFile(
       getGameJsonPath(sourceGameId, assetKey),
-      getGameJsonPath(gameId, assetKey),
-      JSON_ASSET_DEFAULTS[assetKey],
+                 getGameJsonPath(gameId, assetKey),
+                 JSON_ASSET_DEFAULTS[assetKey],
     );
   }
 
@@ -792,16 +742,8 @@ const ensureDefaultScenario = () => {
       ...DEFAULT_SCENARIO_META,
       countryNameOverrides: {},
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
     });
-  }
-
-  for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
-    const targetPath = getScenarioJsonPath(DEFAULT_SCENARIO_ID, assetKey);
-    if (!fs.existsSync(targetPath)) {
-      seedScenarioJsonFilesFromBaseSave(DEFAULT_SCENARIO_ID, DEFAULT_BASE_SAVE_ID);
-      break;
-    }
   }
 
   syncBuiltInScenarioSeedDate();
@@ -829,14 +771,13 @@ const ensureDefaultGame = () => {
     writeJsonFile(getGameMetaPath(DEFAULT_GAME_ID), {
       ...DEFAULT_GAME_META,
       accentColor: scenarioMeta.accentColor,
-      baseSaveId: scenarioMeta.baseSaveId,
       createdAt: new Date().toISOString(),
-      heroSubtitle: scenarioMeta.heroSubtitle,
-      heroTitle: scenarioMeta.heroTitle,
-      name: `${scenarioMeta.name} Session`,
-      scenarioId: DEFAULT_SCENARIO_ID,
-      subtitle: scenarioMeta.subtitle,
-      updatedAt: new Date().toISOString(),
+                  heroSubtitle: scenarioMeta.heroSubtitle,
+                  heroTitle: scenarioMeta.heroTitle,
+                  name: `${scenarioMeta.name} Session`,
+                  scenarioId: DEFAULT_SCENARIO_ID,
+                  subtitle: scenarioMeta.subtitle,
+                  updatedAt: new Date().toISOString(),
     });
   }
 
@@ -911,10 +852,10 @@ const ensureUniqueId = (requestedId, kind) => {
 
 const resolveOrderedIds = (manifestOrder, rootDir, defaultId) => {
   const dirs = fs.existsSync(rootDir)
-    ? fs.readdirSync(rootDir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-    : [];
+  ? fs.readdirSync(rootDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  : [];
 
   const known = new Set(manifestOrder ?? []);
   const ordered = [];
@@ -963,32 +904,32 @@ const getScenarioCatalog = () => {
   const orderedScenarioIds = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID);
 
   const scenarios = orderedScenarioIds
-    .map((scenarioId) => {
-      const metaPath = getScenarioMetaPath(scenarioId);
-      if (!fs.existsSync(metaPath)) {
-        return null;
-      }
+  .map((scenarioId) => {
+    const metaPath = getScenarioMetaPath(scenarioId);
+    if (!fs.existsSync(metaPath)) {
+      return null;
+    }
 
-      const meta = readScenarioMeta(scenarioId);
-      const assetStatus = getScenarioAssetStatus(scenarioId);
-      const cacheToken = `${scenarioId}-${meta.updatedAt}`;
+    const meta = readScenarioMeta(scenarioId);
+    const assetStatus = getScenarioAssetStatus(scenarioId);
+    const cacheToken = `${scenarioId}-${meta.updatedAt}`;
 
-      return {
-        ...meta,
-        assetStatus,
-        cacheToken,
-        canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
-        coverImageUrl: assetStatus.cover
-          ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
-          : null,
-        gameCount: usageCounts.get(scenarioId) ?? 0,
-      };
-    })
-    .filter(Boolean);
+    return {
+      ...meta,
+      assetStatus,
+      cacheToken,
+      canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
+      coverImageUrl: assetStatus.cover
+      ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
+      : null,
+      gameCount: usageCounts.get(scenarioId) ?? 0,
+    };
+  })
+  .filter(Boolean);
 
   const selectedScenarioId = scenarios.some((scenario) => scenario.id === manifest.selectedScenarioId)
-    ? manifest.selectedScenarioId
-    : DEFAULT_SCENARIO_ID;
+  ? manifest.selectedScenarioId
+  : DEFAULT_SCENARIO_ID;
 
   if (selectedScenarioId !== manifest.selectedScenarioId) {
     saveScenarioManifest({
@@ -1000,7 +941,6 @@ const getScenarioCatalog = () => {
 
   return {
     activeScenarioId: selectedScenarioId,
-    baseSaves: listBaseSaveIds(),
     scenarios,
     selectedScenarioId,
   };
@@ -1014,50 +954,50 @@ const getGameCatalog = () => {
   const orderedGameIds = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID);
 
   const games = orderedGameIds
-    .map((gameId) => {
-      const metaPath = getGameMetaPath(gameId);
-      if (!fs.existsSync(metaPath)) {
-        return null;
-      }
+  .map((gameId) => {
+    const metaPath = getGameMetaPath(gameId);
+    if (!fs.existsSync(metaPath)) {
+      return null;
+    }
 
-      const meta = readGameMeta(gameId);
-      const assetStatus = getGameAssetStatus(gameId);
-      const gameData = readJsonFile(getGameJsonPath(gameId, "game"), {});
-      const actions = readJsonFile(getGameJsonPath(gameId, "actions"), []);
-      const events = readJsonFile(getGameJsonPath(gameId, "events"), []);
-      const scenario = scenarioLookup.get(meta.scenarioId) ?? readScenarioMeta(meta.scenarioId);
-      const pendingActions = Array.isArray(actions)
-        ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
-        : 0;
-      const cacheToken = `${gameId}-${meta.updatedAt}`;
-      const ownCoverImageUrl = assetStatus.cover
-        ? buildGameAssetUrl(gameId, COVER_IMAGE_ASSET_KEY, cacheToken)
-        : null;
+    const meta = readGameMeta(gameId);
+    const assetStatus = getGameAssetStatus(gameId);
+    const gameData = readJsonFile(getGameJsonPath(gameId, "game"), {});
+    const actions = readJsonFile(getGameJsonPath(gameId, "actions"), []);
+    const events = readJsonFile(getGameJsonPath(gameId, "events"), []);
+    const scenario = scenarioLookup.get(meta.scenarioId) ?? readScenarioMeta(meta.scenarioId);
+    const pendingActions = Array.isArray(actions)
+    ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
+    : 0;
+    const cacheToken = `${gameId}-${meta.updatedAt}`;
+    const ownCoverImageUrl = assetStatus.cover
+    ? buildGameAssetUrl(gameId, COVER_IMAGE_ASSET_KEY, cacheToken)
+    : null;
 
-      return {
-        ...meta,
-        assetStatus,
-        cacheToken,
-        canDelete: gameId !== DEFAULT_GAME_ID,
-        country: String(gameData?.country ?? "").trim(),
-        coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
-        currentDate: String(gameData?.gameDate ?? "").trim(),
-        eventCount: Array.isArray(events) ? events.length : 0,
-        ownCoverImageUrl,
-        pendingActions,
-        round:
-          Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
-            ? Math.trunc(Number(gameData.round))
-            : 1,
-        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
-        scenarioName: scenario?.name ?? meta.scenarioId,
-      };
-    })
-    .filter(Boolean);
+    return {
+      ...meta,
+      assetStatus,
+      cacheToken,
+      canDelete: gameId !== DEFAULT_GAME_ID,
+      country: String(gameData?.country ?? "").trim(),
+       coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
+       currentDate: String(gameData?.gameDate ?? "").trim(),
+       eventCount: Array.isArray(events) ? events.length : 0,
+       ownCoverImageUrl,
+       pendingActions,
+       round:
+       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
+       ? Math.trunc(Number(gameData.round))
+       : 1,
+       scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
+       scenarioName: scenario?.name ?? meta.scenarioId,
+    };
+  })
+  .filter(Boolean);
 
   const activeGameId = games.some((game) => game.id === manifest.activeGameId)
-    ? manifest.activeGameId
-    : DEFAULT_GAME_ID;
+  ? manifest.activeGameId
+  : DEFAULT_GAME_ID;
 
   if (activeGameId !== manifest.activeGameId) {
     saveGameManifest({
@@ -1077,30 +1017,29 @@ const getLibraryCatalog = () => {
   const scenarioCatalog = getScenarioCatalog();
   const gameCatalog = getGameCatalog();
   const selectedScenario =
-    scenarioCatalog.scenarios.find((scenario) => scenario.id === scenarioCatalog.selectedScenarioId) ??
-    scenarioCatalog.scenarios[0] ??
-    null;
+  scenarioCatalog.scenarios.find((scenario) => scenario.id === scenarioCatalog.selectedScenarioId) ??
+  scenarioCatalog.scenarios[0] ??
+  null;
   const activeGame =
-    gameCatalog.games.find((game) => game.id === gameCatalog.activeGameId) ?? gameCatalog.games[0] ?? null;
+  gameCatalog.games.find((game) => game.id === gameCatalog.activeGameId) ?? gameCatalog.games[0] ?? null;
   const runtimeScenario =
-    activeGame && activeGame.scenarioId
-      ? scenarioCatalog.scenarios.find((scenario) => scenario.id === activeGame.scenarioId) ?? null
-      : null;
+  activeGame && activeGame.scenarioId
+  ? scenarioCatalog.scenarios.find((scenario) => scenario.id === activeGame.scenarioId) ?? null
+  : null;
 
   return {
     activeGame,
     activeGameId: gameCatalog.activeGameId,
     activeScenarioId: scenarioCatalog.selectedScenarioId,
-    baseSaves: scenarioCatalog.baseSaves,
     games: gameCatalog.games,
     runtimeScenario,
     scenarios: scenarioCatalog.scenarios,
     selectedScenario,
     selectedScenarioId: scenarioCatalog.selectedScenarioId,
     token:
-      activeGame && runtimeScenario
-        ? `${activeGame.cacheToken}-${runtimeScenario.updatedAt || runtimeScenario.cacheToken || ""}`
-        : activeGame?.cacheToken ?? "",
+    activeGame && runtimeScenario
+    ? `${activeGame.cacheToken}-${runtimeScenario.updatedAt || runtimeScenario.cacheToken || ""}`
+    : activeGame?.cacheToken ?? "",
   };
 };
 
@@ -1200,9 +1139,9 @@ const setActiveGame = (gameId) => {
 const mergeJsonAsset = (targetPath, patch, fallback) => {
   const current = readJsonFile(targetPath, fallback);
   const next =
-    patch && typeof patch === "object" && !Array.isArray(patch)
-      ? { ...current, ...patch }
-      : cloneJson(patch);
+  patch && typeof patch === "object" && !Array.isArray(patch)
+  ? { ...current, ...patch }
+  : cloneJson(patch);
 
   writeJsonFile(targetPath, next);
   return next;
@@ -1210,7 +1149,6 @@ const mergeJsonAsset = (targetPath, patch, fallback) => {
 
 const createScenario = ({
   accentColor,
-  baseSaveId,
   countryNameOverrides,
   description,
   eyebrow,
@@ -1225,12 +1163,11 @@ const createScenario = ({
   ensureScenarioStore();
 
   const scenarioId = ensureUniqueId(id || name || "scenario", "scenario");
-  const resolvedBaseSaveId = String(baseSaveId ?? DEFAULT_BASE_SAVE_ID).trim() || DEFAULT_BASE_SAVE_ID;
   const scenarioDir = getScenarioDirectory(scenarioId);
   const sourceScenario =
-    seedScenarioId && fs.existsSync(getScenarioDirectory(seedScenarioId))
-      ? getScenarioSummary(seedScenarioId)
-      : null;
+  seedScenarioId && fs.existsSync(getScenarioDirectory(seedScenarioId))
+  ? getScenarioSummary(seedScenarioId)
+  : null;
 
   ensureDirectory(scenarioDir);
   ensureDirectory(path.join(scenarioDir, "storage"));
@@ -1238,43 +1175,49 @@ const createScenario = ({
   if (sourceScenario) {
     seedScenarioJsonFilesFromScenario(scenarioId, seedScenarioId);
   } else {
-    seedScenarioJsonFilesFromBaseSave(scenarioId, resolvedBaseSaveId);
+    // Seed from the default scenario's committed files
+    for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
+      copyJsonFile(
+        getScenarioJsonPath(DEFAULT_SCENARIO_ID, assetKey),
+                   getScenarioJsonPath(scenarioId, assetKey),
+                   JSON_ASSET_DEFAULTS[assetKey],
+      );
+    }
   }
 
   const createdAt = new Date().toISOString();
   writeJsonFile(getScenarioMetaPath(scenarioId), {
     accentColor: String(accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
-    baseSaveId: resolvedBaseSaveId,
-    coverImageContentType: sourceScenario?.coverImageContentType ?? null,
-    countryNameOverrides:
-      countryNameOverrides && typeof countryNameOverrides === "object"
-        ? countryNameOverrides
-        : {},
-    createdAt,
-    description:
-      String(description ?? "").trim() ||
-      String(subtitle ?? "").trim() ||
-      String(name ?? "").trim() ||
-      DEFAULT_SCENARIO_META.description,
-    eyebrow: String(eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
-    heroSubtitle:
-      String(heroSubtitle ?? "").trim() ||
-      String(description ?? "").trim() ||
-      String(subtitle ?? "").trim() ||
-      sourceScenario?.heroSubtitle ||
-      DEFAULT_SCENARIO_META.heroSubtitle,
-    heroTitle:
-      String(heroTitle ?? "").trim() ||
-      String(name ?? "").trim() ||
-      sourceScenario?.heroTitle ||
-      DEFAULT_SCENARIO_META.heroTitle,
-    name: String(name ?? "").trim() || "Custom Scenario",
-    subtitle:
-      String(subtitle ?? "").trim() ||
-      String(description ?? "").trim() ||
-      sourceScenario?.subtitle ||
-      DEFAULT_SCENARIO_META.subtitle,
-    updatedAt: createdAt,
+                coverImageContentType: sourceScenario?.coverImageContentType ?? null,
+                countryNameOverrides:
+                countryNameOverrides && typeof countryNameOverrides === "object"
+                ? countryNameOverrides
+                : {},
+                createdAt,
+                description:
+                String(description ?? "").trim() ||
+                String(subtitle ?? "").trim() ||
+                String(name ?? "").trim() ||
+                DEFAULT_SCENARIO_META.description,
+                eyebrow: String(eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
+                heroSubtitle:
+                String(heroSubtitle ?? "").trim() ||
+                String(description ?? "").trim() ||
+                String(subtitle ?? "").trim() ||
+                sourceScenario?.heroSubtitle ||
+                DEFAULT_SCENARIO_META.heroSubtitle,
+                heroTitle:
+                String(heroTitle ?? "").trim() ||
+                String(name ?? "").trim() ||
+                sourceScenario?.heroTitle ||
+                DEFAULT_SCENARIO_META.heroTitle,
+                name: String(name ?? "").trim() || "Custom Scenario",
+                subtitle:
+                String(subtitle ?? "").trim() ||
+                String(description ?? "").trim() ||
+                sourceScenario?.subtitle ||
+                DEFAULT_SCENARIO_META.subtitle,
+                updatedAt: createdAt,
   });
 
   const manifest = getScenarioManifest();
@@ -1328,40 +1271,39 @@ const createGame = ({
 
   writeJsonFile(getGameMetaPath(resolvedGameId), {
     accentColor:
-      String(accentColor ?? "").trim() ||
-      sourceGame?.accentColor ||
-      scenarioSummary.accentColor ||
-      DEFAULT_GAME_META.accentColor,
-    baseSaveId: scenarioSummary.baseSaveId,
+    String(accentColor ?? "").trim() ||
+    sourceGame?.accentColor ||
+    scenarioSummary.accentColor ||
+    DEFAULT_GAME_META.accentColor,
     createdAt,
     description:
-      String(description ?? "").trim() ||
-      sourceGame?.description ||
-      scenarioSummary.description ||
-      DEFAULT_GAME_META.description,
+    String(description ?? "").trim() ||
+    sourceGame?.description ||
+    scenarioSummary.description ||
+    DEFAULT_GAME_META.description,
     eyebrow:
-      String(eyebrow ?? "").trim() ||
-      sourceGame?.eyebrow ||
-      DEFAULT_GAME_META.eyebrow,
+    String(eyebrow ?? "").trim() ||
+    sourceGame?.eyebrow ||
+    DEFAULT_GAME_META.eyebrow,
     heroSubtitle:
-      String(heroSubtitle ?? "").trim() ||
-      sourceGame?.heroSubtitle ||
-      scenarioSummary.heroSubtitle ||
-      DEFAULT_GAME_META.heroSubtitle,
+    String(heroSubtitle ?? "").trim() ||
+    sourceGame?.heroSubtitle ||
+    scenarioSummary.heroSubtitle ||
+    DEFAULT_GAME_META.heroSubtitle,
     heroTitle:
-      String(heroTitle ?? "").trim() ||
-      sourceGame?.heroTitle ||
-      scenarioSummary.heroTitle ||
-      DEFAULT_GAME_META.heroTitle,
+    String(heroTitle ?? "").trim() ||
+    sourceGame?.heroTitle ||
+    scenarioSummary.heroTitle ||
+    DEFAULT_GAME_META.heroTitle,
     name: String(name ?? "").trim() || `${seedName} Session`,
-    scenarioId: scenarioSummary.id,
-    coverImageContentType: sourceGame?.coverImageContentType ?? null,
-    subtitle:
-      String(subtitle ?? "").trim() ||
-      sourceGame?.subtitle ||
-      scenarioSummary.subtitle ||
-      DEFAULT_GAME_META.subtitle,
-    updatedAt: createdAt,
+                scenarioId: scenarioSummary.id,
+                coverImageContentType: sourceGame?.coverImageContentType ?? null,
+                subtitle:
+                String(subtitle ?? "").trim() ||
+                sourceGame?.subtitle ||
+                scenarioSummary.subtitle ||
+                DEFAULT_GAME_META.subtitle,
+                updatedAt: createdAt,
   });
 
   const manifest = getGameManifest();
@@ -1407,17 +1349,17 @@ const updateScenario = (
   const currentMeta = readScenarioMeta(scenarioId);
   writeScenarioMeta(scenarioId, {
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
-    countryNameOverrides:
-      countryNameOverrides && typeof countryNameOverrides === "object"
-        ? countryNameOverrides
-        : currentMeta.countryNameOverrides,
-    description: String(description ?? currentMeta.description).trim() || currentMeta.description,
-    eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
-    heroSubtitle:
-      String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
-    heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
-    name: String(name ?? currentMeta.name).trim() || currentMeta.name,
-    subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
+                    countryNameOverrides:
+                    countryNameOverrides && typeof countryNameOverrides === "object"
+                    ? countryNameOverrides
+                    : currentMeta.countryNameOverrides,
+                    description: String(description ?? currentMeta.description).trim() || currentMeta.description,
+                    eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
+                    heroSubtitle:
+                    String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
+                    heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
+                    name: String(name ?? currentMeta.name).trim() || currentMeta.name,
+                    subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
 
   if (game && typeof game === "object") {
@@ -1431,8 +1373,8 @@ const updateScenario = (
   } else if (promptsPatch && typeof promptsPatch === "object") {
     mergeJsonAsset(
       getScenarioJsonPath(scenarioId, "prompts"),
-      promptsPatch,
-      JSON_ASSET_DEFAULTS.prompts,
+                   promptsPatch,
+                   JSON_ASSET_DEFAULTS.prompts,
     );
   }
 
@@ -1486,13 +1428,13 @@ const updateGame = (
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
-    description: String(description ?? currentMeta.description).trim() || currentMeta.description,
-    eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
-    heroSubtitle:
-      String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
-    heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
-    name: String(name ?? currentMeta.name).trim() || currentMeta.name,
-    subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
+                description: String(description ?? currentMeta.description).trim() || currentMeta.description,
+                eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
+                heroSubtitle:
+                String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
+                heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
+                name: String(name ?? currentMeta.name).trim() || currentMeta.name,
+                subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
 
   if (game && typeof game === "object") {
@@ -1555,7 +1497,7 @@ const deleteScenario = (scenarioId) => {
     (entry) => entry !== scenarioId,
   );
   const nextSelectedScenarioId =
-    manifest.selectedScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.selectedScenarioId;
+  manifest.selectedScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.selectedScenarioId;
 
   saveScenarioManifest({
     order: nextOrder.length > 0 ? nextOrder : [DEFAULT_SCENARIO_ID],
@@ -1587,7 +1529,7 @@ const deleteGame = (gameId) => {
     (entry) => entry !== gameId,
   );
   const nextActiveGameId =
-    manifest.activeGameId === gameId ? DEFAULT_GAME_ID : manifest.activeGameId;
+  manifest.activeGameId === gameId ? DEFAULT_GAME_ID : manifest.activeGameId;
 
   saveGameManifest({
     activeGameId: nextActiveGameId,
@@ -1614,8 +1556,8 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
   writeScenarioMeta(
     scenarioId,
     assetKey === COVER_IMAGE_ASSET_KEY
-      ? { coverImageContentType: normalizeImageContentType(contentType) }
-      : {},
+    ? { coverImageContentType: normalizeImageContentType(contentType) }
+    : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -1656,8 +1598,8 @@ const uploadGameAsset = (gameId, assetKey, dataBuffer, contentType = "") => {
   writeGameMeta(
     gameId,
     assetKey === COVER_IMAGE_ASSET_KEY
-      ? { coverImageContentType: normalizeImageContentType(contentType) }
-      : {},
+    ? { coverImageContentType: normalizeImageContentType(contentType) }
+    : {},
   );
   return getGameDetails(gameId);
 };
@@ -1703,9 +1645,9 @@ const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
 
   return {
     contentType:
-      assetKey === COVER_IMAGE_ASSET_KEY
-        ? readScenarioMeta(scenarioId).coverImageContentType || "application/octet-stream"
-        : "application/octet-stream",
+    assetKey === COVER_IMAGE_ASSET_KEY
+    ? readScenarioMeta(scenarioId).coverImageContentType || "application/octet-stream"
+    : "application/octet-stream",
     sourcePath,
   };
 };
@@ -1728,9 +1670,9 @@ const resolveGameUploadAsset = (gameId, assetKey) => {
 
   return {
     contentType:
-      assetKey === COVER_IMAGE_ASSET_KEY
-        ? readGameMeta(gameId).coverImageContentType || "application/octet-stream"
-        : "application/octet-stream",
+    assetKey === COVER_IMAGE_ASSET_KEY
+    ? readGameMeta(gameId).coverImageContentType || "application/octet-stream"
+    : "application/octet-stream",
     sourcePath,
   };
 };
@@ -1764,9 +1706,9 @@ const readRuntimeJsonAsset = (assetKey) => {
 
   const activeGame = getActiveGameSummary();
   const gamePath =
-    assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
-      ? getGameJsonPath(activeGame.id, assetKey)
-      : null;
+  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  ? getGameJsonPath(activeGame.id, assetKey)
+  : null;
 
   if (gamePath && fs.existsSync(gamePath)) {
     return {
@@ -1778,9 +1720,9 @@ const readRuntimeJsonAsset = (assetKey) => {
 
   const scenario = getActiveRuntimeScenarioSummary();
   const scenarioPath =
-    assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
-      ? getScenarioJsonPath(scenario.id, assetKey)
-      : null;
+  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  ? getScenarioJsonPath(scenario.id, assetKey)
+  : null;
 
   if (scenarioPath && fs.existsSync(scenarioPath)) {
     return {
@@ -1791,7 +1733,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   }
 
   if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-    const fallbackPath = resolveBaseAssetFile(assetKey);
+    const fallbackPath = resolveColorsAssetFile();
     if (!fallbackPath) {
       return {
         contentType: "application/json; charset=utf-8",
@@ -1845,9 +1787,8 @@ const resolveRuntimeBinaryAsset = (assetKey) => {
     };
   }
 
-  const activeGame = getActiveGameSummary();
-  const fallbackPath = resolveBaseSaveFile(activeGame.baseSaveId, PMTILES_ASSET_FILES[assetKey]);
-  if (!fallbackPath) {
+  const fallbackPath = path.join(PMTILES_ASSETS_DIR, PMTILES_ASSET_FILES[assetKey]);
+  if (!fs.existsSync(fallbackPath)) {
     throw new Error(`No PMTiles archive available for ${assetKey}.`);
   }
 
@@ -1937,7 +1878,6 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
     mode: mode === "full" ? "full" : "light",
     scenario: {
       accentColor: summary.accentColor,
-      baseSaveId: summary.baseSaveId,
       countryNameOverrides: cloneJson(summary.countryNameOverrides),
       description: summary.description,
       eyebrow: summary.eyebrow,
@@ -1969,7 +1909,6 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
 
   const created = createScenario({
     accentColor: scenario.accentColor,
-    baseSaveId: scenario.baseSaveId,
     countryNameOverrides: scenario.countryNameOverrides,
     description: scenario.description,
     eyebrow: scenario.eyebrow,

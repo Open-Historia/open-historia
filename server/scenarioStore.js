@@ -10,17 +10,17 @@ const SERVER_DATA_DIR = path.join(__dirname, "data");
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
 
-const DEFAULT_BASE_SAVE_ID = "save0";
+const PMTILES_ASSETS_DIR = path.join(PUBLIC_DIR, "assets");
+
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_SCENARIO_META = {
   accentColor: "#7c3aed",
-  baseSaveId: DEFAULT_BASE_SAVE_ID,
   description: "Server-backed base scenario",
   eyebrow: "Live Scenario",
   heroSubtitle: "Lightweight scenario overrides stored on the server.",
   heroTitle: "Modern Day",
   name: "Modern Day",
-  subtitle: "Base save0 configuration",
+  subtitle: "Base configuration",
 };
 
 const JSON_ASSET_FILES = {
@@ -58,12 +58,10 @@ const JSON_ASSET_DEFAULTS = {
   world: {},
 };
 
-const BASE_ASSET_CANDIDATES = {
-  colors: [
-    path.join(DIST_DIR, "assets", "colors.json"),
-    path.join(PUBLIC_DIR, "assets", "colors.json"),
-  ],
-};
+const COLORS_ASSET_CANDIDATES = [
+  path.join(DIST_DIR, "assets", "colors.json"),
+  path.join(PUBLIC_DIR, "assets", "colors.json"),
+];
 
 const ensureDirectory = (targetPath) => {
   fs.mkdirSync(targetPath, { recursive: true });
@@ -89,44 +87,8 @@ const writeJsonFile = (targetPath, value) => {
 
 const cloneJson = (value) => JSON.parse(JSON.stringify(value));
 
-const listBaseSaveIds = () => {
-  const candidates = [path.join(DIST_DIR, "saves"), path.join(PUBLIC_DIR, "saves")];
-  const seen = new Set();
-
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-
-    for (const entry of fs.readdirSync(candidate, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        seen.add(entry.name);
-      }
-    }
-  }
-
-  return Array.from(seen).sort((left, right) => left.localeCompare(right));
-};
-
-const resolveBaseSaveFile = (baseSaveId, relativePath) => {
-  const candidates = [
-    path.join(DIST_DIR, "saves", baseSaveId, relativePath),
-    path.join(PUBLIC_DIR, "saves", baseSaveId, relativePath),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-};
-
-const resolveBaseAssetFile = (assetKey) => {
-  const candidates = BASE_ASSET_CANDIDATES[assetKey] ?? [];
-
-  for (const candidate of candidates) {
+const resolveColorsAssetFile = () => {
+  for (const candidate of COLORS_ASSET_CANDIDATES) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -137,10 +99,10 @@ const resolveBaseAssetFile = (assetKey) => {
 
 const normalizeScenarioId = (rawValue) => {
   const value = String(rawValue ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
 
   return value || `scenario-${Date.now().toString(36)}`;
 };
@@ -148,9 +110,9 @@ const normalizeScenarioId = (rawValue) => {
 const getScenarioDirectory = (scenarioId) => path.join(SCENARIOS_DIR, scenarioId);
 const getScenarioMetaPath = (scenarioId) => path.join(getScenarioDirectory(scenarioId), "scenario.json");
 const getScenarioJsonPath = (scenarioId, assetKey) =>
-  path.join(getScenarioDirectory(scenarioId), JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey]);
+path.join(getScenarioDirectory(scenarioId), JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey]);
 const getScenarioUploadPath = (scenarioId, assetKey) =>
-  path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
+path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
 
 const getManifest = () => {
   const manifest = readJsonFile(MANIFEST_PATH, null);
@@ -169,7 +131,7 @@ const saveManifest = (manifest) => {
   writeJsonFile(MANIFEST_PATH, {
     activeScenarioId: manifest.activeScenarioId,
     order: Array.from(new Set(manifest.order ?? [DEFAULT_SCENARIO_ID])),
-    version: 1,
+                version: 1,
   });
 };
 
@@ -188,11 +150,10 @@ const readScenarioMeta = (scenarioId) => {
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
     accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
-    baseSaveId: String(raw?.baseSaveId ?? "").trim() || DEFAULT_BASE_SAVE_ID,
     countryNameOverrides:
-      raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object"
-        ? raw.countryNameOverrides
-        : {},
+    raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object"
+    ? raw.countryNameOverrides
+    : {},
     createdAt: raw?.createdAt ?? new Date().toISOString(),
     updatedAt: raw?.updatedAt ?? new Date().toISOString(),
   };
@@ -221,14 +182,6 @@ const copyJsonFile = (sourcePath, targetPath, fallback) => {
   writeJsonFile(targetPath, cloneJson(fallback));
 };
 
-const seedScenarioJsonFilesFromBaseSave = (scenarioId, baseSaveId) => {
-  for (const [assetKey, relativePath] of Object.entries(JSON_ASSET_FILES)) {
-    const sourcePath = resolveBaseSaveFile(baseSaveId, relativePath);
-    const targetPath = getScenarioJsonPath(scenarioId, assetKey);
-    copyJsonFile(sourcePath, targetPath, JSON_ASSET_DEFAULTS[assetKey]);
-  }
-};
-
 const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
   for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
     const sourcePath = getScenarioJsonPath(sourceScenarioId, assetKey);
@@ -249,16 +202,8 @@ const ensureDefaultScenario = () => {
       ...DEFAULT_SCENARIO_META,
       countryNameOverrides: {},
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
     });
-  }
-
-  for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
-    const targetPath = getScenarioJsonPath(DEFAULT_SCENARIO_ID, assetKey);
-    if (!fs.existsSync(targetPath)) {
-      seedScenarioJsonFilesFromBaseSave(DEFAULT_SCENARIO_ID, DEFAULT_BASE_SAVE_ID);
-      break;
-    }
   }
 
   const manifest = getManifest();
@@ -290,10 +235,10 @@ const getScenarioAssetStatus = (scenarioId) => {
 const resolveScenarioOrder = (manifest) => {
   const known = new Set(manifest.order ?? []);
   const dirs = fs.existsSync(SCENARIOS_DIR)
-    ? fs.readdirSync(SCENARIOS_DIR, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-    : [];
+  ? fs.readdirSync(SCENARIOS_DIR, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  : [];
 
   const ordered = [];
 
@@ -322,25 +267,25 @@ const getScenarioCatalog = () => {
   const manifest = getManifest();
   const orderedScenarioIds = resolveScenarioOrder(manifest);
   const scenarios = orderedScenarioIds
-    .map((scenarioId) => {
-      const metaPath = getScenarioMetaPath(scenarioId);
-      if (!fs.existsSync(metaPath)) {
-        return null;
-      }
+  .map((scenarioId) => {
+    const metaPath = getScenarioMetaPath(scenarioId);
+    if (!fs.existsSync(metaPath)) {
+      return null;
+    }
 
-      const meta = readScenarioMeta(scenarioId);
-      return {
-        ...meta,
-        assetStatus: getScenarioAssetStatus(scenarioId),
-        cacheToken: `${scenarioId}-${meta.updatedAt}`,
-        canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
-      };
-    })
-    .filter(Boolean);
+    const meta = readScenarioMeta(scenarioId);
+    return {
+      ...meta,
+      assetStatus: getScenarioAssetStatus(scenarioId),
+       cacheToken: `${scenarioId}-${meta.updatedAt}`,
+       canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
+    };
+  })
+  .filter(Boolean);
 
   const activeScenarioId = scenarios.some((scenario) => scenario.id === manifest.activeScenarioId)
-    ? manifest.activeScenarioId
-    : DEFAULT_SCENARIO_ID;
+  ? manifest.activeScenarioId
+  : DEFAULT_SCENARIO_ID;
 
   if (activeScenarioId !== manifest.activeScenarioId) {
     saveManifest({
@@ -352,7 +297,6 @@ const getScenarioCatalog = () => {
 
   return {
     activeScenarioId,
-    baseSaves: listBaseSaveIds(),
     scenarios,
   };
 };
@@ -407,7 +351,6 @@ const ensureUniqueScenarioId = (requestedId) => {
 
 const createScenario = ({
   accentColor,
-  baseSaveId,
   countryNameOverrides,
   description,
   eyebrow,
@@ -430,40 +373,39 @@ const createScenario = ({
   if (seedScenarioId && fs.existsSync(getScenarioDirectory(seedScenarioId))) {
     seedScenarioJsonFilesFromScenario(scenarioId, seedScenarioId);
   } else {
-    const resolvedBaseSaveId = String(baseSaveId ?? DEFAULT_BASE_SAVE_ID).trim() || DEFAULT_BASE_SAVE_ID;
-    seedScenarioJsonFilesFromBaseSave(scenarioId, resolvedBaseSaveId);
+    // Seed from the default scenario's committed files
+    seedScenarioJsonFilesFromScenario(scenarioId, DEFAULT_SCENARIO_ID);
   }
 
   const createdAt = new Date().toISOString();
   writeJsonFile(getScenarioMetaPath(scenarioId), {
     accentColor: String(accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
-    baseSaveId: String(baseSaveId ?? DEFAULT_BASE_SAVE_ID).trim() || DEFAULT_BASE_SAVE_ID,
-    countryNameOverrides:
-      countryNameOverrides && typeof countryNameOverrides === "object"
-        ? countryNameOverrides
-        : {},
-    createdAt,
-    description:
-      String(description ?? "").trim() ||
-      String(subtitle ?? "").trim() ||
-      String(name ?? "").trim() ||
-      DEFAULT_SCENARIO_META.description,
-    eyebrow: String(eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
-    heroSubtitle:
-      String(heroSubtitle ?? "").trim() ||
-      String(description ?? "").trim() ||
-      String(subtitle ?? "").trim() ||
-      DEFAULT_SCENARIO_META.heroSubtitle,
-    heroTitle:
-      String(heroTitle ?? "").trim() ||
-      String(name ?? "").trim() ||
-      DEFAULT_SCENARIO_META.heroTitle,
-    name: String(name ?? "").trim() || "Custom Scenario",
-    subtitle:
-      String(subtitle ?? "").trim() ||
-      String(description ?? "").trim() ||
-      DEFAULT_SCENARIO_META.subtitle,
-    updatedAt: createdAt,
+                countryNameOverrides:
+                countryNameOverrides && typeof countryNameOverrides === "object"
+                ? countryNameOverrides
+                : {},
+                createdAt,
+                description:
+                String(description ?? "").trim() ||
+                String(subtitle ?? "").trim() ||
+                String(name ?? "").trim() ||
+                DEFAULT_SCENARIO_META.description,
+                eyebrow: String(eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
+                heroSubtitle:
+                String(heroSubtitle ?? "").trim() ||
+                String(description ?? "").trim() ||
+                String(subtitle ?? "").trim() ||
+                DEFAULT_SCENARIO_META.heroSubtitle,
+                heroTitle:
+                String(heroTitle ?? "").trim() ||
+                String(name ?? "").trim() ||
+                DEFAULT_SCENARIO_META.heroTitle,
+                name: String(name ?? "").trim() || "Custom Scenario",
+                subtitle:
+                String(subtitle ?? "").trim() ||
+                String(description ?? "").trim() ||
+                DEFAULT_SCENARIO_META.subtitle,
+                updatedAt: createdAt,
   });
 
   updateManifestOrder(scenarioId);
@@ -482,9 +424,9 @@ const mergeJsonAsset = (scenarioId, assetKey, patch) => {
 
   const current = readJsonFile(getScenarioJsonPath(scenarioId, assetKey), JSON_ASSET_DEFAULTS[assetKey]);
   const next =
-    patch && typeof patch === "object" && !Array.isArray(patch)
-      ? { ...current, ...patch }
-      : cloneJson(patch);
+  patch && typeof patch === "object" && !Array.isArray(patch)
+  ? { ...current, ...patch }
+  : cloneJson(patch);
 
   writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), next);
   return next;
@@ -521,13 +463,13 @@ const updateScenario = (
     ...currentMeta,
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
     countryNameOverrides:
-      countryNameOverrides && typeof countryNameOverrides === "object"
-        ? countryNameOverrides
-        : currentMeta.countryNameOverrides,
+    countryNameOverrides && typeof countryNameOverrides === "object"
+    ? countryNameOverrides
+    : currentMeta.countryNameOverrides,
     description: String(description ?? currentMeta.description).trim() || currentMeta.description,
     eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
     heroSubtitle:
-      String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
+    String(heroSubtitle ?? currentMeta.heroSubtitle).trim() || currentMeta.heroSubtitle,
     heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
     name: String(name ?? currentMeta.name).trim() || currentMeta.name,
     subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
@@ -594,7 +536,7 @@ const deleteScenario = (scenarioId) => {
   const manifest = getManifest();
   const nextOrder = manifest.order.filter((entry) => entry !== scenarioId);
   const nextActiveScenarioId =
-    manifest.activeScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.activeScenarioId;
+  manifest.activeScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.activeScenarioId;
 
   saveManifest({
     ...manifest,
@@ -657,20 +599,20 @@ const readRuntimeJsonAsset = (assetKey) => {
 
   const activeScenario = getActiveScenarioSummary();
   const scenarioPath =
-    JSON_ASSET_FILES[assetKey] || OPTIONAL_JSON_ASSET_FILES[assetKey]
-      ? getScenarioJsonPath(activeScenario.id, assetKey)
-      : null;
+  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  ? getScenarioJsonPath(activeScenario.id, assetKey)
+  : null;
 
   if (scenarioPath && fs.existsSync(scenarioPath)) {
     return {
       contentType: "application/json; charset=utf-8",
-      data: readJsonFile(scenarioPath, assetKey === "colors" ? {} : JSON_ASSET_DEFAULTS[assetKey]),
+      data: readJsonFile(scenarioPath, JSON_ASSET_DEFAULTS[assetKey] ?? {}),
       sourcePath: scenarioPath,
     };
   }
 
   if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-    const fallbackPath = resolveBaseAssetFile(assetKey);
+    const fallbackPath = resolveColorsAssetFile();
     if (!fallbackPath) {
       return {
         contentType: "application/json; charset=utf-8",
@@ -724,8 +666,8 @@ const resolveRuntimeBinaryAsset = (assetKey) => {
     };
   }
 
-  const fallbackPath = resolveBaseSaveFile(activeScenario.baseSaveId, PMTILES_ASSET_FILES[assetKey]);
-  if (!fallbackPath) {
+  const fallbackPath = path.join(PMTILES_ASSETS_DIR, PMTILES_ASSET_FILES[assetKey]);
+  if (!fs.existsSync(fallbackPath)) {
     throw new Error(`No PMTiles archive available for ${assetKey}.`);
   }
 

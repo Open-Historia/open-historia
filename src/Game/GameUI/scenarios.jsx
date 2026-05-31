@@ -18,7 +18,7 @@ const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
   background:
-    "linear-gradient(180deg, rgba(8, 10, 17, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
+  "linear-gradient(180deg, rgba(8, 10, 17, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
   border: "1px solid rgba(255,255,255,0.08)",
   boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
   backdropFilter: "blur(18px)",
@@ -89,9 +89,9 @@ const formatCountryOverrides = (overrides) => {
   }
 
   return Object.entries(overrides)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key} = ${value}`)
-    .join("\n");
+  .sort(([left], [right]) => left.localeCompare(right))
+  .map(([key, value]) => `${key} = ${value}`)
+  .join("\n");
 };
 
 const parseCountryOverrides = (value) => {
@@ -117,8 +117,8 @@ const parseCountryOverrides = (value) => {
     }
 
     const separatorIndex = entry.includes("=")
-      ? entry.indexOf("=")
-      : entry.indexOf(":");
+    ? entry.indexOf("=")
+    : entry.indexOf(":");
 
     if (separatorIndex <= 0) {
       throw new Error("Use `CODE = New Name` or JSON for country overrides.");
@@ -192,9 +192,9 @@ const buildEditorState = (details) => {
 };
 
 const renderAssetBadges = (assetStatus = {}) =>
-  Object.entries(uploadLabels)
-    .filter(([key]) => assetStatus[key])
-    .map(([, label]) => label.replace(" PMTiles", "").replace(" JSON", ""));
+Object.entries(uploadLabels)
+.filter(([key]) => assetStatus[key])
+.map(([, label]) => label.replace(" PMTiles", "").replace(" JSON", ""));
 
 const ScenarioCard = ({
   active,
@@ -206,158 +206,158 @@ const ScenarioCard = ({
 
   return (
     <div
-      style={{
-        ...surfaceStyle,
-        borderColor: active ? `${scenario.accentColor}66` : "rgba(255,255,255,0.08)",
-        borderRadius: "24px",
-        flex: "0 0 21rem",
-        minHeight: "15rem",
-        overflow: "hidden",
-        position: "relative",
-      }}
+    style={{
+      ...surfaceStyle,
+      borderColor: active ? `${scenario.accentColor}66` : "rgba(255,255,255,0.08)",
+          borderRadius: "24px",
+          flex: "0 0 21rem",
+          minHeight: "15rem",
+          overflow: "hidden",
+          position: "relative",
+    }}
     >
-      <div
-        style={{
-          background:
-            `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
-            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
-            "url('/loading_screen.jpg') center/cover",
+    <div
+    style={{
+      background:
+      `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
+      `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
+      "url('/loading_screen.jpg') center/cover",
           inset: 0,
           opacity: 0.92,
           position: "absolute",
-        }}
-      />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
-          justifyContent: "space-between",
-          padding: "1.2rem",
-          position: "relative",
-          zIndex: 1,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              gap: "0.5rem",
-              justifyContent: "space-between",
-            }}
-          >
-            <span
-              style={{
-                background: active ? `${scenario.accentColor}66` : "rgba(255,255,255,0.12)",
-                border: "1px solid rgba(255,255,255,0.15)",
+    }}
+    />
+    <div
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      height: "100%",
+      justifyContent: "space-between",
+      padding: "1.2rem",
+      position: "relative",
+      zIndex: 1,
+    }}
+    >
+    <div>
+    <div
+    style={{
+      alignItems: "center",
+      display: "flex",
+      gap: "0.5rem",
+      justifyContent: "space-between",
+    }}
+    >
+    <span
+    style={{
+      background: active ? `${scenario.accentColor}66` : "rgba(255,255,255,0.12)",
+          border: "1px solid rgba(255,255,255,0.15)",
+          borderRadius: "999px",
+          color: "rgba(248,250,252,0.94)",
+          display: "inline-flex",
+          fontSize: "0.69rem",
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          padding: "0.35rem 0.6rem",
+          textTransform: "uppercase",
+    }}
+    >
+    {scenario.eyebrow || "Scenario"}
+    </span>
+    {active && (
+      <span
+      style={{
+        background: "rgba(255,255,255,0.18)",
                 borderRadius: "999px",
-                color: "rgba(248,250,252,0.94)",
-                display: "inline-flex",
-                fontSize: "0.69rem",
+                color: "#fff",
+                fontSize: "0.72rem",
                 fontWeight: 700,
-                letterSpacing: "0.08em",
-                padding: "0.35rem 0.6rem",
-                textTransform: "uppercase",
-              }}
-            >
-              {scenario.eyebrow || "Scenario"}
-            </span>
-            {active && (
-              <span
-                style={{
-                  background: "rgba(255,255,255,0.18)",
-                  borderRadius: "999px",
-                  color: "#fff",
-                  fontSize: "0.72rem",
-                  fontWeight: 700,
-                  padding: "0.32rem 0.65rem",
-                }}
-              >
-                Active
-              </span>
-            )}
-          </div>
-          <div style={{ marginTop: "4.2rem" }}>
-            <div
-              style={{
-                color: "#fff",
-                fontSize: "2rem",
-                fontWeight: 800,
-                letterSpacing: "-0.03em",
-                lineHeight: 1,
-              }}
-            >
-              {scenario.heroTitle || scenario.name}
-            </div>
-            <div
-              style={{
-                color: "rgba(240,244,255,0.7)",
-                fontSize: "0.92rem",
-                lineHeight: 1.45,
-                marginTop: "0.65rem",
-                maxWidth: "15rem",
-              }}
-            >
-              {scenario.heroSubtitle || scenario.description || scenario.subtitle}
-            </div>
-          </div>
-        </div>
-        <div>
-          <div
-            style={{
-              color: "rgba(255,255,255,0.68)",
-              fontSize: "0.8rem",
-              marginBottom: "0.7rem",
-            }}
-          >
-            {scenario.subtitle}
-          </div>
-          {assetBadges.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.85rem" }}>
-              {assetBadges.map((badge) => (
-                <span
-                  key={badge}
-                  style={{
-                    background: "rgba(255,255,255,0.14)",
-                    borderRadius: "999px",
-                    color: "rgba(255,255,255,0.9)",
-                    fontSize: "0.7rem",
-                    padding: "0.28rem 0.55rem",
-                  }}
-                >
-                  {badge}
-                </span>
-              ))}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: "0.55rem" }}>
-            <button
-              onClick={() => onActivate(scenario.id)}
-              style={{
-                ...actionButtonStyle,
-                background: active ? "rgba(255,255,255,0.16)" : `${scenario.accentColor}cc`,
-                borderColor: active ? "rgba(255,255,255,0.22)" : `${scenario.accentColor}dd`,
-                color: "#fff",
-                flex: 1,
-              }}
-            >
-              {active ? "Selected" : "Open"}
-            </button>
-            <button
-              onClick={() => onEdit(scenario.id)}
-              style={{
-                ...actionButtonStyle,
-                background: "rgba(10,13,20,0.58)",
-                color: "rgba(255,255,255,0.92)",
-                flex: 1,
-              }}
-            >
-              Edit
-            </button>
-          </div>
-        </div>
+                padding: "0.32rem 0.65rem",
+      }}
+      >
+      Active
+      </span>
+    )}
+    </div>
+    <div style={{ marginTop: "4.2rem" }}>
+    <div
+    style={{
+      color: "#fff",
+      fontSize: "2rem",
+      fontWeight: 800,
+      letterSpacing: "-0.03em",
+      lineHeight: 1,
+    }}
+    >
+    {scenario.heroTitle || scenario.name}
+    </div>
+    <div
+    style={{
+      color: "rgba(240,244,255,0.7)",
+          fontSize: "0.92rem",
+          lineHeight: 1.45,
+          marginTop: "0.65rem",
+          maxWidth: "15rem",
+    }}
+    >
+    {scenario.heroSubtitle || scenario.description || scenario.subtitle}
+    </div>
+    </div>
+    </div>
+    <div>
+    <div
+    style={{
+      color: "rgba(255,255,255,0.68)",
+          fontSize: "0.8rem",
+          marginBottom: "0.7rem",
+    }}
+    >
+    {scenario.subtitle}
+    </div>
+    {assetBadges.length > 0 && (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.85rem" }}>
+      {assetBadges.map((badge) => (
+        <span
+        key={badge}
+        style={{
+          background: "rgba(255,255,255,0.14)",
+                                   borderRadius: "999px",
+                                   color: "rgba(255,255,255,0.9)",
+                                   fontSize: "0.7rem",
+                                   padding: "0.28rem 0.55rem",
+        }}
+        >
+        {badge}
+        </span>
+      ))}
       </div>
+    )}
+    <div style={{ display: "flex", gap: "0.55rem" }}>
+    <button
+    onClick={() => onActivate(scenario.id)}
+    style={{
+      ...actionButtonStyle,
+      background: active ? "rgba(255,255,255,0.16)" : `${scenario.accentColor}cc`,
+          borderColor: active ? "rgba(255,255,255,0.22)" : `${scenario.accentColor}dd`,
+          color: "#fff",
+          flex: 1,
+    }}
+    >
+    {active ? "Selected" : "Open"}
+    </button>
+    <button
+    onClick={() => onEdit(scenario.id)}
+    style={{
+      ...actionButtonStyle,
+      background: "rgba(10,13,20,0.58)",
+          color: "rgba(255,255,255,0.92)",
+          flex: 1,
+    }}
+    >
+    Edit
+    </button>
+    </div>
+    </div>
+    </div>
     </div>
   );
 };
@@ -367,15 +367,15 @@ const ScenarioEditor = ({
   editorError,
   fileInputsRef,
   formState,
-  isBusy,
-  onChange,
-  onClearAsset,
-  onClose,
-  onDelete,
-  onFileSelect,
-  onOpenFileDialog,
-  onSave,
-  onSetActive,
+    isBusy,
+    onChange,
+    onClearAsset,
+    onClose,
+    onDelete,
+    onFileSelect,
+    onOpenFileDialog,
+    onSave,
+    onSetActive,
 }) => {
   if (!details || !formState) {
     return null;
@@ -385,333 +385,333 @@ const ScenarioEditor = ({
 
   return (
     <div
-      style={{
-        ...surfaceStyle,
-        borderRadius: "26px",
-        bottom: "0.85rem",
-        color: "#fff",
-        maxHeight: `calc(100vh - ${BAR_HEIGHT + 32}px)`,
-        overflow: "auto",
-        padding: "1.05rem",
-        position: "fixed",
-        right: "0.85rem",
-        top: `calc(${TOP_BAR_OFFSET} + 3.5rem)`,
-        width: "min(32rem, calc(100vw - 1.2rem))",
-        zIndex: 10031,
-      }}
+    style={{
+      ...surfaceStyle,
+      borderRadius: "26px",
+      bottom: "0.85rem",
+      color: "#fff",
+      maxHeight: `calc(100vh - ${BAR_HEIGHT + 32}px)`,
+          overflow: "auto",
+          padding: "1.05rem",
+          position: "fixed",
+          right: "0.85rem",
+          top: `calc(${TOP_BAR_OFFSET} + 3.5rem)`,
+          width: "min(32rem, calc(100vw - 1.2rem))",
+          zIndex: 10031,
+    }}
     >
-      <div
-        style={{
-          alignItems: "center",
-          display: "flex",
-          gap: "0.7rem",
-          justifyContent: "space-between",
-          marginBottom: "1rem",
-        }}
-      >
-        <div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-            Scenario Editor
-          </div>
-          <div style={{ fontSize: "1.35rem", fontWeight: 800, letterSpacing: "-0.03em", marginTop: "0.2rem" }}>
-            {scenario.name}
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          style={{
-            ...actionButtonStyle,
-            background: "rgba(255,255,255,0.04)",
-            minWidth: "2.35rem",
-            padding: 0,
-          }}
-        >
-          ×
-        </button>
-      </div>
+    <div
+    style={{
+      alignItems: "center",
+      display: "flex",
+      gap: "0.7rem",
+      justifyContent: "space-between",
+      marginBottom: "1rem",
+    }}
+    >
+    <div>
+    <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+    Scenario Editor
+    </div>
+    <div style={{ fontSize: "1.35rem", fontWeight: 800, letterSpacing: "-0.03em", marginTop: "0.2rem" }}>
+    {scenario.name}
+    </div>
+    </div>
+    <button
+    onClick={onClose}
+    style={{
+      ...actionButtonStyle,
+      background: "rgba(255,255,255,0.04)",
+          minWidth: "2.35rem",
+          padding: 0,
+    }}
+    >
+    ×
+    </button>
+    </div>
 
-      <div
-        style={{
-          background: "rgba(255,255,255,0.03)",
+    <div
+    style={{
+      background: "rgba(255,255,255,0.03)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: "18px",
           marginBottom: "0.95rem",
           padding: "0.9rem",
-        }}
-      >
-        <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Name</label>
-            <input
-              style={inputStyle}
-              value={formState.name}
-              onChange={(event) => onChange("name", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Eyebrow</label>
-            <input
-              style={inputStyle}
-              value={formState.eyebrow}
-              onChange={(event) => onChange("eyebrow", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Accent</label>
-            <input
-              style={{
-                ...inputStyle,
-                height: "3.1rem",
-                padding: "0.25rem 0.3rem",
-              }}
-              type="color"
-              value={formState.accentColor}
-              onChange={(event) => onChange("accentColor", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Subtitle</label>
-            <input
-              style={inputStyle}
-              value={formState.subtitle}
-              onChange={(event) => onChange("subtitle", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Description</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "6.5rem" }}
-              value={formState.description}
-              onChange={(event) => onChange("description", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Hero Title</label>
-            <input
-              style={inputStyle}
-              value={formState.heroTitle}
-              onChange={(event) => onChange("heroTitle", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Hero Subtitle</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "5.5rem" }}
-              value={formState.heroSubtitle}
-              onChange={(event) => onChange("heroSubtitle", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Player Country</label>
-            <input
-              style={inputStyle}
-              value={formState.country}
-              onChange={(event) => onChange("country", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Game Date</label>
-            <input
-              style={inputStyle}
-              value={formState.gameDate}
-              onChange={(event) => onChange("gameDate", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Language</label>
-            <input
-              style={inputStyle}
-              value={formState.language}
-              onChange={(event) => onChange("language", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Difficulty</label>
-            <input
-              style={inputStyle}
-              value={formState.difficulty}
-              onChange={(event) => onChange("difficulty", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Country Name Overrides</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "6.5rem" }}
-              placeholder={"DEU = German Empire\nRUS = Russian State"}
-              value={formState.countryOverridesText}
-              onChange={(event) => onChange("countryOverridesText", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>World Before Round One</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "8rem" }}
-              value={formState.startingTimelineText}
-              onChange={(event) => onChange("startingTimelineText", event.target.value)}
-            />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={fieldLabelStyle}>Simulation Rules</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "8rem" }}
-              value={formState.simulationRules}
-              onChange={(event) => onChange("simulationRules", event.target.value)}
-            />
-          </div>
-        </div>
-      </div>
+    }}
+    >
+    <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Name</label>
+    <input
+    style={inputStyle}
+    value={formState.name}
+    onChange={(event) => onChange("name", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Eyebrow</label>
+    <input
+    style={inputStyle}
+    value={formState.eyebrow}
+    onChange={(event) => onChange("eyebrow", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Accent</label>
+    <input
+    style={{
+      ...inputStyle,
+      height: "3.1rem",
+      padding: "0.25rem 0.3rem",
+    }}
+    type="color"
+    value={formState.accentColor}
+    onChange={(event) => onChange("accentColor", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Subtitle</label>
+    <input
+    style={inputStyle}
+    value={formState.subtitle}
+    onChange={(event) => onChange("subtitle", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Description</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "6.5rem" }}
+    value={formState.description}
+    onChange={(event) => onChange("description", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Hero Title</label>
+    <input
+    style={inputStyle}
+    value={formState.heroTitle}
+    onChange={(event) => onChange("heroTitle", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Hero Subtitle</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "5.5rem" }}
+    value={formState.heroSubtitle}
+    onChange={(event) => onChange("heroSubtitle", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Player Country</label>
+    <input
+    style={inputStyle}
+    value={formState.country}
+    onChange={(event) => onChange("country", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Game Date</label>
+    <input
+    style={inputStyle}
+    value={formState.gameDate}
+    onChange={(event) => onChange("gameDate", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Language</label>
+    <input
+    style={inputStyle}
+    value={formState.language}
+    onChange={(event) => onChange("language", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Difficulty</label>
+    <input
+    style={inputStyle}
+    value={formState.difficulty}
+    onChange={(event) => onChange("difficulty", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Country Name Overrides</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "6.5rem" }}
+    placeholder={"DEU = German Empire\nRUS = Russian State"}
+    value={formState.countryOverridesText}
+    onChange={(event) => onChange("countryOverridesText", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>World Before Round One</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "8rem" }}
+    value={formState.startingTimelineText}
+    onChange={(event) => onChange("startingTimelineText", event.target.value)}
+    />
+    </div>
+    <div style={{ gridColumn: "1 / -1" }}>
+    <label style={fieldLabelStyle}>Simulation Rules</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "8rem" }}
+    value={formState.simulationRules}
+    onChange={(event) => onChange("simulationRules", event.target.value)}
+    />
+    </div>
+    </div>
+    </div>
 
-      <div
-        style={{
-          background: "rgba(255,255,255,0.03)",
+    <div
+    style={{
+      background: "rgba(255,255,255,0.03)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: "18px",
           marginBottom: "0.95rem",
           padding: "0.9rem",
-        }}
-      >
-        <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", marginBottom: "0.75rem", textTransform: "uppercase" }}>
-          Prompts
-        </div>
-        <div style={{ display: "grid", gap: "0.9rem" }}>
-          <div>
-            <label style={fieldLabelStyle}>Advisor Prompt</label>
-            <textarea
-              style={textareaStyle}
-              value={formState.systemPrompt}
-              onChange={(event) => onChange("systemPrompt", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Leader Prompt</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "11rem" }}
-              value={formState.leaderPrompt}
-              onChange={(event) => onChange("leaderPrompt", event.target.value)}
-            />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>Advanced AI Prompt Pack</label>
-            <textarea
-              style={{ ...textareaStyle, minHeight: "16rem", fontFamily: "Consolas, monospace", fontSize: "0.8rem" }}
-              value={formState.advancedPromptsText}
-              onChange={(event) => onChange("advancedPromptsText", event.target.value)}
-            />
-          </div>
-        </div>
-      </div>
+    }}
+    >
+    <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", marginBottom: "0.75rem", textTransform: "uppercase" }}>
+    Prompts
+    </div>
+    <div style={{ display: "grid", gap: "0.9rem" }}>
+    <div>
+    <label style={fieldLabelStyle}>Advisor Prompt</label>
+    <textarea
+    style={textareaStyle}
+    value={formState.systemPrompt}
+    onChange={(event) => onChange("systemPrompt", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Leader Prompt</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "11rem" }}
+    value={formState.leaderPrompt}
+    onChange={(event) => onChange("leaderPrompt", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Advanced AI Prompt Pack</label>
+    <textarea
+    style={{ ...textareaStyle, minHeight: "16rem", fontFamily: "Consolas, monospace", fontSize: "0.8rem" }}
+    value={formState.advancedPromptsText}
+    onChange={(event) => onChange("advancedPromptsText", event.target.value)}
+    />
+    </div>
+    </div>
+    </div>
 
-      <div
-        style={{
-          background: "rgba(255,255,255,0.03)",
+    <div
+    style={{
+      background: "rgba(255,255,255,0.03)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: "18px",
           marginBottom: "0.95rem",
           padding: "0.9rem",
-        }}
+    }}
+    >
+    <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", marginBottom: "0.75rem", textTransform: "uppercase" }}>
+    Asset Overrides
+    </div>
+    <div style={{ display: "grid", gap: "0.7rem" }}>
+    {Object.entries(uploadLabels).map(([assetKey, label]) => (
+      <div
+      key={assetKey}
+      style={{
+        alignItems: "center",
+        background: "rgba(255,255,255,0.03)",
+                                                              border: "1px solid rgba(255,255,255,0.08)",
+                                                              borderRadius: "14px",
+                                                              display: "flex",
+                                                              gap: "0.75rem",
+                                                              justifyContent: "space-between",
+                                                              padding: "0.72rem 0.78rem",
+      }}
       >
-        <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", marginBottom: "0.75rem", textTransform: "uppercase" }}>
-          Asset Overrides
-        </div>
-        <div style={{ display: "grid", gap: "0.7rem" }}>
-          {Object.entries(uploadLabels).map(([assetKey, label]) => (
-            <div
-              key={assetKey}
-              style={{
-                alignItems: "center",
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: "14px",
-                display: "flex",
-                gap: "0.75rem",
-                justifyContent: "space-between",
-                padding: "0.72rem 0.78rem",
-              }}
-            >
-              <div>
-                <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{label}</div>
-                <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", marginTop: "0.15rem" }}>
-                  {assetStatus[assetKey] ? "Stored on the server for this scenario" : "Using base scenario asset"}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "0.45rem" }}>
-                <button
-                  onClick={() => onOpenFileDialog(assetKey)}
-                  style={actionButtonStyle}
-                >
-                  Upload
-                </button>
-                <button
-                  onClick={() => onClearAsset(assetKey)}
-                  style={{
-                    ...actionButtonStyle,
-                    background: "rgba(255,255,255,0.03)",
-                    color: assetStatus[assetKey] ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.35)",
-                  }}
-                  disabled={!assetStatus[assetKey]}
-                >
-                  Reset
-                </button>
-                <input
-                  ref={(node) => {
-                    fileInputsRef.current[assetKey] = node;
-                  }}
-                  accept={uploadAccept[assetKey]}
-                  onChange={(event) => onFileSelect(assetKey, event)}
-                  style={{ display: "none" }}
-                  type="file"
-                />
-              </div>
-            </div>
-          ))}
-        </div>
+      <div>
+      <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{label}</div>
+      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", marginTop: "0.15rem" }}>
+      {assetStatus[assetKey] ? "Stored on the server for this scenario" : "Using base asset"}
       </div>
-
-      {editorError && (
-        <div
-          style={{
-            background: "rgba(248,113,113,0.12)",
-            border: "1px solid rgba(248,113,113,0.34)",
-            borderRadius: "14px",
-            color: "#fecaca",
-            marginBottom: "0.9rem",
-            padding: "0.8rem 0.9rem",
-          }}
-        >
-          {editorError}
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
-        <button
-          onClick={onSave}
-          style={{
-            ...actionButtonStyle,
-            background: `${scenario.accentColor}cc`,
-            borderColor: `${scenario.accentColor}dd`,
-            color: "#fff",
-            minWidth: "7.2rem",
-          }}
-        >
-          {isBusy ? "Saving..." : "Save"}
-        </button>
-        <button onClick={onSetActive} style={actionButtonStyle}>
-          Activate
-        </button>
-        {scenario.canDelete && (
-          <button
-            onClick={onDelete}
-            style={{
-              ...actionButtonStyle,
-              background: "rgba(127,29,29,0.34)",
-              borderColor: "rgba(248,113,113,0.28)",
-              color: "#fecaca",
-            }}
-          >
-            Delete
-          </button>
-        )}
       </div>
+      <div style={{ display: "flex", gap: "0.45rem" }}>
+      <button
+      onClick={() => onOpenFileDialog(assetKey)}
+      style={actionButtonStyle}
+      >
+      Upload
+      </button>
+      <button
+      onClick={() => onClearAsset(assetKey)}
+      style={{
+        ...actionButtonStyle,
+        background: "rgba(255,255,255,0.03)",
+                                                              color: assetStatus[assetKey] ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.35)",
+      }}
+      disabled={!assetStatus[assetKey]}
+      >
+      Reset
+      </button>
+      <input
+      ref={(node) => {
+        fileInputsRef.current[assetKey] = node;
+      }}
+      accept={uploadAccept[assetKey]}
+      onChange={(event) => onFileSelect(assetKey, event)}
+      style={{ display: "none" }}
+      type="file"
+      />
+      </div>
+      </div>
+    ))}
+    </div>
+    </div>
+
+    {editorError && (
+      <div
+      style={{
+        background: "rgba(248,113,113,0.12)",
+                     border: "1px solid rgba(248,113,113,0.34)",
+                     borderRadius: "14px",
+                     color: "#fecaca",
+                     marginBottom: "0.9rem",
+                     padding: "0.8rem 0.9rem",
+      }}
+      >
+      {editorError}
+      </div>
+    )}
+
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+    <button
+    onClick={onSave}
+    style={{
+      ...actionButtonStyle,
+      background: `${scenario.accentColor}cc`,
+      borderColor: `${scenario.accentColor}dd`,
+      color: "#fff",
+      minWidth: "7.2rem",
+    }}
+    >
+    {isBusy ? "Saving..." : "Save"}
+    </button>
+    <button onClick={onSetActive} style={actionButtonStyle}>
+    Activate
+    </button>
+    {scenario.canDelete && (
+      <button
+      onClick={onDelete}
+      style={{
+        ...actionButtonStyle,
+        background: "rgba(127,29,29,0.34)",
+                            borderColor: "rgba(248,113,113,0.28)",
+                            color: "#fecaca",
+      }}
+      >
+      Delete
+      </button>
+    )}
+    </div>
     </div>
   );
 };
@@ -720,7 +720,6 @@ const ScenarioTopBar = () => {
   const {
     activeScenario,
     activeScenarioId,
-    baseSaves,
     error,
     loaded,
     loading,
@@ -761,7 +760,6 @@ const ScenarioTopBar = () => {
 
     try {
       const details = await createScenario({
-        baseSaveId: activeScenario?.baseSaveId ?? baseSaves[0] ?? "save0",
         name: activeScenario ? `${activeScenario.name} Copy` : "New Scenario",
         seedScenarioId: activeScenario?.id ?? "default",
         setActive: true,
@@ -793,33 +791,33 @@ const ScenarioTopBar = () => {
       const details = await saveScenario(editorDetails.scenario.id, {
         accentColor: editorState.accentColor,
         countryNameOverrides: parseCountryOverrides(editorState.countryOverridesText),
-        description: editorState.description,
-        eyebrow: editorState.eyebrow,
-        game: {
-          ...currentGame,
-          country: editorState.country,
-          difficulty: editorState.difficulty,
-          gameDate: editorState.gameDate,
-          language: editorState.language,
-          startDate: editorState.gameDate || currentGame.startDate || "",
-        },
-        heroSubtitle: editorState.heroSubtitle,
-        heroTitle: editorState.heroTitle,
-        name: editorState.name,
-        prompts: {
-          ...currentPrompts,
-          advisor: editorState.systemPrompt,
-          leader: editorState.leaderPrompt,
-          ...advancedPrompts,
-        },
-        subtitle: editorState.subtitle,
-        world: {
-          ...currentWorld,
-          difficulty: editorState.difficulty,
-          language: editorState.language,
-          simulationRules: editorState.simulationRules,
-          startingTimelineText: editorState.startingTimelineText,
-        },
+                                         description: editorState.description,
+                                         eyebrow: editorState.eyebrow,
+                                         game: {
+                                           ...currentGame,
+                                           country: editorState.country,
+                                           difficulty: editorState.difficulty,
+                                           gameDate: editorState.gameDate,
+                                           language: editorState.language,
+                                           startDate: editorState.gameDate || currentGame.startDate || "",
+                                         },
+                                         heroSubtitle: editorState.heroSubtitle,
+                                         heroTitle: editorState.heroTitle,
+                                         name: editorState.name,
+                                         prompts: {
+                                           ...currentPrompts,
+                                           advisor: editorState.systemPrompt,
+                                           leader: editorState.leaderPrompt,
+                                           ...advancedPrompts,
+                                         },
+                                         subtitle: editorState.subtitle,
+                                         world: {
+                                           ...currentWorld,
+                                           difficulty: editorState.difficulty,
+                                           language: editorState.language,
+                                           simulationRules: editorState.simulationRules,
+                                           startingTimelineText: editorState.startingTimelineText,
+                                         },
       });
 
       setEditorDetails(details);
@@ -917,207 +915,207 @@ const ScenarioTopBar = () => {
 
   return (
     <>
-      <div
-        style={{
-          ...surfaceStyle,
-          alignItems: "center",
-          borderLeft: "none",
-          borderRadius: 0,
-          borderRight: "none",
-          borderTop: "none",
+    <div
+    style={{
+      ...surfaceStyle,
+      alignItems: "center",
+      borderLeft: "none",
+      borderRadius: 0,
+      borderRight: "none",
+      borderTop: "none",
+      display: "flex",
+      gap: "0.9rem",
+      height: `${BAR_HEIGHT}px`,
+      justifyContent: "space-between",
+      left: 0,
+      padding: "0 1rem",
+      position: "fixed",
+      right: 0,
+      top: 0,
+      zIndex: 10030,
+    }}
+    >
+    <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
+    <div
+    style={{
+      alignItems: "center",
+      background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          borderRadius: "999px",
           display: "flex",
-          gap: "0.9rem",
-          height: `${BAR_HEIGHT}px`,
-          justifyContent: "space-between",
-          left: 0,
-          padding: "0 1rem",
-          position: "fixed",
-          right: 0,
-          top: 0,
-          zIndex: 10030,
-        }}
-      >
-        <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
-          <div
-            style={{
-              alignItems: "center",
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: "999px",
-              display: "flex",
-              height: "2.65rem",
-              justifyContent: "center",
-              overflow: "hidden",
-              width: "2.65rem",
-            }}
-          >
-            <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-              Pax Historia
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem" }}>
-              Server-backed scenario deck
-            </div>
-          </div>
-        </div>
+          height: "2.65rem",
+          justifyContent: "center",
+          overflow: "hidden",
+          width: "2.65rem",
+    }}
+    >
+    <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+    </div>
+    <div style={{ minWidth: 0 }}>
+    <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+    Pax Historia
+    </div>
+    <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem" }}>
+    Server-backed scenario deck
+    </div>
+    </div>
+    </div>
 
-        <div
-          style={{
-            alignItems: "center",
-            display: "flex",
-            flex: 1,
-            gap: "0.55rem",
-            justifyContent: "center",
-            minWidth: 0,
-            overflowX: "auto",
-            padding: "0 0.35rem",
-            scrollbarWidth: "none",
-          }}
-        >
-          {panelCards.slice(0, 6).map((scenario) => {
-            const active = scenario.id === activeScenarioId;
+    <div
+    style={{
+      alignItems: "center",
+      display: "flex",
+      flex: 1,
+      gap: "0.55rem",
+      justifyContent: "center",
+      minWidth: 0,
+      overflowX: "auto",
+      padding: "0 0.35rem",
+      scrollbarWidth: "none",
+    }}
+    >
+    {panelCards.slice(0, 6).map((scenario) => {
+      const active = scenario.id === activeScenarioId;
 
-            return (
-              <button
-                key={scenario.id}
-                onClick={() => handleActivate(scenario.id)}
-                style={{
-                  ...actionButtonStyle,
-                  background: active ? `${scenario.accentColor}55` : "rgba(255,255,255,0.05)",
-                  borderColor: active ? `${scenario.accentColor}88` : "rgba(255,255,255,0.08)",
-                  color: "#fff",
-                  flexShrink: 0,
-                }}
-              >
-                {scenario.name}
-              </button>
-            );
-          })}
-        </div>
-
-        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem" }}>
-          <button onClick={() => setIsPanelOpen((open) => !open)} style={actionButtonStyle}>
-            {isPanelOpen ? "Hide Deck" : "Scenarios"}
-          </button>
-          <button
-            onClick={() => refreshScenarioCatalog({ force: true }).catch(() => {})}
-            style={actionButtonStyle}
-          >
-            Refresh
-          </button>
-          <button
-            onClick={handleCreateScenario}
-            style={{
-              ...actionButtonStyle,
-              background: `${activeScenario?.accentColor ?? "#7c3aed"}cc`,
-              borderColor: `${activeScenario?.accentColor ?? "#7c3aed"}dd`,
+      return (
+        <button
+        key={scenario.id}
+        onClick={() => handleActivate(scenario.id)}
+        style={{
+          ...actionButtonStyle,
+          background: active ? `${scenario.accentColor}55` : "rgba(255,255,255,0.05)",
+              borderColor: active ? `${scenario.accentColor}88` : "rgba(255,255,255,0.08)",
               color: "#fff",
-            }}
-          >
-            New Scenario
-          </button>
-        </div>
+              flexShrink: 0,
+        }}
+        >
+        {scenario.name}
+        </button>
+      );
+    })}
+    </div>
+
+    <div style={{ alignItems: "center", display: "flex", gap: "0.55rem" }}>
+    <button onClick={() => setIsPanelOpen((open) => !open)} style={actionButtonStyle}>
+    {isPanelOpen ? "Hide Deck" : "Scenarios"}
+    </button>
+    <button
+    onClick={() => refreshScenarioCatalog({ force: true }).catch(() => {})}
+    style={actionButtonStyle}
+    >
+    Refresh
+    </button>
+    <button
+    onClick={handleCreateScenario}
+    style={{
+      ...actionButtonStyle,
+      background: `${activeScenario?.accentColor ?? "#7c3aed"}cc`,
+      borderColor: `${activeScenario?.accentColor ?? "#7c3aed"}dd`,
+      color: "#fff",
+    }}
+    >
+    New Scenario
+    </button>
+    </div>
+    </div>
+
+    {isPanelOpen && (
+      <div
+      style={{
+        ...surfaceStyle,
+        borderRadius: "0 0 28px 28px",
+        left: "0.85rem",
+        maxWidth: "calc(100vw - 1.7rem)",
+                     padding: "1rem",
+                     position: "fixed",
+                     right: "0.85rem",
+                     top: `${BAR_HEIGHT}px`,
+                     zIndex: 10029,
+      }}
+      >
+      <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        gap: "0.7rem",
+        justifyContent: "space-between",
+        marginBottom: "0.9rem",
+      }}
+      >
+      <div>
+      <div style={{ color: "#fff", fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em" }}>
+      {activeScenario?.heroTitle || activeScenario?.name || "Scenario Deck"}
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.9rem", marginTop: "0.2rem" }}>
+      {activeScenario?.heroSubtitle || "Switch prompts, names, and PMTiles without cloning full saves."}
+      </div>
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.8rem" }}>
+      {scenarios.length} scenario{scenarios.length === 1 ? "" : "s"}
+      </div>
       </div>
 
-      {isPanelOpen && (
-        <div
-          style={{
-            ...surfaceStyle,
-            borderRadius: "0 0 28px 28px",
-            left: "0.85rem",
-            maxWidth: "calc(100vw - 1.7rem)",
-            padding: "1rem",
-            position: "fixed",
-            right: "0.85rem",
-            top: `${BAR_HEIGHT}px`,
-            zIndex: 10029,
-          }}
-        >
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              gap: "0.7rem",
-              justifyContent: "space-between",
-              marginBottom: "0.9rem",
-            }}
-          >
-            <div>
-              <div style={{ color: "#fff", fontSize: "1.45rem", fontWeight: 800, letterSpacing: "-0.04em" }}>
-                {activeScenario?.heroTitle || activeScenario?.name || "Scenario Deck"}
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.9rem", marginTop: "0.2rem" }}>
-                {activeScenario?.heroSubtitle || "Switch prompts, names, and PMTiles without cloning full saves."}
-              </div>
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.8rem" }}>
-              {scenarios.length} scenario{scenarios.length === 1 ? "" : "s"}
-            </div>
-          </div>
+      <div
+      style={{
+        display: "flex",
+        gap: "0.9rem",
+        overflowX: "auto",
+        paddingBottom: "0.15rem",
+        scrollbarWidth: "thin",
+      }}
+      >
+      {panelCards.map((scenario) => (
+        <ScenarioCard
+        key={scenario.id}
+        active={scenario.id === activeScenarioId}
+        onActivate={handleActivate}
+        onEdit={openEditor}
+        scenario={scenario}
+        />
+      ))}
+      </div>
+      </div>
+    )}
 
-          <div
-            style={{
-              display: "flex",
-              gap: "0.9rem",
-              overflowX: "auto",
-              paddingBottom: "0.15rem",
-              scrollbarWidth: "thin",
-            }}
-          >
-            {panelCards.map((scenario) => (
-              <ScenarioCard
-                key={scenario.id}
-                active={scenario.id === activeScenarioId}
-                onActivate={handleActivate}
-                onEdit={openEditor}
-                scenario={scenario}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+    <ScenarioEditor
+    details={editorDetails}
+    editorError={editorError || error}
+    fileInputsRef={fileInputsRef}
+    formState={editorState}
+    isBusy={isBusy || loading}
+    onChange={(field, value) => {
+      setEditorState((current) => ({
+        ...current,
+        [field]: value,
+      }));
+    }}
+    onClearAsset={handleClearAsset}
+    onClose={() => {
+      setEditorDetails(null);
+      setEditorState(null);
+      setEditorError(null);
+    }}
+    onDelete={handleDelete}
+    onFileSelect={handleFileSelect}
+    onOpenFileDialog={(assetKey) => fileInputsRef.current[assetKey]?.click()}
+    onSave={handleSave}
+    onSetActive={() => handleActivate(editorDetails?.scenario?.id)}
+    />
 
-      <ScenarioEditor
-        details={editorDetails}
-        editorError={editorError || error}
-        fileInputsRef={fileInputsRef}
-        formState={editorState}
-        isBusy={isBusy || loading}
-        onChange={(field, value) => {
-          setEditorState((current) => ({
-            ...current,
-            [field]: value,
-          }));
-        }}
-        onClearAsset={handleClearAsset}
-        onClose={() => {
-          setEditorDetails(null);
-          setEditorState(null);
-          setEditorError(null);
-        }}
-        onDelete={handleDelete}
-        onFileSelect={handleFileSelect}
-        onOpenFileDialog={(assetKey) => fileInputsRef.current[assetKey]?.click()}
-        onSave={handleSave}
-        onSetActive={() => handleActivate(editorDetails?.scenario?.id)}
-      />
-
-      {!loaded && (
-        <div
-          style={{
-            color: "rgba(255,255,255,0.6)",
-            fontSize: "0.82rem",
-            position: "fixed",
-            right: "1.25rem",
-            top: "4.35rem",
-            zIndex: 10028,
-          }}
-        >
-          Loading scenarios...
-        </div>
-      )}
+    {!loaded && (
+      <div
+      style={{
+        color: "rgba(255,255,255,0.6)",
+                 fontSize: "0.82rem",
+                 position: "fixed",
+                 right: "1.25rem",
+                 top: "4.35rem",
+                 zIndex: 10028,
+      }}
+      >
+      Loading scenarios...
+      </div>
+    )}
     </>
   );
 };
