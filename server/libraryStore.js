@@ -1963,7 +1963,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
       continue;
     }
 
-    removeFileIfPresent(getScenarioJsonPath(scenarioId, assetKey));
+
+    if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+      removeFileIfPresent(getScenarioJsonPath(scenarioId, assetKey));
+    }
     removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
   }
 
