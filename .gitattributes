@@ -1,1 +1,4 @@
 *.pmtiles filter=lfs diff=lfs merge=lfs -text
+public/assets/regions-seed.geojson filter=lfs diff=lfs merge=lfs -text
+public/assets/cities-seed.json filter=lfs diff=lfs merge=lfs -text
+server/data/scenarios/**/regions.geojson filter=lfs diff=lfs merge=lfs -text
