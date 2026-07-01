@@ -1,4 +1,16 @@
-import React from "react";
+/*! Pax Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import React, { useEffect, useState } from "react";
+
+// Loading-screen artwork. The first is the original; the rest cycle in once the
+// files exist in /public. Missing files are skipped (see the preload check), so
+// the screen never flashes a broken image.
+const LOADING_IMAGES = [
+  "/loading_screen.jpg",
+  "/loading_screen_2.jpg",
+  "/loading_screen_3.jpg",
+  "/loading_screen_4.jpg",
+];
+const IMAGE_ROTATE_MS = 4500;
 
 const formatBytes = (bytes) => {
   if (!bytes) return "0 B";
@@ -24,6 +36,49 @@ const StartupScreen = ({
   const activeStep = steps.find((s) => s.status === "active");
   const doneCount = steps.filter((s) => s.status === "done").length;
 
+  // Only cycle through artwork that actually loads, so absent files are skipped
+  // rather than flashing a broken background.
+  // Show all artwork immediately, starting on a RANDOM one so short (warm-cache)
+  // loads still surface the new images rather than always the first. Any file that
+  // fails to load is pruned so it never shows a broken background.
+  const [availableImages, setAvailableImages] = useState(LOADING_IMAGES);
+  const [bgIndex, setBgIndex] = useState(() => Math.floor(Math.random() * LOADING_IMAGES.length));
+
+  useEffect(() => {
+    let cancelled = false;
+    const ok = [];
+    let pending = LOADING_IMAGES.length;
+    for (const src of LOADING_IMAGES) {
+      const img = new Image();
+      const settle = (good) => {
+        if (cancelled) return;
+        if (good) ok.push(src);
+        pending -= 1;
+        if (pending === 0) {
+          const loaded = LOADING_IMAGES.filter((s) => ok.includes(s));
+          if (loaded.length) setAvailableImages(loaded);
+        }
+      };
+      img.onload = () => settle(true);
+      img.onerror = () => settle(false);
+      img.src = src;
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (availableImages.length <= 1) return undefined;
+    const timer = setInterval(
+      () => setBgIndex((i) => (i + 1) % availableImages.length),
+      IMAGE_ROTATE_MS,
+    );
+    return () => clearInterval(timer);
+  }, [availableImages]);
+
+  const currentBg = bgIndex % availableImages.length;
+
   return (
     <>
     <style>{`
@@ -37,10 +92,18 @@ const StartupScreen = ({
         height: 100vh;
         overflow: hidden;
         background: #050403;
-        background-image: url('/loading_screen.jpg');
+        font-family: 'EB Garamond', Georgia, serif;
+      }
+
+      /* Cross-fading artwork layers (one per loaded image) */
+      .ss-bg {
+        position: absolute;
+        inset: 0;
         background-size: cover;
         background-position: center top;
-        font-family: 'EB Garamond', Georgia, serif;
+        opacity: 0;
+        transition: opacity 1.4s ease-in-out;
+        z-index: 0;
       }
 
       /* Bottom-half gradient so UI reads over artwork */
@@ -311,11 +374,34 @@ const StartupScreen = ({
         color: rgba(160,140,100,0.4);
         letter-spacing: 0.02em;
       }
+
+      /* Creator credit over the artwork — small and very subtle */
+      .ss-copyright {
+        position: absolute;
+        top: 0.85rem;
+        right: 1.1rem;
+        z-index: 5;
+        font-family: 'Cinzel', serif;
+        font-size: 0.5rem;
+        letter-spacing: 0.14em;
+        color: rgba(232,220,196,0.2);
+        text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+        pointer-events: none;
+        user-select: none;
+      }
       `}</style>
 
       <div className="ss-shell">
+      {availableImages.map((src, index) => (
+        <div
+        key={src}
+        className="ss-bg"
+        style={{ backgroundImage: `url('${src}')`, opacity: index === currentBg ? 1 : 0 }}
+        />
+      ))}
       <div className="ss-gradient" />
       <div className="ss-grain" />
+      <div className="ss-copyright">Image © 2026 Nicholas Krol</div>
 
       <div className="ss-hud">
 
