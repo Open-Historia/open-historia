@@ -29,6 +29,11 @@ export const onOceanClicked = () => {
     if (_currentSelection) _dismiss?.();
 };
 
+// Dismiss the region popup when another selection (e.g. a unit) takes over.
+export const dismissRegionPopup = () => {
+    if (_currentSelection) _dismiss?.();
+};
+
 const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
     status,
     imageUrl,
