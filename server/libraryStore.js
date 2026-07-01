@@ -1,3 +1,4 @@
+/*! Pax Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import fs from "fs";
 import path from "path";
 import url from "url";
@@ -69,6 +70,16 @@ const PMTILES_ASSET_FILES = {
   regions: "regions.pmtiles",
 };
 
+// Custom geometry authored in the map editor. Stored per-scenario (static map
+// data, like the pmtiles), served to the runtime as JSON, and rendered by the
+// game as a GeoJSON region layer when world.customRegions is set. Scenarios
+// without it fall back to the stock pmtiles rendering (full backward-compat).
+const SCENARIO_GEOJSON_ASSET_FILES = {
+  regionsGeojson: "regions.geojson",
+};
+
+const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
+
 const COVER_IMAGE_ASSET_KEY = "cover";
 
 const SCENARIO_IMAGE_ASSET_FILES = {
@@ -83,6 +94,7 @@ const UPLOADABLE_SCENARIO_ASSET_FILES = {
   ...SCENARIO_IMAGE_ASSET_FILES,
   ...OPTIONAL_JSON_ASSET_FILES,
   ...PMTILES_ASSET_FILES,
+  ...SCENARIO_GEOJSON_ASSET_FILES,
 };
 
 const UPLOADABLE_GAME_ASSET_FILES = {
@@ -101,8 +113,12 @@ const JSON_ASSET_DEFAULTS = {
 };
 
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
-  "difficulty",
+  "allowedUnitTypes",
+"author",
+"customRegions",
+"difficulty",
 "language",
+"mapCredit",
 "notes",
 "polityOverrides",
 "regionOwnershipOverrides",
@@ -481,12 +497,14 @@ const buildFreshGameSeedFromScenario = ({ baseGame, scenarioGame }) => {
   (hasCustomStartDate ? scenarioStartDate : "") ||
   (hasCustomGameDate ? scenarioGameDate : "") ||
   scenarioStartDate ||
-  baseStartDate;
+  baseStartDate ||
+  BUILT_IN_SCENARIO_DEFAULT_DATE;
   const nextGameDate =
   (hasCustomGameDate ? scenarioGameDate : "") ||
   (hasCustomStartDate ? scenarioStartDate : "") ||
   baseGameDate ||
-  nextStartDate;
+  nextStartDate ||
+  BUILT_IN_SCENARIO_DEFAULT_DATE;
 
   return {
     ...cloneJson(baseGame ?? {}),
@@ -1704,6 +1722,20 @@ const getActiveRuntimeScenarioSummary = () => {
 const readRuntimeJsonAsset = (assetKey) => {
   ensureGameStore();
 
+  // Custom region geometry is scenario-scoped (static map data). Resolve it from
+  // the active game's scenario, mirroring how pmtiles overrides resolve. Absent
+  // => empty collection, so the game keeps its stock pmtiles rendering.
+  if (assetKey === "regionsGeojson") {
+    const scenario = getActiveRuntimeScenarioSummary();
+    const overridePath = getScenarioUploadPath(scenario.id, "regionsGeojson");
+    const hasOverride = fs.existsSync(overridePath);
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: hasOverride ? readJsonFile(overridePath, EMPTY_FEATURE_COLLECTION) : cloneJson(EMPTY_FEATURE_COLLECTION),
+      sourcePath: hasOverride ? overridePath : null,
+    };
+  }
+
   const activeGame = getActiveGameSummary();
   const gamePath =
   assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
@@ -1835,6 +1867,23 @@ const buildScenarioBundleAsset = (scenarioId, assetKey, mode) => {
     };
   }
 
+  // Custom region geometry IS the map, so always embed it (even in "light"
+  // mode) — a shared custom map is broken without its geometry.
+  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
+    const geojsonPath = getScenarioUploadPath(scenarioId, assetKey);
+    if (!fs.existsSync(geojsonPath)) {
+      return { fileName: SCENARIO_GEOJSON_ASSET_FILES[assetKey], mode: "default" };
+    }
+
+    return {
+      contentType: "application/json",
+      data: encodeBinaryFile(geojsonPath),
+      encoding: "base64",
+      fileName: SCENARIO_GEOJSON_ASSET_FILES[assetKey],
+      mode: "embedded",
+    };
+  }
+
   const uploadPath = getScenarioUploadPath(scenarioId, assetKey);
   if (!fs.existsSync(uploadPath) || mode !== "full") {
     return {
@@ -1864,6 +1913,7 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       colors: buildScenarioBundleAsset(scenarioId, "colors", mode),
       countries: buildScenarioBundleAsset(scenarioId, "countries", mode),
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
+      regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
     },
     data: {
       actions: cloneJson(details.data.actions),
