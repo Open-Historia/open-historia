@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+/*! Pax Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   PROMPT_SECTION_DEFINITIONS,
   normalizePromptPack,
@@ -25,6 +26,20 @@ import {
   uploadScenarioAsset,
   useLibraryState,
 } from "../../runtime/library.js";
+import { loadCountryNames } from "../../runtime/assets.js";
+import { UNIT_TYPES } from "../../runtime/gameState.js";
+
+const UNIT_TYPE_LABELS = {
+  infantry: "Infantry",
+  armor: "Armor",
+  air: "Air Force",
+  naval: "Naval",
+  artillery: "Artillery",
+  garrison: "Garrison",
+};
+
+// Lazy so OpenLayers only loads when the in-game map editor is opened.
+const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 
 const BAR_HEIGHT = 64;
 const TOP_BAR_OFFSET = "4.75rem";
@@ -180,6 +195,7 @@ const buildScenarioEditorState = (details) => {
 
   return {
     accentColor: scenario.accentColor ?? "#7c3aed",
+    allowedUnitTypes: Array.isArray(world.allowedUnitTypes) ? world.allowedUnitTypes : [...UNIT_TYPES],
     country: game.country ?? "",
     countryOverridesText: formatCountryOverrides(scenario.countryNameOverrides),
     description: scenario.description ?? "",
@@ -625,6 +641,7 @@ const EditorDrawer = ({
   onExportBundle,
   onFileSelect,
   onOpenFileDialog,
+  onOpenMapEditor,
   onSave,
   promptSectionKey,
   setEditorSection,
@@ -742,6 +759,41 @@ const EditorDrawer = ({
               <label style={fieldLabelStyle}>Difficulty</label>
               <input style={inputStyle} value={formState.difficulty} onChange={(event) => onChange("difficulty", event.target.value)} />
             </div>
+            {kind === "scenario" && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={fieldLabelStyle}>Deployable Troop Types</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                  {UNIT_TYPES.map((unitType) => {
+                    const checked = (formState.allowedUnitTypes ?? []).includes(unitType);
+                    return (
+                      <button
+                        key={unitType}
+                        type="button"
+                        onClick={() => {
+                          const set = new Set(formState.allowedUnitTypes ?? []);
+                          if (set.has(unitType)) set.delete(unitType);
+                          else set.add(unitType);
+                          onChange("allowedUnitTypes", UNIT_TYPES.filter((t) => set.has(t)));
+                        }}
+                        style={{
+                          ...actionButtonStyle,
+                          background: checked ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.04)",
+                          borderColor: checked ? "rgba(124,58,237,0.5)" : "rgba(255,255,255,0.1)",
+                          minHeight: "2rem",
+                          padding: "0 0.7rem",
+                        }}
+                      >
+                        {checked ? "✓ " : ""}
+                        {UNIT_TYPE_LABELS[unitType] ?? unitType}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.4rem" }}>
+                  Uncheck types that don't fit the era — e.g. no Air Force in 1200. Players can only deploy the checked types.
+                </div>
+              </div>
+            )}
             <div style={{ gridColumn: "1 / -1" }}>
               <label style={fieldLabelStyle}>World Before Round One</label>
               <textarea style={{ ...textareaStyle, minHeight: "8rem" }} value={formState.startingTimelineText} onChange={(event) => onChange("startingTimelineText", event.target.value)} />
@@ -880,6 +932,15 @@ const EditorDrawer = ({
         >
           {isBusy ? "Saving..." : "Save"}
         </button>
+        {kind === "scenario" && onOpenMapEditor && (
+          <button
+            onClick={onOpenMapEditor}
+            style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.24)", borderColor: "rgba(124,58,237,0.38)", color: "#fff", minWidth: "9rem" }}
+            type="button"
+          >
+            🗺️ Open Map Editor
+          </button>
+        )}
         {record.canDelete && (
           <button
             onClick={onDelete}
@@ -968,22 +1029,56 @@ const LibraryTopBar = () => {
     }
   };
 
-  const handleScenarioPlay = async (scenario) => {
+  // Create the game from the scenario, optionally overriding the starting country
+  // the player chose in the picker, then open its editor.
+  const startGameForCountry = async (scenario, countryCode) => {
+    setCountryPicker(null);
     setEditorError(null);
     setIsBusy(true);
-
     try {
       const details = await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
         setActive: true,
       });
+      if (countryCode) {
+        // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+        // startDate/gameDate/round (the "Undated" bug).
+        await saveGame(details.game.id, { gamePatch: { country: countryCode } });
+      }
       await openGameEditor(details.game.id);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
       setIsBusy(false);
     }
+  };
+
+  // Build the start-country list for a scenario: only the factions that actually
+  // exist in it (world.ownerCodes), named as era polities where defined. Falls
+  // back to every country for scenarios without an owner list.
+  const buildScenarioCountryOptions = (world, allCountries) => {
+    const list = Array.isArray(allCountries) ? allCountries : [];
+    const ownerCodes = Array.isArray(world?.ownerCodes) ? world.ownerCodes : null;
+    if (!ownerCodes || !ownerCodes.length) return list;
+    const nameByCode = new Map(list.map((entry) => [entry.code, entry.name]));
+    const polity = world?.polityOverrides ?? {};
+    return ownerCodes
+      .map((code) => ({ code, name: polity[code]?.name || nameByCode.get(code) || code }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  };
+
+  // "New Game" now opens a country picker first (the player chooses who to play).
+  const handleScenarioPlay = (scenario) => {
+    setCountryQuery("");
+    setCountryOptions([]);
+    setPlayGameId(null);
+    setCountryPicker(scenario);
+    Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
+      .then(([allCountries, details]) => {
+        setCountryOptions(buildScenarioCountryOptions(details?.data?.world, allCountries));
+      })
+      .catch(() => setCountryOptions([]));
   };
 
   const handleScenarioClone = async (scenario) => {
@@ -1096,6 +1191,9 @@ const LibraryTopBar = () => {
           subtitle: editorState.subtitle,
           world: {
             ...currentWorld,
+            allowedUnitTypes: Array.isArray(editorState.allowedUnitTypes)
+              ? editorState.allowedUnitTypes
+              : [...UNIT_TYPES],
             difficulty: editorState.difficulty,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
@@ -1288,6 +1386,120 @@ const LibraryTopBar = () => {
     setIsPanelOpen(true);
   };
 
+  const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
+  const [mapEditorScenario, setMapEditorScenario] = useState(null);
+  const [countryPicker, setCountryPicker] = useState(null);
+  const [countryOptions, setCountryOptions] = useState([]);
+  const [countryQuery, setCountryQuery] = useState("");
+  // When set, the country picker refines the country of this already-active game
+  // (the Apply-&-Play flow) instead of creating a brand new game.
+  const [playGameId, setPlayGameId] = useState(null);
+
+  // Write a map built in the editor into its scenario (region geometry + ownership
+  // + colors), then immediately spin up and activate a fresh game from it so the
+  // player SEES the map right away — the stock country-level renderer can't show
+  // per-region ownership, so every applied map ships its geometry and renders via
+  // the custom GeoJSON layer.
+  const applyMapToScenario = async (scenario, seed) => {
+    if (!scenario || !seed) return;
+    const scenarioId = scenario.id;
+
+    const details = await loadScenarioDetails(scenarioId);
+    const currentWorld = details?.data?.world ?? {};
+    const currentGame = details?.data?.game ?? {};
+
+    await saveScenario(scenarioId, {
+      world: {
+        ...currentWorld,
+        regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
+        polityOverrides: {
+          ...(currentWorld.polityOverrides ?? {}),
+          ...(seed.world?.polityOverrides ?? {}),
+        },
+        // Playable factions for the start-country picker.
+        ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
+        customRegions: true,
+        author: seed.world?.author ?? "",
+        mapCredit: seed.world?.mapCredit ?? "",
+      },
+      game: {
+        ...currentGame,
+        country: seed.game?.country || currentGame.country || "",
+        // Guarantee a valid date so the timeline never shows "Invalid Date".
+        gameDate:
+          currentGame.gameDate || currentGame.startDate || seed.game?.gameDate || seed.game?.startDate || "2016-01-01",
+        startDate:
+          currentGame.startDate || currentGame.gameDate || seed.game?.startDate || seed.game?.gameDate || "2016-01-01",
+      },
+    });
+
+    await uploadScenarioAsset(
+      scenarioId,
+      "colors",
+      new Blob([JSON.stringify(seed.colors ?? {})], { type: "application/json" }),
+    );
+    await uploadScenarioAsset(
+      scenarioId,
+      "regionsGeojson",
+      new Blob([JSON.stringify(seed.regions ?? { type: "FeatureCollection", features: [] })], {
+        type: "application/json",
+      }),
+    );
+
+    // Create + activate a fresh game so the running map reflects the edit. Relying
+    // on the player finishing a follow-up picker left the old active game (and old
+    // map) in place — this guarantees the new map is live.
+    const gameDetails = await createGame({
+      name: `${scenario.name} Session`,
+      scenarioId,
+      setActive: true,
+    });
+    const newGameId = gameDetails.game.id;
+    if (seed.game?.country) {
+      await saveGame(newGameId, { gamePatch: { country: seed.game.country } });
+    }
+
+    // Tear down all the library UI so the freshly-activated game is visible.
+    setIsMapEditorOpen(false);
+    setMapEditorScenario(null);
+    resetEditor();
+    setIsPanelOpen(false);
+
+    // Optional: let the player pick who they control on the new game — limited to
+    // the factions this map actually contains.
+    const seedWorld = {
+      ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
+      polityOverrides: seed.world?.polityOverrides ?? {},
+    };
+    setPlayGameId(newGameId);
+    setCountryQuery("");
+    setCountryOptions([]);
+    setCountryPicker(scenario);
+    loadCountryNames()
+      .then((allCountries) => setCountryOptions(buildScenarioCountryOptions(seedWorld, allCountries)))
+      .catch(() => setCountryOptions([]));
+  };
+
+  // Country picker resolution: in the Apply-&-Play flow update the active game;
+  // in the normal "New Game" flow create a new game.
+  const choosePlayCountry = async (countryCode) => {
+    const gid = playGameId;
+    setCountryPicker(null);
+    setPlayGameId(null);
+    if (!gid) return;
+    try {
+      if (countryCode) {
+        await saveGame(gid, { gamePatch: { country: countryCode } });
+      }
+      await activateGame(gid);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
+  };
+
+  const pickCountry = (countryCode) =>
+    playGameId ? choosePlayCountry(countryCode) : startGameForCountry(countryPicker, countryCode);
+
   return (
     <>
       <div
@@ -1344,6 +1556,82 @@ const LibraryTopBar = () => {
 
         <div />
       </div>
+
+      {isMapEditorOpen && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 10050 }}>
+          <Suspense
+            fallback={
+              <div style={{ position: "fixed", inset: 0, background: "#0b1020", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>
+                Loading map editor…
+              </div>
+            }
+          >
+            <MapEditor
+              onClose={() => {
+                setIsMapEditorOpen(false);
+                setMapEditorScenario(null);
+              }}
+              scenarioName={mapEditorScenario?.name}
+              onApplyToScenario={
+                mapEditorScenario ? (seed) => applyMapToScenario(mapEditorScenario, seed) : undefined
+              }
+            />
+          </Suspense>
+        </div>
+      )}
+
+      {countryPicker && (
+        <div
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); }}
+          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...surfaceStyle, borderRadius: 16, width: "min(440px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif" }}
+          >
+            <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+              Starting “{countryPicker.name}”
+            </div>
+            <input
+              autoFocus
+              value={countryQuery}
+              onChange={(e) => setCountryQuery(e.target.value)}
+              placeholder="Search countries…"
+              style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
+            />
+            <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+              <button
+                type="button"
+                onClick={() => pickCountry("")}
+                style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
+              >
+                {playGameId ? "Keep scenario default" : "Scenario default"}
+              </button>
+              {countryOptions
+                .filter((c) => {
+                  const q = countryQuery.trim().toLowerCase();
+                  return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
+                })
+                .slice(0, 400)
+                .map((c) => (
+                  <button
+                    key={c.code || c.name}
+                    type="button"
+                    onClick={() => pickCountry(c.code)}
+                    style={{ ...actionButtonStyle, justifyContent: "space-between", background: "rgba(255,255,255,0.04)" }}
+                  >
+                    <span>{c.name}</span>
+                    <span style={{ opacity: 0.5, fontSize: "0.72rem" }}>{c.code}</span>
+                  </button>
+                ))}
+            </div>
+            <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+              {playGameId ? "Done" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <input
         ref={importScenarioInputRef}
@@ -1420,6 +1708,10 @@ const LibraryTopBar = () => {
         onClose={resetEditor}
         onDelete={handleDelete}
         onExportBundle={handleExportBundle}
+        onOpenMapEditor={() => {
+          setMapEditorScenario(editorDetails?.scenario || null);
+          setIsMapEditorOpen(true);
+        }}
         onFileSelect={handleEditorAssetSelect}
         onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}
         onSave={handleSave}
