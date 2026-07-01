@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Map from "./Game/Map/World.jsx";
 import UI from "./Game/GameUI/main.jsx";
+
+// Lazy so OpenLayers is only fetched when the editor is actually opened.
+const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import {
   STARTUP_TIME_BUDGET_MS,
@@ -28,7 +31,7 @@ const Vignette = {
   zIndex: 10,
 };
 
-function App() {
+function GameApp() {
   const mapRef = useRef(null);
   const preloadStartedAtRef = useRef(null);
   const preloadFinishedRef = useRef(false);
@@ -177,6 +180,24 @@ function App() {
     {!isReady && <StartupScreen {...startupOverlayState} />}
     </>
   );
+}
+
+// Standalone modes are isolated behind URL flags so the real game is untouched:
+//   ?editor=1  -> the OpenLayers map editor (author custom maps)
+// Flags are read once at render time, so hook order stays consistent.
+function App() {
+  const params =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search)
+      : new URLSearchParams();
+  if (params.has("editor")) {
+    return (
+      <Suspense fallback={<div style={{ position: "fixed", inset: 0, background: "#0b1020" }} />}>
+        <MapEditor />
+      </Suspense>
+    );
+  }
+  return <GameApp />;
 }
 
 export default App;

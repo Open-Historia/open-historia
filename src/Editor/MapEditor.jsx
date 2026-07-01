@@ -7,7 +7,7 @@
 // OpenLayers surface with the editing toolbar, the side-panel managers (Types /
 // Regions / Layers), the selection inspector, and the bottom status bar, all
 // wired to the document state hook. Kept isolated from the game (its own React
-// tree, its own map instance) exactly like the QBAM experimental mode.
+// tree, its own map instance) so it can't disturb the game's MapLibre map.
 
 import { useEffect, useMemo, useState } from "react";
 import "ol/ol.css";

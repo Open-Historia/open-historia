@@ -4,8 +4,8 @@
  */
 
 // The OpenLayers map surface for the editor. Created once and driven imperatively
-// through refs so it never tears down on React re-renders (mirrors how the game's
-// QBAMMap keeps its canvas outside React's cycle). Owns the region vector source/
+// through refs so it never tears down on React re-renders (the canvas lives
+// outside React's render cycle). Owns the region vector source/
 // layer, a region-label layer, the swappable reference basemap, click-selection,
 // the editing interactions (draw / modify / move / snap / delete), and exposes an
 // imperative API via onReady for the side panels.
