@@ -402,6 +402,25 @@ const resolveHelperValues = (helperTemplates, variables) => {
   return resolved;
 };
 
+const buildUnitsSummaryText = (world) => {
+  const units = normalizeArray(world?.units);
+  if (units.length === 0) {
+    return "No military units are currently deployed on the map.";
+  }
+
+  return units
+    .slice(0, 60)
+    .map((unit) => {
+      const lat = Number(unit.lat);
+      const lng = Number(unit.lng);
+      const coords = Number.isFinite(lat) && Number.isFinite(lng)
+        ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+        : "unknown location";
+      return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    })
+    .join("\n");
+};
+
 const buildTemplateVariables = async (
   bundle,
   {
@@ -459,7 +478,8 @@ const buildTemplateVariables = async (
     numberOfRegions: String(regionCatalog.length),
     plannedActions: buildActionHistoryText(bundle.actions),
     playerPolity: bundle.game.country || "Unknown polity",
-    playerBattalionSummaries: "No battalion summary data is currently available in the lightweight runtime.",
+    playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
+    unitsSummary: buildUnitsSummaryText(bundle.world),
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle),
     recentEvents,
     recentEventsLong: buildEventHistoryText(bundle.events, { limit: 24 }),

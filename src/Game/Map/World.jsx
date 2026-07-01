@@ -3,6 +3,8 @@ import Map from "react-map-gl/maplibre";
 import Nations from "./Nations";
 import RegionPopup from "../Selection/Regions";
 import Cities from "./Cities";
+import Units from "./Units";
+import UnitPopup from "../Selection/Units";
 import {
   SATELLITE_TILE_TEMPLATE,
   TERRAIN_TILE_TEMPLATE,
@@ -137,7 +139,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       >
         <Nations />
         <Cities />
+        <Units />
         <RegionPopup />
+        <UnitPopup />
       </Map>
     </div>
   );

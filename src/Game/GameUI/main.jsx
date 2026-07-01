@@ -5,6 +5,7 @@ import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
+import { ForcesPanel } from "./forces";
 import {
   getStoredProvider,
   loadProviderSettingsFormState,
@@ -197,6 +198,7 @@ const Main = ({
       />
       <Other topOffset={TOP_BAR_OFFSET} />
       <Search mapRef={mapRef} />
+      <ForcesPanel mapRef={mapRef} topOffset={TOP_BAR_OFFSET} />
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         rightShift={rightShift}

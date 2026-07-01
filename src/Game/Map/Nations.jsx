@@ -1,6 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
-import { onRegionSelected } from "../Selection/Regions";
+import { onRegionSelected, dismissRegionPopup } from "../Selection/Regions";
+import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
+import {
+  getInteractionMode,
+  clearInteractionMode,
+  deployUnit,
+  moveUnitTo,
+  attackWith,
+} from "./unitsController.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
@@ -54,6 +62,40 @@ const WorldMap = () => {
   const regionsUrl = PMTILES_PROTOCOL_URLS.regions;
 
   const handleRegionClick = useCallback((event) => {
+    const unitsAt = () =>
+      map.getLayer("units-fill")
+        ? map.queryRenderedFeatures(event.point, { layers: ["units-fill"] })
+        : [];
+
+    const mode = getInteractionMode();
+
+    // Active troop command modes intercept the click as a target, not a selection.
+    if (mode.kind === "deploy") {
+      deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
+      clearInteractionMode();
+      return;
+    }
+    if (mode.kind === "move") {
+      moveUnitTo(mode.unitId, event.lngLat.lng, event.lngLat.lat);
+      clearInteractionMode();
+      return;
+    }
+    if (mode.kind === "attack") {
+      const target = unitsAt();
+      if (target.length) attackWith(mode.unitId, target[0].properties.id);
+      clearInteractionMode();
+      return;
+    }
+
+    // Normal selection: a unit click wins over the region beneath it.
+    const unitHits = unitsAt();
+    if (unitHits.length) {
+      dismissRegionPopup();
+      onUnitSelected({ id: unitHits[0].properties.id, lngLat: event.lngLat });
+      return;
+    }
+
+    dismissUnitPopup();
     const features = map.queryRenderedFeatures(event.point, { layers: ["regions-fill"] });
     if (!features.length) return;
 

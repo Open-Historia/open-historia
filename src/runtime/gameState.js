@@ -22,6 +22,25 @@ export const WORLD_DEFAULTS = {
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
+  units: [],
+};
+
+// Military units that ride along inside world state (world.units[]). Stored here
+// so they share every existing read/write/poll/normalize path with no server change.
+export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
+const UNIT_TYPE_SET = new Set(UNIT_TYPES);
+const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated"]);
+const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
+
+const finiteOrNull = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+export const clampUnitStrength = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 100;
+  return Math.max(0, Math.min(1000, Math.round(num)));
 };
 
 const cloneValue = (value) => {
@@ -387,6 +406,124 @@ const normalizePolityChange = (entry) => {
   };
 };
 
+export const normalizeUnitEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  const lat = finiteOrNull(entry.lat ?? entry.latitude);
+  const ownerCode = normalizeOptionalString(entry.ownerCode || entry.owner || entry.code);
+  if (lng === null || lat === null || !ownerCode) {
+    return null;
+  }
+
+  const type = normalizeOptionalString(entry.type).toLowerCase();
+  const status = normalizeOptionalString(entry.status).toLowerCase();
+  const source = normalizeOptionalString(entry.source).toLowerCase();
+  const timestamp = new Date().toISOString();
+
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`unit-${index}`),
+    name: normalizeOptionalString(entry.name) || "Unit",
+    type: UNIT_TYPE_SET.has(type) ? type : "infantry",
+    ownerCode,
+    strength: clampUnitStrength(entry.strength ?? 100),
+    lng,
+    lat,
+    regionId: normalizeOptionalString(entry.regionId),
+    status: UNIT_STATUS_SET.has(status) ? status : "idle",
+    note: normalizeOptionalString(entry.note),
+    source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
+    orderId: normalizeOptionalString(entry.orderId),
+    createdAt: normalizeOptionalString(entry.createdAt) || timestamp,
+    updatedAt: normalizeOptionalString(entry.updatedAt) || timestamp,
+  };
+};
+
+export const normalizeUnits = (units) =>
+  normalizeArray(units)
+    .map((entry, index) => normalizeUnitEntry(entry, index))
+    .filter(Boolean);
+
+// One AI-authored mutation to the unit list: spawn | move | strength | remove.
+const normalizeUnitOp = (entry) => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const op = normalizeOptionalString(entry.op).toLowerCase();
+  const unitId = normalizeOptionalString(entry.unitId || entry.id);
+
+  if (op === "spawn") {
+    const unit = normalizeUnitEntry(entry.unit ?? entry, 0);
+    if (!unit) return null;
+    unit.source = "ai";
+    return { op, unit };
+  }
+
+  if (!unitId) {
+    return null;
+  }
+
+  if (op === "move") {
+    const toLng = finiteOrNull(entry.toLng ?? entry.lng);
+    const toLat = finiteOrNull(entry.toLat ?? entry.lat);
+    if (toLng === null || toLat === null) return null;
+    return {
+      op,
+      unitId,
+      toLng,
+      toLat,
+      regionId: normalizeOptionalString(entry.regionId),
+      note: normalizeOptionalString(entry.note),
+    };
+  }
+
+  if (op === "strength") {
+    return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), note: normalizeOptionalString(entry.note) };
+  }
+
+  if (op === "remove") {
+    return { op, unitId, note: normalizeOptionalString(entry.note) };
+  }
+
+  return null;
+};
+
+// Apply a batch of unit ops to a unit list (pure). Ops referencing unknown ids
+// are silently ignored; units reduced to <=0 strength are dropped.
+export const applyUnitOps = (units, ops) => {
+  let next = normalizeUnits(units);
+  for (const op of normalizeArray(ops)) {
+    if (op.op === "spawn") {
+      next.push(op.unit);
+    } else if (op.op === "move") {
+      next = next.map((unit) =>
+        unit.id === op.unitId
+          ? {
+              ...unit,
+              lng: op.toLng,
+              lat: op.toLat,
+              regionId: op.regionId || unit.regionId,
+              status: "moving",
+              updatedAt: new Date().toISOString(),
+            }
+          : unit,
+      );
+    } else if (op.op === "strength") {
+      next = next.map((unit) =>
+        unit.id === op.unitId
+          ? { ...unit, strength: op.strength, status: op.strength <= 0 ? "defeated" : unit.status, updatedAt: new Date().toISOString() }
+          : unit,
+      );
+    } else if (op.op === "remove") {
+      next = next.filter((unit) => unit.id !== op.unitId);
+    }
+  }
+  return next.filter((unit) => unit.strength > 0 && unit.status !== "defeated");
+};
+
 const normalizeEventImpacts = (value) => {
   if (!value || typeof value !== "object") {
     return {
@@ -394,6 +531,7 @@ const normalizeEventImpacts = (value) => {
       createdChats: [],
       polityChanges: [],
       regionTransfers: [],
+      unitOps: [],
     };
   }
 
@@ -402,6 +540,7 @@ const normalizeEventImpacts = (value) => {
     createdChats: normalizeChats(value.createdChats),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
+    unitOps: normalizeArray(value.unitOps).map(normalizeUnitOp).filter(Boolean),
   };
 };
 
@@ -559,6 +698,7 @@ export const normalizeWorldState = (world) => {
       .filter(Boolean),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
+    units: normalizeUnits(nextWorld.units),
   };
 };
 
@@ -675,6 +815,10 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
           ];
         }
       }
+    }
+
+    if (event.impacts.unitOps?.length) {
+      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps);
     }
   }
 

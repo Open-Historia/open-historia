@@ -80,11 +80,12 @@ Difficulty: \${difficulty}
 World briefing: \${WORLD_BEFORE_ROUND_ONE_TEXT}
 Simulation rules: \${HISTORICAL_PRESET_SIMULATION_RULES}
 World snapshot: \${GRAND_MAP_DESCRIPTION_NO_CITY}
+Current military units: \${CURRENT_UNITS}
 Recent events: \${ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS}
 Planned actions: \${PLAYER_ACTIONS_THIS_ROUND}
 Chats: \${CHATS_NON_CONSOLIDATED_ROUNDS}
 
-Return JSON only in the same shape as jumpForward.
+Return JSON only in the same shape as jumpForward, including each event's impacts.unitOps (spawn/move/strength/remove) to advance units and honor the player's queued orders.
 
 Stop early when the next event is strategically notable, directly relevant to the player, or a natural catalyst or diplomatic opening.`,
   catalystCreation: `You design an immersive catalyst scene for a strategy game.
@@ -167,12 +168,20 @@ Difficulty: \${difficulty}
 World briefing: \${WORLD_BEFORE_ROUND_ONE_TEXT}
 Simulation rules: \${HISTORICAL_PRESET_SIMULATION_RULES}
 World snapshot: \${GRAND_MAP_DESCRIPTION_NO_CITY}
+Current military units: \${CURRENT_UNITS}
 Recent events: \${ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS}
 Planned actions: \${PLAYER_ACTIONS_THIS_ROUND}
 Chats: \${CHATS_NON_CONSOLIDATED_ROUNDS}
 
 Return JSON only:
-{"summary":"","stopDate":"YYYY-MM-DD","clearActions":true,"events":[{"date":"YYYY-MM-DD","title":"","description":"","importance":"minor","kind":"world","playerRelated":false,"notable":false,"impacts":{"regionTransfers":[],"polityChanges":[],"createdChats":[]}}],"catalyst":{"title":"","premise":"","opening":"","choices":[]}}
+{"summary":"","stopDate":"YYYY-MM-DD","clearActions":true,"events":[{"date":"YYYY-MM-DD","title":"","description":"","importance":"minor","kind":"world","playerRelated":false,"notable":false,"impacts":{"regionTransfers":[],"polityChanges":[],"createdChats":[],"unitOps":[]}}],"catalyst":{"title":"","premise":"","opening":"","choices":[]}}
+
+An event's impacts.unitOps moves the war on the map. Each op is one of:
+{"op":"spawn","unit":{"name":"","type":"infantry|armor|air|naval|artillery|garrison","ownerCode":"","strength":100,"lng":0,"lat":0,"regionId":""}}
+{"op":"move","unitId":"<existing id>","toLng":0,"toLat":0,"regionId":"","note":""}
+{"op":"strength","unitId":"<existing id>","strength":0,"note":""}
+{"op":"remove","unitId":"<existing id>","note":""}
+Spawn and relocate units to reflect mobilizations, offensives and reinforcements. Honor the player's queued move/attack orders unless implausible, and contest them with enemy unitOps. Only reference unit ids that appear in "Current military units". When a front is decisively won, also emit a matching regionTransfers entry so the border moves with the troops.
 
 Generate 3-8 meaningful events, not filler. Never invent player actions the player did not order. Make the final event notable if it deserves immediate attention.`,
   nextSpeaker: `You choose the next speaker in an ongoing diplomatic chat.
@@ -197,6 +206,7 @@ export const PROMPT_HELPER_DEFAULTS = {
   ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS: "${recentEventsLong}",
   CATALYST_PREMISE_DESCRIPTION: "${catalystPremise}",
   CATALYST_SIMULATION_HISTORY: "${catalystHistory}",
+  CURRENT_UNITS: "${unitsSummary}",
   CHATS_NON_CONSOLIDATED_ROUNDS: "${chatHistoryLong}",
   CHAT_PARTICIPANTS: "${chatParticipants}",
   DESCRIPTION_ACTION_TEXT: "${actionInput}",
@@ -287,6 +297,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
       "TARGET_ROUND_DATE",
+      "CURRENT_UNITS",
       "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
@@ -301,6 +312,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     helpers: [
       "PLAYER_POLITY",
       "TARGET_ROUND_DATE",
+      "CURRENT_UNITS",
       "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",

@@ -1,0 +1,18 @@
+{
+  "accentColor": "#8a1f1f",
+  "coverImageContentType": null,
+  "countryNameOverrides": {
+    "THA": "Siam",
+    "AUT": "Germany",
+    "CZE": "Germany"
+  },
+  "createdAt": "2026-06-30T20:39:25.354Z",
+  "description": "The world as the Wehrmacht crosses into Poland. The Axis is ascendant, the colonial empires span the globe, and the United States stands neutral. Lead any power through the deadliest conflict in human history.",
+  "eyebrow": "Historical Preset",
+  "heroSubtitle": "Europe on the eve of war, 1 September 1939",
+  "heroTitle": "World War II",
+  "id": "wwii-1939",
+  "name": "World War II — 1939",
+  "subtitle": "1 September 1939",
+  "updatedAt": "2026-06-30T20:39:25.354Z"
+}
