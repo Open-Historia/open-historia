@@ -1,0 +1,155 @@
+/*!
+ * Pax Historia Map Editor
+ * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ */
+
+// Turn an edited map into a game-playable seed.
+//
+// Tier 1 (re-ownership maps): regions keep their GADM GID_1 ids, so the game
+// renders them from the stock regions.pmtiles and just needs world.json
+// (regionOwnershipOverrides + polityOverrides) and colors.json — exactly like the
+// bundled WWII/Medieval presets. Tier 2 (custom geometry, new/split/merged
+// regions): the exported regions.geojson carries the shapes and world.customRegions
+// tells the game to render them from a GeoJSON layer (see src/Game/Map/Nations.jsx).
+
+// GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
+// editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
+// regions.pmtiles) cannot render.
+const isGid1 = (id) => /\./.test(String(id || "")) && !/^reg_/.test(String(id || ""));
+
+// Deterministic pleasant color from an owner code (used when colors.json has no
+// entry) — mirrors the game's procedural fallback rather than a flat gray.
+const codeToColor = (code) => {
+  let h = 0;
+  for (let i = 0; i < code.length; i += 1) h = (h * 31 + code.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  const s = 0.5;
+  const l = 0.5;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+};
+
+// OpenLayers' GeoJSON writer puts the feature id at the top level (feature.id),
+// not in properties, and MapLibre's ["get","id"] reads from properties. Rebuild a
+// FeatureCollection whose properties carry everything the game renderer/selection
+// needs: id, owner (GID_0-style code driving fill), name, country, gid0, typeId.
+const normalizeRegionsForGame = (regionsFC) => {
+  const features = [];
+  for (const f of regionsFC?.features || []) {
+    const props = f.properties || {};
+    const id = props.id != null ? String(props.id) : f.id != null ? String(f.id) : "";
+    if (!id || !f.geometry) continue;
+    const owner = props.owner ? String(props.owner) : "";
+    // Keep the id in properties only (MapLibre reads ["get","id"]); a non-integer
+    // top-level feature id would spam console warnings across thousands of regions.
+    features.push({
+      type: "Feature",
+      geometry: f.geometry,
+      properties: {
+        id,
+        owner,
+        gid0: props.gid0 ? String(props.gid0) : owner,
+        name: props.name ? String(props.name) : "",
+        country: props.country ? String(props.country) : "",
+        typeId: props.typeId ? String(props.typeId) : "land",
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+};
+
+// A map needs its geometry shipped (tier 2) when it contains any non-GADM region,
+// a merged region, or is a from-scratch (blank) document — anything the stock
+// pmtiles cannot reproduce. Pure re-ownership world maps stay tier 1.
+const detectCustomGeometry = (regionsFC, kind) => {
+  if (kind === "blank") return true;
+  for (const f of regionsFC?.features || []) {
+    const props = f.properties || {};
+    const id = props.id != null ? String(props.id) : f.id != null ? String(f.id) : "";
+    if (!isGid1(id)) return true;
+    if (props.mergedFrom || props.edited) return true;
+  }
+  return false;
+};
+
+export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {}) => {
+  const regionOwnershipOverrides = {};
+  const owners = new Set();
+  let customCount = 0;
+
+  for (const f of regionsFC?.features || []) {
+    const props = f.properties || {};
+    const id = props.id != null ? String(props.id) : f.id != null ? String(f.id) : "";
+    const owner = props.owner;
+    if (!id) continue;
+    if (!isGid1(id)) customCount += 1;
+    if (owner) {
+      regionOwnershipOverrides[id] = owner;
+      owners.add(owner);
+    }
+  }
+
+  const kind = doc.metadata?.kind || "import-world";
+  const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
+  const gameRegions = normalizeRegionsForGame(regionsFC);
+
+  // colors.json: owner code -> [r,g,b]. Use the base palette where known.
+  const colors = {};
+  const polityOverrides = {};
+  for (const owner of owners) {
+    if (palette[owner]) {
+      colors[owner] = palette[owner];
+    } else {
+      // owner not in the base palette — give it a stable color; add a polity entry
+      // only for genuinely custom (non-GADM) codes so the game/AI know the name.
+      const rgb = codeToColor(owner);
+      colors[owner] = rgb;
+      if (!/^[A-Z]{2,3}$/.test(owner)) {
+        polityOverrides[owner] = {
+          code: owner,
+          name: owner,
+          aliases: [],
+          color: `#${rgb.map((n) => n.toString(16).padStart(2, "0")).join("")}`,
+          note: "",
+        };
+      }
+    }
+  }
+
+  const author = (doc.metadata?.author || "").trim();
+  const world = {
+    regionOwnershipOverrides,
+    polityOverrides,
+    customRegions: hasCustomGeometry,
+    author,
+    mapCredit: author ? `Made by ${author}` : "",
+    simulationRules: doc.metadata?.simulationRules || "",
+    startingTimelineText: doc.metadata?.startingTimelineText || "",
+  };
+  const firstOwner = Object.values(regionOwnershipOverrides)[0] || "";
+  const game = {
+    country: playerCode || firstOwner,
+    startDate: doc.metadata?.startDate || "",
+    gameDate: doc.metadata?.gameDate || "",
+  };
+
+  return {
+    name: `${doc.name || doc.metadata?.name || "map"}-game-seed`,
+    kind,
+    author,
+    credit: author ? `Made by ${author}` : "",
+    hasCustomGeometry,
+    stats: { ownedRegions: Object.keys(regionOwnershipOverrides).length, owners: owners.size, customGeometry: customCount },
+    world,
+    // Merge onto the full base palette so re-ownership (tier-1) maps keep colors
+    // for every country the stock pmtiles still renders, not just the edited ones.
+    colors: { ...palette, ...colors },
+    game,
+    // regions is the normalized, game-ready FeatureCollection. Only uploaded to the
+    // scenario when hasCustomGeometry (tier 2); harmless in the downloaded JSON.
+    regions: gameRegions,
+  };
+};
