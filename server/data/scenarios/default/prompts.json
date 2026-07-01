@@ -6,6 +6,7 @@
     "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS": "${recentEventsLong}",
     "CATALYST_PREMISE_DESCRIPTION": "${catalystPremise}",
     "CATALYST_SIMULATION_HISTORY": "${catalystHistory}",
+    "CURRENT_UNITS": "${unitsSummary}",
     "CHATS_NON_CONSOLIDATED_ROUNDS": "${chatHistoryLong}",
     "CHAT_PARTICIPANTS": "${chatParticipants}",
     "DESCRIPTION_ACTION_TEXT": "${actionInput}",
