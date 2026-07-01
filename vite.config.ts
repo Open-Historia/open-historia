@@ -10,6 +10,13 @@ export default defineConfig({
       },
     }),
   ],
+  // Proxy API calls to the Express server during `npm run dev` so the map editor's
+  // save/load (and the game's runtime endpoints) work with hot-reload too.
+  server: {
+    proxy: {
+      '/api': 'http://localhost:3000',
+    },
+  },
   build: {
     rollupOptions: {
       output: {
@@ -17,6 +24,7 @@ export default defineConfig({
           'vendor-react': ['react', 'react-dom'],
           'vendor-maplibre': ['maplibre-gl'],
           'vendor-chartjs': ['chart.js'],
+          'vendor-ol': ['ol'],
         },
       },
     },
