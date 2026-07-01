@@ -271,7 +271,8 @@ const Search = memo(({ mapRef }) => {
       style={{
         position: "fixed",
         bottom: "1rem",
-        left: "9.8rem",
+        // Clear of the bottom toolbar (0.5rem + 12.5rem wide, now incl. Forces).
+        left: "13.5rem",
         height: "3rem",
         width: expanded ? "17rem" : "3rem",
         overflow: "visible",

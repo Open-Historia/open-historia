@@ -114,6 +114,7 @@ const Main = ({
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
@@ -195,10 +196,17 @@ const Main = ({
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
+        forcesOpen={isForcesOpen}
+        onToggleForces={() => setIsForcesOpen((v) => !v)}
       />
       <Other topOffset={TOP_BAR_OFFSET} />
       <Search mapRef={mapRef} />
-      <ForcesPanel mapRef={mapRef} topOffset={TOP_BAR_OFFSET} />
+      <ForcesPanel
+        mapRef={mapRef}
+        topOffset={TOP_BAR_OFFSET}
+        open={isForcesOpen}
+        onToggle={() => setIsForcesOpen((v) => !v)}
+      />
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         rightShift={rightShift}

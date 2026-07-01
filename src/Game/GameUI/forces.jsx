@@ -78,8 +78,13 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
   </button>
 );
 
-export const ForcesPanel = ({ mapRef, topOffset = "0px" }) => {
-  const [open, setOpen] = useState(false);
+// Controlled panel: the launcher button lives in the bottom toolbar (chat.jsx
+// Toolbar) alongside Chat and Actions; main.jsx owns the open state.
+export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle }) => {
+  const setOpen = (next) => {
+    const resolved = typeof next === "function" ? next(open) : next;
+    if (resolved !== open) onToggle?.();
+  };
   const [units, setUnits] = useState(getUnits());
   const [mode, setMode] = useState(getInteractionMode());
   const [allowedTypes, setAllowedTypes] = useState(getAllowedUnitTypes());
@@ -166,34 +171,13 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px" }) => {
         </div>
       )}
 
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title="Forces"
-        style={{
-          ...surface,
-          position: "fixed",
-          bottom: "0.5rem",
-          left: "9.25rem",
-          height: "4rem",
-          width: "4rem",
-          cursor: "pointer",
-          fontSize: "1.5rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 9999,
-        }}
-      >
-        ⚔️
-      </button>
-
       {open && (
         <div
           style={{
             ...surface,
             position: "fixed",
             bottom: "4.75rem",
-            left: "9.25rem",
+            left: "0.5rem",
             width: "17rem",
             maxHeight: "60vh",
             display: "flex",
