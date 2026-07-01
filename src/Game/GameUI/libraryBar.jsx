@@ -40,6 +40,8 @@ const UNIT_TYPE_LABELS = {
 
 // Lazy so OpenLayers only loads when the in-game map editor is opened.
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
+// Lazy so the GitHub-backed Community tab costs nothing until opened.
+const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 
 const BAR_HEIGHT = 64;
 const TOP_BAR_OFFSET = "4.75rem";
@@ -1537,7 +1539,7 @@ const LibraryTopBar = () => {
         </div>
 
         <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center", justifySelf: "center" }}>
-          {["games", "scenarios"].map((tab) => (
+          {["games", "scenarios", "community"].map((tab) => (
             <button
               key={tab}
               onClick={() => handleTabToggle(tab)}
@@ -1549,7 +1551,7 @@ const LibraryTopBar = () => {
               }}
               type="button"
             >
-              {tab === "games" ? "Games" : "Scenarios"}
+              {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : "Community"}
             </button>
           ))}
         </div>
@@ -1655,41 +1657,55 @@ const LibraryTopBar = () => {
             zIndex: 10029,
           }}
         >
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "flex-end", marginBottom: "0.9rem" }}>
-            <button onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})} style={actionButtonStyle} type="button">
-              Refresh
-            </button>
-            {activeTab === "scenarios" && (
-              <button onClick={() => importScenarioInputRef.current?.click()} style={actionButtonStyle} type="button">
-                Import JSON
+          {activeTab !== "community" && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "flex-end", marginBottom: "0.9rem" }}>
+              <button onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})} style={actionButtonStyle} type="button">
+                Refresh
               </button>
-            )}
-          </div>
+              {activeTab === "scenarios" && (
+                <button onClick={() => importScenarioInputRef.current?.click()} style={actionButtonStyle} type="button">
+                  Import JSON
+                </button>
+              )}
+            </div>
+          )}
 
-          <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.15rem", scrollbarWidth: "thin" }}>
-            {activeTab === "games"
-              ? games.map((game) => (
-                  <GameCard
-                    key={game.id}
-                    active={game.id === activeGameId}
-                    game={game}
-                    onActivate={activateGame}
-                    onClone={handleGameClone}
-                    onEdit={openGameEditor}
-                  />
-                ))
-              : scenarios.map((scenario) => (
-                  <ScenarioCard
-                    key={scenario.id}
-                    onClone={handleScenarioClone}
-                    onEdit={openScenarioEditor}
-                    onPlay={handleScenarioPlay}
-                    onSelect={selectScenario}
-                    scenario={scenario}
-                    selected={scenario.id === selectedScenarioId}
-                  />
-                ))}
-          </div>
+          {activeTab === "community" ? (
+            <Suspense
+              fallback={
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
+                  Loading Community…
+                </div>
+              }
+            >
+              <CommunityPanel onImported={() => setActiveTab("scenarios")} />
+            </Suspense>
+          ) : (
+            <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.15rem", scrollbarWidth: "thin" }}>
+              {activeTab === "games"
+                ? games.map((game) => (
+                    <GameCard
+                      key={game.id}
+                      active={game.id === activeGameId}
+                      game={game}
+                      onActivate={activateGame}
+                      onClone={handleGameClone}
+                      onEdit={openGameEditor}
+                    />
+                  ))
+                : scenarios.map((scenario) => (
+                    <ScenarioCard
+                      key={scenario.id}
+                      onClone={handleScenarioClone}
+                      onEdit={openScenarioEditor}
+                      onPlay={handleScenarioPlay}
+                      onSelect={selectScenario}
+                      scenario={scenario}
+                      selected={scenario.id === selectedScenarioId}
+                    />
+                  ))}
+            </div>
+          )}
         </div>
       )}
 
