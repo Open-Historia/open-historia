@@ -21,6 +21,7 @@ export default {
     eyebrow: "Historical Preset",
     subtitle: "c. 1200 AD",
     accentColor: "#9a6b2f",
+    coverImage: "public/loading_screen_4.jpg",
     description:
       "The year 1200. The Holy Roman Empire and the Capetian kings vie for Europe, the " +
       "Angevins rule from England to Aquitaine, Byzantium still stands (the Fourth Crusade " +
@@ -31,6 +32,9 @@ export default {
 
   // Player starts as the Holy Roman Empire. game.country MUST equal the owner code.
   game: { country: "HRE", startDate: "1200-01-01", gameDate: "1200-01-01" },
+
+  // No air power in 1200 — restrict deployable troop types to the era.
+  allowedUnitTypes: ["infantry", "armor", "artillery", "naval", "garrison"],
 
   // 1200's modern country names are wholesale anachronistic, so relabel every
   // owned country with its polity name (Germany/Austria/... -> Holy Roman Empire).
@@ -65,6 +69,13 @@ export default {
     DEN_K: { name: "Kingdom of Denmark", color: "#c9385d", aliases: ["Denmark"] },
     NOR_K: { name: "Kingdom of Norway", color: "#5b8ec9", aliases: ["Norway"] },
     SWE_K: { name: "Kingdom of Sweden", color: "#4a78c0", aliases: ["Sweden"] },
+    VOLG:  { name: "Volga Bulgaria", color: "#7a8a4a", aliases: ["Volga Bulgars", "Bulghar"] },
+    GHUR:  { name: "Ghurid Empire", color: "#8a5a8a", aliases: ["Ghurids", "Ghor"] },
+    PAGAN: { name: "Kingdom of Pagan", color: "#b08a3a", aliases: ["Pagan", "Bagan", "Burma"] },
+    DAIV:  { name: "Dai Viet", color: "#4a8a5a", aliases: ["Đại Việt", "Ly dynasty Vietnam"] },
+    SRIV:  { name: "Srivijaya", color: "#6a7ab0", aliases: ["Sriwijaya", "Palembang"] },
+    CHOL:  { name: "Chola Empire", color: "#c07a4a", aliases: ["Cholas", "Chozha"] },
+    POLO:  { name: "Kingdom of Polonnaruwa", color: "#5a9a8a", aliases: ["Polonnaruwa", "Lanka"] },
     JIN:   { name: "Jin Dynasty", color: "#b87333", aliases: ["Jurchen Jin", "Great Jin"] },
     SONG:  { name: "Southern Song", color: "#c97a5a", aliases: ["Song Dynasty", "Song"] },
     XIA:   { name: "Western Xia", color: "#d0b060", aliases: ["Tangut", "Xi Xia"] },
@@ -83,7 +94,7 @@ export default {
     ENG_A: ["GBR", "IRL"],                 // Scotland split out below
     POR_K: ["PRT"],
     CAST:  ["ESP"],                        // Aragon/Navarre/Almohad split out below
-    HUNG:  ["HUN", "HRV", "SVK", "ROU", "BIH"],
+    HUNG:  ["HUN", "HRV", "SVK", "BIH"],   // + Transylvania & Transcarpathia below; Wallachia/Moldavia are Cuman steppe
     POL_K: ["POL"],
     SERB:  ["SRB", "MNE", "XKO"],
     DEN_K: ["DNK"],
@@ -94,24 +105,69 @@ export default {
     BYZ:   ["GRC", "MKD", "ALB"],          // + western Anatolia below
     BULG:  ["BGR"],
     GEOR:  ["GEO", "ARM"],
-    RUS_K: ["RUS", "UKR", "BLR"],
+    // Kievan Rus': Belarus whole; European Russia and forest Ukraine are granted
+    // region-by-region below — Siberia, the Urals and the Pontic-Caspian steppe
+    // (Cumans/Kipchaks) were NOT Rus' and stay unclaimed.
+    RUS_K: ["BLR"],
     // — Islamic world —
     ALM:   ["MAR", "DZA", "TUN", "LBY", "ESH"],
     AYY:   ["EGY", "SYR", "JOR", "LBN", "ISR", "PSE", "YEM"],
     ABBS:  ["IRQ"],
-    KHWA:  ["IRN", "TKM", "UZB", "AFG", "TJK"],
+    KHWA:  ["IRN", "TKM", "UZB", "TJK"],   // Afghanistan belongs to the rival Ghurids
+    GHUR:  ["AFG", "PAK"],                 // + the freshly conquered north-Indian plain below
     SELJ:  ["TUR"],                        // overridden along the coasts/frontiers below
     JERU:  ["CYP"],                        // + Levantine coast & Antioch below
     // — Asia & Africa —
     JAP_K: ["JPN"],
     GORY:  ["KOR", "PRK"],
-    KHMER: ["KHM", "LAO"],
+    KHMER: ["KHM", "LAO", "THA"],          // Angkor at its height rules the Chao Phraya basin
+    PAGAN: ["MMR"],
+    DAIV:  ["VNM"],
+    SRIV:  ["IDN", "MYS"],
+    POLO:  ["LKA"],
     ETHIO: ["ETH"],
   },
 
   regionAssignments: {
     // Scotland
     "GBR.3_1": "SCOT",
+
+    // Kievan Rus' — the principalities of European Russia (Novgorod's north
+    // included); everything east of the Volga and south into the steppe is not Rus'.
+    "RUS.4_1": "RUS_K",  "RUS.7_1": "RUS_K",  "RUS.8_1": "RUS_K",  "RUS.14_1": "RUS_K",
+    "RUS.19_1": "RUS_K", "RUS.23_1": "RUS_K", "RUS.26_1": "RUS_K", "RUS.31_1": "RUS_K",
+    "RUS.32_1": "RUS_K", "RUS.33_1": "RUS_K", "RUS.37_1": "RUS_K", "RUS.38_1": "RUS_K",
+    "RUS.39_1": "RUS_K", "RUS.43_1": "RUS_K", "RUS.44_1": "RUS_K", "RUS.45_1": "RUS_K",
+    "RUS.47_1": "RUS_K", "RUS.49_1": "RUS_K", "RUS.52_1": "RUS_K", "RUS.57_1": "RUS_K",
+    "RUS.59_1": "RUS_K", "RUS.64_1": "RUS_K", "RUS.70_1": "RUS_K", "RUS.72_1": "RUS_K",
+    "RUS.76_1": "RUS_K", "RUS.78_1": "RUS_K", "RUS.81_1": "RUS_K",
+
+    // Volga Bulgaria on the middle Volga.
+    "RUS.68_1": "VOLG", "RUS.13_1": "VOLG", "RUS.75_1": "VOLG", "RUS.62_1": "VOLG",
+    "RUS.41_1": "VOLG", "RUS.74_1": "VOLG",
+
+    // Rus' Ukraine: the forest and forest-steppe principalities (Kiev, Chernihiv,
+    // Pereyaslav, Volhynia, Galicia). The Black Sea steppe is Cuman and unclaimed.
+    "UKR.1_1": "RUS_K",  "UKR.2_1": "RUS_K",  "UKR.3_1": "RUS_K",  "UKR.7_1": "RUS_K",
+    "UKR.10_1": "RUS_K", "UKR.11_1": "RUS_K", "UKR.12_1": "RUS_K", "UKR.14_1": "RUS_K",
+    "UKR.18_1": "RUS_K", "UKR.19_1": "RUS_K", "UKR.21_1": "RUS_K", "UKR.22_1": "RUS_K",
+    "UKR.24_1": "RUS_K", "UKR.25_1": "RUS_K", "UKR.27_1": "RUS_K",
+    "UKR.23_1": "HUNG",  // Transcarpathia was Hungarian
+
+    // Hungary's Transylvania, Banat and Partium (the rest of modern Romania —
+    // Wallachia and Moldavia — is Cuman steppe in 1200).
+    "ROU.1_1": "HUNG",  "ROU.2_1": "HUNG",  "ROU.5_1": "HUNG",  "ROU.6_1": "HUNG",
+    "ROU.8_1": "HUNG",  "ROU.13_1": "HUNG", "ROU.14_1": "HUNG", "ROU.16_1": "HUNG",
+    "ROU.22_1": "HUNG", "ROU.23_1": "HUNG", "ROU.27_1": "HUNG", "ROU.29_1": "HUNG",
+    "ROU.33_1": "HUNG", "ROU.34_1": "HUNG", "ROU.35_1": "HUNG", "ROU.38_1": "HUNG",
+
+    // Ghurid India: Muhammad of Ghor's generals have just taken the northern
+    // plain (Delhi 1192, Bihar c. 1200); the Deccan and the south stay indigenous.
+    "IND.25_1": "GHUR", "IND.12_1": "GHUR", "IND.28_1": "GHUR", "IND.6_1": "GHUR",
+    "IND.34_1": "GHUR", "IND.5_1": "GHUR",  "IND.29_1": "GHUR",
+
+    // The Chola heartland on the Tamil coast (declining but standing).
+    "IND.31_1": "CHOL", "IND.27_1": "CHOL",
 
     // Iberia: Aragon, Navarre, and the Almohad south carved out of Castile.
     "ESP.2_1": "ARAG", "ESP.6_1": "ARAG",            // Aragón, Cataluña
@@ -169,10 +225,15 @@ export default {
     "Aragón, Navarre and Portugal press the Reconquista. The Ayyubids of Saladin's dynasty hold " +
     "Egypt and Syria; the Crusader states (Jerusalem, Antioch, Tripoli, Cyprus) cling to the " +
     "coast. The Abbasid Caliph in Baghdad has regained real power; the Khwarazmian Empire rises " +
-    "in Persia. In the east the Jin and Southern Song divide China, Kamakura Japan is ruled by " +
-    "its shogun, and the Khmer Empire builds at Angkor. Religion — Latin Christianity, Orthodoxy, " +
-    "Sunni and Shia Islam — is the primary axis of alliance and war. Mongol unification under " +
-    "Temüjin (Genghis Khan) looms after 1206.",
+    "in Persia while its rival, the Ghurid Empire, has just conquered the north-Indian plain " +
+    "(Delhi fell in 1192). Kievan Rus' is a quarrelling family of principalities from Novgorod " +
+    "to Kiev; the Pontic steppe belongs to the pagan Cumans (Kipchaks) and the middle Volga to " +
+    "Muslim Volga Bulgaria — unclaimed steppe regions are Cuman grazing lands, not empty. In " +
+    "the east the Jin and Southern Song divide China, Kamakura Japan is ruled by its shogun, " +
+    "the Khmer Empire at Angkor rules mainland Southeast Asia, Pagan rules Burma, Dai Viet " +
+    "holds the Red River, and Srivijaya commands the straits of the spice trade. Religion — " +
+    "Latin Christianity, Orthodoxy, Sunni and Shia Islam — is the primary axis of alliance and " +
+    "war. Mongol unification under Temüjin (Genghis Khan) looms after 1206.",
 
   startingTimelineText:
     "The year of grace 1200. In Rome the formidable Pope Innocent III asserts the supremacy of " +
