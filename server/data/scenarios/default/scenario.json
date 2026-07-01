@@ -1,6 +1,6 @@
 {
   "accentColor": "#7c3aed",
-  "coverImageContentType": null,
+  "coverImageContentType": "image/jpeg",
   "countryNameOverrides": {},
   "createdAt": "2026-05-31T10:06:08.381Z",
   "description": "Server-backed base scenario",
@@ -10,5 +10,5 @@
   "id": "default",
   "name": "Modern Day",
   "subtitle": "Base template",
-  "updatedAt": "2026-05-31T10:36:33.586Z"
+  "updatedAt": "2026-07-01T20:48:05.665Z"
 }
