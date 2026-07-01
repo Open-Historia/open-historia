@@ -25,7 +25,8 @@
 </div>
 
 <div align="center">
-  <sub>Built with ❤︎ by <a href="https://github.com/Tommi-K">Tommi-K</a> and <a href="https://github.com/Tommi-K/pax-historia/graphs/contributors">contributors</a></sub>
+  <sub>Built with ❤︎ by <a href="https://github.com/Tommi-K">Tommi-K</a> and <a href="https://github.com/Tommi-K/pax-historia/graphs/contributors">contributors</a>.
+  This fork adds the map editor, troops, the Scenario Hub and more — additions © <a href="src/Editor/LICENSE">Nicholas Krol, MIT</a>.</sub>
 </div>
 
 <br />
@@ -39,30 +40,62 @@
 
 - __interactive world map:__ watch territory, borders, and nations shift as history unfolds
 - __ai-generated events:__ dynamic events shaped by your decisions and the state of the world
-- __diplomacy:__ negotiate with AI-controlled nations through natural language chat
+- __diplomacy:__ negotiate with AI-controlled nations through natural language chat — click any country to talk to it or get an AI intelligence briefing
 - __ai advisor:__ consult your advisor for strategic guidance, economic analysis, and situation summaries
-- __scenarios:__ choose from a range of historical starting points and play as any nation
+- __map editor:__ a full vector map editor (draw, split, merge, paint owners, cities) built into the scenario editor — build a world and hit *Apply & Play*
+- __troops:__ deploy, move and battle armies; deployments stay pending until the AI resolves them; scenarios control which troop types exist in their era
+- __scenario hub:__ browse, vote on and import community scenarios from the in-game **Community** tab, and publish your own
 - __self-hostable:__ run your own instance with your own AI backend completely offline
 
 ---
 
 ## 🚀 Installation
 
-### Prerequisites
+### Easiest (Windows)
 
-- [Git](https://git-scm.com/)
-- [Node.js](https://nodejs.org/en)
+Double-click **`Launch Pax Historia.bat`** — it checks Node.js, downloads the map data,
+installs dependencies, builds, and opens the game.
 
-### Steps
+### Manual
+
+Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
 
 ```bash
-git clone https://github.com/Tommi-K/pax-historia.git
-cd pax-historia
+git clone https://github.com/Arkniem/pax-historia-2.git
+cd pax-historia-2
 git lfs install        # Set up Git LFS
-git lfs pull           # Pull large files
-npm install            # Install dependencies
-npm run build          # Build the server
+git lfs pull           # Pull large files (map tiles + editor seeds + world map)
+npm install            # Install dependencies (includes OpenLayers etc. for the editor)
+npm run build          # Build the client
 node server/server.js  # Start the server
 ```
 
 Then open **http://localhost:3000** in your browser.
+
+> **Note:** the large map assets (`*.pmtiles`, `public/assets/*-seed.*`, and
+> `server/data/scenarios/default/regions.geojson`) live in Git LFS. If you downloaded a
+> ZIP instead of cloning, run the launcher `.bat` — it fetches them automatically.
+
+---
+
+## 🌍 Scenarios
+
+**Modern Day** is the only built-in scenario. All other official presets — *WWII 1939*,
+*Medieval 1200*, *Rome 117 AD*, *Mongol World 1300*, *New World 1650* — live on the
+[**Scenario Hub**](https://github.com/Arkniem/pax-historia-scenarios), pinned at the top of
+the in-game **Community** tab. Import any of them with one click, or publish your own.
+
+To rebuild an official preset from source (specs live in `scripts/presets/`):
+
+```bash
+node scripts/presets/build-preset.mjs scripts/presets/wwii-1939.spec.mjs
+```
+
+To regenerate the built-in Modern Day map: `node scripts/build-default-map.mjs`
+
+## 🗺️ Map editor
+
+Open any scenario's editor and click **🗺️ Open Map Editor** (or visit
+`http://localhost:3000/?editor=1` for the standalone editor). Draw regions, split and
+merge borders freehand, paint owners, import 70k cities, sign your map, then
+**Apply & Play**.

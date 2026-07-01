@@ -56,12 +56,16 @@ echo [OK] Node.js !NODEVER! detected.
 echo.
 
 REM ---- 2. Ensure world map data (Git LFS assets) -----------
-REM  The .pmtiles files ship as tiny Git LFS pointer stubs in a
+REM  The big map files ship as tiny Git LFS pointer stubs in a
 REM  ZIP download. Pull the real binaries from GitHub's media CDN.
 echo Checking world map data...
-call :ensure_asset cities
-call :ensure_asset countries
-call :ensure_asset regions
+call :ensure_asset "public\assets\cities.pmtiles"    "public/assets/cities.pmtiles"
+call :ensure_asset "public\assets\countries.pmtiles" "public/assets/countries.pmtiles"
+call :ensure_asset "public\assets\regions.pmtiles"   "public/assets/regions.pmtiles"
+REM  Map-editor seeds + the built-in Modern Day world map (also LFS)
+call :ensure_asset "public\assets\regions-seed.geojson" "public/assets/regions-seed.geojson"
+call :ensure_asset "public\assets\cities-seed.json"     "public/assets/cities-seed.json"
+call :ensure_asset "server\data\scenarios\default\regions.geojson" "server/data/scenarios/default/regions.geojson"
 echo.
 
 REM ---- 3. Install dependencies -----------------------------
@@ -110,31 +114,30 @@ exit /b 0
 
 
 REM ============================================================
-REM  Subroutine: make sure one PMTiles asset is the real file.
-REM  Real archives are several MB; LFS pointer stubs are ~150 B.
-REM  Usage:  call :ensure_asset <name-without-extension>
+REM  Subroutine: make sure one Git LFS asset is the real file.
+REM  Real files are several MB; LFS pointer stubs are ~150 B.
+REM  Usage:  call :ensure_asset "local\path" "repo/path"
 REM ============================================================
 :ensure_asset
-set "ASSET=%~1"
-set "TARGET=public\assets\%ASSET%.pmtiles"
-set "URL=https://media.githubusercontent.com/media/Tommi-K/pax-historia/main/public/assets/%ASSET%.pmtiles"
+set "TARGET=%~1"
+set "URL=https://media.githubusercontent.com/media/Arkniem/pax-historia-2/main/%~2"
 set "FSIZE=0"
 if exist "%TARGET%" for %%A in ("%TARGET%") do set "FSIZE=%%~zA"
 
 if !FSIZE! GEQ 100000 (
-    echo   [OK] %ASSET%.pmtiles already present.
+    echo   [OK] %~nx1 already present.
     goto :eof
 )
 
-echo   Downloading %ASSET%.pmtiles ...
-curl -L -f --retry 3 -o "%TARGET%.download" "%URL%"
+echo   Downloading %~nx1 ...
+curl -L -f --retry 3 --create-dirs -o "%TARGET%.download" "%URL%"
 if errorlevel 1 (
-    echo   [WARN] Could not download %ASSET%.pmtiles - the map may not display.
+    echo   [WARN] Could not download %~nx1 - the map may not display.
     if exist "%TARGET%.download" del /q "%TARGET%.download"
     goto :eof
 )
 move /y "%TARGET%.download" "%TARGET%" >nul
-echo   [OK] %ASSET%.pmtiles downloaded.
+echo   [OK] %~nx1 downloaded.
 goto :eof
 
 
