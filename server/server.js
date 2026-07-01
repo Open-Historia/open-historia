@@ -340,6 +340,44 @@ app.head("/api/runtime/pmtiles/:assetKey", (req, res) => {
   }
 });
 
+// ---- Scenario Hub --------------------------------------------------------
+// Downloads a scenario bundle from the community hub on the browser's behalf —
+// GitHub file attachments don't send CORS headers, so the client can't fetch
+// them directly. Locked to GitHub hosts; nothing else is proxied.
+const HUB_DOWNLOAD_HOSTS = new Set([
+  "github.com",
+  "raw.githubusercontent.com",
+  "objects.githubusercontent.com",
+  "user-images.githubusercontent.com",
+  "user-attachments.githubusercontent.com",
+]);
+const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
+
+app.get("/api/hub/file", async (req, res) => {
+  try {
+    const target = new URL(String(req.query.url ?? ""));
+    if (target.protocol !== "https:" || !HUB_DOWNLOAD_HOSTS.has(target.hostname)) {
+      return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
+    }
+
+    const upstream = await fetch(target, { redirect: "follow" });
+    if (!upstream.ok) {
+      return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
+    }
+
+    const text = await upstream.text();
+    if (text.length > HUB_MAX_BUNDLE_BYTES) {
+      return sendError(res, 413, new Error("Scenario bundle is too large."));
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    res.type("application/json");
+    res.send(text);
+  } catch (error) {
+    sendError(res, 502, error);
+  }
+});
+
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
   try {
