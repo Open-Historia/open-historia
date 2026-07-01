@@ -30,6 +30,14 @@ import {
   uploadScenarioAsset,
   writeRuntimeJsonAsset,
 } from "./libraryStore.js";
+import {
+  createMapEditorDocument,
+  deleteMapEditorDocument,
+  ensureMapEditorStore,
+  getMapEditorCatalog,
+  getMapEditorDocument,
+  updateMapEditorDocument,
+} from "./mapEditorStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const app = express();
@@ -42,6 +50,7 @@ const uploadParser = express.raw({ type: () => true, limit: "2048mb" });
 
 ensureScenarioStore();
 ensureGameStore();
+ensureMapEditorStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -328,6 +337,47 @@ app.head("/api/runtime/pmtiles/:assetKey", (req, res) => {
     res.status(200).end();
   } catch (error) {
     sendError(res, 404, error);
+  }
+});
+
+// ---- Map editor documents ------------------------------------------------
+app.get("/api/mapeditor/documents", (_req, res) => {
+  try {
+    res.json(getMapEditorCatalog());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/mapeditor/documents", largeJsonParser, (req, res) => {
+  try {
+    res.status(201).json(createMapEditorDocument(req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/mapeditor/documents/:id", (req, res) => {
+  try {
+    res.json(getMapEditorDocument(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.put("/api/mapeditor/documents/:id", largeJsonParser, (req, res) => {
+  try {
+    res.json(updateMapEditorDocument(req.params.id, req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/mapeditor/documents/:id", (req, res) => {
+  try {
+    res.json(deleteMapEditorDocument(req.params.id));
+  } catch (error) {
+    sendError(res, 400, error);
   }
 });
 
