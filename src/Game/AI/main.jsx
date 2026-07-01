@@ -1,5 +1,6 @@
 import {
     getProviderSettings,
+    getReasoningEnabled,
     getStoredProvider,
     providerSupportsModelDiscovery,
     setProviderField,
@@ -229,6 +230,10 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
                 contents: history,
+                // Reasoning toggle (settings): let thinking-capable Gemini models think.
+                ...(getReasoningEnabled()
+                    ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
+                    : {}),
             }),
         });
 
@@ -281,6 +286,10 @@ async function callOpenAIStyleChatCompletions({
             body: JSON.stringify({
                 model,
                 messages: toOpenAIMessages(systemPrompt, history),
+                // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
+                // most OpenAI-compatible gateways; models that reject it surface a
+                // clear API error so the user knows to pick a reasoning model.
+                ...(getReasoningEnabled() ? { reasoning_effort: "medium" } : {}),
             }),
         });
 
@@ -391,6 +400,11 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
         "anthropic-dangerous-direct-browser-access": "true",
     };
 
+    // Reasoning toggle (settings): extended thinking. max_tokens must exceed the
+    // thinking budget, so it is raised alongside; thinking blocks are filtered out
+    // by extractAnthropicText, which only reads text blocks.
+    const reasoning = getReasoningEnabled();
+
     for (let attempt = 1; attempt <= retries; attempt++) {
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
@@ -398,7 +412,8 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
             body: JSON.stringify({
                 model,
                 system: systemPrompt,
-                max_tokens: 1024,
+                max_tokens: reasoning ? 8192 : 1024,
+                ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
                 messages: toAnthropicMessages(history),
             }),
         });

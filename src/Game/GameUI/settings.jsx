@@ -3,7 +3,9 @@ import {
     DEFAULT_PROVIDER,
     PROVIDER_OPTIONS,
     getProviderMeta,
+    getReasoningEnabled,
     providerSupportsModelDiscovery,
+    setReasoningEnabled,
 } from "../AI/providerConfig.js";
 
 const baseStyle = {
@@ -294,6 +296,13 @@ const SettingsInput = ({
 const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
     const meta = getProviderMeta(provider);
     const supportsModelDiscovery = providerSupportsModelDiscovery(provider);
+    // Global reasoning toggle — one switch, applied in every provider mode.
+    const [reasoningOn, setReasoningOn] = useState(() => getReasoningEnabled());
+    const toggleReasoning = () => {
+        const next = !reasoningOn;
+        setReasoningOn(next);
+        setReasoningEnabled(next);
+    };
 
     return (
         <div
@@ -402,6 +411,19 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             />
             </>
         )}
+
+        <div style={{ marginTop: "0.5rem" }}>
+        <Toggle
+        label="Model reasoning"
+        enabled={reasoningOn}
+        onToggle={toggleReasoning}
+        />
+        <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+        Lets thinking-capable models reason before answering (Gemini thinking, OpenAI
+        reasoning effort, Claude extended thinking). Slower and costs more tokens;
+        needs a model that supports it.
+        </div>
+        </div>
         </div>
     );
 };

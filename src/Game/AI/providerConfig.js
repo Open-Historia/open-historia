@@ -133,6 +133,18 @@ export function getProviderSettings(provider) {
     };
 }
 
+// Global "model reasoning" toggle — applied by callAI in every provider mode
+// (Gemini thinkingConfig, OpenAI/compatible reasoning_effort, Anthropic thinking).
+const REASONING_STORAGE_KEY = "ai_reasoning_enabled";
+
+export function getReasoningEnabled() {
+    return localStorage.getItem(REASONING_STORAGE_KEY) === "1";
+}
+
+export function setReasoningEnabled(enabled) {
+    localStorage.setItem(REASONING_STORAGE_KEY, enabled ? "1" : "0");
+}
+
 export function loadProviderSettingsFormState() {
     const state = {};
 
