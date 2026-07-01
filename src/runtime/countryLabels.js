@@ -459,7 +459,7 @@ const computeCountryLabelCacheKey = (buffer, archiveUrl) => {
   return `${COUNTRY_LABELS_CACHE_KEY}-${bytes.byteLength}-${(hash >>> 0).toString(36)}-${encodeURIComponent(archiveUrl)}`;
 };
 
-const buildCountryLabelCollections = async (tileData) => {
+const buildCountryLabelCollections = async (tileData, ownedCodes = null) => {
   if (!tileData?.data) {
     return EMPTY_COUNTRY_LABELS;
   }
@@ -472,11 +472,15 @@ const buildCountryLabelCollections = async (tileData) => {
 
   const extent = layer.extent || 4096;
   const registry = new Map();
+  const filterByOwners = ownedCodes instanceof Set && ownedCodes.size > 0;
 
   for (let index = 0; index < layer.length; index += 1) {
     const feature = layer.feature(index);
     const props = feature.properties;
     const code = props?.GID_0 || props?.gid_0 || props?.ISO_A3 || props?.iso_a3 || "";
+    // Skip countries that own no territory in this scenario, so nonexistent-era
+    // nations don't float their modern names over unclaimed land.
+    if (filterByOwners && !ownedCodes.has(code)) continue;
     const name = resolveCountryDisplayName(
       props?.Country || props?.NAME || props?.name || props?.COUNTRY,
       code,
@@ -565,11 +569,24 @@ const isCountryLabelPayload = (value) =>
   value.curvedLabelData?.type === "FeatureCollection" &&
   Array.isArray(value.curvedLabelData.features);
 
-export const loadCountryLabelCollections = async ({ force = false } = {}) => {
+export const loadCountryLabelCollections = async ({ force = false, ownedCodes = null } = {}) => {
   const tileData = await getCountriesTileData();
-  const cacheKey = tileData?.data
+  const baseKey = tileData?.data
     ? computeCountryLabelCacheKey(tileData.data, PMTILES_ARCHIVES.countries)
     : COUNTRY_LABELS_CACHE_KEY;
+
+  // A distinct owner set (scenario-specific label filtering) caches separately.
+  let ownersSuffix = "";
+  if (ownedCodes instanceof Set && ownedCodes.size > 0) {
+    const joined = [...ownedCodes].sort().join(",");
+    let hash = 2166136261;
+    for (let i = 0; i < joined.length; i += 1) {
+      hash ^= joined.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    ownersSuffix = `-own${ownedCodes.size}-${(hash >>> 0).toString(36)}`;
+  }
+  const cacheKey = `${baseKey}${ownersSuffix}`;
 
   if (!force && countryLabelsValue && countryLabelsValueKey === cacheKey) {
     return countryLabelsValue;
@@ -597,7 +614,7 @@ export const loadCountryLabelCollections = async ({ force = false } = {}) => {
       }
     }
 
-    const built = await buildCountryLabelCollections(tileData);
+    const built = await buildCountryLabelCollections(tileData, ownedCodes);
     countryLabelsValue = built;
     countryLabelsValueKey = cacheKey;
 
