@@ -79,14 +79,17 @@ const Units = () => {
         paint={{
           "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 7, 6, 11, 12, 16],
           "circle-color": ["get", "rgb"],
-          "circle-opacity": 0.92,
-          "circle-stroke-width": 2,
+          // Pending (player-requested, not yet AI-resolved) units are translucent.
+          "circle-opacity": ["case", ["==", ["get", "status"], "pending"], 0.32, 0.92],
+          "circle-stroke-width": ["case", ["==", ["get", "status"], "pending"], 1.5, 2],
           "circle-stroke-color": [
             "case",
+            ["==", ["get", "status"], "pending"], "#93c5fd",
             ["==", ["get", "status"], "moving"], "#ffd24a",
             ["==", ["get", "status"], "engaged"], "#ff6b6b",
             "#ffffff",
           ],
+          "circle-stroke-opacity": ["case", ["==", ["get", "status"], "pending"], 0.55, 1],
           "circle-pitch-alignment": "map",
         }}
       />
@@ -105,6 +108,7 @@ const Units = () => {
           "text-color": "#ffffff",
           "text-halo-color": "rgba(0,0,0,0.65)",
           "text-halo-width": 1,
+          "text-opacity": ["case", ["==", ["get", "status"], "pending"], 0.5, 1],
         }}
       />
       <Layer

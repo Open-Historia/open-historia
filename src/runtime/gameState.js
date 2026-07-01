@@ -29,7 +29,8 @@ export const WORLD_DEFAULTS = {
 // so they share every existing read/write/poll/normalize path with no server change.
 export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
 const UNIT_TYPE_SET = new Set(UNIT_TYPES);
-const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated"]);
+// "pending" = a player deployment awaiting AI resolution (rendered translucent).
+const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
 
 const finiteOrNull = (value) => {

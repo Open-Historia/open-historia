@@ -23,6 +23,7 @@ import { resolveClash } from "./unitCombat.js";
 let units = [];
 let playerCode = "";
 let round = 1;
+let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
 let interactionMode = { kind: "idle" }; // idle | deploy | move | attack
 let pollTimer = null;
 let busy = false; // suppress poll overwrite mid-commit
@@ -46,6 +47,8 @@ export const subscribeUnits = (fn) => {
 export const getUnits = () => units;
 export const getUnitById = (id) => units.find((unit) => unit.id === id) ?? null;
 export const getPlayerCode = () => playerCode;
+// The scenario's allowed deployable troop types, or null when unrestricted.
+export const getAllowedUnitTypes = () => allowedUnitTypes;
 export const getInteractionMode = () => interactionMode;
 export const setInteractionMode = (next) => {
   interactionMode = next && next.kind ? next : { kind: "idle" };
@@ -63,6 +66,9 @@ const refresh = async () => {
     units = world.units ?? [];
     playerCode = game.country ?? "";
     round = game.round ?? 1;
+    allowedUnitTypes = Array.isArray(world.allowedUnitTypes) && world.allowedUnitTypes.length
+      ? world.allowedUnitTypes
+      : null;
     emit();
   } catch (error) {
     console.error("Failed to refresh units:", error);
@@ -115,7 +121,9 @@ const queueOrder = async (text) => {
 
 export const deployUnit = async ({ type, strength, name, lng, lat }) => {
   if (!playerCode) await refresh();
-  return commit((list) => {
+  // Deploy as PENDING (rendered translucent): the player states an intent, and the
+  // AI confirms, relocates or rejects it on the next time-jump.
+  const saved = await commit((list) => {
     const unit = normalizeUnitEntry({
       type,
       strength,
@@ -124,10 +132,16 @@ export const deployUnit = async ({ type, strength, name, lng, lat }) => {
       lat,
       ownerCode: playerCode || "PLAYER",
       source: "player",
-      status: "idle",
+      status: "pending",
     });
     return unit ? [...list, unit] : list;
   });
+  await queueOrder(
+    `Deploy request: ${name || type} (${type}, strength ${strength}, owner ${playerCode || "PLAYER"}) at ` +
+      `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
+      `reposition it, or reject it as the front and logistics allow.`,
+  );
+  return saved;
 };
 
 export const moveUnitTo = async (unitId, lng, lat) => {

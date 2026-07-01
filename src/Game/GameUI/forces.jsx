@@ -3,6 +3,7 @@ import {
   subscribeUnits,
   getUnits,
   getPlayerCode,
+  getAllowedUnitTypes,
   getInteractionMode,
   setInteractionMode,
   clearInteractionMode,
@@ -81,6 +82,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px" }) => {
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(getUnits());
   const [mode, setMode] = useState(getInteractionMode());
+  const [allowedTypes, setAllowedTypes] = useState(getAllowedUnitTypes());
   const [deployType, setDeployType] = useState("infantry");
   const [deployStrength, setDeployStrength] = useState(100);
   const [deployName, setDeployName] = useState("");
@@ -89,9 +91,22 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px" }) => {
     const unsubscribe = subscribeUnits(() => {
       setUnits(getUnits());
       setMode(getInteractionMode());
+      setAllowedTypes(getAllowedUnitTypes());
     });
     return unsubscribe;
   }, []);
+
+  // The scenario may restrict deployable troop types (e.g. no air in 1200).
+  const availableTypes =
+    Array.isArray(allowedTypes) && allowedTypes.length
+      ? UNIT_TYPES.filter((t) => allowedTypes.includes(t))
+      : UNIT_TYPES;
+
+  useEffect(() => {
+    if (availableTypes.length && !availableTypes.includes(deployType)) {
+      setDeployType(availableTypes[0]);
+    }
+  }, [availableTypes, deployType]);
 
   const playerCode = getPlayerCode();
   const myUnits = units.filter((u) => u.ownerCode && u.ownerCode === playerCode);
@@ -206,7 +221,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px" }) => {
                 onChange={(e) => setDeployType(e.target.value)}
                 style={{ flex: 1, background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px" }}
               >
-                {UNIT_TYPES.map((t) => (
+                {availableTypes.map((t) => (
                   <option key={t} value={t} style={{ color: "black" }}>
                     {TYPE_LABEL[t] ?? t}
                   </option>
