@@ -3,12 +3,15 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { resolveCountryDisplayName } from "../../runtime/assets.js";
 import { flagImageUrlFromGid, flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { readWorldState } from "../../runtime/gameState.js";
+import { requestDiplomaticChat } from "../GameUI/chat.jsx";
+import { generateCountryStats } from "../AI/gameplay.js";
 
 let _setSelection = null;
 let _currentSelection = null;
 let _dismiss = null;
 
-export const onRegionSelected = ({ COUNTRY, NAME_1, GID_0, lngLat }) => {
+export const onRegionSelected = ({ COUNTRY, NAME_1, GID_0, gid0, owner, lngLat }) => {
     if (!_setSelection) return;
 
     const isSame =
@@ -21,7 +24,7 @@ export const onRegionSelected = ({ COUNTRY, NAME_1, GID_0, lngLat }) => {
     } else if (_currentSelection !== null) {
         _dismiss?.();
     } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, lngLat });
+        _setSelection({ COUNTRY, NAME_1, GID_0, gid0, owner, lngLat });
     }
 };
 
@@ -45,6 +48,14 @@ const resolveFlagInfo = (gid0) => {
     const imageUrl = flagImageUrlFromGid(gid0);
     if (!imageUrl) return null;
     return { imageUrl, emoji: flagEmojiFromGid(gid0) };
+};
+
+// Era-aware flag: a scenario polity's own flag URL wins; otherwise the owner code
+// resolves as an ISO country flag (correct for modern owners). Custom era polities
+// with neither simply have no flag — the popup then says "No flag available".
+const resolveEraFlagInfo = (ownerCode, polity) => {
+    if (polity?.flag) return { imageUrl: polity.flag, emoji: null };
+    return resolveFlagInfo(ownerCode);
 };
 
 const IconBtn = ({ children, title, onClick }) => {
@@ -103,15 +114,79 @@ const RegionPopup = () => {
     const [dismissing, setDismissing] = useState(false);
     const [flagState, setFlagState] = useState(() => createFlagState());
     const [flagImageFailed, setFlagImageFailed] = useState(false);
+    const [statsOpen, setStatsOpen] = useState(false);
+    const [statsLoading, setStatsLoading] = useState(false);
+    const [statsText, setStatsText] = useState("");
+    const [statsError, setStatsError] = useState("");
+    // Scenario polity registry (world.polityOverrides): era names + optional flags.
+    const [polities, setPolities] = useState({});
     const { current: map } = useMap();
+
+    // Refresh the polity registry whenever a selection opens (cheap; keeps the
+    // popup era-correct after switching games/scenarios mid-session).
+    useEffect(() => {
+        if (!selection) return;
+        let cancelled = false;
+        readWorldState({ force: true })
+            .then((world) => {
+                if (!cancelled) setPolities(world?.polityOverrides ?? {});
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selection?.GID_0, selection?.NAME_1]);
 
     _setSelection = (value) => {
         _currentSelection = value;
         setDismissing(false);
         setFlagState(value ? createFlagState("loading") : createFlagState());
         setFlagImageFailed(false);
+        setStatsOpen(false);
+        setStatsText("");
+        setStatsError("");
+        setStatsLoading(false);
         setSelection(value);
         if (value !== null) setAnimKey((key) => key + 1);
+    };
+
+    // Era-aware display name for the selected owner (polity name > overrides > modern).
+    const resolveSelectionName = (sel) =>
+        polities[sel?.GID_0]?.name || resolveCountryDisplayName(sel?.COUNTRY, sel?.GID_0);
+
+    // Open a diplomatic chat with the selected country (via the chat panel bridge).
+    const handleOpenChat = () => {
+        if (!_currentSelection) return;
+        requestDiplomaticChat({
+            name: resolveSelectionName(_currentSelection),
+            code: _currentSelection.GID_0,
+        });
+        _dismiss?.();
+    };
+
+    // Toggle an AI-generated intelligence briefing for the selected country.
+    const handleToggleStats = async () => {
+        if (statsOpen) {
+            setStatsOpen(false);
+            return;
+        }
+        setStatsOpen(true);
+        if (statsText || statsLoading) return;
+        const sel = _currentSelection;
+        setStatsLoading(true);
+        setStatsError("");
+        try {
+            const text = await generateCountryStats({
+                code: sel?.GID_0,
+                name: resolveSelectionName(sel),
+            });
+            setStatsText(text || "No information available.");
+        } catch {
+            setStatsError("Couldn't generate a briefing. Set an AI provider + key in Settings.");
+        } finally {
+            setStatsLoading(false);
+        }
     };
 
     _dismiss = () => setDismissing(true);
@@ -127,20 +202,24 @@ const RegionPopup = () => {
     };
 
     useEffect(() => {
-        if (!selection?.GID_0 && !selection?.COUNTRY) {
+        const unclaimed = selection?.owner === "";
+        if (unclaimed || (!selection?.GID_0 && !selection?.COUNTRY)) {
             setFlagState(createFlagState());
             return;
         }
 
         setFlagImageFailed(false);
 
-        const flagInfo = resolveFlagInfo(selection.GID_0);
+        // Era-correct flag only: the polity's own flag, else the owner's ISO flag.
+        // Deliberately NO modern-country fallback — an era polity without a flag
+        // shows "No flag available" rather than an anachronistic modern flag.
+        const flagInfo = resolveEraFlagInfo(selection.GID_0, polities[selection.GID_0]);
         setFlagState(
             flagInfo
                 ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
                 : createFlagState("error"),
         );
-    }, [selection?.COUNTRY, selection?.GID_0]);
+    }, [selection?.COUNTRY, selection?.GID_0, selection?.owner, polities]);
 
     useEffect(() => {
         if (!map) return;
@@ -211,7 +290,14 @@ const RegionPopup = () => {
     if (!selection || !screenPos) return null;
 
     const { COUNTRY, NAME_1 } = selection;
-    const displayCountry = resolveCountryDisplayName(COUNTRY, selection.GID_0);
+    // Custom regions with an empty owner are deliberately unclaimed land.
+    const isUnclaimed = selection.owner === "";
+    // Era name first: the scenario's polity name for the owner ("Holy Roman
+    // Empire", not "Germany"), then scenario name overrides, then the modern name.
+    const displayCountry = isUnclaimed
+        ? "Unclaimed Territory"
+        : polities[selection.GID_0]?.name
+            || resolveCountryDisplayName(COUNTRY, selection.GID_0);
     const POPUP_WIDTH = 210;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
     const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
@@ -317,8 +403,9 @@ const RegionPopup = () => {
         </span>
         </div>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <IconBtn title="Copy country name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
-        <IconBtn title="Country info">{"\u24D8"}</IconBtn>
+        {!isUnclaimed && <IconBtn title="Open diplomatic chat" onClick={handleOpenChat}>{"\uD83D\uDCAC"}</IconBtn>}
+        <IconBtn title="Copy name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
+        {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
 
@@ -333,6 +420,16 @@ const RegionPopup = () => {
         <IconBtn title="Region info">{"\u24D8"}</IconBtn>
         </div>
         </div>
+
+        {statsOpen && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", marginTop: "8px", paddingTop: "8px", maxHeight: "190px", overflowY: "auto", fontSize: "11.5px", lineHeight: 1.55, color: "rgba(255,255,255,0.86)", whiteSpace: "pre-wrap" }}>
+        {statsLoading
+        ? "Generating intelligence briefing\u2026"
+        : statsError
+        ? <span style={{ color: "#f87171" }}>{statsError}</span>
+        : statsText}
+        </div>
+        )}
         </div>
         </div>
 
