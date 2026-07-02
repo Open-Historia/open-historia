@@ -1726,9 +1726,25 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
 
-  const activeGameId = getActiveGameId();
+  let activeGameId = getActiveGameId();
   if (!activeGameId) {
-    throw new Error("No active game — start a game from a scenario first.");
+    // With every game deleted, the map still renders (reads fall back to the
+    // selected scenario) so play LOOKS possible — but there was nowhere to
+    // save, and every AI feature died on this guard. The first stateful
+    // interaction now quietly creates a real session from the selected
+    // scenario instead, which is how it always felt back when a built-in
+    // game guaranteed a write target.
+    const scenario = getSelectedScenarioSummary();
+    if (!scenario) {
+      throw new Error("No active game — start a game from a scenario first.");
+    }
+    const details = createGame({
+      name: `${scenario.name} Session`,
+      scenarioId: scenario.id,
+      setActive: true,
+    });
+    activeGameId = details.game.id;
+    console.log(`No active game — created "${activeGameId}" from scenario "${scenario.id}".`);
   }
   const targetPath = getGameJsonPath(activeGameId, assetKey);
   writeJsonFile(targetPath, value);
