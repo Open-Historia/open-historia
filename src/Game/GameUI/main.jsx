@@ -213,7 +213,9 @@ const Main = ({
         onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
       />
       <Suspense fallback={null}>
-        {shouldLoadAdvisor && <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} />}
+        {shouldLoadAdvisor && (
+          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} />
+        )}
       </Suspense>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
