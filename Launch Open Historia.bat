@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title Pax Historia - Launcher
+title Open Historia - Launcher
 
 REM ============================================================
-REM  Pax Historia - one-click setup and launch
+REM  Open Historia - one-click setup and launch
 REM  ----------------------------------------------------------
 REM   1. Verifies Node.js is installed
 REM   2. Downloads the world map data (Git LFS assets) if missing
@@ -20,7 +20,7 @@ cd /d "%~dp0"
 
 echo.
 echo ===================================================
-echo             PAX HISTORIA  -  LAUNCHER
+echo             OPEN HISTORIA  -  LAUNCHER
 echo ===================================================
 echo.
 
@@ -28,7 +28,7 @@ REM ---- 1. Check Node.js -------------------------------------
 where node >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Node.js was not found on this computer.
-    echo Pax Historia needs Node.js to run.
+    echo Open Historia needs Node.js to run.
     echo.
     where winget >nul 2>&1
     if not errorlevel 1 (
@@ -120,7 +120,7 @@ REM  Usage:  call :ensure_asset "local\path" "repo/path"
 REM ============================================================
 :ensure_asset
 set "TARGET=%~1"
-set "URL=https://media.githubusercontent.com/media/Arkniem/pax-historia-2/main/%~2"
+set "URL=https://media.githubusercontent.com/media/Tommi-K/open-historia/main/%~2"
 set "FSIZE=0"
 if exist "%TARGET%" for %%A in ("%TARGET%") do set "FSIZE=%%~zA"
 

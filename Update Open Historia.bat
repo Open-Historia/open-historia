@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title Pax Historia - Updater
+title Open Historia - Updater
 
 REM ============================================================
-REM  Pax Historia - one-click updater
+REM  Open Historia - one-click updater
 REM  ----------------------------------------------------------
 REM  Replaces this install's files with the latest ones from
 REM  GitHub, without touching your saved games or settings.
@@ -20,13 +20,13 @@ REM                               are never overwritten)
 REM   * public\assets\*.pmtiles  (real map data is never
 REM                               replaced by LFS pointer stubs)
 REM
-REM  After updating, run "Launch Pax Historia.bat" as usual -
+REM  After updating, run "Launch Open Historia.bat" as usual -
 REM  it reinstalls dependencies and rebuilds automatically.
 REM ============================================================
 
 REM Which repository to update from.
 set "REPO_OWNER=Tommi-K"
-set "REPO_NAME=pax-historia"
+set "REPO_NAME=open-historia"
 set "REPO_BRANCH=main"
 
 REM Work from the folder this script lives in (the project root)
@@ -34,7 +34,7 @@ cd /d "%~dp0"
 
 echo.
 echo ===================================================
-echo             PAX HISTORIA  -  UPDATER
+echo             OPEN HISTORIA  -  UPDATER
 echo    source: %REPO_OWNER%/%REPO_NAME% (%REPO_BRANCH%)
 echo ===================================================
 echo.
@@ -72,7 +72,7 @@ if errorlevel 1 (
     pause & exit /b 1
 )
 
-set "WORKDIR=%TEMP%\pax-historia-update"
+set "WORKDIR=%TEMP%\open-historia-update"
 set "ZIPFILE=%WORKDIR%\latest.zip"
 if exist "%WORKDIR%" rmdir /s /q "%WORKDIR%"
 mkdir "%WORKDIR%"
@@ -142,7 +142,7 @@ if exist "dist" rmdir /s /q "dist"
 echo.
 echo ===================================================
 echo   Update complete.
-echo   Run "Launch Pax Historia.bat" to play - it will
+echo   Run "Launch Open Historia.bat" to play - it will
 echo   reinstall dependencies and rebuild automatically.
 echo ===================================================
 echo.

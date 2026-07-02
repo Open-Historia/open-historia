@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  Pax Historia - one-click updater (Linux / macOS)
+#  Open Historia - one-click updater (Linux / macOS)
 #  ----------------------------------------------------------
 #  Replaces this install's files with the latest ones from
 #  GitHub, without touching your saved games or settings.
@@ -17,16 +17,16 @@
 #   * public/assets/*.pmtiles  (real map data is never
 #                               replaced by LFS pointer stubs)
 #
-#  After updating, run "Launch Pax Historia.sh" as usual -
+#  After updating, run "Launch Open Historia.sh" as usual -
 #  it reinstalls dependencies and rebuilds automatically.
 #
-#  Run from a terminal:   ./"Update Pax Historia.sh"
-#  macOS: double-click "Update Pax Historia.command" instead.
+#  Run from a terminal:   ./"Update Open Historia.sh"
+#  macOS: double-click "Update Open Historia.command" instead.
 # ============================================================
 
 # Which repository to update from.
 REPO_OWNER="Tommi-K"
-REPO_NAME="pax-historia"
+REPO_NAME="open-historia"
 REPO_BRANCH="main"
 
 fail_copy() {
@@ -45,7 +45,7 @@ main() {
 
     echo ""
     echo "==================================================="
-    echo "            PAX HISTORIA  -  UPDATER"
+    echo "            OPEN HISTORIA  -  UPDATER"
     echo "   source: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo "==================================================="
     echo ""
@@ -84,7 +84,7 @@ main() {
         exit 1
     fi
 
-    WORKDIR="${TMPDIR:-/tmp}/pax-historia-update"
+    WORKDIR="${TMPDIR:-/tmp}/open-historia-update"
     ZIPFILE="$WORKDIR/latest.zip"
     rm -rf "$WORKDIR"
     mkdir -p "$WORKDIR"
@@ -154,12 +154,12 @@ main() {
 
 finish() {
     # ZIP extraction can lose the executable bit - restore it.
-    chmod +x "Launch Pax Historia.sh" "Update Pax Historia.sh" \
-             "Launch Pax Historia.command" "Update Pax Historia.command" 2>/dev/null
+    chmod +x "Launch Open Historia.sh" "Update Open Historia.sh" \
+             "Launch Open Historia.command" "Update Open Historia.command" 2>/dev/null
     echo ""
     echo "==================================================="
     echo "  Update complete."
-    echo "  Run \"Launch Pax Historia.sh\" to play - it will"
+    echo "  Run \"Launch Open Historia.sh\" to play - it will"
     echo "  reinstall dependencies and rebuild automatically."
     echo "==================================================="
     echo ""
