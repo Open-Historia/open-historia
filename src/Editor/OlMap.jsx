@@ -666,6 +666,22 @@ const OlMap = ({
           notifyRegions();
         });
       },
+      // Seed the modern world, then stamp a scenario's ownership overrides on
+      // top — how a scenario WITHOUT custom geometry opens in the editor (its
+      // tier-1 map is exactly "stock world + these overrides").
+      reseedWorldWithOwners: (overrides = {}) => {
+        loadSeedFeatures().then((feats) => {
+          regionSource.clear();
+          for (const f of feats) {
+            const id = f.getId();
+            if (id != null && overrides[id] !== undefined) f.set("owner", overrides[id] || null);
+          }
+          regionSource.addFeatures(feats);
+          regionLayer.changed();
+          labelLayer.changed();
+          notifyRegions();
+        });
+      },
       undo: () => doUndo(),
       redo: () => doRedo(),
       restyle: () => {

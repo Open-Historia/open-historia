@@ -1652,10 +1652,6 @@ const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
-  if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-    throw new Error(`Asset ${assetKey} is not a binary download.`);
-  }
-
   if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
@@ -1665,13 +1661,15 @@ const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
     throw new Error(`Asset not found: ${assetKey}`);
   }
 
-  return {
-    contentType:
+  // JSON assets (colors, region/city geojson) download as JSON so the map
+  // editor can open a scenario's own map; everything else streams as binary.
+  const contentType =
     assetKey === COVER_IMAGE_ASSET_KEY
-    ? readScenarioMeta(scenarioId).coverImageContentType || "application/octet-stream"
-    : "application/octet-stream",
-    sourcePath,
-  };
+      ? readScenarioMeta(scenarioId).coverImageContentType || "application/octet-stream"
+      : assetKey in OPTIONAL_JSON_ASSET_FILES || assetKey in SCENARIO_GEOJSON_ASSET_FILES
+        ? "application/json; charset=utf-8"
+        : "application/octet-stream";
+  return { contentType, sourcePath };
 };
 
 const resolveGameUploadAsset = (gameId, assetKey) => {
