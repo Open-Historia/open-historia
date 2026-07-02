@@ -223,6 +223,94 @@ export default {
     "IND.31_1": "PAND", "IND.27_1": "PAND",
   },
 
+  // Era cities: [name, modern-seed-name | [lng,lat], tier, population].
+  // tier 4 = great-power capital ★, 3 = major city ◆, 2 = city, 1 = town.
+  cities: [
+    // — The Mongol khanates —
+    ["Khanbaliq", "Beijing", 4, 400000], // Dadu, the Yuan capital
+    ["Karakorum", [102.85, 47.2], 2, 25000], // the old imperial capital
+    ["Shangdu", [116.18, 42.36], 2, 30000], // Xanadu, the summer court
+    ["Sarai", [47.98, 46.63], 4, 100000], // Golden Horde capital
+    ["Bolghar", [49.06, 54.98], 2, 30000],
+    ["Tabriz", [46.29, 38.08], 4, 150000], // Ilkhanate capital
+    ["Baghdad", "Baghdad", 2, 100000], // never recovered from 1258
+    ["Isfahan", [51.67, 32.65], 2, 60000],
+    ["Shiraz", [52.54, 29.61], 2, 50000],
+    ["Herat", [62.2, 34.35], 2, 50000],
+    ["Samarkand", "Samarkand", 2, 70000],
+    ["Bukhara", "Bukhara", 2, 50000],
+    ["Urgench", [59.15, 42.33], 3, 90000],
+    ["Almaliq", [80.42, 44.16], 2, 20000], // Chagatai seat
+    ["Kashgar", "Kashgar", 1, 20000],
+    // — Yuan China beyond the capital —
+    ["Hangzhou", "Hangzhou", 3, 800000], // Quinsai — Marco Polo's greatest city
+    ["Quanzhou", "Quanzhou", 3, 200000], // Zayton, the great port
+    ["Guangzhou", "Guangzhou", 2, 150000],
+    ["Chengdu", "Chengdu", 2, 100000],
+    ["Kaifeng", [114.31, 34.8], 2, 100000],
+    // — Tributaries and neighbours —
+    ["Kaesong", [126.55, 37.97], 2, 60000], // Goryeo, Yuan son-in-law state
+    ["Kyoto", [135.77, 35.01], 3, 150000],
+    ["Kamakura", [139.55, 35.32], 3, 80000], // the shogunate that beat the Mongols
+    ["Pagan", [94.86, 21.17], 1, 20000], // sacked 1287, in decline
+    ["Sukhothai", [99.82, 17.01], 2, 25000],
+    ["Angkor", [103.86, 13.44], 3, 300000],
+    ["Thang Long", "Hanoi", 2, 60000], // repelled three invasions
+    ["Delhi", "Delhi", 4, 200000], // Delhi Sultanate — the Mongols' wall
+    ["Multan", "Multan", 2, 40000],
+    ["Devagiri", [75.23, 19.94], 2, 50000], // Yadava capital
+    ["Madurai", "Madurai", 2, 50000], // Pandya capital
+    // — The Mamluks and Islam beyond the Ilkhans —
+    ["Cairo", "Cairo", 4, 450000], // Mamluk capital, greatest city of Islam
+    ["Damascus", "Damascus", 3, 80000],
+    ["Aleppo", "Aleppo", 2, 50000],
+    ["Mecca", "Mecca", 2, 15000],
+    ["Fez", "Fès", 3, 120000], // Marinid capital
+    ["Tunis", "Tunis", 2, 50000], // Hafsid capital
+    ["Tlemcen", [-1.31, 34.88], 2, 40000],
+    ["Granada", "Granada", 3, 50000], // Nasrid capital
+    // — Christendom —
+    ["Constantinople", "Istanbul", 3, 60000], // restored but diminished
+    ["Paris", "Paris", 4, 200000],
+    ["London", "London", 3, 80000],
+    ["Venice", "Venice", 3, 100000],
+    ["Genoa", "Genoa", 3, 90000],
+    ["Florence", "Florence", 3, 90000],
+    ["Milan", "Milan", 2, 100000],
+    ["Rome", "Rome", 2, 30000],
+    ["Naples", "Naples", 2, 50000],
+    ["Palermo", [13.36, 38.12], 2, 50000],
+    ["Bruges", "Bruges", 2, 40000],
+    ["Ghent", [3.72, 51.05], 2, 55000],
+    ["Cologne", "Cologne", 2, 40000],
+    ["Lübeck", "Lübeck", 2, 20000],
+    ["Prague", "Prague", 2, 35000],
+    ["Vienna", "Vienna", 2, 25000],
+    ["Buda", "Budapest", 2, 15000],
+    ["Kraków", "Kraków", 2, 20000],
+    ["Seville", [-5.99, 37.39], 2, 40000],
+    ["Barcelona", "Barcelona", 2, 40000],
+    ["Lisbon", "Lisbon", 2, 30000],
+    // — The Rus' under the Horde —
+    ["Novgorod", [31.27, 58.52], 3, 30000],
+    ["Moscow", "Moscow", 1, 10000], // a minor fort, for now
+    ["Tver", "Tver", 2, 15000],
+    ["Vladimir", "Vladimir", 2, 15000],
+    ["Kiev", "Kyiv", 1, 10000], // devastated, 1240
+    // — Africa and the Indian Ocean —
+    ["Niani", [-9.6, 11.38], 3, 30000], // Mali imperial capital
+    ["Timbuktu", "Timbuktu", 2, 20000],
+    ["Kilwa", [39.51, -8.96], 2, 15000],
+    ["Mogadishu", "Mogadishu", 2, 20000],
+    ["Great Zimbabwe", [30.93, -20.27], 2, 15000],
+    // — The Americas —
+    ["Cahokia", [-90.06, 38.66], 1, 8000], // in decline
+    ["Mayapan", [-89.46, 20.63], 2, 15000],
+    ["Azcapotzalco", [-99.18, 19.48], 1, 10000], // Tepanec seat in the Valley of Mexico
+    ["Cusco", "Cusco", 2, 10000], // the young Inca seat
+    ["Chan Chan", [-79.07, -8.1], 3, 40000], // Chimor at its height
+  ],
+
   simulationRules:
     "It is 1300 AD. The Mongol Empire is the largest land empire in history but is no longer " +
     "one state: the Yuan Great Khan (Temur, Kublai's grandson) reigns in Khanbaliq and is " +
