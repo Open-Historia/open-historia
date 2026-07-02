@@ -1,3 +1,4 @@
+# Pax Historia — Android APK build & release workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 name: Build Android APK
 
 # Builds the thin Android client (mobile/) and attaches the APK to the

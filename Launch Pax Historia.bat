@@ -1,4 +1,6 @@
 @echo off
+REM Pax Historia — Windows launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+
 setlocal EnableExtensions EnableDelayedExpansion
 title Pax Historia - Launcher
 

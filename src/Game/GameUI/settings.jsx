@@ -1,3 +1,4 @@
+/*! Pax Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import {
     DEFAULT_PROVIDER,

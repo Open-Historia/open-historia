@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Pax Historia — Linux/Termux launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+
 # ============================================================
 #  Pax Historia - one-click setup and launch (Linux / macOS)
 #  ----------------------------------------------------------

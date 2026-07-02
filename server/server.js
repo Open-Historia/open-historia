@@ -1,3 +1,4 @@
+/*! Pax Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import express from "express";
 import fs from "fs";
 import path from "path";

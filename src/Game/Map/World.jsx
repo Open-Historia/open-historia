@@ -1,3 +1,4 @@
+/*! Pax Historia — portions (troop system integration) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useMemo, useRef } from "react";
 import Map from "react-map-gl/maplibre";
 import Nations from "./Nations";

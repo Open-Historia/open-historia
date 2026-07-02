@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Pax Historia — Linux/Termux updater © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+
 # ============================================================
 #  Pax Historia - one-click updater (Linux / macOS)
 #  ----------------------------------------------------------

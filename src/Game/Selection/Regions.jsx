@@ -1,3 +1,4 @@
+/*! Pax Historia — portions (era polity names/flags + intel briefing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";

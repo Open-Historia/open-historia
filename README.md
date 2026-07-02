@@ -1,3 +1,4 @@
+<!-- Pax Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
 <h1 align="center">Pax Historia</h1>
 
 <div align="center">
