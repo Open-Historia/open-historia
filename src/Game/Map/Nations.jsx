@@ -58,10 +58,17 @@ const fallbackColorFromCode = (code = "") => {
 const NEUTRAL_LAND_COLOR = "rgb(88, 98, 110)";
 
 // GADM region ids contain a dot ("DEU.2_1"); author-drawn regions ("reg_...")
-// don't. On custom maps, GADM regions render from the stock vector tiles (crisp
-// at every zoom — the seed geometry is too coarse up close and leaves sliver
-// gaps between polygons), while only drawn geometry renders from the GeoJSON.
+// don't. On custom maps, GADM regions crossfade between two sources: the seed
+// GeoJSON when zoomed OUT (the stock tiles are too simplified out there and
+// show sliver gaps) and the stock vector tiles when zoomed IN (the z5 seed is
+// too coarse up close). Author-drawn geometry renders from the GeoJSON at every
+// zoom, on top — the tiles don't know those shapes.
 const CUSTOM_GEOMETRY_FILTER = ["==", ["index-of", ".", ["get", "id"]], -1];
+const GADM_GEOMETRY_FILTER = [">=", ["index-of", ".", ["get", "id"]], 0];
+// Crossfade band: seed geometry was extracted at tile-zoom 5, so hand off to
+// the tiles just past that.
+const FAR_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.72, 6.5, 0];
+const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.72];
 
 // ---- Owner labels for custom maps -----------------------------------------
 // The stock label pipeline labels modern countries from countries.pmtiles, which
@@ -496,7 +503,8 @@ const WorldMap = () => {
     if (!stops.length) return { "fill-opacity": 0 };
     return {
       "fill-color": ["match", ["get", "GID_1"], ...stops, NEUTRAL_LAND_COLOR],
-      "fill-opacity": 0.72,
+      // Fades in as the seed-geometry far layer fades out.
+      "fill-opacity": TILE_FILL_FADE,
     };
   }, [customActive, ownerByRegionId, colorMap]);
 
@@ -586,6 +594,15 @@ const WorldMap = () => {
           stock tiles above for crisp borders at every zoom. Empty (and inert)
           unless world.customRegions is set. */}
       <Source id="custom-regions-source" type="geojson" data={customRegionData}>
+        {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
+            tiles are too simplified at low zoom and show sliver gaps there. */}
+        <Layer
+          id="custom-regions-fill-far"
+          type="fill"
+          maxzoom={7}
+          filter={GADM_GEOMETRY_FILTER}
+          paint={{ "fill-color": customFillStyle["fill-color"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+        />
         <Layer
           id="custom-regions-fill"
           type="fill"
