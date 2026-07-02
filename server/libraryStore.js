@@ -298,23 +298,25 @@ const getGameManifest = () => {
 
   if (manifest && Array.isArray(manifest.order)) {
     return {
-      activeGameId: String(manifest.activeGameId ?? "").trim() || DEFAULT_GAME_ID,
+      activeGameId: String(manifest.activeGameId ?? "").trim(),
       order: manifest.order,
       version: 2,
     };
   }
 
+  // No games yet — nothing is created implicitly; the player starts their
+  // first game from a scenario.
   return {
-    activeGameId: DEFAULT_GAME_ID,
-    order: [DEFAULT_GAME_ID],
+    activeGameId: "",
+    order: [],
     version: 2,
   };
 };
 
 const saveGameManifest = (manifest) => {
   writeJsonFile(GAME_MANIFEST_PATH, {
-    activeGameId: manifest.activeGameId,
-    order: Array.from(new Set(manifest.order ?? [DEFAULT_GAME_ID])),
+    activeGameId: manifest.activeGameId ?? "",
+    order: Array.from(new Set(manifest.order ?? [])),
                 version: 2,
   });
 };
@@ -568,52 +570,6 @@ const syncBuiltInScenarioSeedDate = () => {
   });
 };
 
-const syncBuiltInDefaultGameDate = () => {
-  const gameDataPath = getGameJsonPath(DEFAULT_GAME_ID, "game");
-  const currentGame = normalizeRecordValue(readJsonFile(gameDataPath, {}));
-  const snapshot = {
-    actions: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "actions"), []),
-    chat: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "chat"), []),
-    events: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "events"), []),
-    game: currentGame,
-    world: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "world"), {}),
-  };
-
-  if (
-    scenarioLooksLikeRuntimeSnapshot(snapshot) ||
-    (Array.isArray(snapshot.events) && snapshot.events.length > 0) ||
-    Number(currentGame?.round ?? 1) > 1
-  ) {
-    return;
-  }
-
-  const baseGame = normalizeRecordValue(readDefaultScenarioJsonAsset("game"));
-  const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
-  const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
-
-  if (
-    !shouldBackfillSeedDatePair({
-      baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
-                                baseStartDate: normalizeSnapshotString(baseGame?.startDate),
-                                currentGameDate,
-                                currentStartDate,
-    })
-  ) {
-    return;
-  }
-
-  const scenarioGame = normalizeRecordValue(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game"), {}));
-  const startDate =
-  normalizeSnapshotString(scenarioGame?.startDate) || BUILT_IN_SCENARIO_DEFAULT_DATE;
-  const gameDate = normalizeSnapshotString(scenarioGame?.gameDate) || startDate;
-
-  writeJsonFile(gameDataPath, {
-    ...cloneJson(currentGame),
-                ...(gameDate ? { gameDate } : {}),
-                ...(startDate ? { startDate } : {}),
-  });
-};
-
 const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
   const scenarioSnapshot = {
     actions: readJsonFile(getScenarioJsonPath(sourceScenarioId, "actions"), []),
@@ -780,51 +736,6 @@ const ensureDefaultScenario = () => {
   saveScenarioManifest(manifest);
 };
 
-const ensureDefaultGame = () => {
-  ensureDirectory(GAMES_DIR);
-  const gameDir = getGameDirectory(DEFAULT_GAME_ID);
-
-  ensureDirectory(gameDir);
-  ensureDirectory(path.join(gameDir, "storage"));
-
-  const scenarioMeta = readScenarioMeta(DEFAULT_SCENARIO_ID);
-
-  if (!fs.existsSync(getGameMetaPath(DEFAULT_GAME_ID))) {
-    writeJsonFile(getGameMetaPath(DEFAULT_GAME_ID), {
-      ...DEFAULT_GAME_META,
-      accentColor: scenarioMeta.accentColor,
-      createdAt: new Date().toISOString(),
-                  heroSubtitle: scenarioMeta.heroSubtitle,
-                  heroTitle: scenarioMeta.heroTitle,
-                  name: `${scenarioMeta.name} Session`,
-                  scenarioId: DEFAULT_SCENARIO_ID,
-                  subtitle: scenarioMeta.subtitle,
-                  updatedAt: new Date().toISOString(),
-    });
-  }
-
-  for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
-    const targetPath = getGameJsonPath(DEFAULT_GAME_ID, assetKey);
-    if (!fs.existsSync(targetPath)) {
-      seedGameJsonFilesFromScenario(DEFAULT_GAME_ID, DEFAULT_SCENARIO_ID);
-      break;
-    }
-  }
-
-  if (readGameMeta(DEFAULT_GAME_ID).scenarioId === DEFAULT_SCENARIO_ID) {
-    syncBuiltInDefaultGameDate();
-  }
-
-  const manifest = getGameManifest();
-  if (!manifest.order.includes(DEFAULT_GAME_ID)) {
-    manifest.order.unshift(DEFAULT_GAME_ID);
-  }
-  if (!manifest.activeGameId) {
-    manifest.activeGameId = DEFAULT_GAME_ID;
-  }
-  saveGameManifest(manifest);
-};
-
 const ensureScenarioStore = () => {
   ensureDirectory(SERVER_DATA_DIR);
   ensureDirectory(SCENARIOS_DIR);
@@ -834,7 +745,6 @@ const ensureScenarioStore = () => {
 const ensureGameStore = () => {
   ensureScenarioStore();
   ensureDirectory(GAMES_DIR);
-  ensureDefaultGame();
 };
 
 const getScenarioAssetStatus = (scenarioId) => {
@@ -1000,7 +910,7 @@ const getGameCatalog = () => {
       ...meta,
       assetStatus,
       cacheToken,
-      canDelete: gameId !== DEFAULT_GAME_ID,
+      canDelete: true,
       country: String(gameData?.country ?? "").trim(),
        coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
        currentDate: String(gameData?.gameDate ?? "").trim(),
@@ -1019,7 +929,7 @@ const getGameCatalog = () => {
 
   const activeGameId = games.some((game) => game.id === manifest.activeGameId)
   ? manifest.activeGameId
-  : DEFAULT_GAME_ID;
+  : games[0]?.id ?? "";
 
   if (activeGameId !== manifest.activeGameId) {
     saveGameManifest({
@@ -1532,10 +1442,6 @@ const deleteScenario = (scenarioId) => {
 const deleteGame = (gameId) => {
   ensureGameStore();
 
-  if (gameId === DEFAULT_GAME_ID) {
-    throw new Error("The default game cannot be deleted.");
-  }
-
   const gameDir = getGameDirectory(gameId);
   const resolved = path.resolve(gameDir);
   const resolvedRoot = path.resolve(GAMES_DIR);
@@ -1550,12 +1456,14 @@ const deleteGame = (gameId) => {
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
     (entry) => entry !== gameId,
   );
+  // Deleting the active game hands off to the next one; deleting the LAST
+  // game is fine too — the runtime falls back to the selected scenario's data.
   const nextActiveGameId =
-  manifest.activeGameId === gameId ? DEFAULT_GAME_ID : manifest.activeGameId;
+  manifest.activeGameId === gameId ? nextOrder[0] ?? "" : manifest.activeGameId;
 
   saveGameManifest({
     activeGameId: nextActiveGameId,
-    order: nextOrder.length > 0 ? nextOrder : [DEFAULT_GAME_ID],
+    order: nextOrder,
   });
 
   return getLibraryCatalog();
@@ -1758,9 +1666,10 @@ const readRuntimeJsonAsset = (assetKey) => {
     };
   }
 
+  // No games yet — runtime data resolves from the scenario below.
   const activeGame = getActiveGameSummary();
   const gamePath =
-  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES)
   ? getGameJsonPath(activeGame.id, assetKey)
   : null;
 
@@ -1818,6 +1727,9 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
   }
 
   const activeGameId = getActiveGameId();
+  if (!activeGameId) {
+    throw new Error("No active game — start a game from a scenario first.");
+  }
   const targetPath = getGameJsonPath(activeGameId, assetKey);
   writeJsonFile(targetPath, value);
   writeGameMeta(activeGameId, {});
