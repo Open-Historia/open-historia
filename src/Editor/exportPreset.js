@@ -75,6 +75,33 @@ const detectCustomGeometry = (regionsFC, kind) => {
   return false;
 };
 
+// Prominence tier driving when a city appears on the game map (4 = capital,
+// 3 = major, 2 = city, 1 = town) — see src/Game/Map/Cities.jsx.
+const cityTier = (f) => {
+  if ((f.tags || []).includes("capital")) return 4;
+  const pop = f.population || 0;
+  if (pop >= 1000000) return 3;
+  if (pop >= 100000) return 2;
+  return 1;
+};
+
+// The document's point features (cities) as the game-ready cities.geojson.
+const buildCitiesForGame = (features) => ({
+  type: "FeatureCollection",
+  features: (features || [])
+    .filter((f) => Array.isArray(f.coord) && f.coord.length === 2 && f.coord[0] != null && f.coord[1] != null)
+    .map((f) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [Number(f.coord[0]), Number(f.coord[1])] },
+      properties: {
+        city: f.name ? String(f.name) : "",
+        population: f.population || 0,
+        capital: (f.tags || []).includes("capital") ? "primary" : "",
+        tier: cityTier(f),
+      },
+    })),
+});
+
 export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {}) => {
   const regionOwnershipOverrides = {};
   const owners = new Set();
@@ -120,10 +147,15 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
   }
 
   const author = (doc.metadata?.author || "").trim();
+  const gameCities = buildCitiesForGame(doc.features);
   const world = {
     regionOwnershipOverrides,
     polityOverrides,
     customRegions: hasCustomGeometry,
+    // Authored cities replace the modern city labels. A custom-geometry map with
+    // no cities still sets the flag — modern names over invented land would be
+    // wrong — while a pure re-ownership map without cities keeps the stock set.
+    customCities: gameCities.features.length > 0 || hasCustomGeometry,
     author,
     mapCredit: author ? `Made by ${author}` : "",
     simulationRules: doc.metadata?.simulationRules || "",
@@ -151,5 +183,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     // regions is the normalized, game-ready FeatureCollection. Only uploaded to the
     // scenario when hasCustomGeometry (tier 2); harmless in the downloaded JSON.
     regions: gameRegions,
+    // cities is the authored era city set (cities.geojson in the scenario).
+    cities: gameCities,
   };
 };

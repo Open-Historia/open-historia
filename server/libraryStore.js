@@ -76,6 +76,9 @@ const PMTILES_ASSET_FILES = {
 // without it fall back to the stock pmtiles rendering (full backward-compat).
 const SCENARIO_GEOJSON_ASSET_FILES = {
   regionsGeojson: "regions.geojson",
+  // Era-accurate custom cities (points). When world.customCities is set the game
+  // renders these instead of the modern cities.pmtiles labels.
+  citiesGeojson: "cities.geojson",
 };
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -115,6 +118,7 @@ const JSON_ASSET_DEFAULTS = {
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "allowedUnitTypes",
 "author",
+"customCities",
 "customRegions",
 "difficulty",
 "language",
@@ -1722,12 +1726,12 @@ const getActiveRuntimeScenarioSummary = () => {
 const readRuntimeJsonAsset = (assetKey) => {
   ensureGameStore();
 
-  // Custom region geometry is scenario-scoped (static map data). Resolve it from
-  // the active game's scenario, mirroring how pmtiles overrides resolve. Absent
-  // => empty collection, so the game keeps its stock pmtiles rendering.
-  if (assetKey === "regionsGeojson") {
+  // Custom region/city geometry is scenario-scoped (static map data). Resolve it
+  // from the active game's scenario, mirroring how pmtiles overrides resolve.
+  // Absent => empty collection, so the game keeps its stock pmtiles rendering.
+  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
     const scenario = getActiveRuntimeScenarioSummary();
-    const overridePath = getScenarioUploadPath(scenario.id, "regionsGeojson");
+    const overridePath = getScenarioUploadPath(scenario.id, assetKey);
     const hasOverride = fs.existsSync(overridePath);
     return {
       contentType: "application/json; charset=utf-8",
@@ -1914,6 +1918,7 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       countries: buildScenarioBundleAsset(scenarioId, "countries", mode),
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
+      citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson", mode),
     },
     data: {
       actions: cloneJson(details.data.actions),
