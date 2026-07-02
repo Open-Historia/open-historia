@@ -606,7 +606,9 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 };
 
 export const loadRegionCatalog = async ({ force = false } = {}) => {
-  const cacheKey = PMTILES_ARCHIVES.regions;
+  // Keyed on BOTH sources: switching games/scenarios (new runtime token) must
+  // refresh the custom-region names merged in below.
+  const cacheKey = `${PMTILES_ARCHIVES.regions}|${JSON_URLS.regionsGeojson}`;
 
   if (!force && regionCatalogPromise && regionCatalogPromiseKey === cacheKey) {
     return regionCatalogPromise;
@@ -647,6 +649,28 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
             name: String(name),
           });
         }
+      }
+
+      // Regions the stock tiles don't know — shapes DRAWN in the map editor
+      // (reg_* ids) and seed-only regions — get their names from the active
+      // scenario's own geometry, so the AI can talk about them by name instead
+      // of raw ids. Usually already in the JSON cache (the map fetched it).
+      try {
+        const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null });
+        for (const feature of custom?.features ?? []) {
+          const props = feature?.properties ?? {};
+          const id = props.id != null ? String(props.id) : "";
+          if (!id || seen.has(id)) continue;
+          const countryCode = props.gid0 ? String(props.gid0) : "";
+          seen.set(id, {
+            country: props.country ? String(props.country) : "",
+            countryCode,
+            id,
+            name: props.name ? String(props.name) : id,
+          });
+        }
+      } catch {
+        // No custom geometry (or fetch hiccup) — stock names only.
       }
 
       return Array.from(seen.values()).sort((left, right) => {

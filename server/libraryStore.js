@@ -1721,20 +1721,40 @@ const getActiveRuntimeScenarioSummary = () => {
   return getScenarioSummary(activeGame.scenarioId);
 };
 
+// Every scenario renders the custom map style: worlds that never set the flag
+// (fresh scenarios, old imported bundles) get it injected in the SERVED payload
+// — their geometry is the Modern Day fallback in readRuntimeJsonAsset, and
+// their ownership overrides recolor it. Nothing is written to disk.
+const normalizeRuntimeWorld = (assetKey, data) => {
+  if (assetKey !== "world" || !data || typeof data !== "object" || Array.isArray(data)) {
+    return data;
+  }
+  return data.customRegions ? data : { ...data, customRegions: true };
+};
+
 const readRuntimeJsonAsset = (assetKey) => {
   ensureGameStore();
 
   // Custom region/city geometry is scenario-scoped (static map data). Resolve it
   // from the active game's scenario, mirroring how pmtiles overrides resolve.
-  // Absent => empty collection, so the game keeps its stock pmtiles rendering.
   if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
     const scenario = getActiveRuntimeScenarioSummary();
-    const overridePath = getScenarioUploadPath(scenario.id, assetKey);
-    const hasOverride = fs.existsSync(overridePath);
+    let sourcePath = getScenarioUploadPath(scenario.id, assetKey);
+    if (!fs.existsSync(sourcePath)) {
+      sourcePath = null;
+      // Scenarios without a map of their own use the built-in Modern Day
+      // geometry, so EVERY scenario renders with the custom map style (the
+      // scenario's ownership overrides still recolor it). Cities stay absent
+      // unless the scenario ships its own set.
+      if (assetKey === "regionsGeojson" && scenario.id !== DEFAULT_SCENARIO_ID) {
+        const defaultPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, assetKey);
+        if (fs.existsSync(defaultPath)) sourcePath = defaultPath;
+      }
+    }
     return {
       contentType: "application/json; charset=utf-8",
-      data: hasOverride ? readJsonFile(overridePath, EMPTY_FEATURE_COLLECTION) : cloneJson(EMPTY_FEATURE_COLLECTION),
-      sourcePath: hasOverride ? overridePath : null,
+      data: sourcePath ? readJsonFile(sourcePath, EMPTY_FEATURE_COLLECTION) : cloneJson(EMPTY_FEATURE_COLLECTION),
+      sourcePath,
     };
   }
 
@@ -1747,7 +1767,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   if (gamePath && fs.existsSync(gamePath)) {
     return {
       contentType: "application/json; charset=utf-8",
-      data: readJsonFile(gamePath, JSON_ASSET_DEFAULTS[assetKey] ?? {}),
+      data: normalizeRuntimeWorld(assetKey, readJsonFile(gamePath, JSON_ASSET_DEFAULTS[assetKey] ?? {})),
       sourcePath: gamePath,
     };
   }
@@ -1761,7 +1781,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   if (scenarioPath && fs.existsSync(scenarioPath)) {
     return {
       contentType: "application/json; charset=utf-8",
-      data: readJsonFile(scenarioPath, JSON_ASSET_DEFAULTS[assetKey] ?? {}),
+      data: normalizeRuntimeWorld(assetKey, readJsonFile(scenarioPath, JSON_ASSET_DEFAULTS[assetKey] ?? {})),
       sourcePath: scenarioPath,
     };
   }
