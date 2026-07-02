@@ -353,6 +353,15 @@ const HUB_DOWNLOAD_HOSTS = new Set([
 ]);
 const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
 
+// Shut the server down from the UI (the ⏻ button in the top bar) — handy on
+// phones/Termux and headless installs where no terminal is in sight. Responds
+// first so the client can show its "server stopped" screen, then exits.
+app.post("/api/server/shutdown", (_req, res) => {
+  res.json({ ok: true });
+  console.log("Shutdown requested from the UI — exiting.");
+  setTimeout(() => process.exit(0), 300);
+});
+
 app.get("/api/hub/file", async (req, res) => {
   try {
     const target = new URL(String(req.query.url ?? ""));

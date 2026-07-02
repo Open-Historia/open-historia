@@ -1391,6 +1391,22 @@ const LibraryTopBar = () => {
   };
 
   const isMobile = useIsMobile();
+  // True once the user shut the server down from the ⏻ button — swaps the whole
+  // UI for a "server stopped" screen (every poll would just error underneath).
+  const [serverDown, setServerDown] = useState(false);
+
+  const handleShutdownServer = async () => {
+    if (!window.confirm("Shut down the Pax Historia server? The game stops for everyone connected to it.")) {
+      return;
+    }
+    try {
+      await fetch("/api/server/shutdown", { method: "POST" });
+    } catch {
+      // The socket may drop before the response arrives — that IS the shutdown.
+    }
+    setServerDown(true);
+  };
+
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
@@ -1573,8 +1589,51 @@ const LibraryTopBar = () => {
           ))}
         </div>
 
-        <div />
+        {/* Top-right: shut the server down (phones/Termux have no terminal handy). */}
+        <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={handleShutdownServer}
+            title="Exit: shut down the Pax Historia server"
+            type="button"
+            style={{
+              ...actionButtonStyle,
+              background: "rgba(220,70,70,0.14)",
+              borderColor: "rgba(248,113,113,0.35)",
+              color: "#fca5a5",
+              minWidth: "2.35rem",
+              padding: isMobile ? "0.55rem 0.7rem" : undefined,
+            }}
+          >
+            ⏻
+          </button>
+        </div>
       </div>
+
+      {serverDown && (
+        <div
+          style={{
+            alignItems: "center",
+            background: "rgba(5,8,18,0.97)",
+            color: "#fff",
+            display: "flex",
+            flexDirection: "column",
+            fontFamily: "sans-serif",
+            gap: "0.8rem",
+            inset: 0,
+            justifyContent: "center",
+            padding: "1rem",
+            position: "fixed",
+            textAlign: "center",
+            zIndex: 20000,
+          }}
+        >
+          <div style={{ fontSize: "2.2rem" }}>⏻</div>
+          <div style={{ fontSize: "1.2rem", fontWeight: 800 }}>Server stopped</div>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", maxWidth: "22rem" }}>
+            You can close this tab now. Run the launcher (or <code>node server/server.js</code>) to start it again.
+          </div>
+        </div>
+      )}
 
       {isMapEditorOpen && (
         <div style={{ position: "fixed", inset: 0, zIndex: 10050 }}>
