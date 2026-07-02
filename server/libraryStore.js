@@ -712,6 +712,13 @@ const ensureDefaultScenario = () => {
   ensureDirectory(SCENARIOS_DIR);
   const scenarioDir = getScenarioDirectory(DEFAULT_SCENARIO_ID);
 
+  // The built-in scenario is deletable (like the built-in game before it) — a
+  // deliberately deleted one must stay deleted across restarts. It is only
+  // (re)seeded on a true first run, i.e. before any scenario manifest exists.
+  if (fs.existsSync(SCENARIO_MANIFEST_PATH) && !fs.existsSync(scenarioDir)) {
+    return;
+  }
+
   ensureDirectory(scenarioDir);
   ensureDirectory(path.join(scenarioDir, "storage"));
 
@@ -850,7 +857,9 @@ const getScenarioCatalog = () => {
       ...meta,
       assetStatus,
       cacheToken,
-      canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
+      // Every scenario is deletable, the built-in one included (usage by
+      // existing games still blocks deletion in deleteScenario).
+      canDelete: true,
       coverImageUrl: assetStatus.cover
       ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
       : null,
@@ -859,9 +868,11 @@ const getScenarioCatalog = () => {
   })
   .filter(Boolean);
 
+  // Fall back to the first scenario that actually exists — the built-in one
+  // may have been deleted.
   const selectedScenarioId = scenarios.some((scenario) => scenario.id === manifest.selectedScenarioId)
   ? manifest.selectedScenarioId
-  : DEFAULT_SCENARIO_ID;
+  : (scenarios[0]?.id ?? "");
 
   if (selectedScenarioId !== manifest.selectedScenarioId) {
     saveScenarioManifest({
@@ -1405,10 +1416,6 @@ const updateGame = (
 const deleteScenario = (scenarioId) => {
   ensureScenarioStore();
 
-  if (scenarioId === DEFAULT_SCENARIO_ID) {
-    throw new Error("The default scenario cannot be deleted.");
-  }
-
   const usageCount = getScenarioUsageCountMap().get(scenarioId) ?? 0;
   if (usageCount > 0) {
     throw new Error("This scenario is still used by one or more games.");
@@ -1428,11 +1435,13 @@ const deleteScenario = (scenarioId) => {
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
     (entry) => entry !== scenarioId,
   );
+  // Select the first remaining scenario (the deleted one may have been the
+  // built-in default — nothing resurrects it).
   const nextSelectedScenarioId =
-  manifest.selectedScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.selectedScenarioId;
+  manifest.selectedScenarioId === scenarioId ? (nextOrder[0] ?? "") : manifest.selectedScenarioId;
 
   saveScenarioManifest({
-    order: nextOrder.length > 0 ? nextOrder : [DEFAULT_SCENARIO_ID],
+    order: nextOrder,
     selectedScenarioId: nextSelectedScenarioId,
   });
 
