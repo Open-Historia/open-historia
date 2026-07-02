@@ -52,7 +52,10 @@ if ! command -v node >/dev/null 2>&1; then
             ;;
         *)
             PKG_CMD=""
-            if command -v apt-get >/dev/null 2>&1; then PKG_CMD="sudo apt-get install -y nodejs npm"
+            # Termux (Android) has its own package manager and no sudo.
+            if [ -n "$TERMUX_VERSION" ] || { [ -n "$PREFIX" ] && [ "${PREFIX#*com.termux}" != "$PREFIX" ]; }; then
+                PKG_CMD="pkg install -y nodejs"
+            elif command -v apt-get >/dev/null 2>&1; then PKG_CMD="sudo apt-get install -y nodejs npm"
             elif command -v dnf >/dev/null 2>&1; then PKG_CMD="sudo dnf install -y nodejs npm"
             elif command -v pacman >/dev/null 2>&1; then PKG_CMD="sudo pacman -S --noconfirm nodejs npm"
             elif command -v zypper >/dev/null 2>&1; then PKG_CMD="sudo zypper install -y nodejs npm"

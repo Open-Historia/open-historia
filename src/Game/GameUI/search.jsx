@@ -1,4 +1,5 @@
 import React, { memo, useEffect, useRef, useState } from "react";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const SEARCH_HEADERS = { "Accept-Language": "en, *;q=0.5" };
 const SEARCH_RESULT_CACHE = new Map();
@@ -140,6 +141,7 @@ const getIcon = (suggestion) => {
 };
 
 const Search = memo(({ mapRef }) => {
+  const isMobile = useIsMobile();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState(null);
@@ -270,11 +272,14 @@ const Search = memo(({ mapRef }) => {
     <div
       style={{
         position: "fixed",
-        bottom: "1rem",
+        // Desktop: sits right of the bottom toolbar and expands rightward.
+        // Phones: the expanded box wouldn't fit there, so it opens as a
+        // full-width bar just above the toolbar instead.
+        bottom: expanded && isMobile ? "5rem" : "1rem",
         // Clear of the bottom toolbar (0.5rem + 12.5rem wide, now incl. Forces).
-        left: "13.5rem",
+        left: expanded && isMobile ? "0.5rem" : "13.5rem",
         height: "3rem",
-        width: expanded ? "17rem" : "3rem",
+        width: expanded ? (isMobile ? "calc(100vw - 1rem)" : "17rem") : "3rem",
         overflow: "visible",
         transition: "width 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
         cursor: expanded ? "default" : "pointer",

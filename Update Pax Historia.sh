@@ -79,7 +79,8 @@ main() {
     fi
     if ! command -v rsync >/dev/null 2>&1; then
         echo "[ERROR] rsync was not found. It ships with macOS; on Linux install it"
-        echo "        with your package manager (e.g. sudo apt-get install rsync)."
+        echo "        with your package manager (e.g. sudo apt-get install rsync;"
+        echo "        on Termux: pkg install rsync)."
         exit 1
     fi
 

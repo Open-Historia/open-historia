@@ -15,7 +15,8 @@ const Panel = ({ title, icon, onClose, side = "left", width = 340, footer, child
       position: "fixed",
       top: 64,
       [side]: 12,
-      width,
+      // Never wider than the screen (phones).
+      width: `min(${width}px, calc(100vw - 24px))`,
       maxHeight: "calc(100vh - 150px)",
       display: "flex",
       flexDirection: "column",

@@ -21,7 +21,8 @@ import {
 dayjs.extend(advancedFormat);
 
 const TIMELINE_STYLE_ID = "timeline-ui-style";
-const PANEL_WIDTH = "26.25rem";
+// Clamped so the timeline panel and widget always fit phone screens.
+const PANEL_WIDTH = "min(26.25rem, calc(100vw - 0.9rem))";
 
 const ensureTimelineStyles = () => {
     if (typeof document === "undefined" || document.getElementById(TIMELINE_STYLE_ID)) {
@@ -158,7 +159,7 @@ const widgetSurface = {
     padding: "0 0.5rem",
     position: "fixed",
     transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    width: "18rem",
+    width: "min(18rem, calc(100vw - 0.9rem))",
     zIndex: 9999,
 };
 

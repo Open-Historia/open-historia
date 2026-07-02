@@ -61,6 +61,23 @@ and opens the game. To update an existing install later, run the matching
 **`Update Pax Historia`** script for your platform — it fetches the latest version
 while preserving your saves, scenarios, and map data.
 
+### Android (Termux)
+
+The game runs and hosts fine on a phone. In [Termux](https://termux.dev):
+
+```bash
+pkg install nodejs git git-lfs rsync
+git clone https://github.com/Tommi-K/pax-historia.git && cd pax-historia
+git lfs install && git lfs pull
+npm install && npm run build
+node server/server.js
+```
+
+Then open **http://localhost:3000** in your phone's browser — the UI adapts to
+small touch screens. Other devices on the same Wi-Fi can play too, at
+`http://<phone-ip>:3000`. (`./"Launch Pax Historia.sh"` and the update script
+also work on Termux.)
+
 ### Manual
 
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).

@@ -41,6 +41,10 @@ const Toolbar = ({ activeTool, onToolChange, onFit, onUndo, onRedo, canUndo, can
       transform: "translateX(-50%)",
       display: "flex",
       alignItems: "center",
+      // Wraps into extra rows on narrow (phone) screens instead of overflowing.
+      flexWrap: "wrap",
+      justifyContent: "center",
+      maxWidth: "calc(100vw - 12px)",
       gap: 4,
       padding: "6px 8px",
       zIndex: 30,

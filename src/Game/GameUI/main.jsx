@@ -13,7 +13,7 @@ import {
   persistProviderSetting,
 } from "../AI/providerConfig.js";
 
-const ADVISOR_PANEL_WIDTH = "20rem";
+const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 const baseStyle = {
   position: "fixed",
   backgroundColor: "rgba(17, 24, 39, 0.9)",

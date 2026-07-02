@@ -6,7 +6,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 
 Chart.register(...registerables);
 
-const ADVISOR_PANEL_WIDTH = "20rem";
+const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 
 const baseStyle = {
     position: "fixed",
