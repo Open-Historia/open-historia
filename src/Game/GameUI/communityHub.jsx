@@ -51,6 +51,10 @@ const fetchInstallCounts = async () => {
   }
 };
 
+// Official = posted by someone with real access to the hub repo, as reported
+// by GitHub itself (author_association). Titles and body text can't fake this.
+const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
 const parsePost = (issue, installsByFile) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
@@ -67,10 +71,14 @@ const parsePost = (issue, installsByFile) => {
     avatarUrl: issue.user?.avatar_url ?? null,
     url: issue.html_url,
     createdAt: issue.created_at,
+    // The "pinned" label can only be applied by hub collaborators: GitHub
+    // silently drops labels set by anyone without push access (API, issue
+    // forms and URL params alike), so authors can't pin their own posts.
     pinned: (issue.labels ?? []).some((label) => (label.name ?? label) === "pinned"),
-    // Verified against GitHub's author_association — only posts actually made by
-    // the hub owner count. Writing "official" in a title does nothing.
-    official: issue.author_association === "OWNER",
+    // Verified against GitHub's author_association — only posts actually made
+    // by the hub owner or a repo collaborator count. Writing "official" in a
+    // title does nothing.
+    official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
     upvotes: issue.reactions?.["+1"] ?? 0,
     plays: issue.reactions?.rocket ?? 0,
     comments: issue.comments ?? 0,
@@ -160,7 +168,7 @@ const ScenarioCard = ({ post, busy, onImport }) => (
       )}
       <div style={{ minWidth: 0 }}>
         <div
-          title={post.official ? "Official: posted by the hub owner (verified by GitHub, not by the title)" : undefined}
+          title={post.official ? "Official: posted by a hub maintainer (verified by GitHub, not by the title)" : undefined}
           style={{
             // Purple = verified official (hub-owner post). A random poster writing
             // "official" in their title stays white.
