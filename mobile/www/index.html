@@ -77,10 +77,11 @@
     <div class="card" id="update" style="display: none">
       <h1>Update available</h1>
       <p id="updateInfo">
-        A newer version of the app is downloading — install
-        <b>pax-historia.apk</b> from your notification bar when it finishes,
-        then reopen the app.
+        A newer version of the app is available. Tap below to download
+        <b>pax-historia.apk</b>, then open the finished download to install it
+        and reopen the app.
       </p>
+      <button id="downloadUpdate">Download update</button>
       <button class="ghost" id="skipUpdate">Continue without updating</button>
     </div>
 
@@ -113,9 +114,12 @@
           await fetch(url + "/api/library", { signal: AbortSignal.timeout(4000) });
           localStorage.setItem(KEY, url);
           window.location.replace(url);
-        } catch {
+        } catch (err) {
           showSetup();
-          errorBox.textContent = "Could not reach " + url + " — is the server running?";
+          // Show the real failure — "TypeError: Failed to fetch" vs a timeout
+          // point at very different problems when debugging on a phone.
+          const detail = err && err.name ? " (" + err.name + (err.message ? ": " + err.message : "") + ")" : "";
+          errorBox.textContent = "Could not reach " + url + " — is the server running?" + detail;
         }
       };
 
@@ -187,12 +191,23 @@
         setup.style.display = "none";
         connecting.style.display = "none";
         document.getElementById("update").style.display = "flex";
+        // Explicit button — the reliable path. (The download is handed to the
+        // system browser by the native download listener.)
+        document.getElementById("downloadUpdate").addEventListener("click", () => {
+          window.location.href = update.url;
+        });
         document.getElementById("skipUpdate").addEventListener("click", () => {
           document.getElementById("update").style.display = "none";
           startNormalFlow();
         });
-        window.location.href = update.url;
       });
+
+      // Which build is this? Shown in the corner so bug reports can say.
+      const badge = document.createElement("div");
+      badge.textContent = "build " + (/^\d+$/.test(APP_BUILD) ? APP_BUILD : "dev");
+      badge.style.cssText =
+        "position:fixed;bottom:0.6rem;right:0.9rem;color:rgba(255,255,255,0.28);font-size:0.7rem;";
+      document.body.appendChild(badge);
     </script>
   </body>
 </html>
