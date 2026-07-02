@@ -159,7 +159,7 @@ const loadMessages = async () => {
     } catch { return []; }
 };
 
-const AdvisorPanel = ({ isAdvisorOpen }) => {
+const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -259,6 +259,15 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         title="Clear chat"
         style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.5rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
         >🗑</button>
+        {/* On phones the panel slides over the 🧭 launcher, making it
+            untappable — this ✕ is the way out. */}
+        {onClose && (
+            <button
+            onClick={onClose}
+            title="Close advisor"
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: "0 0 0 0.35rem", display: "flex", alignItems: "center" }}
+            >✕</button>
+        )}
         </div>
 
         {/* Messages */}

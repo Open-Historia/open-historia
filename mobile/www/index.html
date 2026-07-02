@@ -104,6 +104,28 @@
         return url.replace(/\/+$/, "");
       };
 
+      // Probe via NATIVE http when available: the WebView's fetch is subject
+      // to CORS and Chrome's Private Network Access rules for loopback
+      // targets ("TypeError: Failed to fetch" with the server running fine),
+      // while native requests are not. Navigation afterwards is unaffected by
+      // those policies, and the game then runs same-origin on the server.
+      const probe = async (url) => {
+        const native = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+        if (native) {
+          const res = await native.request({
+            url: url + "/api/library",
+            method: "GET",
+            connectTimeout: 4000,
+            readTimeout: 4000,
+          });
+          if (!res || res.status < 100 || res.status >= 500) {
+            throw new Error("HTTP " + (res && res.status));
+          }
+          return;
+        }
+        await fetch(url + "/api/library", { signal: AbortSignal.timeout(4000) });
+      };
+
       // Probe the server first so a typo shows an error here instead of a
       // WebView error page the user can't navigate back from.
       const connect = async (raw) => {
@@ -111,7 +133,7 @@
         if (!url) return;
         errorBox.textContent = "";
         try {
-          await fetch(url + "/api/library", { signal: AbortSignal.timeout(4000) });
+          await probe(url);
           localStorage.setItem(KEY, url);
           window.location.replace(url);
         } catch (err) {
@@ -149,7 +171,7 @@
           setup.style.display = "none";
           connecting.style.display = "flex";
           document.getElementById("connectingTo").textContent = "Looking for a server on this phone…";
-          fetch(guess + "/api/library", { signal: AbortSignal.timeout(2500) })
+          probe(guess)
             .then(() => {
               localStorage.setItem(KEY, guess);
               window.location.replace(guess);
