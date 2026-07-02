@@ -80,10 +80,15 @@ also work on Termux.)
 
 #### Android app (thin APK)
 
-`mobile/` is a ready-to-build Android app: a full-screen WebView with a connect
-screen that remembers your server — the Termux server on the same phone
-(`http://localhost:3000`) or any host on your network. Build it with the
-Android SDK installed:
+Easiest: download **`pax-historia.apk`** from the
+[**Android release**](https://github.com/Tommi-K/pax-historia/releases/tag/android)
+and open it to install (allow installs from your browser when Android asks).
+On first launch the app finds the Termux server on the same phone by itself;
+to play against another machine, type its address once — it's remembered.
+It's a thin client: the game itself runs on the server it connects to.
+
+<details>
+<summary>Build the APK yourself (needs the Android SDK)</summary>
 
 ```bash
 cd mobile
@@ -93,8 +98,11 @@ cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
 ```
 
 The APK lands in `mobile/android/app/build/outputs/apk/debug/`. (Or open
-`mobile/android` in Android Studio and press Run.) It's a thin client — the
-game itself still runs on the server you point it at.
+`mobile/android` in Android Studio and press Run.) Maintainers: the
+**Build Android APK** action in the Actions tab builds and republishes the
+release APK — run it after changing `mobile/`.
+
+</details>
 
 ### Manual
 

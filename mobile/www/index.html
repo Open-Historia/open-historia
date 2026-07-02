@@ -123,6 +123,22 @@
         connecting.style.display = "flex";
         document.getElementById("connectingTo").textContent = "Connecting to " + saved + "…";
         autoTimer = setTimeout(() => connect(saved), 1500);
+      } else {
+        // First launch: look for a Termux server on this phone — if it's there,
+        // go straight into the game with zero typing. Otherwise show the form.
+        const guess = "http://localhost:3000";
+        setup.style.display = "none";
+        connecting.style.display = "flex";
+        document.getElementById("connectingTo").textContent = "Looking for a server on this phone…";
+        fetch(guess + "/api/library", { signal: AbortSignal.timeout(2500) })
+          .then(() => {
+            localStorage.setItem(KEY, guess);
+            window.location.replace(guess);
+          })
+          .catch(() => {
+            showSetup();
+            errorBox.textContent = "";
+          });
       }
     </script>
   </body>
