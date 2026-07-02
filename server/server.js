@@ -479,6 +479,18 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+});
+
+// A taken port used to crash with a raw EADDRINUSE stack, which the launchers
+// then reported as a bare "Server stopped." — say what actually happened.
+httpServer.on("error", (error) => {
+  if (error?.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use — Pax Historia is probably already running.`);
+    console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
+    console.error(`PORT environment variable to run this one on a different port.`);
+    process.exit(1);
+  }
+  throw error;
 });
