@@ -213,6 +213,67 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
   return { type: "FeatureCollection", features };
 };
 
+// TRUE era borders for custom maps: the edges shared by regions with
+// DIFFERENT owners, computed from the seed geometry (neighboring regions
+// share their border vertices, so equal-edge hashing finds the boundary).
+// Without this, hiding the stock country borders left nothing visible at
+// world zoom — countries were only separated by fill colour.
+const buildOwnerBorderCollection = (regionsFC, ownerById) => {
+  const edges = new Map();
+  const keyOf = (a, b) => {
+    const ka = `${a[0].toFixed(4)},${a[1].toFixed(4)}`;
+    const kb = `${b[0].toFixed(4)},${b[1].toFixed(4)}`;
+    return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+  };
+
+  for (const feature of regionsFC?.features ?? []) {
+    const props = feature.properties || {};
+    const id = props.id != null ? String(props.id) : "";
+    // "~" marks unclaimed land as its own owner so its frontier gets a border.
+    const owner = (ownerById.get(id) ?? props.owner ?? "") || "~unclaimed";
+    const geometry = feature.geometry;
+    const polygons = geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+    for (const polygon of polygons) {
+      for (const ring of polygon) {
+        for (let index = 1; index < ring.length; index += 1) {
+          const a = ring[index - 1];
+          const b = ring[index];
+          const key = keyOf(a, b);
+          let entry = edges.get(key);
+          if (!entry) {
+            entry = { a, b, owners: new Set() };
+            edges.set(key, entry);
+          }
+          entry.owners.add(owner);
+        }
+      }
+    }
+  }
+
+  const lines = [];
+  for (const entry of edges.values()) {
+    if (entry.owners.size > 1) {
+      lines.push([entry.a, entry.b]);
+    }
+  }
+
+  if (!lines.length) return EMPTY_FEATURE_COLLECTION;
+  // Chunked MultiLineStrings keep the geojson source responsive.
+  const features = [];
+  for (let start = 0; start < lines.length; start += 5000) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "MultiLineString", coordinates: lines.slice(start, start + 5000) },
+      properties: {},
+    });
+  }
+  return { type: "FeatureCollection", features };
+};
+
 // Procedural fallback keyed on the custom region's own "owner" property (the
 // custom-geometry twin of buildFallbackColorExpression, which reads GID_0).
 const buildOwnerFallbackColorExpression = () => ([
@@ -500,6 +561,23 @@ const WorldMap = () => {
     ownerLookupRef.current = ownerByRegionId;
   }, [ownerByRegionId]);
 
+  // Stable fingerprint of the ownership map: the world poll rebuilds
+  // ownerByRegionId every 5s, but the border geometry only needs recomputing
+  // when an owner actually changes.
+  const ownershipKey = useMemo(() => {
+    if (!customActive) return "";
+    let key = "";
+    for (const [regionId, owner] of ownerByRegionId) key += `${regionId}:${owner};`;
+    return key;
+  }, [customActive, ownerByRegionId]);
+
+  const ownerBorderData = useMemo(() => {
+    if (!customActive) return EMPTY_FEATURE_COLLECTION;
+    return buildOwnerBorderCollection(customRegionData, ownerLookupRef.current);
+    // ownershipKey stands in for ownerByRegionId's contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customActive, customRegionData, ownershipKey]);
+
   // GADM regions on custom maps paint the STOCK vector tiles (sharp geometry at
   // every zoom — the coarse seed polygons left sliver gaps up close). Only
   // author-drawn shapes still render from the GeoJSON, on top.
@@ -645,6 +723,22 @@ const WorldMap = () => {
             "line-opacity": customActive
               ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.35, 8, 0.6]
               : 0,
+          }}
+        />
+      </Source>
+
+      {/* Era country borders (owner boundaries). Strong at world/mid zoom where
+          the faint per-region outlines are invisible; hands off to the crisp
+          tile-rendered region borders up close (the seed geometry these lines
+          come from is too coarse at high zoom). */}
+      <Source id="owner-borders-source" type="geojson" data={ownerBorderData}>
+        <Layer
+          id="owner-borders"
+          type="line"
+          paint={{
+            "line-color": "#000",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.9, 6, 1.6],
+            "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.85, 7, 0.85, 8.5, 0],
           }}
         />
       </Source>
