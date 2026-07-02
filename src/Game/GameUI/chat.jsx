@@ -187,7 +187,8 @@ const MessageBubble = ({ msg }) => {
             </div>
         )}
 
-        <div style={{
+        {/* Player-typed text stays verbatim under UI translation. */}
+        <div data-no-translate={isPlayer ? "" : undefined} style={{
             padding: "0.6rem 0.85rem",
             borderRadius: isPlayer ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
             backgroundColor: isPlayer

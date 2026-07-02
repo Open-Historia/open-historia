@@ -8,6 +8,11 @@ import {
     providerSupportsModelDiscovery,
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
+import {
+    getLanguageOptions,
+    getStoredLanguage,
+    setStoredLanguage,
+} from "../../runtime/i18n.js";
 
 const baseStyle = {
     position: "fixed",
@@ -87,6 +92,63 @@ function groupProviders(options) {
 
     return groups;
 }
+
+const LanguageSelector = () => {
+    const [query, setQuery] = useState("");
+    const current = getStoredLanguage();
+    const options = getLanguageOptions();
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = normalizedQuery
+        ? options.filter((option) =>
+            `${option.name} ${option.nativeName} ${option.code}`.toLowerCase().includes(normalizedQuery))
+        : options;
+
+    const applyLanguage = (code) => {
+        if (!code || code === current) {
+            return;
+        }
+
+        setStoredLanguage(code);
+        // Reload so the translator starts (or stops) cleanly and every
+        // already-rendered string goes through it from scratch.
+        window.location.reload();
+    };
+
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>Language</label>
+        <input
+        style={{ ...inputStyle, marginBottom: "0.4rem" }}
+        type="text"
+        value={query}
+        placeholder="Search languages..."
+        onChange={(event) => setQuery(event.target.value)}
+        />
+        <select
+        data-no-translate
+        value={filtered.some((option) => option.code === current) ? current : ""}
+        onChange={(event) => applyLanguage(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        {!filtered.some((option) => option.code === current) && (
+            <option value="" disabled>
+            {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
+            </option>
+        )}
+        {filtered.map((option) => (
+            <option key={option.code} value={option.code} style={{ color: "black" }}>
+            {option.name}{option.nativeName ? ` — ${option.nativeName}` : ""}
+            </option>
+        ))}
+        </select>
+        <p style={helperStyle}>
+        {options.length}+ languages. Non-English translations are AI-generated
+        with your configured provider — the interface, scenarios, and AI
+        replies all follow. Changing this reloads the game.
+        </p>
+        </div>
+    );
+};
 
 const Toggle = ({ label, enabled, onToggle }) => (
     <div
@@ -593,6 +655,8 @@ const SettingsMenu = ({
         settings={providerSettings ?? {}}
         onSettingChange={onProviderSettingChange ?? (() => {})}
         />
+
+        <LanguageSelector />
 
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />

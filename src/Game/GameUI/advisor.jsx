@@ -296,7 +296,8 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
                     {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
                     </span>
                 )}
-                <div style={{
+                {/* Player-typed text stays verbatim under UI translation. */}
+                <div data-no-translate={msg.role === "user" ? "" : undefined} style={{
                     maxWidth: "90%", width: chartConfig ? "90%" : undefined,
                     padding: "0.6rem 0.85rem",
                     borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
