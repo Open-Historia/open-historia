@@ -1,0 +1,12 @@
+{
+  "appId": "io.github.arkniem.paxhistoria",
+  "appName": "Pax Historia",
+  "webDir": "www",
+  "server": {
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
