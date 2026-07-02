@@ -1266,7 +1266,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
   const targetDate = dayjs(bundle.game.gameDate).add(safeDays, "day").format("YYYY-MM-DD");
   const variables = await buildTemplateVariables(bundle, { targetDate });
-  const payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+  let payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
     // The jump IS the game — let slow (local/reasoning) models finish instead
     // of silently swapping in the canned fallback after a few seconds.
@@ -1277,6 +1277,20 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
         : "Simulate a standard jump forward to the requested target date. Return JSON only.",
     variables,
   });
+
+  // A model can answer with VALID but EMPTY JSON (reasoning models told
+  // "JSON only" often emit a bare object). That used to be accepted as a
+  // successful turn of nothing: no events, no summary, an invisible history
+  // entry — the game looked like it "did nothing" with no fallback either.
+  // An empty turn now counts as a failure and takes the fallback path.
+  const emptyTurn =
+    normalizeArray(payload?.events).length === 0 &&
+    !normalizeString(payload?.summary) &&
+    !payload?.catalyst;
+  if (emptyTurn) {
+    console.warn("[ai] jump returned an empty turn — using the deterministic fallback.");
+    payload = await fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate });
+  }
 
   const result = {
     catalyst: payload?.catalyst ?? null,

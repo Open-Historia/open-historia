@@ -4,6 +4,7 @@
   "webDir": "www",
   "server": {
     "androidScheme": "http",
+    "hostname": "app.paxhistoria",
     "cleartext": true,
     "allowNavigation": ["*"]
   },
