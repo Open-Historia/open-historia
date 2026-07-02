@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import {
     DEFAULT_PROVIDER,
@@ -145,10 +145,11 @@ const LanguageSelector = () => {
         ))}
         </select>
         <p style={helperStyle}>
-        The 50 most spoken languages. Non-English text is AI-translated with
-        your configured provider — the interface, scenarios, and AI replies
-        all follow. The choice is saved on the server, so the Android app and
-        every browser use it too. Changing this reloads the game.
+        The 50 most spoken languages. Switching pre-translates everything once
+        with your configured AI provider (a progress pill shows) — after that,
+        menus, scenarios, the community tab, and AI replies open already
+        translated. The choice is saved on the server, so the Android app and
+        every browser use it too.
         </p>
         </div>
     );
