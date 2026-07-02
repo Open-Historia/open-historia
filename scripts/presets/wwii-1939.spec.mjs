@@ -159,6 +159,136 @@ export default {
     "YEM.7_1": "GBR",   // Al Mahrah
   },
 
+  // Era cities: [name, modern-seed-name | [lng,lat], tier, population].
+  // tier 4 = great-power capital ★, 3 = major city ◆, 2 = city, 1 = town.
+  // Names and populations as of 1939 (Danzig, Königsberg, Leningrad, Batavia...).
+  cities: [
+    // — Europe —
+    ["Berlin", "Berlin", 4, 4339000],
+    ["Hamburg", "Hamburg", 3, 1712000],
+    ["Munich", "Munich", 2, 829000],
+    ["Cologne", "Cologne", 2, 772000],
+    ["Vienna", "Vienna", 3, 1918000], // annexed, 1938
+    ["Prague", "Prague", 2, 962000], // Protectorate of Bohemia-Moravia
+    ["Danzig", "Gdańsk", 2, 400000], // the Free City — the war's first prize
+    ["Königsberg", "Kaliningrad", 2, 372000],
+    ["Breslau", "Wrocław", 2, 630000],
+    ["Warsaw", "Warsaw", 3, 1289000],
+    ["London", "London", 4, 8615000],
+    ["Manchester", "Manchester", 2, 736000],
+    ["Glasgow", [-4.25, 55.86], 2, 1128000],
+    ["Paris", "Paris", 4, 2830000],
+    ["Marseille", "Marseille", 2, 914000],
+    ["Rome", "Rome", 4, 1284000],
+    ["Milan", "Milan", 3, 1116000],
+    ["Naples", "Naples", 2, 866000],
+    ["Madrid", "Madrid", 3, 1048000], // Franco's Spain, war just ended
+    ["Barcelona", "Barcelona", 2, 1081000],
+    ["Lisbon", "Lisbon", 2, 594000],
+    ["Amsterdam", "Amsterdam", 2, 800000],
+    ["Brussels", [4.35, 50.85], 2, 913000],
+    ["Bern", [7.45, 46.95], 1, 122000],
+    ["Copenhagen", "Copenhagen", 2, 700000],
+    ["Oslo", "Oslo", 2, 276000],
+    ["Stockholm", "Stockholm", 2, 570000],
+    ["Helsinki", "Helsinki", 2, 291000],
+    ["Tallinn", "Tallinn", 1, 145000],
+    ["Riga", "Riga", 2, 385000],
+    ["Kaunas", "Kaunas", 1, 152000], // interwar Lithuanian capital
+    ["Budapest", "Budapest", 3, 1163000],
+    ["Bucharest", "Bucharest", 2, 870000],
+    ["Belgrade", "Belgrade", 2, 320000],
+    ["Sofia", "Sofia", 2, 401000],
+    ["Athens", "Athens", 2, 481000],
+    ["Dublin", "Dublin", 1, 472000],
+    // — Soviet Union —
+    ["Moscow", "Moscow", 4, 4137000],
+    ["Leningrad", [30.32, 59.94], 3, 3191000],
+    ["Stalingrad", "Volgograd", 2, 445000],
+    ["Kiev", "Kyiv", 2, 847000],
+    ["Kharkov", "Kharkiv", 2, 833000],
+    ["Minsk", "Minsk", 2, 239000],
+    ["Odessa", "Odesa", 2, 604000],
+    ["Baku", "Baku", 2, 809000], // the oil fields
+    ["Tbilisi", "Tbilisi", 1, 519000],
+    ["Tashkent", "Tashkent", 2, 585000],
+    ["Novosibirsk", "Novosibirsk", 1, 404000],
+    ["Vladivostok", "Vladivostok", 1, 206000],
+    // — Middle East and Africa —
+    ["Istanbul", "Istanbul", 3, 793000],
+    ["Ankara", "Ankara", 2, 157000],
+    ["Tehran", "Tehran", 2, 540000],
+    ["Baghdad", "Baghdad", 2, 400000],
+    ["Jerusalem", "Jerusalem", 1, 132000], // British Mandate
+    ["Cairo", "Cairo", 3, 1312000],
+    ["Alexandria", "Alexandria", 2, 686000],
+    ["Tripoli", "Tripoli", 1, 111000], // Italian Libya
+    ["Algiers", "Algiers", 2, 252000],
+    ["Casablanca", "Casablanca", 2, 257000],
+    ["Dakar", "Dakar", 1, 92000],
+    ["Lagos", "Lagos", 1, 167000],
+    ["Léopoldville", "Kinshasa", 1, 46000], // Belgian Congo
+    ["Nairobi", "Nairobi", 1, 61000],
+    ["Addis Ababa", "Addis Ababa", 2, 300000], // occupied Italian East Africa
+    ["Johannesburg", "Johannesburg", 2, 500000],
+    ["Cape Town", "Cape Town", 2, 344000],
+    // — Asia —
+    ["Tokyo", "Tokyo", 4, 6779000],
+    ["Osaka", "Ōsaka", 3, 3252000],
+    ["Kyoto", [135.77, 35.01], 2, 1090000],
+    ["Hiroshima", "Hiroshima", 1, 344000],
+    ["Keijo", "Seoul", 2, 774000], // colonial Seoul
+    ["Hsinking", [125.32, 43.88], 2, 415000], // capital of Manchukuo
+    ["Mukden", "Shenyang", 2, 863000],
+    ["Peiping", "Beijing", 3, 1556000], // occupied
+    ["Tientsin", "Tianjin", 3, 1210000], // occupied
+    ["Shanghai", "Shanghai", 4, 3727000], // occupied — the foreign concessions remain
+    ["Nanking", "Nanjing", 2, 700000], // occupied
+    ["Chungking", "Chongqing", 3, 635000], // Free China's wartime capital
+    ["Canton", "Guangzhou", 2, 1122000], // occupied
+    ["Hong Kong", "Hong Kong", 2, 1050000],
+    ["Hanoi", "Hanoi", 2, 149000], // French Indochina
+    ["Saigon", "Ho Chi Minh City", 2, 256000],
+    ["Bangkok", "Bangkok", 2, 681000],
+    ["Rangoon", [96.16, 16.87], 2, 400000], // British Burma
+    ["Singapore", "Singapore", 2, 728000], // the fortress
+    ["Batavia", "Jakarta", 2, 533000], // Dutch East Indies capital
+    ["Manila", "Manila", 2, 623000], // U.S. Commonwealth
+    ["Delhi", "Delhi", 3, 522000], // capital of the British Raj
+    ["Bombay", "Mumbai", 3, 1490000],
+    ["Calcutta", [88.36, 22.57], 3, 2109000],
+    ["Karachi", "Karachi", 2, 387000],
+    ["Colombo", "Colombo", 1, 362000],
+    // — The Americas —
+    ["New York", "New York", 4, 7455000],
+    ["Washington", [-77.04, 38.91], 3, 663000],
+    ["Chicago", "Chicago", 3, 3397000],
+    ["Detroit", "Detroit", 2, 1623000],
+    ["Los Angeles", "Los Angeles", 3, 1504000],
+    ["San Francisco", "San Francisco", 2, 635000],
+    ["Honolulu", "Honolulu", 1, 179000],
+    ["Ottawa", "Ottawa", 2, 155000],
+    ["Toronto", "Toronto", 2, 667000],
+    ["Montreal", "Montréal", 2, 903000],
+    ["Vancouver", "Vancouver", 1, 275000],
+    ["Mexico City", "Mexico City", 3, 1560000],
+    ["Havana", "Havana", 2, 570000],
+    ["Caracas", "Caracas", 1, 269000],
+    ["Bogotá", "Bogotá", 1, 330000],
+    ["Lima", "Lima", 2, 533000],
+    ["Santiago", "Santiago", 2, 952000],
+    ["Buenos Aires", "Buenos Aires", 3, 2400000],
+    ["Montevideo", "Montevideo", 2, 700000],
+    ["Rio de Janeiro", "Rio de Janeiro", 3, 1764000],
+    ["São Paulo", "São Paulo", 3, 1258000],
+    // — Oceania —
+    ["Sydney", "Sydney", 2, 1302000],
+    ["Melbourne", "Melbourne", 2, 1046000],
+    ["Canberra", "Canberra", 1, 11000],
+    ["Wellington", "Wellington", 1, 158000],
+    ["Auckland", "Auckland", 1, 221000],
+  ],
+
   simulationRules:
     "It is 1 September 1939. Germany has just invaded Poland; Britain and France will " +
     "declare war within 48 hours, beginning the Second World War. The Molotov–Ribbentrop " +

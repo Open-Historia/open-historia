@@ -49,6 +49,62 @@ const die = (msg) => {
   process.exit(1);
 };
 
+// ── Era cities ────────────────────────────────────────────────────────────────
+// spec.cities: [[name, at, tier, population], ...] where `at` is either the
+// MODERN name of the place in cities-seed.json (coords resolved from the seed,
+// e.g. ["Constantinople", "Istanbul", 4, 200000]) or explicit [lng, lat] for
+// places with no modern successor (Karakorum, Cahokia...). tier drives when the
+// city appears on the game map (4 = great-power capital ★, 3 = major city ◆,
+// 2 = city, 1 = town); population is the historical estimate.
+const CITIES_SEED_PATH = path.join(PROJECT_ROOT, "public", "assets", "cities-seed.json");
+
+const buildCityLookup = () => {
+  const seed = JSON.parse(readFileSync(CITIES_SEED_PATH, "utf8"));
+  const byName = new Map();
+  for (const c of seed) {
+    if (!Array.isArray(c.coord) || c.coord[0] == null || c.coord[1] == null) continue;
+    const key = String(c.name || "").toLowerCase();
+    if (!key) continue;
+    const prev = byName.get(key);
+    // Same-named places (Paris, Texas...) resolve to the most populous one.
+    if (!prev || (c.population || 0) > (prev.population || 0)) byName.set(key, c);
+  }
+  return byName;
+};
+
+const compileCities = (spec) => {
+  if (!Array.isArray(spec.cities) || !spec.cities.length) return null;
+  const lookup = buildCityLookup();
+  const features = [];
+  const cityErrors = [];
+  for (const entry of spec.cities) {
+    const [name, at, tier = 2, population = 0] = entry;
+    let coord = null;
+    if (Array.isArray(at)) {
+      coord = [Number(at[0]), Number(at[1])];
+    } else {
+      const hit = lookup.get(String(at).toLowerCase());
+      if (!hit) {
+        cityErrors.push(`city "${name}": modern place "${at}" not found in cities-seed.json`);
+        continue;
+      }
+      coord = [hit.coord[0], hit.coord[1]];
+    }
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: coord },
+      properties: {
+        city: String(name),
+        population: Number(population) || 0,
+        capital: tier >= 4 ? "primary" : "",
+        tier: Number(tier) || 2,
+      },
+    });
+  }
+  if (cityErrors.length) die(`spec city validation failed:\n  - ${cityErrors.join("\n  - ")}`);
+  return { type: "FeatureCollection", features };
+};
+
 const specArg = process.argv[2];
 if (!specArg) die("usage: node scripts/presets/build-preset.mjs <spec.mjs>");
 const specPath = path.resolve(process.cwd(), specArg);
@@ -128,6 +184,8 @@ const scenarioDir = path.join(SCENARIOS_DIR, spec.id);
 mkdirSync(path.join(scenarioDir, "storage"), { recursive: true });
 const now = new Date().toISOString();
 
+const cityCollection = compileCities(spec);
+
 const world = {
   regionOwnershipOverrides: overrides,
   polityOverrides,
@@ -135,6 +193,9 @@ const world = {
   // so the map shows accurate per-region ownership — the stock pmtiles only fill
   // whole countries by GID_0 and cannot depict era borders inside a country.
   customRegions: true,
+  // Era-accurate cities (cities.geojson) replace the modern city labels — no
+  // St. Petersburg in 117 AD, no Istanbul in 1200.
+  ...(cityCollection ? { customCities: true } : {}),
   // Era-appropriate deployable troop types (e.g. no Air Force in 1200).
   ...(Array.isArray(spec.allowedUnitTypes) ? { allowedUnitTypes: spec.allowedUnitTypes } : {}),
   simulationRules: spec.simulationRules ?? "",
@@ -200,6 +261,10 @@ writeFileSync(
   "utf8",
 );
 
+if (cityCollection) {
+  writeJson(path.join(scenarioDir, "cities.geojson"), cityCollection);
+}
+
 writeJson(path.join(scenarioDir, "game.json"), {
   country: spec.game?.country ?? "",
   startDate: spec.game?.startDate ?? "",
@@ -260,6 +325,9 @@ const assigned = Object.keys(overrides).length;
 console.log(`\n[build-preset] "${spec.id}" written to ${path.relative(PROJECT_ROOT, scenarioDir)}`);
 console.log(`  regions assigned: ${assigned}/${catalog.length} (${catalog.length - assigned} keep modern owner)`);
 console.log(`  regions.geojson: ${regionFeatures.length} features (customRegions=true, tier-2 render)`);
+if (cityCollection) {
+  console.log(`  cities.geojson: ${cityCollection.features.length} era cities (customCities=true)`);
+}
 console.log(`  polities: ${Object.keys(polityOverrides).length}`);
 console.log("  per-polity region counts:");
 for (const [code, n] of Object.entries(perPolity).sort((a, b) => b[1] - a[1])) {
