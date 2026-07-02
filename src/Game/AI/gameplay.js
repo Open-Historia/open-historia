@@ -424,6 +424,28 @@ const buildUnitsSummaryText = (world) => {
     .join("\n");
 };
 
+const MILITARY_ACTION_PATTERN =
+  /\b(troop|army|armies|attack|invade|invasion|deploy|fleet|navy|naval|air force|airforce|bomb|siege|offensive|battalion|regiment|garrison|blockade|mobiliz)/i;
+
+// Reach/logistics doctrine for the AI. Deliberately CONDITIONAL: it only
+// rides along when the turn actually involves forces (units on the map or
+// military-sounding orders), so peaceful turns don't pay the context cost.
+const buildMilitaryFeasibilityText = (world, actionsText) => {
+  const hasUnits = normalizeArray(world?.units).length > 0;
+  if (!hasUnits && !MILITARY_ACTION_PATTERN.test(actionsText || "")) {
+    return "";
+  }
+
+  return [
+    "",
+    "MILITARY FEASIBILITY — test every deploy request, move/attack order and your own unitOps against the era and the unit's type before honoring it:",
+    "- Era reach: before ~1500, armies march on foot or horse and cross water only by coastal shipping — intercontinental operations are impossible. ~1500–1850 (age of sail): overseas action needs fleets and friendly ports and takes months. 1850–1945: rail and steamships speed logistics; aircraft stay short-ranged until the 1940s. After 1945: global power projection belongs only to major powers with bases, carriers or allies along the route.",
+    "- Unit type: air units are fastest but need airbases or carriers within range and cannot hold ground; naval units move only by sea; infantry, armor and artillery crawl overland and need supply lines; garrisons do not travel.",
+    "- Distance: compare the unit's coordinates with the target's. An order beyond plausible reach or pace is NOT executed as given — reject it, or convert it into a partial advance with an event explaining the delay, the transport it would need, or why it failed.",
+    "- Never teleport units: each move op may only cover what that unit could actually travel in the elapsed time; long campaigns should progress across several turns.",
+  ].join("\n");
+};
+
 const buildTemplateVariables = async (
   bundle,
   {
@@ -482,7 +504,11 @@ const buildTemplateVariables = async (
     plannedActions: buildActionHistoryText(bundle.actions),
     playerPolity: bundle.game.country || "Unknown polity",
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
-    unitsSummary: buildUnitsSummaryText(bundle.world),
+    // Simulation tasks additionally get the reach/logistics doctrine — but
+    // only when forces are actually in play this turn (see the builder).
+    unitsSummary:
+      buildUnitsSummaryText(bundle.world) +
+      buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle),
     recentEvents,
     recentEventsLong: buildEventHistoryText(bundle.events, { limit: 24 }),
