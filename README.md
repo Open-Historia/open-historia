@@ -78,6 +78,24 @@ small touch screens. Other devices on the same Wi-Fi can play too, at
 `http://<phone-ip>:3000`. (`./"Launch Pax Historia.sh"` and the update script
 also work on Termux.)
 
+#### Android app (thin APK)
+
+`mobile/` is a ready-to-build Android app: a full-screen WebView with a connect
+screen that remembers your server — the Termux server on the same phone
+(`http://localhost:3000`) or any host on your network. Build it with the
+Android SDK installed:
+
+```bash
+cd mobile
+npm install
+npx cap sync android
+cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
+```
+
+The APK lands in `mobile/android/app/build/outputs/apk/debug/`. (Or open
+`mobile/android` in Android Studio and press Run.) It's a thin client — the
+game itself still runs on the server you point it at.
+
 ### Manual
 
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).

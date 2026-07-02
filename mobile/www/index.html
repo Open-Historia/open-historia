@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>Pax Historia</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        height: 100%;
+        background: #0b1020;
+        color: #fff;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        width: min(22rem, calc(100vw - 2rem));
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        text-align: center;
+      }
+      h1 { font-size: 1.5rem; letter-spacing: -0.02em; }
+      p { color: rgba(255, 255, 255, 0.55); font-size: 0.85rem; line-height: 1.5; }
+      input {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        color: #fff;
+        font-size: 1rem;
+        padding: 0.8rem 1rem;
+        text-align: center;
+        width: 100%;
+      }
+      button {
+        background: rgba(124, 58, 237, 0.75);
+        border: 1px solid rgba(167, 139, 250, 0.5);
+        border-radius: 12px;
+        color: #fff;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 700;
+        padding: 0.85rem 1rem;
+        width: 100%;
+      }
+      button.ghost {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.15);
+        font-weight: 600;
+      }
+      .error { color: #f87171; font-size: 0.82rem; min-height: 1.1em; }
+      #connecting { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="setup">
+      <h1>Pax Historia</h1>
+      <p>
+        This app connects to a running Pax Historia server — the one on this phone
+        (Termux: <b>localhost:3000</b>) or any computer on your network.
+      </p>
+      <input id="server" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+             placeholder="http://localhost:3000" value="http://localhost:3000" />
+      <button id="connect">Connect &amp; Play</button>
+      <div class="error" id="error"></div>
+    </div>
+
+    <div class="card" id="connecting">
+      <h1>Pax Historia</h1>
+      <p id="connectingTo">Connecting…</p>
+      <button class="ghost" id="cancel">Change server</button>
+    </div>
+
+    <script>
+      const KEY = "pax-server-url";
+      const setup = document.getElementById("setup");
+      const connecting = document.getElementById("connecting");
+      const input = document.getElementById("server");
+      const errorBox = document.getElementById("error");
+      let autoTimer = null;
+
+      const normalize = (raw) => {
+        let url = String(raw || "").trim();
+        if (!url) return "";
+        if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+        return url.replace(/\/+$/, "");
+      };
+
+      // Probe the server first so a typo shows an error here instead of a
+      // WebView error page the user can't navigate back from.
+      const connect = async (raw) => {
+        const url = normalize(raw);
+        if (!url) return;
+        errorBox.textContent = "";
+        try {
+          await fetch(url + "/api/library", { signal: AbortSignal.timeout(4000) });
+          localStorage.setItem(KEY, url);
+          window.location.replace(url);
+        } catch {
+          showSetup();
+          errorBox.textContent = "Could not reach " + url + " — is the server running?";
+        }
+      };
+
+      const showSetup = () => {
+        if (autoTimer) clearTimeout(autoTimer);
+        connecting.style.display = "none";
+        setup.style.display = "flex";
+      };
+
+      document.getElementById("connect").addEventListener("click", () => connect(input.value));
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(input.value); });
+      document.getElementById("cancel").addEventListener("click", showSetup);
+
+      // A remembered server auto-connects after a short grace period.
+      const saved = localStorage.getItem(KEY);
+      if (saved) {
+        input.value = saved;
+        setup.style.display = "none";
+        connecting.style.display = "flex";
+        document.getElementById("connectingTo").textContent = "Connecting to " + saved + "…";
+        autoTimer = setTimeout(() => connect(saved), 1500);
+      }
+    </script>
+  </body>
+</html>
