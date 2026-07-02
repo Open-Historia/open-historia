@@ -50,10 +50,16 @@
 
 ## 🚀 Installation
 
-### Easiest (Windows)
+### Easiest
 
-Double-click **`Launch Pax Historia.bat`** — it checks Node.js, downloads the map data,
-installs dependencies, builds, and opens the game.
+- **Windows:** double-click **`Launch Pax Historia.bat`**
+- **macOS:** double-click **`Launch Pax Historia.command`** (first run: right-click → *Open*)
+- **Linux:** run `./"Launch Pax Historia.sh"` in a terminal
+
+The launcher checks Node.js, downloads the map data, installs dependencies, builds,
+and opens the game. To update an existing install later, run the matching
+**`Update Pax Historia`** script for your platform — it fetches the latest version
+while preserving your saves, scenarios, and map data.
 
 ### Manual
 
@@ -73,7 +79,7 @@ Then open **http://localhost:3000** in your browser.
 
 > **Note:** the large map assets (`*.pmtiles`, `public/assets/*-seed.*`, and
 > `server/data/scenarios/default/regions.geojson`) live in Git LFS. If you downloaded a
-> ZIP instead of cloning, run the launcher `.bat` — it fetches them automatically.
+> ZIP instead of cloning, run the launcher script for your platform — it fetches them automatically.
 
 ---
 
