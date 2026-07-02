@@ -60,7 +60,7 @@ installs dependencies, builds, and opens the game.
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
 
 ```bash
-git clone https://github.com/Tommi-K//pax-historia.git
+git clone https://github.com/Tommi-K/pax-historia.git
 cd pax-historia
 git lfs install        # Set up Git LFS
 git lfs pull           # Pull large files (map tiles + editor seeds + world map)
