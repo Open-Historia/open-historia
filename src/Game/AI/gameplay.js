@@ -949,20 +949,83 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
 
 // Freeform AI intelligence briefing on a specific country/polity, grounded in the
 // current world state. Returned as plain-text bullet points for the region popup.
+// Everything the game state actually records about ONE polity — the target's
+// dossier for intelligence briefings. The generic world summary truncates hard
+// (24 of possibly thousands of region overrides, 16 polities), so without this
+// the target usually isn't in the prompt at all and the AI can only shrug.
+const buildTargetDossier = async (bundle, code) => {
+  const world = normalizeWorldState(bundle.world);
+  const lines = [];
+
+  const polity = code ? world.polityOverrides?.[code] : null;
+  if (polity) {
+    lines.push(
+      `Polity: ${polity.name || code} (code ${code})${
+        polity.aliases?.length > 0 ? ` — also known as ${polity.aliases.join(", ")}` : ""
+      }`,
+    );
+    if (polity.note) lines.push(`Notes: ${polity.note}`);
+  }
+
+  const overrides = Object.entries(world.regionOwnershipOverrides ?? {});
+  const owned = code ? overrides.filter(([, owner]) => owner === code) : [];
+  if (owned.length > 0) {
+    const regionCatalog = await loadRegionCatalog();
+    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
+    const names = owned.slice(0, 40).map(([regionId]) => {
+      const region = regionLookup.get(regionId);
+      return region ? `${region.name}${region.country ? ` (${region.country})` : ""}` : regionId;
+    });
+    lines.push(
+      `Territory: holds ${owned.length} regions${owned.length > names.length ? ", including" : ""}: ${names.join(", ")}${
+        owned.length > names.length ? ", …" : ""
+      }`,
+    );
+  } else if (code) {
+    lines.push(
+      overrides.length > 0
+        ? `Territory: no regions on the current map are recorded as held by ${code}.`
+        : `Territory: holds its modern-day territory (no territorial changes recorded).`,
+    );
+  }
+
+  const units = normalizeArray(bundle.world?.units).filter((unit) => unit?.ownerCode === code);
+  if (units.length > 0) {
+    const byType = new Map();
+    let strength = 0;
+    for (const unit of units) {
+      byType.set(unit.type, (byType.get(unit.type) || 0) + 1);
+      strength += Number(unit.strength) || 0;
+    }
+    const composition = Array.from(byType.entries()).map(([type, n]) => `${n} ${type}`).join(", ");
+    lines.push(`Deployed forces: ${units.length} units (${composition}), combined strength ${strength}.`);
+  } else {
+    lines.push("Deployed forces: none currently on the map.");
+  }
+
+  return lines.join("\n");
+};
+
 export const generateCountryStats = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
   const target = name || code || "the polity";
   const playerPolity = variables.playerPolity || bundle?.game?.country || "the player";
+  const dossier = await buildTargetDossier(bundle, normalizeString(code));
+  const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
   const system =
     `You are the intelligence advisor in an alternate-history strategy game. ` +
     `The current date is ${variables.date || "unknown"}. The player leads ${playerPolity}. ` +
-    `Give a concise intelligence briefing on ${target}${code ? ` (code ${code})` : ""} using ONLY the world state below. ` +
-    `Cover government/leadership, territory & key regions, military strength, economy, and diplomatic posture toward ${playerPolity}. ` +
-    `Be specific and grounded; if something is unknown, say so briefly.\n\n` +
+    `Give a concise intelligence briefing on ${target}${code ? ` (code ${code})` : ""}. ` +
+    `Treat the TARGET DOSSIER and WORLD STATE below as ground truth. Where specifics are not recorded, ` +
+    `give your best historical estimate for this era, people and region — you are the advisor, and ` +
+    `plausible estimates are your job. Never answer with "unknown", "no data" or "not specified"; ` +
+    `mark guesses with "(est.)" instead. ` +
+    `Cover government/leadership, territory & key regions, military strength, economy, and diplomatic posture toward ${playerPolity}.\n\n` +
+    (era ? `ERA & WORLD RULES:\n${era}\n\n` : "") +
+    `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}\n\n` +
     `WORLD STATE:\n${variables.worldSummary || variables.grandMapDescription || "(no summary)"}\n\n` +
     `RECENT EVENTS:\n${variables.recentEvents || "(none)"}\n\n` +
-    `MILITARY:\n${variables.unitsSummary || variables.playerBattalionSummaries || "(none)"}\n\n` +
     `Respond in ${variables.language || "English"} as 4-6 short bullet points, each prefixed with "- ". No preamble, no closing remarks.`;
   const raw = await callAI(system, [
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },

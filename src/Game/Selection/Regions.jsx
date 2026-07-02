@@ -182,8 +182,15 @@ const RegionPopup = () => {
                 name: resolveSelectionName(sel),
             });
             setStatsText(text || "No information available.");
-        } catch {
-            setStatsError("Couldn't generate a briefing. Set an AI provider + key in Settings.");
+        } catch (error) {
+            // Surface the real reason (rate limit, network, missing key...);
+            // nothing is cached on failure — closing and reopening retries.
+            const reason = error?.message ? String(error.message) : "";
+            setStatsError(
+                reason
+                    ? `Couldn't generate a briefing: ${reason} — close and reopen to retry.`
+                    : "Couldn't generate a briefing. Set an AI provider + key in Settings.",
+            );
         } finally {
             setStatsLoading(false);
         }
