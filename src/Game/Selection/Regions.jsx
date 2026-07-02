@@ -11,8 +11,18 @@ import { generateCountryStats } from "../AI/gameplay.js";
 let _setSelection = null;
 let _currentSelection = null;
 let _dismiss = null;
+// Cheats' click-to-annex/edit tools grab the next map click(s) instead of the
+// normal region popup. The interceptor returns true to consume the click.
+let _clickInterceptor = null;
 
-export const onRegionSelected = ({ COUNTRY, NAME_1, GID_0, gid0, owner, lngLat }) => {
+export const setRegionClickInterceptor = (fn) => {
+    _clickInterceptor = typeof fn === "function" ? fn : null;
+};
+
+export const onRegionSelected = (props) => {
+    if (_clickInterceptor && _clickInterceptor(props)) return;
+
+    const { COUNTRY, NAME_1, GID_0, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
     const isSame =

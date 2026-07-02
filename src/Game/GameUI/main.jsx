@@ -32,6 +32,9 @@ const baseStyle = {
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
 );
+const LazyCheatsPanel = lazy(() =>
+  import("./cheats").then((module) => ({ default: module.CheatsPanel })),
+);
 
 const checkWebGL = () => {
   try {
@@ -114,6 +117,8 @@ const Main = ({
   setIsTerrainEnabled,
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isCheatsOpen, setIsCheatsOpen] = useState(false);
+  const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
@@ -218,6 +223,11 @@ const Main = ({
           <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} />
         )}
       </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadCheats && (
+          <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} />
+        )}
+      </Suspense>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
@@ -226,6 +236,11 @@ const Main = ({
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
           githubUrl="https://github.com/Tommi-K/pax-historia"
+          onOpenCheats={() => {
+            setShouldLoadCheats(true);
+            setIsCheatsOpen(true);
+            setIsSettingsOpen(false);
+          }}
           topOffset={TOP_BAR_OFFSET}
           isFullscreenEnabled={isFullscreenEnabled}
           isGlobeEnabled={isGlobeEnabled}
