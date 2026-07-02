@@ -520,7 +520,11 @@ const withTimeout = async (promise, timeoutMs, timeoutMessage) => {
   }
 };
 
-const runJsonTask = async (taskKey, { fallback, timeoutMs = 12000, userMessage, variables }) => {
+// Give the AI real time: local/self-hosted models (and reasoning modes) often
+// need well over a minute per turn. The old 12s default silently discarded
+// their answers and served the canned fallback instead — turns "completed"
+// with nothing to show. The UI has spinners; waiting beats silently wrong.
+const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage, variables }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
   const systemPrompt = renderTemplate(prompts.tasks[taskKey], {
@@ -538,8 +542,9 @@ const runJsonTask = async (taskKey, { fallback, timeoutMs = 12000, userMessage, 
     if (parsed) {
       return parsed;
     }
-  } catch {
-    // Fall through to deterministic fallback.
+    console.warn(`[ai] task "${taskKey}": response was not parseable JSON — using the deterministic fallback.`);
+  } catch (error) {
+    console.warn(`[ai] task "${taskKey}" failed (${error?.message || error}) — using the deterministic fallback.`);
   }
 
   return fallback();
@@ -1263,7 +1268,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   const variables = await buildTemplateVariables(bundle, { targetDate });
   const payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
-    timeoutMs: safeDays >= 90 || mode === "auto" ? 9000 : 12000,
+    // The jump IS the game — let slow (local/reasoning) models finish instead
+    // of silently swapping in the canned fallback after a few seconds.
+    timeoutMs: 180000,
     userMessage:
       mode === "auto"
         ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only."

@@ -240,13 +240,16 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
         <>
         <MarkdownStyleInjector />
         <div style={{
-            position: "fixed", bottom: 0,
-            right: isAdvisorOpen ? 0 : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
+            position: "fixed", bottom: 0, right: 0,
+            // Slide via transform: the old right: calc(-min(...) - 1rem) was
+            // INVALID CSS (a min() can't be negated like that), so the closed
+            // position was silently dropped and the drawer never slid away.
+            transform: isAdvisorOpen ? "translateX(0)" : "translateX(calc(100% + 2rem))",
             width: ADVISOR_PANEL_WIDTH, height: "calc(100vh - 64px)",
             backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
             zIndex: 9998, borderLeft: "1px solid rgba(255,255,255,0.1)",
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
-            transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+            transition: "transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>
