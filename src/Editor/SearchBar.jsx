@@ -7,7 +7,8 @@
 // this map (point features), this map's regions, and the modern world place
 // index (~70k cities/POIs the original app ships). Clicking a result flies the
 // view there; world places offer one-click "+ Add" to drop them onto the map
-// as a custom city.
+// as a custom city. Lives INSIDE the bottom bar (results open upward) so it
+// never covers the tool buttons — floating it top-left did, on phones.
 
 import { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
@@ -92,9 +93,9 @@ const SearchBar = ({ api, features, onAddCity }) => {
   const hasResults = results.custom.length || results.regions.length || results.world.length;
 
   return (
-    <div ref={boxRef} style={{ position: "fixed", top: 60, left: 12, zIndex: 36, width: 272 }}>
-      <div style={{ ...panelSurface, display: "flex", alignItems: "center", gap: 6, padding: "6px 9px" }}>
-        <Icon name="search" size={15} style={{ opacity: 0.6 }} />
+    <div ref={boxRef} style={{ position: "relative", flex: "1 1 170px", maxWidth: 300, minWidth: 140 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }}>
+        <Icon name="search" size={14} style={{ opacity: 0.6, flexShrink: 0 }} />
         <input
           value={query}
           onChange={(e) => {
@@ -106,7 +107,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
             if (e.key === "Escape") setOpen(false);
           }}
           placeholder="Search places…"
-          style={{ ...inputStyle, border: "none", background: "transparent", padding: "2px 0" }}
+          style={{ ...inputStyle, border: "none", background: "transparent", padding: "2px 0", fontSize: 12 }}
         />
         {query && (
           <button
@@ -114,7 +115,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
               setQuery("");
               setOpen(false);
             }}
-            style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: 13 }}
+            style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: 13, flexShrink: 0 }}
             title="Clear"
           >
             ✕
@@ -126,13 +127,17 @@ const SearchBar = ({ api, features, onAddCity }) => {
         <div
           style={{
             ...panelSurface,
-            marginTop: 6,
+            position: "absolute",
+            bottom: "calc(100% + 10px)",
+            left: 0,
+            width: "min(320px, calc(100vw - 40px))",
             padding: 6,
-            maxHeight: "55vh",
+            maxHeight: "50vh",
             overflowY: "auto",
             display: "flex",
             flexDirection: "column",
             gap: 2,
+            zIndex: 40,
           }}
         >
           {!hasResults && (

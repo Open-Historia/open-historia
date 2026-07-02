@@ -559,7 +559,9 @@ const SettingsMenu = ({
             left: "0.5rem",
             width: "22rem",
             maxWidth: "calc(100vw - 1rem)",
-            maxHeight: "calc(100vh - 5rem)",
+            // Never taller than the space below the panel's own top edge — the old
+            // 100vh-5rem pushed the bottom (Discord/GitHub links) off short screens.
+            maxHeight: `calc(100vh - ${topOffset} - 5.25rem)`,
             overflowY: "auto",
             padding: "1rem",
             flexDirection: "column",

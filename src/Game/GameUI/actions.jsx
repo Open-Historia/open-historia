@@ -372,7 +372,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             display: "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            height: "calc(100vh - 33rem)",
+            // Tall desktops keep the old size; laptops/phones get a usable 30rem
+            // instead of the sliver calc(100vh - 33rem) left them.
+            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
             minHeight: "10rem",
             left: "0rem",
             maxWidth: "calc(100vw - 1rem)",
