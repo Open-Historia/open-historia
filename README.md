@@ -2,7 +2,7 @@
 <h1 align="center">Open Historia</h1>
 
 <div align="center">
-  <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Open Historia</a>.</strong>
+  <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
 </div>
 
 <br />
