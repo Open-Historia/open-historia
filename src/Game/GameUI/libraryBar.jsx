@@ -1421,6 +1421,7 @@ const LibraryTopBar = () => {
         // Playable factions for the start-country picker.
         ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
         customRegions: true,
+        customCities: seed.world?.customCities ?? false,
         author: seed.world?.author ?? "",
         mapCredit: seed.world?.mapCredit ?? "",
       },
@@ -1444,6 +1445,13 @@ const LibraryTopBar = () => {
       scenarioId,
       "regionsGeojson",
       new Blob([JSON.stringify(seed.regions ?? { type: "FeatureCollection", features: [] })], {
+        type: "application/json",
+      }),
+    );
+    await uploadScenarioAsset(
+      scenarioId,
+      "citiesGeojson",
+      new Blob([JSON.stringify(seed.cities ?? { type: "FeatureCollection", features: [] })], {
         type: "application/json",
       }),
     );

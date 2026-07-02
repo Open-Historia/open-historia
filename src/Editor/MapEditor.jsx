@@ -20,6 +20,8 @@ import LayersPanel from "./LayersPanel.jsx";
 import FeatureManager from "./FeatureManager.jsx";
 import SelectionInspector from "./SelectionInspector.jsx";
 import DocumentsMenu from "./DocumentsMenu.jsx";
+import CityPopup from "./CityPopup.jsx";
+import SearchBar from "./SearchBar.jsx";
 import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { buildGameSeed } from "./exportPreset.js";
@@ -33,6 +35,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
   const [docId, setDocId] = useState(null); // server document id (null until first save)
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [applying, setApplying] = useState(false); // writing the map into the scenario
+  const [cityPopup, setCityPopup] = useState(null); // {id, x, y, isNew} — inline city editor
 
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
@@ -109,6 +112,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.name, d.types, d.features, d.metadata]);
 
+  // The city popup is anchored to a screen position; panning/zooming would leave
+  // it floating over the wrong spot, so any map movement closes it.
+  useEffect(() => {
+    if (!api?.map) return undefined;
+    const close = () => setCityPopup(null);
+    api.map.on("movestart", close);
+    return () => api.map.un("movestart", close);
+  }, [api]);
+
   // Region-count-per-type for the Type Manager (recomputed on relevant changes).
   const typeUsage = useMemo(
     () => (api ? api.countByType() : {}),
@@ -143,19 +155,29 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
           d.setRegionCount(count);
           d.setSaveStatus("dirty");
         }}
-        onFeatureCreate={(partial) => {
+        onFeatureCreate={({ pixel, ...partial }) => {
+          const id = newId("feat");
           d.setFeatures((list) => [
             ...list,
             {
-              id: newId("feat"),
+              id,
               name: "New City",
               type: "Coordinate",
               symbol: "square",
-              tags: [],
+              tags: ["city"],
+              population: 250000,
               ...partial,
             },
           ]);
           d.setSaveStatus("dirty");
+          // Open the inline editor right where the city was dropped.
+          setCityPopup({ id, x: pixel?.[0] ?? 80, y: pixel?.[1] ?? 80, isNew: true });
+        }}
+        onFeatureEdit={({ id, pixel }) => setCityPopup({ id, x: pixel[0], y: pixel[1], isNew: false })}
+        onFeatureRemove={(id) => {
+          d.setFeatures((list) => list.filter((f) => f.id !== id));
+          d.setSaveStatus("dirty");
+          setCityPopup((p) => (p?.id === id ? null : p));
         }}
         onHistory={setHistory}
         onReady={setApi}
@@ -282,6 +304,47 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
         colors={d.colors}
         setSelection={d.setSelection}
       />
+
+      <SearchBar
+        api={api}
+        features={d.features}
+        onAddCity={(c) => {
+          const id = newId("feat");
+          d.setFeatures((list) => [
+            ...list,
+            {
+              id,
+              name: c.name,
+              type: "Coordinate",
+              symbol: "square",
+              coord: c.coord,
+              country: c.country || "",
+              owner: null,
+              regionId: null,
+              population: c.population || 0,
+              tags: c.capital ? ["city", "capital"] : ["city"],
+            },
+          ]);
+          api?.locateFeature(c.coord);
+        }}
+      />
+
+      {cityPopup && (
+        <CityPopup
+          feature={d.features.find((f) => f.id === cityPopup.id)}
+          x={cityPopup.x}
+          y={cityPopup.y}
+          isNew={cityPopup.isNew}
+          onChange={(patch) =>
+            d.setFeatures((list) => list.map((f) => (f.id === cityPopup.id ? { ...f, ...patch } : f)))
+          }
+          onDelete={() => {
+            d.setFeatures((list) => list.filter((f) => f.id !== cityPopup.id));
+            setCityPopup(null);
+          }}
+          onClose={() => setCityPopup(null)}
+        />
+      )}
 
       <BottomBar
         counts={d.counts}

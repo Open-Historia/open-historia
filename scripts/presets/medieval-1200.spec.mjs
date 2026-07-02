@@ -213,6 +213,101 @@ export default {
     "CHN.29_1": "TIBET", "CHN.21_1": "TIBET",
   },
 
+  // Era cities: [name, modern-seed-name | [lng,lat], tier, population].
+  // tier 4 = great-power capital ★, 3 = major city ◆, 2 = city, 1 = town.
+  // Populations are c. 1200 estimates — a medieval "great city" held 50-200k.
+  cities: [
+    // — Christendom —
+    ["Constantinople", "Istanbul", 4, 200000],
+    ["Paris", "Paris", 4, 110000],
+    ["London", "London", 3, 25000],
+    ["Rome", "Rome", 3, 35000],
+    ["Venice", "Venice", 3, 80000],
+    ["Genoa", "Genoa", 2, 50000],
+    ["Pisa", "Pisa", 2, 30000],
+    ["Florence", "Florence", 2, 50000],
+    ["Milan", "Milan", 2, 70000],
+    ["Palermo", [13.36, 38.12], 3, 100000],
+    ["Naples", "Naples", 2, 40000],
+    ["Cologne", "Cologne", 2, 40000],
+    ["Lübeck", "Lübeck", 1, 10000],
+    ["Aachen", [6.08, 50.78], 1, 10000],
+    ["Prague", "Prague", 2, 30000],
+    ["Vienna", "Vienna", 2, 20000],
+    ["Esztergom", "Esztergom", 2, 12000], // Hungarian royal seat
+    ["Kraków", "Kraków", 2, 15000],
+    ["Kiev", "Kyiv", 3, 45000],
+    ["Novgorod", [31.27, 58.52], 3, 30000],
+    ["Vladimir", "Vladimir", 2, 20000],
+    ["Smolensk", "Smolensk", 1, 15000],
+    ["Uppsala", "Uppsala", 1, 5000],
+    ["Nidaros", "Trondheim", 1, 5000],
+    ["Roskilde", "Roskilde", 1, 6000],
+    ["Tarnovo", [25.62, 43.08], 2, 15000], // Bulgarian capital
+    ["Thessalonica", [22.94, 40.64], 2, 40000],
+    ["Toledo", [-4.02, 39.86], 2, 35000], // Castilian royal city
+    ["Lisbon", "Lisbon", 2, 20000],
+    ["Barcelona", "Barcelona", 2, 25000],
+    // — Dar al-Islam —
+    ["Seville", [-5.99, 37.39], 3, 80000], // Almohad seat in al-Andalus
+    ["Córdoba", [-4.78, 37.89], 3, 60000],
+    ["Granada", "Granada", 2, 30000],
+    ["Marrakesh", "Marrakech", 3, 100000], // Almohad capital
+    ["Fez", "Fès", 3, 80000],
+    ["Tunis", "Tunis", 2, 40000],
+    ["Cairo", "Cairo", 4, 200000], // Ayyubid capital
+    ["Alexandria", "Alexandria", 2, 60000],
+    ["Damascus", "Damascus", 3, 80000],
+    ["Aleppo", "Aleppo", 2, 60000],
+    ["Jerusalem", "Jerusalem", 2, 20000],
+    ["Acre", [35.07, 32.93], 2, 40000], // Crusader capital
+    ["Baghdad", "Baghdad", 4, 300000], // Abbasid caliphal seat
+    ["Mosul", "Mosul", 2, 40000],
+    ["Konya", "Konya", 2, 30000], // Seljuk Rum capital
+    ["Mecca", "Mecca", 2, 15000],
+    ["Tabriz", [46.29, 38.08], 2, 40000],
+    ["Isfahan", [51.67, 32.65], 2, 60000],
+    ["Nishapur", [58.8, 36.21], 2, 70000],
+    ["Merv", [62.19, 37.66], 3, 100000],
+    ["Bukhara", "Bukhara", 2, 60000],
+    ["Samarkand", "Samarkand", 3, 80000],
+    ["Gurganj", [59.15, 42.33], 3, 90000], // Khwarazmian capital
+    ["Ghazni", "Ghaznī", 2, 40000], // Ghurid twin capital
+    ["Herat", [62.2, 34.35], 2, 40000],
+    // — India and Ceylon —
+    ["Delhi", "Delhi", 2, 50000], // seat of the new Ghurid conquest
+    ["Lahore", "Lahore", 2, 40000],
+    ["Varanasi", [83.01, 25.32], 2, 50000],
+    ["Thanjavur", [79.14, 10.79], 2, 60000], // Chola capital
+    ["Polonnaruwa", [81.0, 7.94], 2, 30000], // Lankan capital
+    // — East and Southeast Asia —
+    ["Hangzhou", "Hangzhou", 4, 500000], // Lin'an, Southern Song capital
+    ["Zhongdu", "Beijing", 3, 250000], // Jin capital
+    ["Kaifeng", [114.31, 34.8], 3, 300000],
+    ["Chengdu", "Chengdu", 2, 150000],
+    ["Guangzhou", "Guangzhou", 2, 150000],
+    ["Quanzhou", "Quanzhou", 2, 150000],
+    ["Chang'an", [108.94, 34.34], 2, 80000],
+    ["Kyoto", [135.77, 35.01], 3, 150000], // Heian-kyō
+    ["Kamakura", [139.55, 35.32], 2, 50000], // seat of the new shogunate
+    ["Kaesong", [126.55, 37.97], 2, 60000], // Goryeo capital
+    ["Pagan", [94.86, 21.17], 3, 60000], // Burmese capital
+    ["Angkor", [103.86, 13.44], 4, 400000], // Khmer capital — largest city on earth by area
+    ["Thang Long", "Hanoi", 2, 50000], // Đại Việt capital
+    // — Africa beyond Islam —
+    ["Koumbi Saleh", [-7.68, 15.77], 2, 20000], // Ghana Empire
+    ["Timbuktu", "Timbuktu", 1, 8000],
+    ["Lalibela", [39.04, 12.03], 2, 15000], // Zagwe capital
+    ["Kilwa", [39.51, -8.96], 2, 12000],
+    ["Mogadishu", "Mogadishu", 2, 15000],
+    ["Great Zimbabwe", [30.93, -20.27], 2, 10000],
+    // — The Americas —
+    ["Cahokia", [-90.06, 38.66], 2, 15000],
+    ["Chan Chan", [-79.07, -8.1], 2, 30000], // Chimor capital
+    ["Cusco", "Cusco", 1, 5000],
+    ["Mayapan", [-89.46, 20.63], 1, 10000],
+  ],
+
   simulationRules:
     "It is the year 1200, the height of the Middle Ages. Warfare is feudal: mounted knights, " +
     "levied infantry, castles and sieges; there is NO gunpowder and NO standing professional " +

@@ -24,7 +24,7 @@ const TOOLS = [
   { id: "split", icon: "split", label: "Split (drag across a region to cut it)", enabled: true },
   { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)", enabled: true },
   { id: "paint", icon: "paint", label: "Paint owner (click regions)", enabled: true },
-  { id: "feature", icon: "feature", label: "Add feature (click map)", enabled: true },
+  { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)", enabled: true },
 ];
 
 const Separator = () => (

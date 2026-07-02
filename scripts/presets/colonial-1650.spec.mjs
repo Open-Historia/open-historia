@@ -184,6 +184,103 @@ export default {
     "CHL.6_1": "MAPU", "CHL.3_1": "MAPU", "CHL.10_1": "MAPU", "CHL.9_1": "MAPU",
   },
 
+  // Era cities: [name, modern-seed-name | [lng,lat], tier, population].
+  // tier 4 = great-power capital ★, 3 = major city ◆, 2 = city, 1 = town.
+  // Cape Town is deliberately absent — the VOC station is founded in 1652.
+  cities: [
+    // — English, Dutch, French and Swedish North America —
+    ["Boston", "Boston", 2, 3000],
+    ["Plymouth", [-70.67, 41.96], 1, 1000],
+    ["New Amsterdam", "New York", 2, 1000], // capital of New Netherland
+    ["Fort Orange", [-73.75, 42.65], 1, 500], // Albany — the fur trade post
+    ["Jamestown", [-76.78, 37.21], 1, 1000],
+    ["St. Mary's City", [-76.43, 38.19], 1, 500],
+    ["Fort Christina", [-75.55, 39.74], 1, 400], // capital of New Sweden
+    ["Québec", "Quebec City", 2, 1500], // capital of New France
+    ["Ville-Marie", "Montréal", 1, 300], // the new mission at Montréal
+    ["St. Augustine", "St. Augustine", 1, 1500],
+    ["Santa Fe", [-105.94, 35.69], 1, 1500],
+    // — Native nations —
+    ["Onondaga", [-76.15, 43.05], 2, 2000], // Haudenosaunee council fire
+    ["Chota", [-84.13, 35.56], 1, 1000], // Cherokee mother town
+    // — New Spain and the Caribbean —
+    ["Mexico City", "Mexico City", 4, 100000], // capital of New Spain
+    ["Puebla", "Puebla", 2, 30000],
+    ["Veracruz", "Veracruz", 2, 8000],
+    ["Acapulco", "Acapulco de Juárez", 1, 4000], // the Manila galleon port
+    ["Mérida", "Mérida", 1, 6000],
+    ["Santiago de Guatemala", "Antigua Guatemala", 2, 25000],
+    ["Havana", "Havana", 2, 30000],
+    ["Santo Domingo", "Santo Domingo", 2, 15000],
+    ["San Juan", "San Juan", 1, 5000],
+    ["Cartagena", "Cartagena", 2, 20000],
+    ["Portobelo", [-79.65, 9.55], 1, 3000], // the silver fleet's Atlantic port
+    ["Panamá", "Panama City", 2, 8000],
+    ["Bridgetown", "Bridgetown", 2, 10000], // Barbados sugar boom
+    // — Spanish South America —
+    ["Bogotá", "Bogotá", 2, 15000],
+    ["Quito", "Quito", 2, 25000],
+    ["Lima", "Lima", 4, 60000], // capital of the Viceroyalty of Peru
+    ["Cusco", "Cusco", 2, 20000],
+    ["Potosí", "Potosí", 3, 150000], // the silver mountain — biggest city in the Americas
+    ["La Paz", "La Paz", 1, 5000],
+    ["Asunción", "Asunción", 1, 4000],
+    ["Buenos Aires", "Buenos Aires", 1, 4000],
+    ["Santiago", "Santiago", 1, 5000],
+    // — Portuguese and Dutch Brazil —
+    ["Salvador", "Salvador", 3, 25000], // capital of Portuguese Brazil
+    ["Mauritsstad", "Recife", 2, 15000], // capital of Dutch Brazil
+    ["Rio de Janeiro", "Rio de Janeiro", 2, 8000],
+    ["São Paulo", "São Paulo", 1, 2000],
+    ["Belém", "Belém", 1, 2000],
+    // — Europe: the metropoles —
+    ["London", "London", 4, 400000],
+    ["Paris", "Paris", 4, 450000],
+    ["Madrid", "Madrid", 3, 130000],
+    ["Seville", [-5.99, 37.39], 3, 120000], // the Indies trade monopoly
+    ["Lisbon", "Lisbon", 3, 150000],
+    ["Amsterdam", "Amsterdam", 4, 175000], // the warehouse of the world
+    ["The Hague", "The Hague", 2, 20000],
+    ["Rome", "Rome", 2, 120000],
+    ["Vienna", "Vienna", 2, 60000],
+    ["Berlin", "Berlin", 1, 12000], // small after the Thirty Years' War
+    ["Stockholm", "Stockholm", 2, 35000],
+    ["Copenhagen", "Copenhagen", 2, 30000],
+    ["Warsaw", "Warsaw", 2, 20000],
+    ["Moscow", "Moscow", 3, 150000],
+    ["Constantinople", "Istanbul", 3, 700000], // the Ottoman capital
+    // — Africa —
+    ["Luanda", "Luanda", 2, 6000], // just retaken from the Dutch, 1648
+    ["Elmina", [-1.35, 5.08], 2, 4000], // Dutch Gold Coast castle
+    ["Fez", "Fès", 2, 80000],
+    ["Algiers", "Algiers", 2, 60000],
+    ["Tunis", "Tunis", 2, 70000],
+    ["Cairo", "Cairo", 3, 300000],
+    ["Mombasa", "Mombasa", 1, 6000],
+    ["Mozambique Island", [40.74, -15.03], 1, 5000],
+    // — Asia: the factories and the empires —
+    ["Goa", "Panaji", 3, 60000], // capital of the Portuguese Estado da Índia
+    ["Batavia", "Jakarta", 3, 30000], // VOC headquarters
+    ["Manila", "Manila", 3, 40000],
+    ["Macau", "Macau", 2, 20000],
+    ["Malacca", "Melaka", 2, 10000], // Dutch since 1641
+    ["Colombo", "Colombo", 1, 8000],
+    ["Fort St. George", "Chennai", 1, 5000], // Madras, founded 1639
+    ["Surat", [72.83, 21.17], 3, 100000], // the Mughal port
+    ["Nagasaki", "Nagasaki", 2, 30000], // Dejima — Japan's one window
+    ["Edo", "Tokyo", 4, 400000], // seat of the Tokugawa shoguns
+    ["Kyoto", [135.77, 35.01], 3, 350000],
+    ["Osaka", "Ōsaka", 3, 300000],
+    ["Beijing", "Beijing", 4, 600000], // the new Qing capital
+    ["Nanjing", "Nanjing", 3, 300000],
+    ["Canton", "Guangzhou", 3, 200000],
+    ["Shahjahanabad", "Delhi", 4, 400000], // Shah Jahan's new Mughal capital
+    ["Agra", [78.01, 27.18], 3, 500000],
+    ["Isfahan", [51.67, 32.65], 4, 400000], // Safavid capital — "half the world"
+    ["Ayutthaya", [100.57, 14.35], 3, 150000], // Siamese capital
+    ["Thang Long", "Hanoi", 2, 60000],
+  ],
+
   simulationRules:
     "It is 1650, the height of the first colonial age. Warfare is pike-and-shot: matchlock " +
     "muskets, pikes, siege cannon and ships of the line; armies are small and oceans are " +

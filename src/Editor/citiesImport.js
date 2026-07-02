@@ -48,3 +48,26 @@ export const importMajorCities = async ({ minPopulation = 500000 } = {}) =>
   (await loadSeed())
     .filter((c) => c.capital || (c.population || 0) >= minPopulation)
     .map(toFeature);
+
+// Name search over the modern world place index (for the editor search bar).
+// Prefix matches rank above substring matches; within each, capitals and larger
+// cities first. Entries without coordinates can't be located, so they're skipped.
+export const searchSeedCities = async (query, limit = 8) => {
+  const q = String(query || "").trim().toLowerCase();
+  if (q.length < 2) return [];
+  const seed = await loadSeed();
+  const starts = [];
+  const contains = [];
+  for (const c of seed) {
+    if (!Array.isArray(c.coord) || c.coord[0] == null || c.coord[1] == null) continue;
+    const name = String(c.name || "").toLowerCase();
+    if (!name) continue;
+    if (name.startsWith(q)) starts.push(c);
+    else if (name.includes(q)) contains.push(c);
+  }
+  const rank = (a, b) =>
+    (b.capital === true) - (a.capital === true) || (b.population || 0) - (a.population || 0);
+  starts.sort(rank);
+  contains.sort(rank);
+  return [...starts, ...contains].slice(0, limit);
+};

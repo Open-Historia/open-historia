@@ -82,6 +82,8 @@ const OlMap = ({
   onRegionCount,
   onRegionsChanged,
   onFeatureCreate,
+  onFeatureEdit,
+  onFeatureRemove,
   onHistory,
   onReady,
 }) => {
@@ -98,6 +100,10 @@ const OlMap = ({
   const redoStackRef = useRef([]);
   const onFeatureCreateRef = useRef(onFeatureCreate);
   onFeatureCreateRef.current = onFeatureCreate;
+  const onFeatureEditRef = useRef(onFeatureEdit);
+  onFeatureEditRef.current = onFeatureEdit;
+  const onFeatureRemoveRef = useRef(onFeatureRemove);
+  onFeatureRemoveRef.current = onFeatureRemove;
   const onHistoryRef = useRef(onHistory);
   onHistoryRef.current = onHistory;
 
@@ -252,6 +258,21 @@ const OlMap = ({
       });
     };
 
+    // City/point feature under the cursor (generous tolerance — point markers
+    // are small).
+    const pointAtPixel = (pixel, tolerance = 8) => {
+      let point = null;
+      map.forEachFeatureAtPixel(
+        pixel,
+        (feature) => {
+          point = feature;
+          return true;
+        },
+        { layerFilter: (l) => l === pointLayerRef.current, hitTolerance: tolerance },
+      );
+      return point;
+    };
+
     map.on("singleclick", (evt) => {
       const tool = activeToolRef.current;
       if (tool !== "select" && tool !== "delete" && tool !== "paint" && tool !== "feature" && tool !== "dissolve") return;
@@ -265,6 +286,12 @@ const OlMap = ({
         { layerFilter: (l) => l === regionLayerRef.current, hitTolerance: 2 },
       );
       if (tool === "delete") {
+        // Deleting works on cities too — a point hit wins over the region under it.
+        const point = pointAtPixel(evt.pixel);
+        if (point) {
+          onFeatureRemoveRef.current?.(point.getId());
+          return;
+        }
         deleteFeature(hit);
         return;
       }
@@ -281,12 +308,20 @@ const OlMap = ({
         return;
       }
       if (tool === "feature") {
+        // Clicking an existing city edits it (rename/resize/delete popup);
+        // clicking empty map adds a new one right there.
+        const point = pointAtPixel(evt.pixel);
+        if (point) {
+          onFeatureEditRef.current?.({ id: point.getId(), pixel: [...evt.pixel] });
+          return;
+        }
         const [lng, lat] = toLonLat(evt.coordinate);
         onFeatureCreateRef.current?.({
           coord: [Number(lng.toFixed(5)), Number(lat.toFixed(5))],
           regionId: hit ? hit.getId() : null,
           owner: hit ? hit.get("owner") || null : null,
           country: hit ? hit.get("country") || "" : "",
+          pixel: [...evt.pixel],
         });
         return;
       }
@@ -341,9 +376,17 @@ const OlMap = ({
       const tool = activeToolRef.current;
       if (tool === "lasso" || tool === "split" || tool === "draw") {
         map.getTargetElement().style.cursor = "crosshair";
+      } else if (tool === "feature" || tool === "delete") {
+        // City-aware tools: pointer over an existing city (edit/remove target).
+        const pointHit = map.hasFeatureAtPixel(evt.pixel, {
+          layerFilter: (l) => l === pointLayerRef.current,
+          hitTolerance: 8,
+        });
+        map.getTargetElement().style.cursor =
+          pointHit || (hit && tool === "delete") ? "pointer" : tool === "feature" ? "crosshair" : "";
       } else {
         map.getTargetElement().style.cursor =
-          hit && (tool === "select" || tool === "delete" || tool === "paint" || tool === "dissolve") ? "pointer" : "";
+          hit && (tool === "select" || tool === "paint" || tool === "dissolve") ? "pointer" : "";
       }
     });
 

@@ -83,6 +83,83 @@ export default {
     "GBR.3_1": "CALE",
   },
 
+  // Era cities: [name, modern-seed-name | [lng,lat], tier, population].
+  // tier 4 = imperial capital ★, 3 = great city ◆, 2 = city, 1 = town.
+  // Populations are the usual scholarly estimates for the early 2nd century.
+  cities: [
+    // — The Roman Empire —
+    ["Roma", "Rome", 4, 1000000],
+    ["Alexandria", "Alexandria", 3, 500000],
+    ["Antiochia", [36.16, 36.2], 3, 250000],
+    ["Carthago", [10.32, 36.85], 3, 150000],
+    ["Ephesus", [27.34, 37.94], 2, 150000],
+    ["Pergamum", [27.18, 39.13], 2, 120000],
+    ["Smyrna", [27.14, 38.43], 2, 90000],
+    ["Corinthus", [22.93, 37.94], 2, 80000],
+    ["Athenae", "Athens", 2, 75000],
+    ["Thessalonica", [22.94, 40.64], 2, 65000],
+    ["Byzantium", "Istanbul", 2, 40000],
+    ["Nicomedia", [29.92, 40.77], 2, 60000],
+    ["Ancyra", "Ankara", 1, 25000],
+    ["Londinium", "London", 2, 30000],
+    ["Eboracum", [-1.08, 53.96], 1, 5000],
+    ["Lutetia", "Paris", 1, 8000],
+    ["Lugdunum", "Lyon", 2, 50000],
+    ["Massilia", "Marseille", 2, 40000],
+    ["Burdigala", "Bordeaux", 1, 20000],
+    ["Colonia Agrippina", "Cologne", 2, 30000],
+    ["Mediolanum", "Milan", 2, 40000],
+    ["Ravenna", "Ravenna", 2, 20000],
+    ["Aquileia", [13.37, 45.77], 2, 30000],
+    ["Syracusae", [15.29, 37.07], 2, 60000],
+    ["Tarraco", "Tarragona", 2, 30000],
+    ["Corduba", [-4.78, 37.89], 2, 50000],
+    ["Gades", [-6.29, 36.53], 2, 50000],
+    ["Emerita Augusta", [-6.34, 38.92], 1, 25000],
+    ["Tingis", "Tangier", 1, 15000],
+    ["Volubilis", [-5.55, 34.07], 1, 12000],
+    ["Leptis Magna", [14.29, 32.64], 2, 80000],
+    ["Cyrene", [21.86, 32.82], 2, 50000],
+    ["Memphis", [31.25, 29.85], 2, 60000],
+    ["Hierosolyma", "Jerusalem", 1, 10000],
+    ["Caesarea", [34.89, 32.5], 2, 45000],
+    ["Damascus", "Damascus", 2, 45000],
+    ["Palmyra", [38.28, 34.55], 2, 30000],
+    ["Petra", [35.44, 30.32], 2, 20000],
+    ["Sarmizegetusa", [22.79, 45.52], 2, 15000],
+    ["Artaxata", [44.55, 39.88], 2, 30000],
+    ["Ctesiphon", [44.58, 33.09], 3, 250000], // taken by Trajan, 116
+    // — Parthia and the Iranian east —
+    ["Ecbatana", [48.52, 34.8], 2, 60000],
+    ["Susa", [48.26, 32.19], 1, 25000],
+    ["Merv", [62.19, 37.66], 2, 50000],
+    // — The Kushan realm and India —
+    ["Purushapura", "Peshawar", 3, 100000],
+    ["Taxila", [72.79, 33.74], 2, 40000],
+    ["Mathura", "Mathura", 2, 60000],
+    ["Pataliputra", "Patna", 3, 150000],
+    ["Ujjain", "Ujjain", 2, 80000],
+    ["Madurai", "Madurai", 2, 50000],
+    ["Anuradhapura", "Anuradhapura", 3, 60000],
+    // — Han China and East Asia —
+    ["Luoyang", "Luoyang", 4, 500000],
+    ["Chang'an", [108.94, 34.34], 3, 250000],
+    ["Chengdu", "Chengdu", 2, 100000],
+    ["Panyu", "Guangzhou", 2, 50000],
+    ["Longbian", "Hanoi", 1, 20000],
+    ["Gungnae", [126.19, 41.16], 2, 20000], // Goguryeo capital
+    // — Africa, Arabia, the Caucasus —
+    ["Meroe", [33.75, 16.94], 3, 25000],
+    ["Aksum", [38.72, 14.13], 3, 20000],
+    ["Zafar", [44.4, 14.21], 2, 15000], // Himyarite capital
+    ["Mtskheta", [44.72, 41.84], 2, 15000], // Iberian capital
+    // — Funan and the Americas —
+    ["Vyadhapura", [105.15, 10.25], 2, 20000], // Funan (Oc Eo)
+    ["Teotihuacan", [-98.84, 19.69], 3, 125000],
+    ["Tikal", [-89.62, 17.22], 2, 40000],
+    ["Monte Alban", [-96.77, 17.04], 1, 17000],
+  ],
+
   simulationRules:
     "It is 117 AD, the high-water mark of Rome. Warfare is classical: legions and auxilia, " +
     "disciplined heavy infantry, cataphract and horse-archer cavalry, siege engines, war " +
