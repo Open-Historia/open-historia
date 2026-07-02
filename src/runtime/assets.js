@@ -244,9 +244,9 @@ export const readJson = async (url, { defaultValue, force = false, signal } = {}
   })()
     .catch((error) => {
       if (defaultValue !== undefined) {
-        const fallback = cloneJson(defaultValue);
-        jsonValueCache.set(url, fallback);
-        return fallback;
+        // Serve the fallback but do NOT cache it — a transient failure must not
+        // pin the default for the rest of the session; the next read retries.
+        return cloneJson(defaultValue);
       }
 
       throw error;
@@ -523,7 +523,14 @@ export const getNationColors = async () => {
 
   if (!nationColorsPromise || nationColorsPromiseKey !== cacheKey) {
     nationColorsPromiseKey = cacheKey;
-    nationColorsPromise = readJson(JSON_URLS.colors, { defaultValue: {} });
+    const promise = readJson(JSON_URLS.colors).catch((error) => {
+      console.warn("Failed to load nation colors (will retry):", error);
+      // Drop the failed promise so the next call retries instead of serving an
+      // empty palette for the rest of the session.
+      if (nationColorsPromise === promise) nationColorsPromise = null;
+      return {};
+    });
+    nationColorsPromise = promise;
   }
 
   return nationColorsPromise;
@@ -537,7 +544,7 @@ export const loadCountryNames = async ({ force = false } = {}) => {
   }
 
   countryNamesPromiseKey = cacheKey;
-  countryNamesPromise = (async () => {
+  const promise = (async () => {
     try {
       const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.countries);
       const tileData = await pmtiles.getZxy(0, 0, 0);
@@ -586,12 +593,16 @@ export const loadCountryNames = async ({ force = false } = {}) => {
         return countries;
       }
     } catch (error) {
-      console.error("Failed to load country names:", error);
+      console.error("Failed to load country names (will retry):", error);
+      // Do not cache the failure — an empty name list would otherwise degrade
+      // labels/pickers for the whole session even after the cause is fixed.
+      if (countryNamesPromise === promise) countryNamesPromise = null;
       return [];
     }
   })();
+  countryNamesPromise = promise;
 
-  return countryNamesPromise;
+  return promise;
 };
 
 export const loadRegionCatalog = async ({ force = false } = {}) => {
@@ -602,7 +613,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
   }
 
   regionCatalogPromiseKey = cacheKey;
-  regionCatalogPromise = (async () => {
+  const promise = (async () => {
     try {
       const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
       const tileData = await pmtiles.getZxy(0, 0, 0);
@@ -647,10 +658,16 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
         return left.name.localeCompare(right.name);
       });
     } catch (error) {
-      console.error("Failed to load region catalog:", error);
+      console.error("Failed to load region catalog (will retry):", error);
+      // One failed load used to pin an EMPTY catalog for the rest of the
+      // session — every AI prompt afterwards lost all region names, so
+      // briefings kept coming back with "no data" even after the cause was
+      // fixed. Drop the promise so the next caller retries.
+      if (regionCatalogPromise === promise) regionCatalogPromise = null;
       return [];
     }
   })();
+  regionCatalogPromise = promise;
 
-  return regionCatalogPromise;
+  return promise;
 };

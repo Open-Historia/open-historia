@@ -1185,6 +1185,8 @@ const DateWidget = ({
 
     // Resolve a valid date defensively: gameDate, else startDate, else nothing.
     // dayjs("") / dayjs(null) is an Invalid Date, so guard before formatting.
+    // Dates dayjs can't parse but that ARE text ("1200 BCE", ancient-era
+    // scenarios) display verbatim instead of "Undated".
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     const parsedGameDate = rawGameDate ? dayjs(rawGameDate) : null;
     const hasValidGameDate = Boolean(parsedGameDate && parsedGameDate.isValid());
@@ -1192,7 +1194,7 @@ const DateWidget = ({
     ? "Loading..."
     : hasValidGameDate
     ? parsedGameDate.format("MMMM Do, YYYY")
-    : "Undated";
+    : String(rawGameDate).trim() || "Undated";
     const currentDate = hasValidGameDate
     ? parsedGameDate.format("YYYY-MM-DD")
     : dayjs().format("YYYY-MM-DD");

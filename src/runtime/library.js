@@ -237,6 +237,21 @@ const toUploadBuffer = async (file) => {
   return new TextEncoder().encode(String(file ?? "")).buffer;
 };
 
+// Fetch a scenario's JSON asset (regions/cities geojson, colors). Returns null
+// when the scenario has no such asset (404) instead of throwing — callers treat
+// a missing asset as "use the default".
+export const downloadScenarioJsonAsset = async (scenarioId, assetKey) => {
+  try {
+    const response = await fetch(
+      `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
 export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,

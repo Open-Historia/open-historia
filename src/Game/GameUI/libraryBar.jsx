@@ -11,6 +11,7 @@ import {
   clearScenarioAsset,
   createGame,
   createScenario,
+  downloadScenarioJsonAsset,
   ensureLibraryCatalog,
   exportScenarioBundle,
   importScenarioBundle,
@@ -1390,6 +1391,7 @@ const LibraryTopBar = () => {
 
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
+  const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
   const [countryQuery, setCountryQuery] = useState("");
@@ -1472,6 +1474,7 @@ const LibraryTopBar = () => {
     // Tear down all the library UI so the freshly-activated game is visible.
     setIsMapEditorOpen(false);
     setMapEditorScenario(null);
+    setMapEditorSeed(null);
     resetEditor();
     setIsPanelOpen(false);
 
@@ -1580,8 +1583,10 @@ const LibraryTopBar = () => {
               onClose={() => {
                 setIsMapEditorOpen(false);
                 setMapEditorScenario(null);
+                setMapEditorSeed(null);
               }}
               scenarioName={mapEditorScenario?.name}
+              initialMap={mapEditorSeed}
               onApplyToScenario={
                 mapEditorScenario ? (seed) => applyMapToScenario(mapEditorScenario, seed) : undefined
               }
@@ -1733,8 +1738,30 @@ const LibraryTopBar = () => {
         onDelete={handleDelete}
         onExportBundle={handleExportBundle}
         onOpenMapEditor={() => {
-          setMapEditorScenario(editorDetails?.scenario || null);
+          const scenario = editorDetails?.scenario || null;
+          setMapEditorScenario(scenario);
+          setMapEditorSeed(null);
           setIsMapEditorOpen(true);
+          // Load the scenario's CURRENT map (geometry + owners + cities + palette)
+          // so the editor opens it instead of the default world. Assets stream in
+          // async; the editor hydrates the moment they arrive.
+          if (scenario) {
+            const world = editorDetails?.data?.world ?? {};
+            Promise.all([
+              downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
+              downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
+              downloadScenarioJsonAsset(scenario.id, "colors"),
+            ]).then(([regions, cities, colors]) => {
+              setMapEditorSeed({
+                name: scenario.name || "",
+                author: world.author || "",
+                ownershipOverrides: world.regionOwnershipOverrides || {},
+                regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
+                cities: cities && Array.isArray(cities.features) ? cities : null,
+                colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+              });
+            });
+          }
         }}
         onFileSelect={handleEditorAssetSelect}
         onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}

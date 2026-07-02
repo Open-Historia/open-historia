@@ -98,6 +98,12 @@ export const useMapDocument = (initial) => {
     };
   }, []);
 
+  // Layer a scenario's own palette (custom polity colors) over the base one.
+  const mergeColors = useCallback((extra) => {
+    if (!extra || typeof extra !== "object") return;
+    setColors((current) => ({ ...current, ...extra }));
+  }, []);
+
   const patchMetadata = useCallback((patch) => {
     setDoc((d) => ({ ...d, metadata: { ...d.metadata, ...patch } }));
     setSaveStatus("dirty");
@@ -118,6 +124,7 @@ export const useMapDocument = (initial) => {
     doc,
     setDoc,
     colors,
+    mergeColors,
     types: doc.types,
     setTypes,
     features: doc.features,

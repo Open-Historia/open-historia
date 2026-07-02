@@ -2,8 +2,9 @@
 
 // The Community tab of the scenario library, Netflix-style: a Pinned shelf at
 // the top (hub posts labeled "pinned" — the official/featured scenarios), then
-// horizontally scrolling rows for Most Played (🚀 reactions), Most Liked (👍)
-// and Most Recent. Data comes straight from the public Scenario Hub — a GitHub
+// horizontally scrolling rows for Most Installed (⬇ release-asset download
+// counts), Most Liked (👍) and Most Recent. Data comes straight from the public
+// Scenario Hub — a GitHub
 // repo where every issue is a posted scenario — and bundles import through the
 // server's /api/hub proxy. Publishing exports the chosen scenario locally and
 // opens a prefilled hub post where the author drags the bundle in.
@@ -20,16 +21,37 @@ const HUB_OWNER = "Arkniem";
 const HUB_REPO = "pax-historia-scenarios";
 const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 const HUB_API_ISSUES = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
+// Official bundles live as assets on the "bundles" release — GitHub counts
+// every download of those, which is the install number shown on the cards.
+const HUB_API_BUNDLES_RELEASE = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/releases/tags/bundles`;
 const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-// First GitHub-hosted .json (or attachment) link in an issue body = the bundle.
+// First GitHub-hosted .json (release asset, attachment or raw) link in an issue
+// body = the bundle. Release links come first in official posts so imports go
+// through the download-counted URL; the raw mirror below it serves old clients.
 const BUNDLE_LINK_PATTERN =
-  /https:\/\/(?:github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
+  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.json|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
 let hubCache = { at: 0, posts: null };
 
-const parsePost = (issue) => {
+// Installs per bundle file (release-asset download counts). Community posts
+// attach their bundles to the issue instead, which GitHub can't count — those
+// show no install number.
+const fetchInstallCounts = async () => {
+  try {
+    const response = await fetch(HUB_API_BUNDLES_RELEASE, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) return new Map();
+    const release = await response.json();
+    return new Map((release.assets ?? []).map((asset) => [asset.name, asset.download_count ?? 0]));
+  } catch {
+    return new Map();
+  }
+};
+
+const parsePost = (issue, installsByFile) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   const description = body
@@ -54,6 +76,8 @@ const parsePost = (issue) => {
     comments: issue.comments ?? 0,
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
     bundleUrl,
+    // null = not trackable (issue attachment), a number = release download count.
+    installs: bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) ?? null : null,
   };
 };
 
@@ -61,9 +85,10 @@ const fetchHubPosts = async ({ force = false } = {}) => {
   if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
     return hubCache.posts;
   }
-  const response = await fetch(HUB_API_ISSUES, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
+  const [response, installsByFile] = await Promise.all([
+    fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
+    fetchInstallCounts(),
+  ]);
   if (!response.ok) {
     throw new Error(
       response.status === 403
@@ -74,7 +99,7 @@ const fetchHubPosts = async ({ force = false } = {}) => {
   const issues = await response.json();
   const posts = (Array.isArray(issues) ? issues : [])
     .filter((issue) => !issue.pull_request)
-    .map(parsePost);
+    .map((issue) => parsePost(issue, installsByFile));
   hubCache = { at: Date.now(), posts };
   return posts;
 };
@@ -164,6 +189,9 @@ const ScenarioCard = ({ post, busy, onImport }) => (
       {post.description || "No description."}
     </div>
     <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+      {post.installs != null && (
+        <span title="Installs (downloads of the scenario file, counted by GitHub)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
+      )}
       <span title="Played (🚀 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>🚀 {post.plays}</span>
       <span title="Liked (👍 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>👍 {post.upvotes}</span>
       <span title="Comments" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>💬 {post.comments}</span>
@@ -231,10 +259,18 @@ const CommunityPanel = ({ onImported }) => {
   const rows = useMemo(() => {
     if (!posts) return null;
     const pinned = posts.filter((post) => post.pinned);
-    const byPlays = [...posts].sort((a, b) => b.plays - a.plays || b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
+    // Installs (real download counts) rank first; posts GitHub can't count
+    // (attachment bundles) fall back to their 🚀 played reactions.
+    const byInstalls = [...posts].sort(
+      (a, b) =>
+        (b.installs ?? -1) - (a.installs ?? -1) ||
+        b.plays - a.plays ||
+        b.upvotes - a.upvotes ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
     const byLikes = [...posts].sort((a, b) => b.upvotes - a.upvotes || b.plays - a.plays || b.createdAt.localeCompare(a.createdAt));
     const byRecent = [...posts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { pinned, byPlays, byLikes, byRecent };
+    return { pinned, byInstalls, byLikes, byRecent };
   }, [posts]);
 
   const handleImport = async (post) => {
@@ -288,7 +324,7 @@ const CommunityPanel = ({ onImported }) => {
     <div style={{ color: "#fff", maxHeight: "calc(100vh - 11rem)", overflowY: "auto", paddingRight: "0.2rem" }}>
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
         <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
-          Community scenarios from the hub — 🚀 = played it, 👍 = liked it (react on the post to vote).
+          Community scenarios from the hub — ⬇ = installs (counted automatically), 🚀 = played it, 👍 = liked it (react on the post to vote).
           {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
         </div>
         <div style={{ flex: 1 }} />
@@ -347,7 +383,7 @@ const CommunityPanel = ({ onImported }) => {
             onImport={handleImport}
             emptyText="No pinned scenarios right now."
           />
-          <ScenarioRow title="🚀 Most Played" posts={rows.byPlays} busyId={busyId} onImport={handleImport} />
+          <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} />
           <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} />
           <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} />
         </>

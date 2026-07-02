@@ -9,7 +9,7 @@
 // wired to the document state hook. Kept isolated from the game (its own React
 // tree, its own map instance) so it can't disturb the game's MapLibre map.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 import OlMap from "./OlMap.jsx";
 import Toolbar from "./Toolbar.jsx";
@@ -27,8 +27,11 @@ import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 
-const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
+const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}) => {
   const d = useMapDocument();
+  // Opened from a scenario: the scenario's own map (regions/cities/colors) is
+  // loaded once it arrives, so never auto-seed the default world underneath it.
+  const scenarioMode = Boolean(onApplyToScenario);
   const [api, setApi] = useState(null);
   const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'layers' | 'features' | null
   const [paintOwner, setPaintOwner] = useState(""); // owner code assigned by the paint tool
@@ -112,6 +115,38 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.name, d.types, d.features, d.metadata]);
 
+  // Hydrate the editor with the scenario's CURRENT map: its regions + owners
+  // (custom geometry when it has one, else the stock world with the scenario's
+  // ownership overrides stamped on), its cities, its palette, and its author —
+  // so "edit this scenario's map" edits THAT map, not a fresh default world.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!api || !initialMap || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const base = createDocument({ name: initialMap.name || "Scenario Map", kind: "import-world" });
+    base.metadata.author = initialMap.author || "";
+    base.features = (initialMap.cities?.features || [])
+      .map((f) => ({
+        id: newId("feat"),
+        name: f.properties?.city ? String(f.properties.city) : "",
+        type: "Coordinate",
+        symbol: "square",
+        coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
+        country: "",
+        owner: null,
+        regionId: null,
+        population: f.properties?.population || 0,
+        tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
+      }))
+      .filter((f) => Array.isArray(f.coord));
+    d.setDoc(base);
+    if (initialMap.colors) d.mergeColors(initialMap.colors);
+    if (initialMap.regions) api.loadRegions(initialMap.regions);
+    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
+    d.setSaveStatus("saved");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, initialMap]);
+
   // The city popup is anchored to a screen position; panning/zooming would leave
   // it floating over the wrong spot, so any map movement closes it.
   useEffect(() => {
@@ -145,7 +180,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario } = {}) => {
         colors={d.colors}
         selectionIds={d.selection}
         activeTool={d.activeTool}
-        seedKind={d.metadata.kind}
+        seedKind={scenarioMode ? "deferred" : d.metadata.kind}
         defaultTypeId={d.types[0]?.id || "land"}
         paintOwner={paintOwner}
         features={d.features}
