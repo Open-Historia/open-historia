@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Pax Historia</string>
-    <string name="title_activity_main">Pax Historia</string>
+    <string name="app_name">Open Historia</string>
+    <string name="title_activity_main">Open Historia</string>
     <string name="package_name">io.github.arkniem.paxhistoria</string>
     <string name="custom_url_scheme">io.github.arkniem.paxhistoria</string>
 </resources>

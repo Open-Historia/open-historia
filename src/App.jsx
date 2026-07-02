@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Map from "./Game/Map/World.jsx";
 import UI from "./Game/GameUI/main.jsx";

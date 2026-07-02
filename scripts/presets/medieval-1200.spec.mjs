@@ -1,4 +1,4 @@
-/*! Pax Historia — Medieval 1200 scenario preset © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Medieval 1200 scenario preset © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Medieval preset — c. 1200 AD (the High Middle Ages).
 //
 // A best-effort repartition of the modern admin-1 map into the polities of the

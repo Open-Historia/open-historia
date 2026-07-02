@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (mobile search layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (mobile search layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useRef, useState } from "react";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 

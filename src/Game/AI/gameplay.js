@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import dayjs from "dayjs";
 import { callAI } from "./main.jsx";
 import {

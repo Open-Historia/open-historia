@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import mapLibreGl from "maplibre-gl";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 

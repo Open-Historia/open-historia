@@ -1,6 +1,6 @@
 {
   "appId": "io.github.arkniem.paxhistoria",
-  "appName": "Pax Historia",
+  "appName": "Open Historia",
   "webDir": "www",
   "server": {
     "androidScheme": "http",

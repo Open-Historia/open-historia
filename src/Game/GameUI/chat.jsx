@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";

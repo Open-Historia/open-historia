@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -519,7 +519,7 @@ const httpServer = app.listen(PORT, () => {
 // then reported as a bare "Server stopped." — say what actually happened.
 httpServer.on("error", (error) => {
   if (error?.code === "EADDRINUSE") {
-    console.error(`Port ${PORT} is already in use — Pax Historia is probably already running.`);
+    console.error(`Port ${PORT} is already in use — Open Historia is probably already running.`);
     console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
     console.error(`PORT environment variable to run this one on a different port.`);
     process.exit(1);

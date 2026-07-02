@@ -1,4 +1,4 @@
-# Pax Historia — Android APK build & release workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — Android APK build & release workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 name: Build Android APK
 
 # Builds the thin Android client (mobile/) and attaches the APK to the
@@ -55,7 +55,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Thin Android client — connects to your Pax Historia server (Termux on the same phone, or any host on your network). Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). On first launch it finds a Termux server on the same phone automatically, and the app updates itself when a newer build is published here.
+          NOTES="Thin Android client — connects to your Open Historia server (Termux on the same phone, or any host on your network). Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). On first launch it finds a Termux server on the same phone automatically, and the app updates itself when a newer build is published here.
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \

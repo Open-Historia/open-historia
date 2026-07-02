@@ -949,11 +949,11 @@ const ScenarioTopBar = () => {
           width: "2.65rem",
     }}
     >
-    <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+    <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
     </div>
     <div style={{ minWidth: 0 }}>
     <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-    Pax Historia
+    Open Historia
     </div>
     <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem" }}>
     Server-backed scenario deck

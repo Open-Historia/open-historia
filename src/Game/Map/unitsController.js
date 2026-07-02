@@ -1,4 +1,4 @@
-/*! Pax Historia — unit orders & deployment controller © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit orders & deployment controller © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Shared troop interaction state + mutations.
 //
 // Holds the current unit list in memory (refreshed from world.json every 5s so

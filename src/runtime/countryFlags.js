@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (flag lookup fixes) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (flag lookup fixes) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Shared country-flag helpers.
 //
 // The map layers (GADM) identify countries by GID_0, an ISO 3166-1 alpha-3 code.

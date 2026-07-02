@@ -1,4 +1,4 @@
-/*! Pax Historia — preset generator (incl. tier-2 geometry) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — preset generator (incl. tier-2 geometry) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Preset generator.
 //
 //   node scripts/presets/build-preset.mjs scripts/presets/wwii-1939.spec.mjs

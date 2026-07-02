@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useSyncExternalStore } from "react";
 import {
   setCountryNameResolver,

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Pax Historia — Linux/Termux launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — Linux/Termux launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 
 # ============================================================
-#  Pax Historia - one-click setup and launch (Linux / macOS)
+#  Open Historia - one-click setup and launch (Linux / macOS)
 #  ----------------------------------------------------------
 #   1. Verifies Node.js is installed
 #   2. Downloads the world map data (Git LFS assets) if missing
@@ -10,8 +10,8 @@
 #   4. Builds the client
 #   5. Starts the server and opens your browser
 #
-#  Run from a terminal:   ./"Launch Pax Historia.sh"
-#  macOS: double-click "Launch Pax Historia.command" instead.
+#  Run from a terminal:   ./"Launch Open Historia.sh"
+#  macOS: double-click "Launch Open Historia.command" instead.
 #  Keep the terminal open while playing; press Ctrl+C to stop.
 # ============================================================
 
@@ -20,7 +20,7 @@ cd "$(dirname "$0")" || exit 1
 
 echo ""
 echo "==================================================="
-echo "            PAX HISTORIA  -  LAUNCHER"
+echo "            OPEN HISTORIA  -  LAUNCHER"
 echo "==================================================="
 echo ""
 
@@ -39,7 +39,7 @@ fetch() { # fetch <url> <outfile>
 # ---- 1. Check Node.js -------------------------------------
 if ! command -v node >/dev/null 2>&1; then
     echo "[ERROR] Node.js was not found on this computer."
-    echo "Pax Historia needs Node.js to run."
+    echo "Open Historia needs Node.js to run."
     echo ""
     case "$(uname -s)" in
         Darwin)

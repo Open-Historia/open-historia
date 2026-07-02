@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   PROMPT_SECTION_DEFINITIONS,
@@ -1398,7 +1398,7 @@ const LibraryTopBar = () => {
   const [serverDown, setServerDown] = useState(false);
 
   const handleShutdownServer = async () => {
-    if (!window.confirm("Shut down the Pax Historia server? The game stops for everyone connected to it.")) {
+    if (!window.confirm("Shut down the Open Historia server? The game stops for everyone connected to it.")) {
       return;
     }
     try {
@@ -1572,13 +1572,13 @@ const LibraryTopBar = () => {
       >
         <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
           <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
-            <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+            <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
           </div>
           {/* Phones keep the logo only — the title/summary would crowd out the tabs. */}
           {!isMobile && (
             <div style={{ minWidth: 0 }}>
               <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-                Pax Historia
+                Open Historia
               </div>
               <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
                 {summaryText}
@@ -1610,7 +1610,7 @@ const LibraryTopBar = () => {
         <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={handleShutdownServer}
-            title="Exit: shut down the Pax Historia server"
+            title="Exit: shut down the Open Historia server"
             type="button"
             style={{
               ...actionButtonStyle,

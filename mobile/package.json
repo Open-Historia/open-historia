@@ -1,8 +1,8 @@
 {
-  "name": "pax-historia-mobile",
+  "name": "open-historia-mobile",
   "private": true,
   "version": "1.0.0",
-  "description": "Thin Android app for Pax Historia: a WebView that connects to a running Pax Historia server (Termux on the same phone, or any host on your network).",
+  "description": "Thin Android app for Open Historia: a WebView that connects to a running Open Historia server (Termux on the same phone, or any host on your network).",
   "scripts": {
     "sync": "cap sync android",
     "open": "cap open android",

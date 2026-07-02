@@ -1,4 +1,4 @@
-/*! Pax Historia — mobile HUD breakpoint hook © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — mobile HUD breakpoint hook © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useEffect, useState } from "react";
 
 // Small-screen detection for the HUD. Components use this to swap desktop

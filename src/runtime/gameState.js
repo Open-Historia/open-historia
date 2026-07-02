@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 
 export const GAME_DEFAULTS = {

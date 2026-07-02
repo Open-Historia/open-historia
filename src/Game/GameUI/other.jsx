@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";

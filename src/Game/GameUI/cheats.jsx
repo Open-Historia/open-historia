@@ -1,4 +1,4 @@
-/*! Pax Historia — cheats panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — cheats panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     JSON_URLS,

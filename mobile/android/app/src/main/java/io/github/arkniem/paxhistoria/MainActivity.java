@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (download handling for the WebView shell) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (download handling for the WebView shell) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 package io.github.arkniem.paxhistoria;
 
 import android.content.Intent;

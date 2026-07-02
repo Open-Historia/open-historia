@@ -1,4 +1,4 @@
-/*! Pax Historia — troop selection & orders UI © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — troop selection & orders UI © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";

@@ -1,5 +1,5 @@
 /*!
- * Pax Historia Map Editor
+ * Open Historia Map Editor
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 

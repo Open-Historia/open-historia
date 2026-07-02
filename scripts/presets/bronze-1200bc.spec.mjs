@@ -1,4 +1,4 @@
-/*! Pax Historia — 1200 BC preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — 1200 BC preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Late Bronze Age preset — c. 1200 BC, on the eve of the Collapse.
 //
 // The last golden generation of the Bronze Age world: New Kingdom Egypt holds

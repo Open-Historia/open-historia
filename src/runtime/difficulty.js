@@ -1,4 +1,4 @@
-/*! Pax Historia — difficulty levels & AI directives © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — difficulty levels & AI directives © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 
 // Difficulty is stored on game.json (game.difficulty) and steers the AI:
 // every gameplay task gets the matching directive appended to its system

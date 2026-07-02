@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (custom-region owner labels) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (custom-region owner labels) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import {
   PMTILES_ARCHIVES,
   decodeVectorTile,

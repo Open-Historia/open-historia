@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import fs from "fs";
 import path from "path";
 import url from "url";

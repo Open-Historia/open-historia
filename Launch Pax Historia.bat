@@ -1,11 +1,11 @@
 @echo off
-REM Pax Historia — Windows launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+REM Open Historia — Windows launcher © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 
 setlocal EnableExtensions EnableDelayedExpansion
-title Pax Historia - Launcher
+title Open Historia - Launcher
 
 REM ============================================================
-REM  Pax Historia - one-click setup and launch
+REM  Open Historia - one-click setup and launch
 REM  ----------------------------------------------------------
 REM   1. Verifies Node.js is installed
 REM   2. Downloads the world map data (Git LFS assets) if missing
@@ -22,7 +22,7 @@ cd /d "%~dp0"
 
 echo.
 echo ===================================================
-echo             PAX HISTORIA  -  LAUNCHER
+echo             OPEN HISTORIA  -  LAUNCHER
 echo ===================================================
 echo.
 
@@ -30,7 +30,7 @@ REM ---- 1. Check Node.js -------------------------------------
 where node >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Node.js was not found on this computer.
-    echo Pax Historia needs Node.js to run.
+    echo Open Historia needs Node.js to run.
     echo.
     where winget >nul 2>&1
     if not errorlevel 1 (

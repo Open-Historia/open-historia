@@ -1,8 +1,8 @@
-<!-- Pax Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
-<h1 align="center">Pax Historia</h1>
+<!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
+<h1 align="center">Open Historia</h1>
 
 <div align="center">
-  <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
+  <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Open Historia</a>.</strong>
 </div>
 
 <br />
@@ -53,13 +53,13 @@
 
 ### Easiest
 
-- **Windows:** double-click **`Launch Pax Historia.bat`**
-- **macOS:** double-click **`Launch Pax Historia.command`** (first run: right-click → *Open*)
-- **Linux:** run `./"Launch Pax Historia.sh"` in a terminal
+- **Windows:** double-click **`Launch Open Historia.bat`**
+- **macOS:** double-click **`Launch Open Historia.command`** (first run: right-click → *Open*)
+- **Linux:** run `./"Launch Open Historia.sh"` in a terminal
 
 The launcher checks Node.js, downloads the map data, installs dependencies, builds,
 and opens the game. To update an existing install later, run the matching
-**`Update Pax Historia`** script for your platform — it fetches the latest version
+**`Update Open Historia`** script for your platform — it fetches the latest version
 while preserving your saves, scenarios, and map data.
 
 #### Android app (thin APK)

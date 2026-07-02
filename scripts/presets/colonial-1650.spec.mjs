@@ -1,4 +1,4 @@
-/*! Pax Historia — 1650 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — 1650 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Colonial preset — 1650 AD (the colonization of the New World).
 //
 // The Age of Sail in full stride: Spain's viceroyalties span two continents,
