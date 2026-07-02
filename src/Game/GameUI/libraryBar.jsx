@@ -30,6 +30,7 @@ import {
 import { loadCountryNames } from "../../runtime/assets.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -1033,9 +1034,9 @@ const LibraryTopBar = () => {
     }
   };
 
-  // Create the game from the scenario, optionally overriding the starting country
-  // the player chose in the picker, then open its editor.
-  const startGameForCountry = async (scenario, countryCode) => {
+  // Create the game from the scenario with the starting country and difficulty
+  // the player chose in the two-step picker, then open its editor.
+  const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
     setEditorError(null);
     setIsBusy(true);
@@ -1045,10 +1046,11 @@ const LibraryTopBar = () => {
         scenarioId: scenario.id,
         setActive: true,
       });
-      if (countryCode) {
-        // gamePatch merges — a full `game` write would REPLACE game.json and wipe
-        // startDate/gameDate/round (the "Undated" bug).
-        await saveGame(details.game.id, { gamePatch: { country: countryCode } });
+      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+      // startDate/gameDate/round (the "Undated" bug).
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      if (Object.keys(gamePatch).length) {
+        await saveGame(details.game.id, { gamePatch });
       }
       await openGameEditor(details.game.id);
     } catch (nextError) {
@@ -1416,6 +1418,9 @@ const LibraryTopBar = () => {
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
+  // Step two of the new-game dialog: the chosen country waits here while the
+  // player picks a difficulty.
+  const [difficultyPick, setDifficultyPick] = useState(null);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -1513,14 +1518,15 @@ const LibraryTopBar = () => {
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.
-  const choosePlayCountry = async (countryCode) => {
+  const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
     setPlayGameId(null);
     if (!gid) return;
     try {
-      if (countryCode) {
-        await saveGame(gid, { gamePatch: { country: countryCode } });
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      if (Object.keys(gamePatch).length) {
+        await saveGame(gid, { gamePatch });
       }
       await activateGame(gid);
     } catch (nextError) {
@@ -1528,8 +1534,19 @@ const LibraryTopBar = () => {
     }
   };
 
-  const pickCountry = (countryCode) =>
-    playGameId ? choosePlayCountry(countryCode) : startGameForCountry(countryPicker, countryCode);
+  // Picking a country moves to step two (difficulty); picking a difficulty
+  // actually creates/updates the game.
+  const pickCountry = (countryCode) => setDifficultyPick({ countryCode });
+
+  const pickDifficulty = (difficultyId) => {
+    const countryCode = difficultyPick?.countryCode || "";
+    setDifficultyPick(null);
+    if (playGameId) {
+      choosePlayCountry(countryCode, difficultyId);
+    } else {
+      startGameForCountry(countryPicker, countryCode, difficultyId);
+    }
+  };
 
   return (
     <>
@@ -1662,53 +1679,89 @@ const LibraryTopBar = () => {
 
       {countryPicker && (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ ...surfaceStyle, borderRadius: 16, width: "min(440px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif" }}
           >
-            <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
-              Starting “{countryPicker.name}”
-            </div>
-            <input
-              autoFocus
-              value={countryQuery}
-              onChange={(e) => setCountryQuery(e.target.value)}
-              placeholder="Search countries…"
-              style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
-            />
-            <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-              <button
-                type="button"
-                onClick={() => pickCountry("")}
-                style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
-              >
-                {playGameId ? "Keep scenario default" : "Scenario default"}
-              </button>
-              {countryOptions
-                .filter((c) => {
-                  const q = countryQuery.trim().toLowerCase();
-                  return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
-                })
-                .slice(0, 400)
-                .map((c) => (
+            {difficultyPick ? (
+              <>
+                <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your difficulty</div>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+                  How hard should the world fight back?
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
+                  {DIFFICULTY_LEVELS.map((level) => (
+                    <button
+                      key={level.id}
+                      type="button"
+                      onClick={() => pickDifficulty(level.id)}
+                      style={{
+                        ...actionButtonStyle,
+                        alignItems: "center",
+                        background: "rgba(255,255,255,0.04)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.2rem",
+                        padding: "0.75rem 0.5rem",
+                      }}
+                    >
+                      <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>{level.emoji}</span>
+                      <span style={{ fontWeight: 700 }}>{level.label}</span>
+                      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", textAlign: "center" }}>{level.blurb}</span>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={() => setDifficultyPick(null)} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                  Back
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+                  Starting “{countryPicker.name}”
+                </div>
+                <input
+                  autoFocus
+                  value={countryQuery}
+                  onChange={(e) => setCountryQuery(e.target.value)}
+                  placeholder="Search countries…"
+                  style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
+                />
+                <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
                   <button
-                    key={c.code || c.name}
                     type="button"
-                    onClick={() => pickCountry(c.code)}
-                    style={{ ...actionButtonStyle, justifyContent: "space-between", background: "rgba(255,255,255,0.04)" }}
+                    onClick={() => pickCountry("")}
+                    style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
                   >
-                    <span>{c.name}</span>
-                    <span style={{ opacity: 0.5, fontSize: "0.72rem" }}>{c.code}</span>
+                    {playGameId ? "Keep scenario default" : "Scenario default"}
                   </button>
-                ))}
-            </div>
-            <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
-              {playGameId ? "Done" : "Cancel"}
-            </button>
+                  {countryOptions
+                    .filter((c) => {
+                      const q = countryQuery.trim().toLowerCase();
+                      return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
+                    })
+                    .slice(0, 400)
+                    .map((c) => (
+                      <button
+                        key={c.code || c.name}
+                        type="button"
+                        onClick={() => pickCountry(c.code)}
+                        style={{ ...actionButtonStyle, justifyContent: "space-between", background: "rgba(255,255,255,0.04)" }}
+                      >
+                        <span>{c.name}</span>
+                        <span style={{ opacity: 0.5, fontSize: "0.72rem" }}>{c.code}</span>
+                      </button>
+                    ))}
+                </div>
+                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                  {playGameId ? "Done" : "Cancel"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

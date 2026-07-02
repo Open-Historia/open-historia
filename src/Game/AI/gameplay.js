@@ -25,6 +25,7 @@ import {
   readActionsState,
   readChatsState,
   readEventsState,
+  readGameData,
   readGameStateBundle,
   readWorldState,
   writeActionsState,
@@ -33,6 +34,7 @@ import {
   writeGameData,
   writeWorldState,
 } from "../../runtime/gameState.js";
+import { difficultyDirective } from "../../runtime/difficulty.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -528,10 +530,18 @@ const withTimeout = async (promise, timeoutMs, timeoutMessage) => {
 const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage, variables }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  const systemPrompt = renderTemplate(prompts.tasks[taskKey], {
+  let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
     ...variables,
     ...helperValues,
   });
+
+  // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
+  try {
+    const game = await readGameData();
+    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
+  } catch {
+    // Without game data the task still runs at its default temperament.
+  }
 
   try {
     const raw = await withTimeout(

@@ -8,6 +8,7 @@ import {
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { languageDirective } from "../../runtime/i18n.js";
+import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     buildActionDisplayText,
@@ -724,7 +725,8 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    return renderTemplate(promptPack.leader, { ...variables, ...helperValues });
+    // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
+    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];
