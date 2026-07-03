@@ -27,8 +27,8 @@ REM  it reinstalls dependencies and rebuilds automatically.
 REM ============================================================
 
 REM Which repository to update from. The beta channel lives on the beta
-REM BRANCH of the main repository - updating keeps tracking that branch.
-set "REPO_OWNER=Tommi-K"
+REM branch of the organisation repository - updating keeps tracking it.
+set "REPO_OWNER=Open-Historia"
 set "REPO_NAME=open-historia"
 set "REPO_BRANCH=beta"
 

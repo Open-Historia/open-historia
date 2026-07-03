@@ -122,7 +122,7 @@ REM  Usage:  call :ensure_asset "local\path" "repo/path"
 REM ============================================================
 :ensure_asset
 set "TARGET=%~1"
-set "URL=https://media.githubusercontent.com/media/Tommi-K/open-historia/main/%~2"
+set "URL=https://media.githubusercontent.com/media/Open-Historia/open-historia/main/%~2"
 set "FSIZE=0"
 if exist "%TARGET%" for %%A in ("%TARGET%") do set "FSIZE=%%~zA"
 

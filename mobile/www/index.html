@@ -91,10 +91,11 @@
       // Stamped with the CI run number at build time; hand-built ("dev")
       // copies skip the update check entirely.
       const APP_BUILD = "__APP_BUILD__";
-      // Self-update polls the Beta repository's rolling "android" release —
-      // the asset name pax-historia.apk must never change (installed apps
-      // look for exactly that name).
-      const RELEASE_API = "https://api.github.com/repos/Arkniem/Open-Historia-Beta/releases/tags/android";
+      // Self-update polls the organisation repository's rolling "android"
+      // release (the android-apk.yml workflow publishes there) — the asset
+      // name pax-historia.apk must never change (installed apps look for
+      // exactly that name).
+      const RELEASE_API = "https://api.github.com/repos/Open-Historia/open-historia/releases/tags/android";
       const setup = document.getElementById("setup");
       const connecting = document.getElementById("connecting");
       const input = document.getElementById("server");

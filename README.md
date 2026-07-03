@@ -26,13 +26,13 @@
 </div>
 
 <div align="center">
-  <sub>Built with ❤︎ by <a href="https://github.com/Tommi-K/open-historia/graphs/contributors">contributors</a>.
+  <sub>Built with ❤︎ by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors">contributors</a>.
 </div>
 
 <br />
 <br />
 
-![](https://github.com/Tommi-K/open-historia/blob/main/public/screenshot.png?raw=true)
+![](https://github.com/Open-Historia/open-historia/blob/main/public/screenshot.png?raw=true)
 
 ---
 
@@ -65,7 +65,7 @@ while preserving your saves, scenarios, and map data.
 #### Android app (thin APK)
 
 Easiest: download **`pax-historia.apk`** from the
-[**Android release**](https://github.com/Tommi-K/open-historia/releases/tag/android)
+[**Android release**](https://github.com/Open-Historia/open-historia/releases/tag/android)
 and open it to install (allow installs from your browser when Android asks).
 On first launch the app finds the Termux server on the same phone by itself;
 to play against another machine, type its address once — it's remembered.
@@ -95,7 +95,7 @@ release APK — run it after changing `mobile/`.
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
 
 ```bash
-git clone https://github.com/Tommi-K/open-historia.git
+git clone https://github.com/Open-Historia/open-historia.git
 cd open-historia
 git lfs install        # Set up Git LFS
 git lfs pull           # Pull large files (map tiles + editor seeds + world map)

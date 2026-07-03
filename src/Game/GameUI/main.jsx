@@ -304,7 +304,7 @@ const Main = ({
       {isSettingsOpen && (
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
-          githubUrl="https://github.com/Arkniem/Open-Historia-Beta"
+          githubUrl="https://github.com/Open-Historia/open-historia"
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);

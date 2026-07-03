@@ -86,7 +86,7 @@ echo ""
 #  The big map files ship as tiny Git LFS pointer stubs in a
 #  ZIP download. Pull the real binaries from GitHub's media CDN.
 #  Real files are several MB; LFS pointer stubs are ~150 B.
-ASSET_BASE="https://media.githubusercontent.com/media/Tommi-K/open-historia/main"
+ASSET_BASE="https://media.githubusercontent.com/media/Open-Historia/open-historia/main"
 
 ensure_asset() { # ensure_asset <local path == repo path>
     local target="$1" size=0

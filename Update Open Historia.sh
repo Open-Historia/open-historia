@@ -27,8 +27,8 @@
 # ============================================================
 
 # Which repository to update from. The beta channel lives on the beta
-# BRANCH of the main repository - updating keeps tracking that branch.
-REPO_OWNER="Tommi-K"
+# branch of the organisation repository - updating keeps tracking it.
+REPO_OWNER="Open-Historia"
 REPO_NAME="open-historia"
 REPO_BRANCH="beta"
 
