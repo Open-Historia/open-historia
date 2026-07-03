@@ -24,9 +24,11 @@
 #  macOS: double-click "Update Pax Historia.command" instead.
 # ============================================================
 
-# Which repository to update from.
-REPO_OWNER="Tommi-K"
-REPO_NAME="pax-historia"
+# Which repository to update from. Active development lives in the Beta
+# repository - updating mirrors it no matter where this copy came from,
+# so every install converges on the same codebase.
+REPO_OWNER="Arkniem"
+REPO_NAME="Open-Historia-Beta"
 REPO_BRANCH="main"
 
 fail_copy() {

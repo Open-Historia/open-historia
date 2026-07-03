@@ -24,9 +24,11 @@ REM  After updating, run "Launch Pax Historia.bat" as usual -
 REM  it reinstalls dependencies and rebuilds automatically.
 REM ============================================================
 
-REM Which repository to update from.
-set "REPO_OWNER=Tommi-K"
-set "REPO_NAME=pax-historia"
+REM Which repository to update from. Active development lives in the Beta
+REM repository - updating mirrors it no matter where this copy came from,
+REM so every install converges on the same codebase.
+set "REPO_OWNER=Arkniem"
+set "REPO_NAME=Open-Historia-Beta"
 set "REPO_BRANCH=main"
 
 REM Work from the folder this script lives in (the project root)
