@@ -226,6 +226,11 @@ const WorldMap = () => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
+  // False until the first world.json read: before that we can't know whether
+  // this game uses the stock map or a custom one, so NO political layer
+  // renders — this kills the "modern world flashes, then the real map loads"
+  // effect every scenario used to show.
+  const [worldKnown, setWorldKnown] = useState(false);
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionData, setCustomRegionData] = useState(EMPTY_FEATURE_COLLECTION);
@@ -278,8 +283,15 @@ const WorldMap = () => {
 
   // On custom maps the stock modern-country labels are replaced wholesale by the
   // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
-  const activePointLabelData = customActive ? ownerLabelData : pointLabelData;
-  const activeCurvedLabelData = customActive ? EMPTY_FEATURE_COLLECTION : curvedLabelData;
+  // Keyed on the FLAG (not customActive): while a custom world's geometry is
+  // still loading, and before the world is known at all, stock labels must
+  // not flash in.
+  const activePointLabelData = !worldKnown
+    ? EMPTY_FEATURE_COLLECTION
+    : customFlag
+      ? ownerLabelData
+      : pointLabelData;
+  const activeCurvedLabelData = worldKnown && !customFlag ? curvedLabelData : EMPTY_FEATURE_COLLECTION;
 
   const handleRegionClick = useCallback((event) => {
     const unitsAt = () =>
@@ -361,6 +373,9 @@ const WorldMap = () => {
         .then((data) => {
           if (!cancelled) {
             setWorldState(data ?? {});
+            // Only now do we KNOW whether this world is stock or custom —
+            // nothing world-dependent renders before this (see worldKnown).
+            setWorldKnown(true);
           }
         })
         .catch((error) => console.error("Error loading world state:", error));
@@ -525,19 +540,24 @@ const WorldMap = () => {
     };
   }, [customActive, ownerByRegionId, colorMap]);
 
-  // When a custom map is active the stock country-level fill/borders are hidden
-  // (era borders replace them); the stock REGION borders stay on — they're the
-  // crisp border art for the tile-painted regions.
-  const countriesFillPaint = customActive ? { ...fillStyle, "fill-opacity": 0 } : fillStyle;
+  // Stock country fills/borders render ONLY once the world is known to be a
+  // stock world. Gating on the customRegions FLAG (not customActive, which
+  // additionally waits for geometry) means a custom world never flashes the
+  // modern map — not before the world loads, and not while its geometry does.
+  const showStockCountries = worldKnown && !customFlag;
+  const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
   const countriesOutlinePaint = {
     "line-color": "#000",
     "line-width": 1,
-    "line-opacity": customActive ? 0 : 1,
+    "line-opacity": showStockCountries ? 1 : 0,
   };
+  // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
-    "line-opacity": ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.4, 8, 0.7],
+    "line-opacity": worldKnown
+      ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.4, 8, 0.7]
+      : 0,
   };
 
   const pointLabelLayerLayout = useMemo(() => ({
