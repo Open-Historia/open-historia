@@ -1312,12 +1312,23 @@ export const advanceActiveCatalyst = async (choiceText) => {
   });
 };
 
+// Event density per skip length (player-tuned): longer skips must return
+// proportionally more events, and short ones must stay brief.
+const eventCountRangeForDays = (days) => {
+  if (days <= 7) return [1, 2];
+  if (days <= 31) return [5, 7];
+  if (days <= 92) return [10, 13];
+  if (days <= 184) return [19, 27];
+  return [29, 37];
+};
+
 export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
   const targetDate = dayjs(bundle.game.gameDate).add(safeDays, "day").format("YYYY-MM-DD");
   const variables = await buildTemplateVariables(bundle, { targetDate });
+  const [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
   let payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
     // The jump IS the game — let slow (local/reasoning) models finish instead
@@ -1325,8 +1336,12 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
     timeoutMs: 180000,
     userMessage:
       mode === "auto"
-        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only."
-        : "Simulate a standard jump forward to the requested target date. Return JSON only.",
+        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
+          "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
+          "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
+        : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
+          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${safeDays} days), with their dates ` +
+          `spread across the skipped period.`,
     variables,
   });
 

@@ -423,6 +423,43 @@ const getEventFocusBounds = (event, { countryBounds, regionBounds }) => {
     return resolvedBounds;
 };
 
+// Every event moves the camera. When the impacts don't pin a location, fall
+// back to the chat participants, then to the countries the event's text
+// actually mentions.
+const deriveEventFocusBounds = (event, { countryBounds, regionBounds, polityLookup }) => {
+    const impactBounds = getEventFocusBounds(event, { countryBounds, regionBounds });
+    if (impactBounds) {
+        return impactBounds;
+    }
+
+    let bounds = null;
+    for (const chat of event?.impacts?.createdChats ?? []) {
+        for (const country of chat?.countries ?? []) {
+            if (country?.code) {
+                bounds = extendBounds(bounds, countryBounds.get(String(country.code)) || null);
+            }
+        }
+    }
+    if (bounds) {
+        return bounds;
+    }
+
+    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
+    for (const [code, name] of polityLookup) {
+        // Very short names ("Chad") false-match inside other words rarely
+        // enough to accept; sub-4-character names don't.
+        if (!name || String(name).length < 4) {
+            continue;
+        }
+
+        if (haystack.includes(String(name).toLowerCase())) {
+            bounds = extendBounds(bounds, countryBounds.get(code) || null);
+        }
+    }
+
+    return bounds;
+};
+
 const getMapInstance = (mapRef) => mapRef?.current?.getMap?.() ?? mapRef?.current ?? null;
 
 const focusMapOnBounds = (mapRef, bounds) => {
@@ -928,7 +965,6 @@ const TimelineSkipPanel = ({
 
 const TimelineHistoryPanel = ({
     isOpen,
-    onFocusEvent,
     onRevealNextEvent,
     lookups,
     onClose,
@@ -972,31 +1008,12 @@ const TimelineHistoryPanel = ({
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {visibleEvents.map((event, index) => {
                 const isLastVisible = index === visibleEvents.length - 1;
-                const hasMapChanges = getEventMapChangeCount(event) > 0;
 
                 return (
                     <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
-                    <EventCard
-                    event={event}
-                    lookups={lookups}
-                    footer={(
-                        hasMapChanges ? (
-                            <div style={{ display: "flex", justifyContent: "center", marginTop: "0.15rem" }}>
-                            <button
-                            type="button"
-                            onClick={() => onFocusEvent(event)}
-                            style={{
-                                ...ghostButtonStyle,
-                                color: "#bfdbfe",
-                            }}
-                            >
-                            <MapIcon />
-                            <span>Show on map</span>
-                            </button>
-                            </div>
-                        ) : null
-                    )}
-                    />
+                    {/* No "Show on map" footer: the camera already flies to
+                        every event as it is revealed. */}
+                    <EventCard event={event} lookups={lookups} />
                     </div>
                 );
             })}
@@ -1208,14 +1225,16 @@ const DateWidget = ({
         setVisibleEventCount(1);
     }, [latestTurnRecord?.id]);
 
+    // The camera follows EVERY revealed event — impacts pin the exact spot,
+    // otherwise the countries the event involves do.
     useEffect(() => {
         if (!activeVisibleEvent) {
             return;
         }
 
-        const bounds = getEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds });
+        const bounds = deriveEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds, polityLookup });
         focusMapOnBounds(mapRef, bounds);
-    }, [activeVisibleEvent, countryBounds, mapRef, regionBounds]);
+    }, [activeVisibleEvent, countryBounds, mapRef, polityLookup, regionBounds]);
 
     const revealNextEvent = () => {
         setVisibleEventCount((current) => {
@@ -1225,11 +1244,6 @@ const DateWidget = ({
 
             return Math.min(totalVisibleEvents, current + 1);
         });
-    };
-
-    const focusEvent = (event) => {
-        const bounds = getEventFocusBounds(event, { countryBounds, regionBounds });
-        focusMapOnBounds(mapRef, bounds);
     };
 
     return (
@@ -1246,7 +1260,6 @@ const DateWidget = ({
         />
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
-        onFocusEvent={focusEvent}
         onRevealNextEvent={revealNextEvent}
         lookups={lookups}
         onClose={() => setPanel(null)}
