@@ -40,6 +40,21 @@ echo             PAX HISTORIA  -  UPDATER
 echo    source: %REPO_OWNER%/%REPO_NAME% (%REPO_BRANCH%)
 echo ===================================================
 echo.
+echo Would you like to update to the most recent release on Beta
+echo (the %REPO_BRANCH% branch of %REPO_OWNER%/%REPO_NAME%) or stay
+echo on your current branch?
+echo.
+echo    [U] Update to the most recent Beta release
+echo    [S] Stay on your current branch
+echo.
+choice /C US /N /M "Your choice [U/S]: "
+if errorlevel 2 (
+    echo.
+    echo Staying on your current branch - nothing was changed.
+    pause
+    exit /b 0
+)
+echo.
 
 REM ---- Git installs: a proper pull is the cleanest update ----
 if exist ".git" (
@@ -49,8 +64,8 @@ if exist ".git" (
         echo Install Git from https://git-scm.com/ and run this again.
         pause & exit /b 1
     )
-    echo This is a git install - updating with git pull...
-    git pull --ff-only
+    echo This is a git install - pulling the Beta repository...
+    git pull --ff-only https://github.com/%REPO_OWNER%/%REPO_NAME%.git %REPO_BRANCH%
     if errorlevel 1 (
         echo.
         echo [WARN] git pull could not fast-forward ^(local changes?^).

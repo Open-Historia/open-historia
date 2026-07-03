@@ -51,6 +51,24 @@ main() {
     echo "   source: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo "==================================================="
     echo ""
+    echo "Would you like to update to the most recent release on Beta"
+    echo "(the $REPO_BRANCH branch of $REPO_OWNER/$REPO_NAME) or stay"
+    echo "on your current branch?"
+    echo ""
+    echo "   [u] Update to the most recent Beta release"
+    echo "   [s] Stay on your current branch"
+    echo ""
+    printf "Your choice [u/s]: "
+    read -r choice
+    case "$choice" in
+        u|U|update|Update|UPDATE) ;;
+        *)
+            echo ""
+            echo "Staying on your current branch - nothing was changed."
+            exit 0
+            ;;
+    esac
+    echo ""
 
     # ---- Git installs: a proper pull is the cleanest update ----
     if [ -d ".git" ]; then
@@ -59,8 +77,8 @@ main() {
             echo "Install Git (https://git-scm.com/) and run this again."
             exit 1
         fi
-        echo "This is a git install - updating with git pull..."
-        if ! git pull --ff-only; then
+        echo "This is a git install - pulling the Beta repository..."
+        if ! git pull --ff-only "https://github.com/$REPO_OWNER/$REPO_NAME.git" "$REPO_BRANCH"; then
             echo ""
             echo "[WARN] git pull could not fast-forward (local changes?)."
             echo "Commit/stash your changes, or resolve manually, then retry."
