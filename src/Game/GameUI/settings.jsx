@@ -706,6 +706,22 @@ const SettingsMenu = ({
 
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
+        <div style={{ marginTop: "-0.85rem", marginBottom: "1rem" }}>
+        <span
+        style={{
+            backgroundColor: "rgba(245,158,11,0.16)",
+            border: "1px solid rgba(245,158,11,0.45)",
+            borderRadius: "999px",
+            color: "#fbbf24",
+            fontSize: "0.66rem",
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+            padding: "0.16rem 0.55rem",
+        }}
+        >
+        Very Experimental
+        </span>
+        </div>
         <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
 
