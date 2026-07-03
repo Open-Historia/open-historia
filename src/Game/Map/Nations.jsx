@@ -682,11 +682,15 @@ const WorldMap = () => {
     "line-opacity": showStockCountries ? 1 : 0,
   };
   // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
+  // Tile hairlines only fade in alongside the tile FILLS (z5.5-6.5): below
+  // that the fills come from the seed geometry, and hairlines from the
+  // simplified low-zoom tiles sit visibly off those fills — disconnected
+  // borders. The far hairlines come from the seed geometry itself instead.
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
     "line-opacity": worldKnown
-      ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.4, 8, 0.7]
+      ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.6, 8, 0.7]
       : 0,
   };
 
@@ -760,7 +764,11 @@ const WorldMap = () => {
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)
           unless world.customRegions is set. */}
-      <Source id="custom-regions-source" type="geojson" data={customRegionData}>
+      {/* tolerance 0: GeoJSON sources simplify geometry per zoom by default,
+          and each region simplifies independently — shared borders drift
+          apart at low zoom. Full resolution keeps them connected everywhere;
+          the seed geometry is coarse enough that this stays cheap. */}
+      <Source id="custom-regions-source" type="geojson" data={customRegionData} tolerance={0}>
         {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
             tiles are too simplified at low zoom and show sliver gaps there. */}
         <Layer
@@ -769,6 +777,22 @@ const WorldMap = () => {
           maxzoom={7}
           filter={GADM_GEOMETRY_FILTER}
           paint={{ "fill-color": customFillStyle["fill-color"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+        />
+        {/* Far hairlines from the SAME seed geometry as the far fills, so
+            zoomed-out region borders sit exactly on the colored areas. They
+            hand off to the stock-tile hairlines with the fill crossfade. */}
+        <Layer
+          id="custom-regions-hairline-far"
+          type="line"
+          maxzoom={7}
+          filter={GADM_GEOMETRY_FILTER}
+          paint={{
+            "line-color": "#000",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
+            "line-opacity": customActive
+              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              : 0,
+          }}
         />
         <Layer
           id="custom-regions-fill"

@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer, useMap } from "react-map-gl/maplibre";
 
-// One full rotation of the earth every 10 minutes.
+// The camera orbits the earth once every 10 minutes.
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 // Resume the auto-rotation this long after the player stops touching the map.
 const INTERACTION_GRACE_MS = 3000;
@@ -18,11 +18,11 @@ const STAR_PX_PER_DEG = 1024 / 360;
 
 const NIGHT_LAYER_ID = "globe-night";
 
-// --- The sun lives in WORLD space. Its longitude is the subsolar point; it
-// creeps westward so the terminator sweeps the earth once per rotation
-// period. The camera's auto-rotation moves at the same rate, so while idle
-// the sun hangs still on screen as countries turn beneath it — but panning
-// the camera moves you around a night side that stays anchored to the world.
+// --- The universe is STATIC and the camera does the moving. The sun holds a
+// fixed world longitude (the subsolar point), the night shadow derives from
+// it, and the stars are pinned to the same world frame — so sun, sky and
+// shadow always agree. Orbiting the earth (the idle auto-orbit or a drag)
+// slides all of them across the view together with the countries.
 let sunWorldLng = null;
 
 const normalizeLng = (lng) => ((lng + 180) % 360 + 360) % 360 - 180;
@@ -113,54 +113,64 @@ const GlobeEffects = ({ active }) => {
       // Where is the sun relative to the camera? 0 = dead ahead.
       const delta = normalizeLng((sunWorldLng ?? 0) - center.lng);
 
-      // The sky turns WITH the globe: tied to the camera longitude, the
-      // stars drift the same screen direction as the surface whenever the
-      // globe rotates — auto-rotation or a drag — never against it.
+      // Stars are pinned to the world frame: orbiting the camera slides them
+      // across the view in lockstep with the countries and the night shadow.
       const space = document.getElementById("oh-globe-space");
       if (space) {
         space.style.backgroundPosition =
           `${(-center.lng * STAR_PX_PER_DEG).toFixed(1)}px ${(center.lat * STAR_PX_PER_DEG).toFixed(1)}px`;
       }
 
-      // The sun: horizontal position from its bearing off the view axis;
-      // it slips behind the earth (and off screen) as you pan away.
+      // The globe's rendered silhouette radius: the 0.74 fudge matches the
+      // limb measured on screen (constant across zooms — fixed camera FOV).
+      const globeRadius = ((512 * 2 ** zoom) / (2 * Math.PI)) * 0.74;
+
+      // The sun: horizontal position from its bearing off the view axis.
       const sun = document.getElementById("oh-sun-glow");
       const sunSize = sun ? sun.offsetWidth : 0;
       const sunX = width * (0.5 + delta / 160);
       const sunY = height * 0.16;
       if (sun) {
-        sun.style.left = `${(sunX - sunSize / 2).toFixed(0)}px`;
-        sun.style.top = `${(sunY - sunSize / 2).toFixed(0)}px`;
+        const sunLeft = sunX - sunSize / 2;
+        const sunTop = sunY - sunSize / 2;
+        sun.style.left = `${sunLeft.toFixed(0)}px`;
+        sun.style.top = `${sunTop.toFixed(0)}px`;
+        // Eclipse, not fade: the earth's disk is a hard hole punched in the
+        // glow's own mask, so the sun is cut off by the limb as it slides
+        // behind the planet — and hidden entirely when the camera looks
+        // straight down at the surface from a deep zoom.
+        const holeX = width / 2 - sunLeft;
+        const holeY = height / 2 - sunTop;
+        const sunMask =
+          `radial-gradient(circle ${(globeRadius + 2).toFixed(0)}px at ${holeX.toFixed(0)}px ${holeY.toFixed(0)}px, ` +
+          `rgba(0,0,0,0) 0 ${(globeRadius - 2).toFixed(0)}px, rgba(0,0,0,1) ${(globeRadius + 2).toFixed(0)}px)`;
+        sun.style.webkitMaskImage = sunMask;
+        sun.style.maskImage = sunMask;
+        // Still fades when it would hang in front of the lit face —
+        // physically it is behind the camera there.
         const bearing = Math.abs(delta);
-        // Gone when it would hang in front of the lit face (physically it is
-        // behind the camera there), and gone once the earth eclipses it.
         const nearFade = Math.min(1, Math.max(0, (bearing - 20) / 15));
-        const farFade = bearing <= 105 ? 1 : Math.max(0, (135 - bearing) / 30);
-        sun.style.opacity = (nearFade * farFade).toFixed(2);
+        sun.style.opacity = nearFade.toFixed(2);
       }
 
       // Atmosphere rim: brightest on the limb facing the sun, fading around
       // to the night side — a masked ring hugging the globe's silhouette.
       const atmo = document.getElementById("oh-atmo-glow");
       if (atmo) {
-        // MapLibre's globe radius tracks the mercator world size; the 0.74
-        // fudge matches the rendered silhouette (measured against the actual
-        // limb position on screen — constant across zooms, fixed camera FOV).
-        const radius = ((512 * 2 ** zoom) / (2 * Math.PI)) * 0.74;
-        const diameter = radius * 2 * 1.1;
+        const diameter = globeRadius * 2 * 1.1;
         atmo.style.width = `${diameter.toFixed(0)}px`;
         atmo.style.height = `${diameter.toFixed(0)}px`;
         atmo.style.left = `${(width / 2 - diameter / 2).toFixed(0)}px`;
         atmo.style.top = `${(height / 2 - diameter / 2).toFixed(0)}px`;
         // Aim the bright side of the ring at the sun (CSS 0deg points up).
         const cssAngle = 90 + (Math.atan2(sunY - height / 2, sunX - width / 2) * 180) / Math.PI;
-        const maskValue = `linear-gradient(${(cssAngle + 180).toFixed(1)}deg, rgba(0,0,0,1) 22%, rgba(0,0,0,0.03) 68%)`;
+        const maskValue = `linear-gradient(${(cssAngle + 180).toFixed(1)}deg, rgba(0,0,0,1) 25%, rgba(0,0,0,0.1) 72%)`;
         atmo.style.webkitMaskImage = maskValue;
         atmo.style.maskImage = maskValue;
-        // Gone once the globe outgrows the viewport; near-nothing when the
-        // sun is around the far side, full burn when it lights this limb.
+        // Gone once the globe outgrows the viewport; a faint band survives on
+        // the night side, full burn on the limb the sun is lighting.
         const zoomFade = Math.max(0, Math.min(1, (5.2 - zoom) / 0.8));
-        const sunFade = 0.12 + 0.88 * Math.max(0, Math.min(1, (150 - Math.abs(delta)) / 90));
+        const sunFade = 0.25 + 0.75 * Math.max(0, Math.min(1, (150 - Math.abs(delta)) / 90));
         atmo.style.opacity = (zoomFade * sunFade).toFixed(2);
       }
     };
@@ -168,13 +178,12 @@ const GlobeEffects = ({ active }) => {
     const tick = (now) => {
       const dt = now - lastTick;
       lastTick = now;
-      // Time always passes: the subsolar point creeps westward.
-      sunWorldLng = normalizeLng((sunWorldLng ?? 0) - ROTATION_DEG_PER_MS * dt);
       const idle = now - lastInteraction > INTERACTION_GRACE_MS;
       if (idle && !mapInstance.isMoving()) {
         const center = mapInstance.getCenter();
-        // West-to-east spin at the sun's own rate: while idle the sun hangs
-        // still in the sky and the world turns beneath it.
+        // The CAMERA orbits the static earth — sun, shadow, stars and
+        // countries all hold their world positions and sweep across the
+        // view together, day side into night side and back each orbit.
         mapInstance.jumpTo({ center: [center.lng - ROTATION_DEG_PER_MS * dt, center.lat] });
       }
       frameId = requestAnimationFrame(tick);

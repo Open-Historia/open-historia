@@ -183,10 +183,12 @@ const AtmosphereGlow = () => (
       pointerEvents: "none",
       opacity: 0,
       // The div is sized 1.1× the globe's diameter; the bright band sits at
-      // 91-96% of the div radius = just OUTSIDE the globe's silhouette.
+      // 91-96% of the div radius = just OUTSIDE the globe's silhouette, with
+      // a broad soft haze bleeding outward past it.
       background:
-        "radial-gradient(circle, rgba(0,0,0,0) 0 85%, rgba(150,200,255,0.12) 89%, " +
-        "rgba(175,218,255,0.6) 92%, rgba(140,190,255,0.62) 94%, rgba(90,140,245,0.28) 97%, rgba(0,0,0,0) 100%)",
+        "radial-gradient(circle, rgba(0,0,0,0) 0 82%, rgba(150,200,255,0.2) 88%, " +
+        "rgba(190,225,255,0.9) 91.5%, rgba(160,205,255,0.7) 94%, rgba(115,165,250,0.38) 96.5%, " +
+        "rgba(85,135,245,0.16) 98.5%, rgba(0,0,0,0) 100%)",
     }}
   />
 );
