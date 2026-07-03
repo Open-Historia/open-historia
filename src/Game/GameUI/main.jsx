@@ -222,7 +222,7 @@ const Main = ({
       {isSettingsOpen && (
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
-          githubUrl="https://github.com/Tommi-K/pax-historia"
+          githubUrl="https://github.com/Arkniem/Open-Historia-Beta"
           topOffset={TOP_BAR_OFFSET}
           isFullscreenEnabled={isFullscreenEnabled}
           isGlobeEnabled={isGlobeEnabled}
