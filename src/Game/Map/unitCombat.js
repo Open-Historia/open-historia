@@ -1,3 +1,4 @@
+/*! Open Historia — unit combat resolution © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Deterministic, reproducible unit combat.
 //
 // A seeded PRNG (xmur3 hash -> mulberry32) derives outcomes from
@@ -36,6 +37,61 @@ const ADVANTAGE = {
 };
 
 const advantage = (a, b) => ADVANTAGE[a]?.[b] ?? 1.0;
+
+// ---- reach & feasibility -------------------------------------------------
+// Units can't act across the planet at will: attacks resolve instantly only
+// inside an era- and type-appropriate engagement range, and movement orders
+// beyond a leash become multi-turn orders for the AI instead of teleports.
+
+const EARTH_RADIUS_KM = 6371;
+
+export const distanceKm = (a, b) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad((b.lat ?? 0) - (a.lat ?? 0));
+  const dLng = toRad((b.lng ?? 0) - (a.lng ?? 0));
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat ?? 0)) * Math.cos(toRad(b.lat ?? 0)) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
+};
+
+// Immediate engagement range: how far a unit can strike RIGHT NOW.
+const ENGAGEMENT_RANGE_KM = {
+  garrison: 60,
+  infantry: 100,
+  artillery: 200,
+  armor: 150,
+  naval: 500,
+  air: 1200,
+};
+
+// One-order movement leash: how far a single move order may relocate a unit
+// before it has to become a multi-turn campaign the AI advances realistically.
+const MOVE_LEASH_KM = {
+  garrison: 200,
+  infantry: 800,
+  artillery: 800,
+  armor: 1000,
+  naval: 4000,
+  air: 3000,
+};
+
+// Logistics scale with the era: a 1200 BC army does not operate like 1944.
+export const eraReachFactor = (gameDate) => {
+  const match = /(-?\d{3,4})/.exec(String(gameDate ?? ""));
+  const bce = /BC|BCE/i.test(String(gameDate ?? ""));
+  const year = match ? Number(match[1]) * (bce ? -1 : 1) : 2000;
+  if (year < 1500) return 0.5;
+  if (year < 1850) return 0.7;
+  if (year < 1945) return 1;
+  return 1.15;
+};
+
+export const engagementRangeKm = (type, gameDate) =>
+  Math.round((ENGAGEMENT_RANGE_KM[type] ?? 100) * eraReachFactor(gameDate));
+
+export const moveLeashKm = (type, gameDate) =>
+  Math.round((MOVE_LEASH_KM[type] ?? 800) * eraReachFactor(gameDate));
 
 export const resolveClash = (attacker, defender, round = 1) => {
   const rand = mulberry32(xmur3(`${attacker.id}|${defender.id}|${round}`)());

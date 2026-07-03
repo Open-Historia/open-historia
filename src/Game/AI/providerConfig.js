@@ -1,3 +1,4 @@
+/*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 export const DEFAULT_PROVIDER = "gemini";
 
 export const PROVIDER_OPTIONS = [

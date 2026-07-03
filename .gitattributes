@@ -1,3 +1,4 @@
+# Open Historia — repo attributes (LFS geodata, script line endings) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 # Shell scripts must stay LF - CRLF breaks bash on Linux/macOS
 *.sh text eol=lf
 *.command text eol=lf

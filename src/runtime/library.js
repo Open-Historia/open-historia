@@ -1,8 +1,10 @@
+/*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useSyncExternalStore } from "react";
 import {
   setCountryNameResolver,
   setRuntimeAssetEndpoints,
 } from "./assets.js";
+import { enqueueContentStrings } from "./translator.js";
 
 const LIBRARY_API_ROOT = "/api/library";
 const SCENARIOS_API_ROOT = "/api/scenarios";
@@ -193,6 +195,9 @@ export const createScenario = async (payload) => {
     body: payload,
     method: "POST",
   });
+  // Edited names/descriptions translate (and reach the server language pack)
+  // the moment they're saved, not when first rendered.
+  enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
   return details;
 };
@@ -202,6 +207,7 @@ export const saveScenario = async (scenarioId, payload) => {
     body: payload,
     method: "PUT",
   });
+  enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
   return details;
 };
@@ -328,6 +334,8 @@ export const createGame = async (payload) => {
     body: payload,
     method: "POST",
   });
+  // Card text edits translate (and reach the server language pack) right away.
+  enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
   return details;
 };
@@ -337,6 +345,7 @@ export const saveGame = async (gameId, payload) => {
     body: payload,
     method: "PUT",
   });
+  enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
   return details;
 };

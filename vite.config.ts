@@ -1,3 +1,4 @@
+/*! Open Historia — portions (dev API proxy + vendor chunks) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 

@@ -1,3 +1,4 @@
+/*! Open Historia — WWII 1939 scenario preset © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // World War II preset — 1 September 1939 (the day Germany invades Poland).
 //
 // Borders are approximated from modern admin-1 regions. We override only where

@@ -1,3 +1,4 @@
+/*! Open Historia — troop selection & orders UI © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
@@ -8,6 +9,7 @@ import {
   setInteractionMode,
   removeUnit,
 } from "../Map/unitsController.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -183,6 +185,10 @@ const UnitPopup = () => {
     };
   }, [map, selection, unit]);
 
+  // Full owner name, never the code (called before the early return —
+  // hook order must not depend on the selection).
+  const ownerName = useCountryDisplayName(unit?.ownerCode || "");
+
   if (!selection || !screenPos || !unit) return null;
 
   const POPUP_WIDTH = 220;
@@ -236,7 +242,7 @@ const UnitPopup = () => {
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: "13px", wordBreak: "break-word" }}>{unit.name}</div>
             <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
-              {TYPE_LABEL[unit.type] ?? unit.type} · {unit.ownerCode}
+              {TYPE_LABEL[unit.type] ?? unit.type} · {ownerName}
             </div>
           </div>
           <button

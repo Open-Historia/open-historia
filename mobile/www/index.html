@@ -1,0 +1,239 @@
+<!-- Open Historia — Android app shell (connect screen + self-update) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>Open Historia</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        height: 100%;
+        background: #0b1020;
+        color: #fff;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        width: min(22rem, calc(100vw - 2rem));
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        text-align: center;
+      }
+      h1 { font-size: 1.5rem; letter-spacing: -0.02em; }
+      p { color: rgba(255, 255, 255, 0.55); font-size: 0.85rem; line-height: 1.5; }
+      input {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        color: #fff;
+        font-size: 1rem;
+        padding: 0.8rem 1rem;
+        text-align: center;
+        width: 100%;
+      }
+      button {
+        background: rgba(124, 58, 237, 0.75);
+        border: 1px solid rgba(167, 139, 250, 0.5);
+        border-radius: 12px;
+        color: #fff;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 700;
+        padding: 0.85rem 1rem;
+        width: 100%;
+      }
+      button.ghost {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.15);
+        font-weight: 600;
+      }
+      .error { color: #f87171; font-size: 0.82rem; min-height: 1.1em; }
+      #connecting { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="setup">
+      <h1>Open Historia</h1>
+      <p>
+        This app connects to a running Open Historia server — the one on this phone
+        (Termux: <b>localhost:3000</b>) or any computer on your network.
+      </p>
+      <input id="server" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+             placeholder="http://localhost:3000" value="http://localhost:3000" />
+      <button id="connect">Connect &amp; Play</button>
+      <div class="error" id="error"></div>
+    </div>
+
+    <div class="card" id="connecting">
+      <h1>Open Historia</h1>
+      <p id="connectingTo">Connecting…</p>
+      <button class="ghost" id="cancel">Change server</button>
+    </div>
+
+    <div class="card" id="update" style="display: none">
+      <h1>Update available</h1>
+      <p id="updateInfo">
+        A newer version of the app is available. Tap below to download
+        <b>pax-historia.apk</b>, then open the finished download to install it
+        and reopen the app.
+      </p>
+      <button id="downloadUpdate">Download update</button>
+      <button class="ghost" id="skipUpdate">Continue without updating</button>
+    </div>
+
+    <script>
+      const KEY = "pax-server-url";
+      // Stamped with the CI run number at build time; hand-built ("dev")
+      // copies skip the update check entirely.
+      const APP_BUILD = "__APP_BUILD__";
+      // Self-update polls the Beta repository's rolling "android" release —
+      // the asset name pax-historia.apk must never change (installed apps
+      // look for exactly that name).
+      const RELEASE_API = "https://api.github.com/repos/Arkniem/Open-Historia-Beta/releases/tags/android";
+      const setup = document.getElementById("setup");
+      const connecting = document.getElementById("connecting");
+      const input = document.getElementById("server");
+      const errorBox = document.getElementById("error");
+      let autoTimer = null;
+
+      const normalize = (raw) => {
+        let url = String(raw || "").trim();
+        if (!url) return "";
+        if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+        return url.replace(/\/+$/, "");
+      };
+
+      // Probe via NATIVE http when available: the WebView's fetch is subject
+      // to CORS and Chrome's Private Network Access rules for loopback
+      // targets ("TypeError: Failed to fetch" with the server running fine),
+      // while native requests are not. Navigation afterwards is unaffected by
+      // those policies, and the game then runs same-origin on the server.
+      const probe = async (url) => {
+        const native = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+        if (native) {
+          const res = await native.request({
+            url: url + "/api/library",
+            method: "GET",
+            connectTimeout: 4000,
+            readTimeout: 4000,
+          });
+          if (!res || res.status < 100 || res.status >= 500) {
+            throw new Error("HTTP " + (res && res.status));
+          }
+          return;
+        }
+        await fetch(url + "/api/library", { signal: AbortSignal.timeout(4000) });
+      };
+
+      // Probe the server first so a typo shows an error here instead of a
+      // WebView error page the user can't navigate back from.
+      const connect = async (raw) => {
+        const url = normalize(raw);
+        if (!url) return;
+        errorBox.textContent = "";
+        try {
+          await probe(url);
+          localStorage.setItem(KEY, url);
+          window.location.replace(url);
+        } catch (err) {
+          showSetup();
+          // Show the real failure — "TypeError: Failed to fetch" vs a timeout
+          // point at very different problems when debugging on a phone.
+          const detail = err && err.name ? " (" + err.name + (err.message ? ": " + err.message : "") + ")" : "";
+          errorBox.textContent = "Could not reach " + url + " — is the server running?" + detail;
+        }
+      };
+
+      const showSetup = () => {
+        if (autoTimer) clearTimeout(autoTimer);
+        connecting.style.display = "none";
+        setup.style.display = "flex";
+      };
+
+      document.getElementById("connect").addEventListener("click", () => connect(input.value));
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(input.value); });
+      document.getElementById("cancel").addEventListener("click", showSetup);
+
+      const startNormalFlow = () => {
+        // A remembered server auto-connects after a short grace period.
+        const saved = localStorage.getItem(KEY);
+        if (saved) {
+          input.value = saved;
+          setup.style.display = "none";
+          connecting.style.display = "flex";
+          document.getElementById("connectingTo").textContent = "Connecting to " + saved + "…";
+          autoTimer = setTimeout(() => connect(saved), 1500);
+        } else {
+          // First launch: look for a Termux server on this phone — if it's
+          // there, go straight into the game with zero typing.
+          const guess = "http://localhost:3000";
+          setup.style.display = "none";
+          connecting.style.display = "flex";
+          document.getElementById("connectingTo").textContent = "Looking for a server on this phone…";
+          probe(guess)
+            .then(() => {
+              localStorage.setItem(KEY, guess);
+              window.location.replace(guess);
+            })
+            .catch(() => {
+              showSetup();
+              errorBox.textContent = "";
+            });
+        }
+      };
+
+      // APK self-update: every launch compares this build against the rolling
+      // "android" release; a newer one auto-downloads (the native download
+      // listener hands the APK to the system browser). Only the app does this
+      // — the regular web version never ships this page.
+      const checkForUpdate = async () => {
+        if (!/^\d+$/.test(APP_BUILD)) return null; // dev build
+        try {
+          const response = await fetch(RELEASE_API, {
+            headers: { Accept: "application/vnd.github+json" },
+            signal: AbortSignal.timeout(4000),
+          });
+          if (!response.ok) return null;
+          const release = await response.json();
+          const remote = String(release.body || "").match(/Build:\s*(\d+)/i);
+          if (!remote || Number(remote[1]) <= Number(APP_BUILD)) return null;
+          const asset = (release.assets || []).find((a) => a.name === "pax-historia.apk");
+          return asset ? { build: remote[1], url: asset.browser_download_url } : null;
+        } catch {
+          return null; // offline / rate-limited — just play
+        }
+      };
+
+      checkForUpdate().then((update) => {
+        if (!update) {
+          startNormalFlow();
+          return;
+        }
+        setup.style.display = "none";
+        connecting.style.display = "none";
+        document.getElementById("update").style.display = "flex";
+        // Explicit button — the reliable path. (The download is handed to the
+        // system browser by the native download listener.)
+        document.getElementById("downloadUpdate").addEventListener("click", () => {
+          window.location.href = update.url;
+        });
+        document.getElementById("skipUpdate").addEventListener("click", () => {
+          document.getElementById("update").style.display = "none";
+          startNormalFlow();
+        });
+      });
+
+      // Which build is this? Shown in the corner so bug reports can say.
+      const badge = document.createElement("div");
+      badge.textContent = "build " + (/^\d+$/.test(APP_BUILD) ? APP_BUILD : "dev");
+      badge.style.cssText =
+        "position:fixed;bottom:0.6rem;right:0.9rem;color:rgba(255,255,255,0.28);font-size:0.7rem;";
+      document.body.appendChild(badge);
+    </script>
+  </body>
+</html>

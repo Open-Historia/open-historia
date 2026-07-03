@@ -1,4 +1,4 @@
-/*! Pax Historia — Scenario Hub (community tab) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Scenario Hub (community tab) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 
 // The Community tab of the scenario library, Netflix-style: a Pinned shelf at
 // the top (hub posts labeled "pinned" — the official/featured scenarios), then
@@ -15,6 +15,7 @@ import {
   importScenarioBundle,
   useLibraryState,
 } from "../../runtime/library.js";
+import { enqueueStrings } from "../../runtime/translator.js";
 
 // The one and only hub. Not configurable by design.
 const HUB_OWNER = "Arkniem";
@@ -89,7 +90,8 @@ const parsePost = (issue, installsByFile) => {
   };
 };
 
-const fetchHubPosts = async ({ force = false } = {}) => {
+// Exported so the translator can pre-translate the Community tab's posts.
+export const fetchHubPosts = async ({ force = false } = {}) => {
   if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
     return hubCache.posts;
   }
@@ -255,7 +257,12 @@ const CommunityPanel = ({ onImported }) => {
   const load = (force) => {
     setError(null);
     fetchHubPosts({ force })
-      .then(setPosts)
+      .then((nextPosts) => {
+        setPosts(nextPosts);
+        // New uploads appear over time: hand their strings to the translator
+        // so only the not-yet-translated ones cost anything.
+        enqueueStrings(nextPosts.flatMap((post) => [post.title, post.description]));
+      })
       .catch((nextError) => setError(nextError.message));
   };
 

@@ -1,3 +1,4 @@
+/*! Open Historia — portions (custom-region owner labels) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import {
   PMTILES_ARCHIVES,
   decodeVectorTile,
@@ -6,6 +7,8 @@ import {
   resolveCountryDisplayName,
   writeRuntimeJson,
 } from "./assets.js";
+import { getStoredLanguage } from "./i18n.js";
+import { translateLabel } from "./translator.js";
 
 const COUNTRY_LABELS_CACHE_KEY = "country-labels-v2";
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -456,7 +459,9 @@ const computeCountryLabelCacheKey = (buffer, archiveUrl) => {
     hash = Math.imul(hash, 16777619);
   }
 
-  return `${COUNTRY_LABELS_CACHE_KEY}-${bytes.byteLength}-${(hash >>> 0).toString(36)}-${encodeURIComponent(archiveUrl)}`;
+  // Language in the key: labels are baked with translated names, so caches
+  // must never leak across UI languages.
+  return `${COUNTRY_LABELS_CACHE_KEY}-${bytes.byteLength}-${(hash >>> 0).toString(36)}-${encodeURIComponent(archiveUrl)}-${getStoredLanguage()}`;
 };
 
 const buildCountryLabelCollections = async (tileData, ownedCodes = null) => {
@@ -481,10 +486,12 @@ const buildCountryLabelCollections = async (tileData, ownedCodes = null) => {
     // Skip countries that own no territory in this scenario, so nonexistent-era
     // nations don't float their modern names over unclaimed land.
     if (filterByOwners && !ownedCodes.has(code)) continue;
-    const name = resolveCountryDisplayName(
+    // Map labels are drawn from these features, not the DOM — run the name
+    // through the translator so country labels follow the UI language.
+    const name = translateLabel(resolveCountryDisplayName(
       props?.Country || props?.NAME || props?.name || props?.COUNTRY,
       code,
-    );
+    ));
     if (!name) continue;
 
     const geometry = feature.loadGeometry();

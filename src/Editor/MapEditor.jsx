@@ -1,5 +1,5 @@
 /*!
- * Pax Historia Map Editor
+ * Open Historia Map Editor
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 
@@ -340,30 +340,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         setSelection={d.setSelection}
       />
 
-      <SearchBar
-        api={api}
-        features={d.features}
-        onAddCity={(c) => {
-          const id = newId("feat");
-          d.setFeatures((list) => [
-            ...list,
-            {
-              id,
-              name: c.name,
-              type: "Coordinate",
-              symbol: "square",
-              coord: c.coord,
-              country: c.country || "",
-              owner: null,
-              regionId: null,
-              population: c.population || 0,
-              tags: c.capital ? ["city", "capital"] : ["city"],
-            },
-          ]);
-          api?.locateFeature(c.coord);
-        }}
-      />
-
       {cityPopup && (
         <CityPopup
           feature={d.features.find((f) => f.id === cityPopup.id)}
@@ -390,6 +366,31 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         saveStatus={d.saveStatus}
         openPanel={openPanel}
         onOpenPanel={togglePanel}
+        search={
+          <SearchBar
+            api={api}
+            features={d.features}
+            onAddCity={(c) => {
+              const id = newId("feat");
+              d.setFeatures((list) => [
+                ...list,
+                {
+                  id,
+                  name: c.name,
+                  type: "Coordinate",
+                  symbol: "square",
+                  coord: c.coord,
+                  country: c.country || "",
+                  owner: null,
+                  regionId: null,
+                  population: c.population || 0,
+                  tags: c.capital ? ["city", "capital"] : ["city"],
+                },
+              ]);
+              api?.locateFeature(c.coord);
+            }}
+          />
+        }
       />
     </div>
   );

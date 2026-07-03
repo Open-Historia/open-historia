@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 
 // Loading-screen artwork. The first is the original; the rest cycle in once the
@@ -391,7 +391,10 @@ const StartupScreen = ({
       }
       `}</style>
 
-      <div className="ss-shell">
+      {/* data-startup-screen: the translator waits for this to disappear
+          before doing ANY work, so translation can never stall the load;
+          data-no-translate keeps its fast-changing progress text verbatim. */}
+      <div className="ss-shell" data-startup-screen="" data-no-translate="">
       {availableImages.map((src, index) => (
         <div
         key={src}
@@ -408,9 +411,9 @@ const StartupScreen = ({
       {/* Title row */}
       <div className="ss-top-row">
       <div className="ss-identity">
-      <img className="ss-logo" src="/logo.png" alt="Pax Historia" />
+      <img className="ss-logo" src="/logo.png" alt="Open Historia" />
       <div className="ss-title-block">
-      <div className="ss-game-name">Pax Historia</div>
+      <div className="ss-game-name">Open Historia</div>
       <div className="ss-title">
       {timedOut ? "Continuing…" : "Preparing the World"}
       </div>

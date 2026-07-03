@@ -2,7 +2,7 @@ MIT License
 
 Copyright (c) 2026 Nicholas Krol
 
-This license covers the Pax Historia Map Editor and its supporting tooling —
+This license covers the Open Historia Map Editor and its supporting tooling —
 namely the contents of src/Editor/, scripts/extract-regions.mjs, and
 server/mapEditorStore.js — authored by Nicholas Krol.
 

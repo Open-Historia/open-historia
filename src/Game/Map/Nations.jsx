@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, dismissRegionPopup } from "../Selection/Regions";
@@ -19,6 +19,8 @@ import {
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
+import { translateLabel } from "../../runtime/translator.js";
+import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -212,6 +214,105 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
   return { type: "FeatureCollection", features };
 };
 
+// Union country borders ship disabled — the Settings toggle is greyed out
+// ("coming soon") until the pass is production-ready. Flip the key below in
+// localStorage to preview; keep it in sync with settings.jsx.
+const COUNTRY_BORDERS_KEY = "country-borders-enabled";
+const countryBordersEnabled = () => {
+  try {
+    return localStorage.getItem(COUNTRY_BORDERS_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+// Era country borders (experiment, round 2): every owner's regions are
+// geometrically UNIONED and the union outline is the border — continuous by
+// construction even where neighbouring regions don't share vertices. Drawn
+// at full strength at EVERY zoom level this time.
+const computeOwnerBorderCollection = async (regionsFC, ownerById, isCancelled) => {
+  const byOwner = new Map();
+  for (const feature of regionsFC?.features ?? []) {
+    const props = feature.properties || {};
+    const id = props.id != null ? String(props.id) : "";
+    // Unclaimed land is its own "owner" so its frontier is drawn too.
+    const owner = (ownerById.get(id) ?? props.owner ?? "") || "~unclaimed";
+    const geometry = feature.geometry;
+    const polygons = geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+    if (!polygons.length) continue;
+    if (!byOwner.has(owner)) byOwner.set(owner, []);
+    byOwner.get(owner).push(...polygons);
+  }
+
+  // Chunked incremental union. One degenerate polygon must never poison a
+  // whole owner group — that used to make the huge "unclaimed" group fall
+  // back to raw per-region shapes, which drew a country-style border around
+  // every single region. Broken shapes are quarantined individually.
+  const unionPolygonsSafely = async (polygons, isCancelled) => {
+    const CHUNK = 40;
+    let merged = null;
+    for (let start = 0; start < polygons.length; start += CHUNK) {
+      // Yield every chunk: the incremental merge calls grow with the shape,
+      // and long synchronous stretches were felt as lag.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (isCancelled()) return null;
+      const chunk = polygons.slice(start, start + CHUNK);
+      let chunkResult = null;
+      try {
+        chunkResult = polygonClipping.union(...chunk);
+      } catch {
+        chunkResult = null;
+        for (const polygon of chunk) {
+          try {
+            chunkResult = chunkResult
+              ? polygonClipping.union(chunkResult, polygon)
+              : polygonClipping.union(polygon);
+          } catch {
+            // Skip just this shape; a hairline hole beats broken borders.
+          }
+        }
+      }
+      if (!chunkResult?.length) continue;
+      try {
+        merged = merged ? polygonClipping.union(merged, chunkResult) : chunkResult;
+      } catch {
+        // Keep what we have rather than losing the whole owner.
+      }
+    }
+    return merged;
+  };
+
+  const features = [];
+  for (const [owner, polygons] of byOwner) {
+    // Yield between owners so big maps don't freeze the UI while merging.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (isCancelled()) return null;
+    const merged = await unionPolygonsSafely(polygons, isCancelled);
+    if (isCancelled()) return null;
+    if (merged?.length) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "MultiPolygon", coordinates: merged },
+        properties: { owner },
+      });
+    } else if (polygons.length) {
+      // Total failure for this owner: keep the raw shapes for the FILL but
+      // never outline them — regions must not carry country-style borders.
+      features.push({
+        type: "Feature",
+        geometry: { type: "MultiPolygon", coordinates: polygons },
+        properties: { owner, noOutline: true },
+      });
+    }
+  }
+
+  return { type: "FeatureCollection", features };
+};
+
 // Procedural fallback keyed on the custom region's own "owner" property (the
 // custom-geometry twin of buildFallbackColorExpression, which reads GID_0).
 const buildOwnerFallbackColorExpression = () => ([
@@ -225,6 +326,11 @@ const WorldMap = () => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
+  // False until the first world.json read: before that we can't know whether
+  // this game uses the stock map or a custom one, so NO political layer
+  // renders — this kills the "modern world flashes, then the real map loads"
+  // effect every scenario used to show.
+  const [worldKnown, setWorldKnown] = useState(false);
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionData, setCustomRegionData] = useState(EMPTY_FEATURE_COLLECTION);
@@ -251,6 +357,15 @@ const WorldMap = () => {
   }, [customRegionData]);
   const ownedCodesKey = useMemo(() => [...ownedCountryCodes].sort().join(","), [ownedCountryCodes]);
 
+  // Bumped when the translator learns new strings, so labels rebuild with
+  // translated names (they're baked into map features, not DOM text).
+  const [labelEpoch, setLabelEpoch] = useState(0);
+  useEffect(() => {
+    const onUpdated = () => setLabelEpoch((epoch) => epoch + 1);
+    window.addEventListener("i18n:updated", onUpdated);
+    return () => window.removeEventListener("i18n:updated", onUpdated);
+  }, []);
+
   // Owner (polity) labels for custom maps — one label per landmass-cluster per
   // owner, named by the scenario's polity registry ("Soviet Union", not "Russia").
   // Recomputed as ownership overrides poll in, so labels follow conquests.
@@ -260,14 +375,23 @@ const WorldMap = () => {
       customRegionData,
       worldState?.regionOwnershipOverrides ?? {},
       worldState?.polityOverrides ?? {},
-      resolveCountryDisplayName,
+      (raw, owner) => translateLabel(resolveCountryDisplayName(raw, owner)),
     );
-  }, [customActive, customRegionData, worldState]);
+    // labelEpoch: rebuild once new translations land.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customActive, customRegionData, worldState, labelEpoch]);
 
   // On custom maps the stock modern-country labels are replaced wholesale by the
   // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
-  const activePointLabelData = customActive ? ownerLabelData : pointLabelData;
-  const activeCurvedLabelData = customActive ? EMPTY_FEATURE_COLLECTION : curvedLabelData;
+  // Keyed on the FLAG (not customActive): while a custom world's geometry is
+  // still loading, and before the world is known at all, stock labels must
+  // not flash in.
+  const activePointLabelData = !worldKnown
+    ? EMPTY_FEATURE_COLLECTION
+    : customFlag
+      ? ownerLabelData
+      : pointLabelData;
+  const activeCurvedLabelData = worldKnown && !customFlag ? curvedLabelData : EMPTY_FEATURE_COLLECTION;
 
   const handleRegionClick = useCallback((event) => {
     const unitsAt = () =>
@@ -349,6 +473,9 @@ const WorldMap = () => {
         .then((data) => {
           if (!cancelled) {
             setWorldState(data ?? {});
+            // Only now do we KNOW whether this world is stock or custom —
+            // nothing world-dependent renders before this (see worldKnown).
+            setWorldKnown(true);
           }
         })
         .catch((error) => console.error("Error loading world state:", error));
@@ -393,7 +520,12 @@ const WorldMap = () => {
   useEffect(() => {
     let cancelled = false;
 
-    loadCountryLabelCollections({ ownedCodes: ownedCountryCodes.size ? ownedCountryCodes : null })
+    // labelEpoch > 0 means translations arrived after the first build: force
+    // a rebuild so baked-in label names pick them up.
+    loadCountryLabelCollections({
+      force: labelEpoch > 0,
+      ownedCodes: ownedCountryCodes.size ? ownedCountryCodes : null,
+    })
       .then(({ pointLabelData: pointLabels, curvedLabelData: curvedLabels }) => {
         if (cancelled) return;
         setPointLabelData(pointLabels);
@@ -405,7 +537,7 @@ const WorldMap = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownedCodesKey]);
+  }, [ownedCodesKey, labelEpoch]);
 
   const fillStyle = useMemo(() => {
     const stops = Object.entries(colorMap).flatMap(([iso, rgb]) => [
@@ -483,6 +615,36 @@ const WorldMap = () => {
     ownerLookupRef.current = ownerByRegionId;
   }, [ownerByRegionId]);
 
+  // Stable fingerprint of the ownership map: the world poll rebuilds
+  // ownerByRegionId every 5s, but border geometry only needs recomputing
+  // when an owner actually changes.
+  const ownershipKey = useMemo(() => {
+    if (!customActive || !countryBordersEnabled()) return "";
+    let key = "";
+    for (const [regionId, owner] of ownerByRegionId) key += `${regionId}:${owner};`;
+    return key;
+  }, [customActive, ownerByRegionId]);
+
+  const [ownerBorderData, setOwnerBorderData] = useState(EMPTY_FEATURE_COLLECTION);
+  useEffect(() => {
+    if (!customActive || !countryBordersEnabled()) {
+      setOwnerBorderData(EMPTY_FEATURE_COLLECTION);
+      return undefined;
+    }
+    let cancelled = false;
+    computeOwnerBorderCollection(customRegionData, ownerLookupRef.current, () => cancelled)
+      .then((collection) => {
+        if (!cancelled && collection) setOwnerBorderData(collection);
+      })
+      .catch((error) => console.error("Failed to compute era borders:", error));
+    return () => {
+      cancelled = true;
+    };
+    // ownershipKey stands in for ownerByRegionId's contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customActive, customRegionData, ownershipKey]);
+
+
   // GADM regions on custom maps paint the STOCK vector tiles (sharp geometry at
   // every zoom — the coarse seed polygons left sliver gaps up close). Only
   // author-drawn shapes still render from the GeoJSON, on top.
@@ -508,19 +670,28 @@ const WorldMap = () => {
     };
   }, [customActive, ownerByRegionId, colorMap]);
 
-  // When a custom map is active the stock country-level fill/borders are hidden
-  // (era borders replace them); the stock REGION borders stay on — they're the
-  // crisp border art for the tile-painted regions.
-  const countriesFillPaint = customActive ? { ...fillStyle, "fill-opacity": 0 } : fillStyle;
+  // Stock country fills/borders render ONLY once the world is known to be a
+  // stock world. Gating on the customRegions FLAG (not customActive, which
+  // additionally waits for geometry) means a custom world never flashes the
+  // modern map — not before the world loads, and not while its geometry does.
+  const showStockCountries = worldKnown && !customFlag;
+  const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
   const countriesOutlinePaint = {
     "line-color": "#000",
     "line-width": 1,
-    "line-opacity": customActive ? 0 : 1,
+    "line-opacity": showStockCountries ? 1 : 0,
   };
+  // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
+  // Tile hairlines only fade in alongside the tile FILLS (z5.5-6.5): below
+  // that the fills come from the seed geometry, and hairlines from the
+  // simplified low-zoom tiles sit visibly off those fills — disconnected
+  // borders. The far hairlines come from the seed geometry itself instead.
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
-    "line-opacity": ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.4, 8, 0.7],
+    "line-opacity": worldKnown
+      ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.6, 8, 0.7]
+      : 0,
   };
 
   const pointLabelLayerLayout = useMemo(() => ({
@@ -593,7 +764,11 @@ const WorldMap = () => {
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)
           unless world.customRegions is set. */}
-      <Source id="custom-regions-source" type="geojson" data={customRegionData}>
+      {/* tolerance 0: GeoJSON sources simplify geometry per zoom by default,
+          and each region simplifies independently — shared borders drift
+          apart at low zoom. Full resolution keeps them connected everywhere;
+          the seed geometry is coarse enough that this stays cheap. */}
+      <Source id="custom-regions-source" type="geojson" data={customRegionData} tolerance={0}>
         {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
             tiles are too simplified at low zoom and show sliver gaps there. */}
         <Layer
@@ -602,6 +777,22 @@ const WorldMap = () => {
           maxzoom={7}
           filter={GADM_GEOMETRY_FILTER}
           paint={{ "fill-color": customFillStyle["fill-color"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+        />
+        {/* Far hairlines from the SAME seed geometry as the far fills, so
+            zoomed-out region borders sit exactly on the colored areas. They
+            hand off to the stock-tile hairlines with the fill crossfade. */}
+        <Layer
+          id="custom-regions-hairline-far"
+          type="line"
+          maxzoom={7}
+          filter={GADM_GEOMETRY_FILTER}
+          paint={{
+            "line-color": "#000",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
+            "line-opacity": customActive
+              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              : 0,
+          }}
         />
         <Layer
           id="custom-regions-fill"
@@ -615,10 +806,6 @@ const WorldMap = () => {
           filter={CUSTOM_GEOMETRY_FILTER}
           paint={{
             "line-color": "#000",
-            // Match the old map's *region* border design: thin, and only fading in
-            // as you zoom. Same-owner regions share a fill colour, so these faint
-            // lines read as internal subdivisions; different owners separate by
-            // colour. No heavy line between same-owner/same-country regions.
             "line-width": [
               "interpolate", ["linear"], ["zoom"],
               3, 0.2,
@@ -628,6 +815,24 @@ const WorldMap = () => {
             "line-opacity": customActive
               ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.35, 8, 0.6]
               : 0,
+          }}
+        />
+      </Source>
+
+      {/* Era country borders: OUTLINES ONLY of the colored areas. Fills stay
+          on the fast tile-painted pipeline (the union fills were the lag);
+          the union geometry draws just the lines, with dynamic zoom styling —
+          strong at world/mid zoom, fading out up close where the crisp
+          tile-rendered region borders take over. */}
+      <Source id="owner-zones-source" type="geojson" data={ownerBorderData}>
+        <Layer
+          id="owner-borders"
+          type="line"
+          filter={["!=", ["coalesce", ["get", "noOutline"], false], true]}
+          paint={{
+            "line-color": "#000",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.9, 6, 1.6],
+            "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.85, 7, 0.85, 8.5, 0],
           }}
         />
       </Source>

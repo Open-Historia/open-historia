@@ -1,3 +1,4 @@
+/*! Open Historia — unit orders & deployment controller © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Shared troop interaction state + mutations.
 //
 // Holds the current unit list in memory (refreshed from world.json every 5s so
@@ -18,11 +19,12 @@ import {
   writeActionsState,
   normalizeUnitEntry,
 } from "../../runtime/gameState.js";
-import { resolveClash } from "./unitCombat.js";
+import { resolveClash, distanceKm, engagementRangeKm, moveLeashKm } from "./unitCombat.js";
 
 let units = [];
 let playerCode = "";
 let round = 1;
+let gameDate = "";
 let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
 let interactionMode = { kind: "idle" }; // idle | deploy | move | attack
 let pollTimer = null;
@@ -66,6 +68,7 @@ const refresh = async () => {
     units = world.units ?? [];
     playerCode = game.country ?? "";
     round = game.round ?? 1;
+    gameDate = game.gameDate || game.startDate || "";
     allowedUnitTypes = Array.isArray(world.allowedUnitTypes) && world.allowedUnitTypes.length
       ? world.allowedUnitTypes
       : null;
@@ -146,6 +149,28 @@ export const deployUnit = async ({ type, strength, name, lng, lat }) => {
 
 export const moveUnitTo = async (unitId, lng, lat) => {
   const unit = getUnitById(unitId);
+  if (!unit) return { resolved: false };
+
+  const distance = distanceKm(unit, { lng, lat });
+  const leash = moveLeashKm(unit.type, gameDate);
+
+  // Beyond the era/type leash the unit does NOT teleport: it stays put with a
+  // long-range order the AI advances (or rejects) realistically over turns.
+  if (distance > leash) {
+    await commit((list) =>
+      list.map((u) =>
+        u.id === unitId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+      ),
+    );
+    await queueOrder(
+      `Long-range movement order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is ordered to ` +
+        `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)} — about ${Math.round(distance)} km away, beyond a single ` +
+        `${unit.type} move in this era (~${leash} km). Advance it realistically across turns given the era, terrain ` +
+        `and transport available, or reject the order with an event explaining why it is infeasible.`,
+    );
+    return { resolved: false, distance, leash };
+  }
+
   await commit((list) =>
     list.map((u) =>
       u.id === unitId
@@ -153,17 +178,36 @@ export const moveUnitTo = async (unitId, lng, lat) => {
         : u,
     ),
   );
-  if (unit) {
-    await queueOrder(
-      `Move ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) to coordinates lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}.`,
-    );
-  }
+  await queueOrder(
+    `Move ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) to coordinates lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}.`,
+  );
+  return { resolved: true, distance, leash };
 };
 
 export const attackWith = async (attackerId, targetId) => {
   const attacker = getUnitById(attackerId);
   const defender = getUnitById(targetId);
-  if (!attacker || !defender || attackerId === targetId) return;
+  if (!attacker || !defender || attackerId === targetId) return { resolved: false };
+
+  // Out-of-range attacks don't resolve instantly (no striking across the
+  // planet): they become an approach order the AI plays out over turns,
+  // judged against the era, unit type and logistics.
+  const distance = distanceKm(attacker, defender);
+  const range = engagementRangeKm(attacker.type, gameDate);
+  if (distance > range) {
+    await commit((list) =>
+      list.map((u) =>
+        u.id === attackerId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+      ),
+    );
+    await queueOrder(
+      `Attack order (approach required): ${attacker.name} (${attacker.type}, id ${attacker.id}, owner ${attacker.ownerCode}) ` +
+        `is ordered against ${defender.name} (id ${defender.id}, owner ${defender.ownerCode}) about ${Math.round(distance)} km away — ` +
+        `beyond its ~${range} km engagement reach for this era. March/sail/fly it toward the target realistically across turns ` +
+        `and resolve the clash when contact is actually possible, or reject the order with an event explaining why it is infeasible.`,
+    );
+    return { resolved: false, distance, range };
+  }
 
   const result = resolveClash(attacker, defender, round);
   await commit((list) =>
@@ -200,6 +244,7 @@ export const attackWith = async (attackerId, targetId) => {
       `${result.captured ? "; attacker holds the field (consider a regionTransfer)" : ""}. ` +
       `Escalate, reinforce or counterattack as the wider front warrants.`,
   );
+  return { resolved: true, distance, range };
 };
 
 export const removeUnit = async (unitId) =>

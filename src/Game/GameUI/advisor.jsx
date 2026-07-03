@@ -1,12 +1,14 @@
+/*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
 
-const ADVISOR_PANEL_WIDTH = "20rem";
+const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 
 const baseStyle = {
     position: "fixed",
@@ -159,13 +161,36 @@ const loadMessages = async () => {
     } catch { return []; }
 };
 
-const AdvisorPanel = ({ isAdvisorOpen }) => {
+const TabButton = ({ icon, label, active, onClick }) => (
+    <button
+    onClick={onClick}
+    style={{
+        alignItems: "center",
+        background: "none",
+        border: "none",
+        borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent",
+        color: active ? "white" : "rgba(255,255,255,0.55)",
+        cursor: "pointer",
+        display: "flex",
+        fontFamily: "sans-serif",
+        fontSize: "0.88rem",
+        fontWeight: active ? 700 : 500,
+        gap: "0.4rem",
+        padding: "0.9rem 0.85rem",
+    }}
+    >
+    <span style={{ fontSize: "1rem" }}>{icon}</span> {label}
+    </button>
+);
+
+const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef            = useRef(null);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
+    const [activeTab, setActiveTab] = useState("advisor");
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);
@@ -240,27 +265,51 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         <>
         <MarkdownStyleInjector />
         <div style={{
-            position: "fixed", bottom: 0,
-            right: isAdvisorOpen ? 0 : `calc(-${ADVISOR_PANEL_WIDTH} - 1rem)`,
+            position: "fixed", bottom: 0, right: 0,
+            // Slide via transform: the old right: calc(-min(...) - 1rem) was
+            // INVALID CSS (a min() can't be negated like that), so the closed
+            // position was silently dropped and the drawer never slid away.
+            transform: isAdvisorOpen ? "translateX(0)" : "translateX(calc(100% + 2rem))",
             width: ADVISOR_PANEL_WIDTH, height: "calc(100vh - 64px)",
             backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
-            zIndex: 9998, borderLeft: "1px solid rgba(255,255,255,0.1)",
+            // Above every HUD button/panel (toolbar 9999, forces 10000,
+            // library panels 10031) so nothing covers the open drawer on
+            // phones; below the editor (10050) and server-down (10060) overlays.
+            zIndex: 10040, borderLeft: "1px solid rgba(255,255,255,0.1)",
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
-            transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+            transition: "transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>
-        {/* Header */}
-        <div style={{ padding: "1.5rem 1.25rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <span style={{ fontSize: "1.5rem" }}>🧭</span>
-        <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, flex: 1 }}>Advisor</h2>
-        <button
-        onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
-        title="Clear chat"
-        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.5rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
-        >🗑</button>
+        {/* Header: tabs to flip between the advisor chat and national stats. */}
+        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
+        <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
+        <TabButton icon="📊" label="Stats" active={activeTab === "stats"} onClick={() => setActiveTab("stats")} />
+        <div style={{ flex: 1 }} />
+        {activeTab === "advisor" && (
+            <button
+            onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
+            title="Clear chat"
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+            >🗑</button>
+        )}
+        {/* On phones the panel slides over the 🧭 launcher, making it
+            untappable — this ✕ is the way out. */}
+        {onClose && (
+            <button
+            onClick={onClose}
+            title="Close advisor"
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: "0 0 0 0.5rem", display: "flex", alignItems: "center" }}
+            >✕</button>
+        )}
         </div>
 
+        {/* National stats pane — kept mounted so flipping tabs is instant. */}
+        <div style={{ display: activeTab === "stats" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+        <StatsPane active={isAdvisorOpen && activeTab === "stats"} />
+        </div>
+
+        <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages */}
         <div style={{ padding: "0.75rem", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
         {messages.length === 0 && (
@@ -280,7 +329,8 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
                     {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
                     </span>
                 )}
-                <div style={{
+                {/* Player-typed text stays verbatim under UI translation. */}
+                <div data-no-translate={msg.role === "user" ? "" : undefined} style={{
                     maxWidth: "90%", width: chartConfig ? "90%" : undefined,
                     padding: "0.6rem 0.85rem",
                     borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
@@ -332,6 +382,7 @@ const AdvisorPanel = ({ isAdvisorOpen }) => {
         onMouseEnter={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
         onMouseLeave={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
         >🚀</button>
+        </div>
         </div>
         </div>
         </>

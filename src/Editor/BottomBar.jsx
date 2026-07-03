@@ -1,5 +1,5 @@
 /*!
- * Pax Historia Map Editor
+ * Open Historia Map Editor
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 
@@ -58,6 +58,7 @@ const BottomBar = ({
   saveStatus,
   openPanel,
   onOpenPanel,
+  search,
 }) => {
   const save = SAVE[saveStatus] || SAVE.saved;
   return (
@@ -76,6 +77,7 @@ const BottomBar = ({
         flexWrap: "wrap",
       }}
     >
+      {search}
       <Chip icon="list" label={`Regions: ${counts.regions}`} active={openPanel === "regions"} onClick={() => onOpenPanel("regions")} />
       <Chip icon="pin" label={`Features: ${counts.features}`} active={openPanel === "features"} onClick={() => onOpenPanel("features")} />
       <Chip icon="types" label={`Types: ${counts.types}`} active={openPanel === "types"} onClick={() => onOpenPanel("types")} />

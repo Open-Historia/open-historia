@@ -1,3 +1,4 @@
+/*! Open Historia — preset prompt sync tool © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Keep each scenario's stored prompts.json in sync with the JS prompt defaults
 // for the keys we changed. The runtime prefers the stored prompts.json over the
 // JS defaults (normalizePromptPack), so a prompt edit only takes effect once the

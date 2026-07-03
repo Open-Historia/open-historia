@@ -1,7 +1,9 @@
+/*! Open Historia — portions (panel sizing on small screens) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplay.js";
 import {
     buildActionDisplayText,
@@ -159,7 +161,7 @@ const ActionItem = ({ action, onDelete }) => {
     );
 };
 
-const SuggestionCard = ({ topic, onQueue }) => (
+const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     <div
     style={{
         background: "rgba(255,255,255,0.04)",
@@ -178,28 +180,34 @@ const SuggestionCard = ({ topic, onQueue }) => (
     </div>
     </div>
     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-    {topic.actions.map((action) => (
-        <button
-        key={action.id}
-        type="button"
-        onClick={() => onQueue(action)}
-        style={{
-            background: "rgba(109,40,217,0.12)",
-                                    border: "1px solid rgba(139,92,246,0.24)",
-                                    borderRadius: "10px",
-                                    color: "rgba(255,255,255,0.9)",
-                                    cursor: "pointer",
-                                    fontFamily: "sans-serif",
-                                    padding: "0.55rem 0.7rem",
-                                    textAlign: "left",
-        }}
-        >
-        <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>{action.title}</div>
-        <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
-        {action.text}
-        </div>
-        </button>
-    ))}
+    {topic.actions.map((action) => {
+        const isQueued = queuedIds?.has(action.id);
+        return (
+            <button
+            key={action.id}
+            type="button"
+            disabled={isQueued}
+            onClick={() => onQueue(action)}
+            style={{
+                background: isQueued ? "rgba(34,197,94,0.12)" : "rgba(109,40,217,0.12)",
+                border: isQueued ? "1px solid rgba(74,222,128,0.35)" : "1px solid rgba(139,92,246,0.24)",
+                borderRadius: "10px",
+                color: "rgba(255,255,255,0.9)",
+                cursor: isQueued ? "default" : "pointer",
+                fontFamily: "sans-serif",
+                padding: "0.55rem 0.7rem",
+                textAlign: "left",
+            }}
+            >
+            <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
+            {isQueued ? `✓ Queued — ${action.title}` : action.title}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
+            {action.text}
+            </div>
+            </button>
+        );
+    })}
     </div>
     </div>
 );
@@ -208,8 +216,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
     const [country, setCountry] = React.useState("your nation");
+    // Full display name for the header, never the code.
+    const countryDisplayName = useCountryDisplayName(country);
     const [gameDate, setGameDate] = React.useState("the current date");
     const [suggestions, setSuggestions] = React.useState([]);
+    const [queuedSuggestionIds, setQueuedSuggestionIds] = React.useState(() => new Set());
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [isImproving, setIsImproving] = React.useState(false);
@@ -324,10 +335,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const handleQueueSuggestion = async (action) => {
         const queuedAction = normalizeSuggestionAction(action);
         if (!queuedAction) {
+            // Malformed AI suggestion — say so instead of doing nothing.
+            console.warn("[actions] suggestion could not be queued (no usable text):", action);
             return;
         }
 
         await persistActions([...actions, queuedAction]);
+        // Visible click feedback: the suggestion button flips to "✓ Queued".
+        setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));
     };
 
     const refreshSuggestions = async () => {
@@ -340,6 +355,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         try {
             const topics = await generateActionSuggestions({ force: true });
             setSuggestions(topics);
+            setQueuedSuggestionIds(new Set());
         } catch (error) {
             console.error("Failed to generate suggestions:", error);
             setSuggestions([]);
@@ -372,7 +388,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             display: "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            height: "calc(100vh - 33rem)",
+            // Tall desktops keep the old size; laptops/phones get a usable 30rem
+            // instead of the sliver calc(100vh - 33rem) left them.
+            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
             minHeight: "10rem",
             left: "0rem",
             maxWidth: "calc(100vw - 1rem)",
@@ -431,7 +449,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             margin: 0,
         }}
         >
-        Submit actions for {country} for {gameDate}. Your actions will affect how the game world responds.
+        Submit actions for {countryDisplayName} for {gameDate}. Your actions will affect how the game world responds.
         </p>
 
         <button
@@ -510,7 +528,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 </p>
             )}
             {suggestions.map((topic) => (
-                <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} />
+                <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
             ))}
             </div>
         )}

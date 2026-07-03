@@ -1,3 +1,4 @@
+/*! Open Historia — preset region-catalog dump tool © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // One-shot inspector: dumps the region catalog so specs can be authored against
 // real GID_1 codes. Usage:
 //   node scripts/presets/lib/dumpCatalog.mjs            -> summary + per-country counts

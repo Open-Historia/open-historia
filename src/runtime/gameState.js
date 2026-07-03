@@ -1,4 +1,6 @@
+/*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { enqueueContentStrings } from "./translator.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -735,8 +737,14 @@ export const buildActionDisplayText = (action) => {
 export const readWorldState = async ({ force = false } = {}) =>
   normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force }));
 
-export const writeWorldState = async (world, options = {}) =>
-  writeJson(JSON_URLS.world, normalizeWorldState(world), { pretty: true, ...options });
+export const writeWorldState = async (world, options = {}) => {
+  const normalized = normalizeWorldState(world);
+  // Edited/AI-written polity names, aliases and notes get translated (and
+  // saved to the server language pack) the moment they're written, not when
+  // they first happen to be rendered somewhere.
+  enqueueContentStrings(normalized.polityOverrides);
+  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options });
+};
 
 export const readGameData = async ({ force = false } = {}) =>
   normalizeGameData(await readJson(JSON_URLS.game, { defaultValue: GAME_DEFAULTS, force }));
@@ -753,8 +761,12 @@ export const writeActionsState = async (actions, options = {}) =>
 export const readEventsState = async ({ force = false } = {}) =>
   normalizeEvents(await readJson(JSON_URLS.events, { defaultValue: [], force }));
 
-export const writeEventsState = async (events, options = {}) =>
-  writeJson(JSON_URLS.events, normalizeEvents(events), { pretty: true, ...options });
+export const writeEventsState = async (events, options = {}) => {
+  const normalized = normalizeEvents(events);
+  // New/edited event text follows the UI language immediately (see above).
+  enqueueContentStrings(normalized);
+  return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
+};
 
 export const readChatsState = async ({ force = false } = {}) =>
   normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));

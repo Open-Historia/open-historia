@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   PROMPT_SECTION_DEFINITIONS,
@@ -29,6 +29,9 @@ import {
 } from "../../runtime/library.js";
 import { loadCountryNames } from "../../runtime/assets.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -45,6 +48,12 @@ const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 
 const BAR_HEIGHT = 64;
+
+// Set by the mounted LibraryTopBar; lets the no-game gate open a tab.
+let _openLibraryTab = null;
+export const openLibraryTab = (tab) => {
+  _openLibraryTab?.(tab);
+};
 const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
@@ -971,6 +980,11 @@ const LibraryTopBar = () => {
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  // Bridge for outside callers (the no-game gate): open a library tab.
+  _openLibraryTab = (tab) => {
+    setActiveTab(tab);
+    setIsPanelOpen(true);
+  };
   const [editorKind, setEditorKind] = useState(null);
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
@@ -1032,9 +1046,9 @@ const LibraryTopBar = () => {
     }
   };
 
-  // Create the game from the scenario, optionally overriding the starting country
-  // the player chose in the picker, then open its editor.
-  const startGameForCountry = async (scenario, countryCode) => {
+  // Create the game from the scenario with the starting country and difficulty
+  // the player chose in the two-step picker, then open its editor.
+  const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
     setEditorError(null);
     setIsBusy(true);
@@ -1044,10 +1058,11 @@ const LibraryTopBar = () => {
         scenarioId: scenario.id,
         setActive: true,
       });
-      if (countryCode) {
-        // gamePatch merges — a full `game` write would REPLACE game.json and wipe
-        // startDate/gameDate/round (the "Undated" bug).
-        await saveGame(details.game.id, { gamePatch: { country: countryCode } });
+      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+      // startDate/gameDate/round (the "Undated" bug).
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      if (Object.keys(gamePatch).length) {
+        await saveGame(details.game.id, { gamePatch });
       }
       await openGameEditor(details.game.id);
     } catch (nextError) {
@@ -1371,13 +1386,15 @@ const LibraryTopBar = () => {
     }
   };
 
+  // Full country name in the summary, never the code.
+  const activeCountryName = useCountryDisplayName(activeGame?.country || "");
   const summaryText = useMemo(() => {
     if (activeGame) {
-      return `${activeGame.name} / ${activeGame.country || "No country"} / ${activeGame.currentDate || "No date"}`;
+      return `${activeGame.name} / ${activeCountryName || "No country"} / ${activeGame.currentDate || "No date"}`;
     }
 
     return "No active game";
-  }, [activeGame]);
+  }, [activeGame, activeCountryName]);
 
   const handleTabToggle = (tab) => {
     if (activeTab === tab) {
@@ -1389,6 +1406,23 @@ const LibraryTopBar = () => {
     setIsPanelOpen(true);
   };
 
+  const isMobile = useIsMobile();
+  // True once the user shut the server down from the ⏻ button — swaps the whole
+  // UI for a "server stopped" screen (every poll would just error underneath).
+  const [serverDown, setServerDown] = useState(false);
+
+  const handleShutdownServer = async () => {
+    if (!window.confirm("Shut down the Open Historia server? The game stops for everyone connected to it.")) {
+      return;
+    }
+    try {
+      await fetch("/api/server/shutdown", { method: "POST" });
+    } catch {
+      // The socket may drop before the response arrives — that IS the shutdown.
+    }
+    setServerDown(true);
+  };
+
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
@@ -1398,6 +1432,9 @@ const LibraryTopBar = () => {
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
+  // Step two of the new-game dialog: the chosen country waits here while the
+  // player picks a difficulty.
+  const [difficultyPick, setDifficultyPick] = useState(null);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -1495,14 +1532,15 @@ const LibraryTopBar = () => {
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.
-  const choosePlayCountry = async (countryCode) => {
+  const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
     setPlayGameId(null);
     if (!gid) return;
     try {
-      if (countryCode) {
-        await saveGame(gid, { gamePatch: { country: countryCode } });
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      if (Object.keys(gamePatch).length) {
+        await saveGame(gid, { gamePatch });
       }
       await activateGame(gid);
     } catch (nextError) {
@@ -1510,8 +1548,19 @@ const LibraryTopBar = () => {
     }
   };
 
-  const pickCountry = (countryCode) =>
-    playGameId ? choosePlayCountry(countryCode) : startGameForCountry(countryPicker, countryCode);
+  // Picking a country moves to step two (difficulty); picking a difficulty
+  // actually creates/updates the game.
+  const pickCountry = (countryCode) => setDifficultyPick({ countryCode });
+
+  const pickDifficulty = (difficultyId) => {
+    const countryCode = difficultyPick?.countryCode || "";
+    setDifficultyPick(null);
+    if (playGameId) {
+      choosePlayCountry(countryCode, difficultyId);
+    } else {
+      startGameForCountry(countryPicker, countryCode, difficultyId);
+    }
+  };
 
   return (
     <>
@@ -1524,11 +1573,11 @@ const LibraryTopBar = () => {
           borderRight: "none",
           borderTop: "none",
           display: "grid",
-          gap: "0.9rem",
+          gap: isMobile ? "0.4rem" : "0.9rem",
           gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
           height: `${BAR_HEIGHT}px`,
           left: 0,
-          padding: "0 1rem",
+          padding: isMobile ? "0 0.5rem" : "0 1rem",
           position: "fixed",
           right: 0,
           top: 0,
@@ -1536,17 +1585,20 @@ const LibraryTopBar = () => {
         }}
       >
         <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
-          <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
-            <img alt="Pax Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+          <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
+            <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
           </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-              Pax Historia
+          {/* Phones keep the logo only — the title/summary would crowd out the tabs. */}
+          {!isMobile && (
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+                Open Historia
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
+                {summaryText}
+              </div>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
-              {summaryText}
-            </div>
-          </div>
+          )}
         </div>
 
         <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center", justifySelf: "center" }}>
@@ -1558,7 +1610,8 @@ const LibraryTopBar = () => {
                 ...actionButtonStyle,
                 background: activeTab === tab ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.05)",
                 borderColor: activeTab === tab ? "rgba(124,58,237,0.38)" : "rgba(255,255,255,0.08)",
-                minWidth: "6.6rem",
+                minWidth: isMobile ? "0" : "6.6rem",
+                padding: isMobile ? "0.55rem 0.7rem" : undefined,
               }}
               type="button"
             >
@@ -1567,8 +1620,51 @@ const LibraryTopBar = () => {
           ))}
         </div>
 
-        <div />
+        {/* Top-right: shut the server down (phones/Termux have no terminal handy). */}
+        <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={handleShutdownServer}
+            title="Exit: shut down the Open Historia server"
+            type="button"
+            style={{
+              ...actionButtonStyle,
+              background: "rgba(220,70,70,0.14)",
+              borderColor: "rgba(248,113,113,0.35)",
+              color: "#fca5a5",
+              minWidth: "2.35rem",
+              padding: isMobile ? "0.55rem 0.7rem" : undefined,
+            }}
+          >
+            ⏻
+          </button>
+        </div>
       </div>
+
+      {serverDown && (
+        <div
+          style={{
+            alignItems: "center",
+            background: "rgba(5,8,18,0.97)",
+            color: "#fff",
+            display: "flex",
+            flexDirection: "column",
+            fontFamily: "sans-serif",
+            gap: "0.8rem",
+            inset: 0,
+            justifyContent: "center",
+            padding: "1rem",
+            position: "fixed",
+            textAlign: "center",
+            zIndex: 20000,
+          }}
+        >
+          <div style={{ fontSize: "2.2rem" }}>⏻</div>
+          <div style={{ fontSize: "1.2rem", fontWeight: 800 }}>Server stopped</div>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", maxWidth: "22rem" }}>
+            You can close this tab now. Run the launcher (or <code>node server/server.js</code>) to start it again.
+          </div>
+        </div>
+      )}
 
       {isMapEditorOpen && (
         <div style={{ position: "fixed", inset: 0, zIndex: 10050 }}>
@@ -1597,53 +1693,89 @@ const LibraryTopBar = () => {
 
       {countryPicker && (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ ...surfaceStyle, borderRadius: 16, width: "min(440px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif" }}
           >
-            <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
-              Starting “{countryPicker.name}”
-            </div>
-            <input
-              autoFocus
-              value={countryQuery}
-              onChange={(e) => setCountryQuery(e.target.value)}
-              placeholder="Search countries…"
-              style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
-            />
-            <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-              <button
-                type="button"
-                onClick={() => pickCountry("")}
-                style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
-              >
-                {playGameId ? "Keep scenario default" : "Scenario default"}
-              </button>
-              {countryOptions
-                .filter((c) => {
-                  const q = countryQuery.trim().toLowerCase();
-                  return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
-                })
-                .slice(0, 400)
-                .map((c) => (
+            {difficultyPick ? (
+              <>
+                <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your difficulty</div>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+                  How hard should the world fight back?
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
+                  {DIFFICULTY_LEVELS.map((level) => (
+                    <button
+                      key={level.id}
+                      type="button"
+                      onClick={() => pickDifficulty(level.id)}
+                      style={{
+                        ...actionButtonStyle,
+                        alignItems: "center",
+                        background: "rgba(255,255,255,0.04)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.2rem",
+                        padding: "0.75rem 0.5rem",
+                      }}
+                    >
+                      <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>{level.emoji}</span>
+                      <span style={{ fontWeight: 700 }}>{level.label}</span>
+                      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", textAlign: "center" }}>{level.blurb}</span>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={() => setDifficultyPick(null)} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                  Back
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+                  Starting “{countryPicker.name}”
+                </div>
+                <input
+                  autoFocus
+                  value={countryQuery}
+                  onChange={(e) => setCountryQuery(e.target.value)}
+                  placeholder="Search countries…"
+                  style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
+                />
+                <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
                   <button
-                    key={c.code || c.name}
                     type="button"
-                    onClick={() => pickCountry(c.code)}
-                    style={{ ...actionButtonStyle, justifyContent: "space-between", background: "rgba(255,255,255,0.04)" }}
+                    onClick={() => pickCountry("")}
+                    style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
                   >
-                    <span>{c.name}</span>
-                    <span style={{ opacity: 0.5, fontSize: "0.72rem" }}>{c.code}</span>
+                    {playGameId ? "Keep scenario default" : "Scenario default"}
                   </button>
-                ))}
-            </div>
-            <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
-              {playGameId ? "Done" : "Cancel"}
-            </button>
+                  {countryOptions
+                    .filter((c) => {
+                      const q = countryQuery.trim().toLowerCase();
+                      return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
+                    })
+                    .slice(0, 400)
+                    .map((c) => (
+                      <button
+                        key={c.code || c.name}
+                        type="button"
+                        onClick={() => pickCountry(c.code)}
+                        style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.04)" }}
+                      >
+                        {/* Full names only — codes stay internal. */}
+                        <span>{c.name}</span>
+                      </button>
+                    ))}
+                </div>
+                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                  {playGameId ? "Done" : "Cancel"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
