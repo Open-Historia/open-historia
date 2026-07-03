@@ -236,27 +236,64 @@ const computeOwnerBorderCollection = async (regionsFC, ownerById, isCancelled) =
     byOwner.get(owner).push(...polygons);
   }
 
+  // Chunked incremental union. One degenerate polygon must never poison a
+  // whole owner group — that used to make the huge "unclaimed" group fall
+  // back to raw per-region shapes, which drew a country-style border around
+  // every single region. Broken shapes are quarantined individually.
+  const unionPolygonsSafely = async (polygons, isCancelled) => {
+    const CHUNK = 40;
+    let merged = null;
+    for (let start = 0; start < polygons.length; start += CHUNK) {
+      if (start % (CHUNK * 4) === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (isCancelled()) return null;
+      }
+      const chunk = polygons.slice(start, start + CHUNK);
+      let chunkResult = null;
+      try {
+        chunkResult = polygonClipping.union(...chunk);
+      } catch {
+        chunkResult = null;
+        for (const polygon of chunk) {
+          try {
+            chunkResult = chunkResult
+              ? polygonClipping.union(chunkResult, polygon)
+              : polygonClipping.union(polygon);
+          } catch {
+            // Skip just this shape; a hairline hole beats broken borders.
+          }
+        }
+      }
+      if (!chunkResult?.length) continue;
+      try {
+        merged = merged ? polygonClipping.union(merged, chunkResult) : chunkResult;
+      } catch {
+        // Keep what we have rather than losing the whole owner.
+      }
+    }
+    return merged;
+  };
+
   const features = [];
   for (const [owner, polygons] of byOwner) {
     // Yield between owners so big maps don't freeze the UI while merging.
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (isCancelled()) return null;
-    try {
-      const merged = polygonClipping.union(...polygons);
-      if (merged?.length) {
-        features.push({
-          type: "Feature",
-          geometry: { type: "MultiPolygon", coordinates: merged },
-          properties: { owner },
-        });
-      }
-    } catch {
-      // Degenerate geometry: draw this owner's raw shapes instead — internal
-      // seams for one owner beat a missing border.
+    const merged = await unionPolygonsSafely(polygons, isCancelled);
+    if (isCancelled()) return null;
+    if (merged?.length) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "MultiPolygon", coordinates: merged },
+        properties: { owner },
+      });
+    } else if (polygons.length) {
+      // Total failure for this owner: keep the raw shapes for the FILL but
+      // never outline them — regions must not carry country-style borders.
       features.push({
         type: "Feature",
         geometry: { type: "MultiPolygon", coordinates: polygons },
-        properties: { owner },
+        properties: { owner, noOutline: true },
       });
     }
   }
@@ -784,6 +821,7 @@ const WorldMap = () => {
         <Layer
           id="owner-borders"
           type="line"
+          filter={["!=", ["coalesce", ["get", "noOutline"], false], true]}
           paint={{
             "line-color": "#000",
             "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1.0, 8, 2.0, 14, 3.0],
