@@ -595,6 +595,28 @@ const WorldMap = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customActive, customRegionData, ownershipKey]);
 
+  // Once the owner unions exist they become BOTH the color zones and the
+  // borders: the fill and its outline are the same polygons, so a border is
+  // exactly "where one color zone meets another color zone (or nothing)" —
+  // one line, perfectly on the color edge, by construction. The per-region
+  // paint layers below switch off at that point.
+  const unionReady = customActive && (ownerBorderData?.features?.length ?? 0) > 0;
+
+  const ownerZoneFillPaint = useMemo(() => {
+    const stops = Object.entries(colorMap).flatMap(([iso, rgb]) => [
+      iso, `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
+    ]);
+    const fallback = buildOwnerFallbackColorExpression();
+    return {
+      "fill-color": [
+        "case",
+        ["==", ["get", "owner"], "~unclaimed"], NEUTRAL_LAND_COLOR,
+        stops.length > 0 ? ["match", ["get", "owner"], ...stops, fallback] : fallback,
+      ],
+      "fill-opacity": 0.72,
+    };
+  }, [colorMap]);
+
   // GADM regions on custom maps paint the STOCK vector tiles (sharp geometry at
   // every zoom — the coarse seed polygons left sliver gaps up close). Only
   // author-drawn shapes still render from the GeoJSON, on top.
@@ -697,7 +719,7 @@ const WorldMap = () => {
           id="regions-fill"
           type="fill"
           source-layer="regions"
-          paint={stockRegionsFillPaint}
+          paint={unionReady ? { ...stockRegionsFillPaint, "fill-opacity": 0 } : stockRegionsFillPaint}
         />
         <Layer
           id="regions-outline"
@@ -712,19 +734,21 @@ const WorldMap = () => {
           unless world.customRegions is set. */}
       <Source id="custom-regions-source" type="geojson" data={customRegionData}>
         {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
-            tiles are too simplified at low zoom and show sliver gaps there. */}
+            tiles are too simplified at low zoom and show sliver gaps there.
+            Once the owner-union zones are ready they take over the coloring
+            entirely, so borders sit exactly on the color edges. */}
         <Layer
           id="custom-regions-fill-far"
           type="fill"
           maxzoom={7}
           filter={GADM_GEOMETRY_FILTER}
-          paint={{ "fill-color": customFillStyle["fill-color"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+          paint={{ "fill-color": customFillStyle["fill-color"], "fill-opacity": customActive && !unionReady ? FAR_FILL_FADE : 0 }}
         />
         <Layer
           id="custom-regions-fill"
           type="fill"
           filter={CUSTOM_GEOMETRY_FILTER}
-          paint={customFillStyle}
+          paint={unionReady ? { ...customFillStyle, "fill-opacity": 0 } : customFillStyle}
         />
         <Layer
           id="custom-regions-outline"
@@ -732,33 +756,38 @@ const WorldMap = () => {
           filter={CUSTOM_GEOMETRY_FILTER}
           paint={{
             "line-color": "#000",
-            // Match the old map's *region* border design: thin, and only fading in
-            // as you zoom. Same-owner regions share a fill colour, so these faint
-            // lines read as internal subdivisions; different owners separate by
-            // colour. No heavy line between same-owner/same-country regions.
             "line-width": [
               "interpolate", ["linear"], ["zoom"],
               3, 0.2,
               8, 0.6,
               12, 1.0,
             ],
-            "line-opacity": customActive
+            "line-opacity": customActive && !unionReady
               ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.35, 8, 0.6]
               : 0,
           }}
         />
       </Source>
 
-      {/* Era country borders (owner-union outlines) — experiment: rendered at
-          FULL strength at every zoom level, no fading. */}
-      <Source id="owner-borders-source" type="geojson" data={ownerBorderData}>
+      {/* Color ZONES and their borders from ONE geometry: each owner's union
+          is the fill, and the same polygon's outline is the border. A border
+          is exactly "where one color zone meets another color zone or
+          nothing" — a single black, defined line on the color edge, at every
+          zoom. Region hairlines above are switched off with unionReady so no
+          second set of lines runs along the same frontier. */}
+      <Source id="owner-zones-source" type="geojson" data={ownerBorderData}>
+        <Layer
+          id="owner-zone-fills"
+          type="fill"
+          paint={unionReady ? ownerZoneFillPaint : { "fill-opacity": 0 }}
+        />
         <Layer
           id="owner-borders"
           type="line"
           paint={{
             "line-color": "#000",
             "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1.0, 8, 2.0, 14, 3.0],
-            "line-opacity": 0.9,
+            "line-opacity": unionReady ? 0.9 : 0,
           }}
         />
       </Source>
