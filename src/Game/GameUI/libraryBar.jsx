@@ -47,6 +47,12 @@ const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 
 const BAR_HEIGHT = 64;
+
+// Set by the mounted LibraryTopBar; lets the no-game gate open a tab.
+let _openLibraryTab = null;
+export const openLibraryTab = (tab) => {
+  _openLibraryTab?.(tab);
+};
 const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
@@ -973,6 +979,11 @@ const LibraryTopBar = () => {
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  // Bridge for outside callers (the no-game gate): open a library tab.
+  _openLibraryTab = (tab) => {
+    setActiveTab(tab);
+    setIsPanelOpen(true);
+  };
   const [editorKind, setEditorKind] = useState(null);
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
