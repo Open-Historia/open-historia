@@ -32,8 +32,20 @@ set "REPO_OWNER=Open-Historia"
 set "REPO_NAME=open-historia"
 set "REPO_BRANCH=beta"
 
-REM Work from the folder this script lives in (the project root)
-cd /d "%~dp0"
+REM ---- Self-update safety --------------------------------------------------
+REM cmd reads batch files incrementally, so the update replacing THIS script
+REM on disk mid-run would corrupt the running interpreter. Re-run from a temp
+REM copy instead: the copy performs the update and can safely overwrite the
+REM original updater along with everything else. (The .sh updater is already
+REM safe - bash parses it fully into main() before any of it executes.)
+if /I not "%~1"=="/from-temp" (
+    copy /Y "%~f0" "%TEMP%\open-historia-updater.bat" >nul
+    "%TEMP%\open-historia-updater.bat" /from-temp "%~dp0"
+    exit /b
+)
+
+REM Work from the folder the ORIGINAL script lives in (the project root)
+cd /d "%~2"
 
 echo.
 echo ===================================================
