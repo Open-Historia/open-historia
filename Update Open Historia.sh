@@ -26,11 +26,11 @@
 #  macOS: double-click "Update Open Historia.command" instead.
 # ============================================================
 
-# Which repository to update from. This install tracks the Beta repo -
-# pointing anywhere else would replace it with a different codebase.
-REPO_OWNER="Arkniem"
-REPO_NAME="Open-Historia-Beta"
-REPO_BRANCH="main"
+# Which repository to update from. The beta channel lives on the beta
+# BRANCH of the main repository - updating keeps tracking that branch.
+REPO_OWNER="Tommi-K"
+REPO_NAME="open-historia"
+REPO_BRANCH="beta"
 
 fail_copy() {
     echo ""
