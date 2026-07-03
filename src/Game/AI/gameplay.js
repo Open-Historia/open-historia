@@ -1,3 +1,4 @@
+/*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import dayjs from "dayjs";
 import { callAI } from "./main.jsx";
 import {
@@ -24,6 +25,7 @@ import {
   readActionsState,
   readChatsState,
   readEventsState,
+  readGameData,
   readGameStateBundle,
   readWorldState,
   writeActionsState,
@@ -32,6 +34,7 @@ import {
   writeGameData,
   writeWorldState,
 } from "../../runtime/gameState.js";
+import { difficultyDirective } from "../../runtime/difficulty.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -421,6 +424,28 @@ const buildUnitsSummaryText = (world) => {
     .join("\n");
 };
 
+const MILITARY_ACTION_PATTERN =
+  /\b(troop|army|armies|attack|invade|invasion|deploy|fleet|navy|naval|air force|airforce|bomb|siege|offensive|battalion|regiment|garrison|blockade|mobiliz)/i;
+
+// Reach/logistics doctrine for the AI. Deliberately CONDITIONAL: it only
+// rides along when the turn actually involves forces (units on the map or
+// military-sounding orders), so peaceful turns don't pay the context cost.
+const buildMilitaryFeasibilityText = (world, actionsText) => {
+  const hasUnits = normalizeArray(world?.units).length > 0;
+  if (!hasUnits && !MILITARY_ACTION_PATTERN.test(actionsText || "")) {
+    return "";
+  }
+
+  return [
+    "",
+    "MILITARY FEASIBILITY — test every deploy request, move/attack order and your own unitOps against the era and the unit's type before honoring it:",
+    "- Era reach: before ~1500, armies march on foot or horse and cross water only by coastal shipping — intercontinental operations are impossible. ~1500–1850 (age of sail): overseas action needs fleets and friendly ports and takes months. 1850–1945: rail and steamships speed logistics; aircraft stay short-ranged until the 1940s. After 1945: global power projection belongs only to major powers with bases, carriers or allies along the route.",
+    "- Unit type: air units are fastest but need airbases or carriers within range and cannot hold ground; naval units move only by sea; infantry, armor and artillery crawl overland and need supply lines; garrisons do not travel.",
+    "- Distance: compare the unit's coordinates with the target's. An order beyond plausible reach or pace is NOT executed as given — reject it, or convert it into a partial advance with an event explaining the delay, the transport it would need, or why it failed.",
+    "- Never teleport units: each move op may only cover what that unit could actually travel in the elapsed time; long campaigns should progress across several turns.",
+  ].join("\n");
+};
+
 const buildTemplateVariables = async (
   bundle,
   {
@@ -479,7 +504,11 @@ const buildTemplateVariables = async (
     plannedActions: buildActionHistoryText(bundle.actions),
     playerPolity: bundle.game.country || "Unknown polity",
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
-    unitsSummary: buildUnitsSummaryText(bundle.world),
+    // Simulation tasks additionally get the reach/logistics doctrine — but
+    // only when forces are actually in play this turn (see the builder).
+    unitsSummary:
+      buildUnitsSummaryText(bundle.world) +
+      buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle),
     recentEvents,
     recentEventsLong: buildEventHistoryText(bundle.events, { limit: 24 }),
@@ -520,13 +549,25 @@ const withTimeout = async (promise, timeoutMs, timeoutMessage) => {
   }
 };
 
-const runJsonTask = async (taskKey, { fallback, timeoutMs = 12000, userMessage, variables }) => {
+// Give the AI real time: local/self-hosted models (and reasoning modes) often
+// need well over a minute per turn. The old 12s default silently discarded
+// their answers and served the canned fallback instead — turns "completed"
+// with nothing to show. The UI has spinners; waiting beats silently wrong.
+const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage, variables }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  const systemPrompt = renderTemplate(prompts.tasks[taskKey], {
+  let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
     ...variables,
     ...helperValues,
   });
+
+  // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
+  try {
+    const game = await readGameData();
+    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
+  } catch {
+    // Without game data the task still runs at its default temperament.
+  }
 
   try {
     const raw = await withTimeout(
@@ -538,8 +579,9 @@ const runJsonTask = async (taskKey, { fallback, timeoutMs = 12000, userMessage, 
     if (parsed) {
       return parsed;
     }
-  } catch {
-    // Fall through to deterministic fallback.
+    console.warn(`[ai] task "${taskKey}": response was not parseable JSON — using the deterministic fallback.`);
+  } catch (error) {
+    console.warn(`[ai] task "${taskKey}" failed (${error?.message || error}) — using the deterministic fallback.`);
   }
 
   return fallback();
@@ -909,36 +951,51 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
     variables,
   });
 
-  const topics = normalizeArray(payload?.topics)
-    .map((topic, topicIndex) => {
-      if (!topic || typeof topic !== "object") {
-        return null;
-      }
+  const normalizeTopics = (raw) =>
+    normalizeArray(raw)
+      .map((topic, topicIndex) => {
+        if (!topic || typeof topic !== "object") {
+          return null;
+        }
 
-      const title = normalizeString(topic.title || topic.name);
-      if (!title) {
-        return null;
-      }
+        const title = normalizeString(topic.title || topic.name);
+        if (!title) {
+          return null;
+        }
 
-      return {
-        actions: normalizeArray(topic.actions)
-          .map((action, actionIndex) =>
-            normalizeActionEntry(
-              {
-                ...action,
-                source: "suggested",
-                suggestionTopic: title,
-              },
-              actionIndex,
-            ),
-          )
-          .filter(Boolean),
-        description: normalizeString(topic.description),
-        id: normalizeString(topic.id) || `topic-${topicIndex}`,
-        title,
-      };
-    })
-    .filter(Boolean);
+        return {
+          actions: normalizeArray(topic.actions)
+            .map((action, actionIndex) =>
+              normalizeActionEntry(
+                {
+                  ...action,
+                  source: "suggested",
+                  suggestionTopic: title,
+                },
+                actionIndex,
+              ),
+            )
+            .filter(Boolean),
+          description: normalizeString(topic.description),
+          id: normalizeString(topic.id) || `topic-${topicIndex}`,
+          title,
+        };
+      })
+      .filter(Boolean);
+
+  // Models told "JSON only" mislabel or wrap the list — accept the common
+  // shapes (top-level array, topics, suggestions) before giving up.
+  let topics = normalizeTopics(
+    Array.isArray(payload) ? payload : payload?.topics ?? payload?.suggestions,
+  );
+
+  // A parseable-but-EMPTY answer used to be accepted as "no suggestions were
+  // generated" — the deterministic fallback (which always has topics) now
+  // covers it, same as empty timeline turns.
+  if (topics.length === 0) {
+    console.warn("[ai] action suggestions came back empty — using the deterministic fallback.");
+    topics = normalizeTopics((await fallbackActionSuggestions(bundle))?.topics);
+  }
 
   const world = normalizeWorldState(await readWorldState());
   world.actionSuggestions = topics;
@@ -1031,6 +1088,44 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
   ]);
   return String(raw || "").trim();
+};
+
+// Structured national stat sheet for the Stats tab: same grounding as the
+// intelligence briefing, but strict JSON so the UI can render bars and cards.
+export const generateCountryStatSheet = async ({ code, name } = {}) => {
+  const bundle = await readGameStateBundle({ force: true });
+  const variables = await buildTemplateVariables(bundle);
+  const target = name || code || "the polity";
+  const dossier = await buildTargetDossier(bundle, normalizeString(code));
+  const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
+  const system =
+    `You are the statistics bureau of an alternate-history strategy game. ` +
+    `The current date is ${variables.date || "unknown"}. ` +
+    `Compile a national stat sheet for ${target}${code ? ` (code ${code})` : ""}. ` +
+    `Treat the TARGET DOSSIER and WORLD STATE below as ground truth; where specifics are not recorded, ` +
+    `give your best historical estimate for this era, people and region — never refuse, never say unknown. ` +
+    `Money units must fit the era (barter/tribute-era polities still get best-effort figures).\n\n` +
+    (era ? `ERA & WORLD RULES:\n${era}\n\n` : "") +
+    `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}\n\n` +
+    `WORLD STATE:\n${variables.worldSummary || "(no summary)"}\n\n` +
+    `RECENT EVENTS:\n${variables.recentEvents || "(none)"}\n\n` +
+    `Respond with ONLY a JSON object — no prose, no markdown fences — exactly this shape:\n` +
+    `{"capital":"city","continent":"continent","government":"system · ideology","leader":"head of state/government",` +
+    `"stability":0-100 integer,` +
+    `"indices":{"sovereignty":0-100,"foodAutonomy":0-100,"energyAutonomy":0-100,"economicIndependence":0-100,"internalSecurity":0-100},` +
+    `"economy":{"gdp":"9 B$","gdpGrowth":"+5.2% / yr","gdpPerCapita":"796 $","currency":"XOF",` +
+    `"inflation":"0.3%","unemployment":"1%","publicDebt":"47.5% GDP","budgetBalance":"-3.7% GDP"},` +
+    `"gdpBreakdown":{"agriculture":24,"industry":24,"services":52}}\n` +
+    `gdpBreakdown percentages must sum to 100. ` +
+    `Write text values in ${variables.language || "English"}; keep numbers plain.`;
+  const raw = await callAI(system, [
+    { role: "user", parts: [{ text: `Compile the national stat sheet for ${target}.` }] },
+  ]);
+  const parsed = extractJsonPayload(raw);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("The stat sheet did not come back as valid JSON.");
+  }
+  return parsed;
 };
 
 export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {
@@ -1255,21 +1350,52 @@ export const advanceActiveCatalyst = async (choiceText) => {
   });
 };
 
+// Event density per skip length (player-tuned): longer skips must return
+// proportionally more events, and short ones must stay brief.
+const eventCountRangeForDays = (days) => {
+  if (days <= 7) return [1, 2];
+  if (days <= 31) return [5, 7];
+  if (days <= 92) return [10, 13];
+  if (days <= 184) return [19, 27];
+  return [29, 37];
+};
+
 export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
   const targetDate = dayjs(bundle.game.gameDate).add(safeDays, "day").format("YYYY-MM-DD");
   const variables = await buildTemplateVariables(bundle, { targetDate });
-  const payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+  const [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
+  let payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
-    timeoutMs: safeDays >= 90 || mode === "auto" ? 9000 : 12000,
+    // The jump IS the game — let slow (local/reasoning) models finish instead
+    // of silently swapping in the canned fallback after a few seconds.
+    timeoutMs: 180000,
     userMessage:
       mode === "auto"
-        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only."
-        : "Simulate a standard jump forward to the requested target date. Return JSON only.",
+        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
+          "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
+          "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
+        : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
+          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${safeDays} days), with their dates ` +
+          `spread across the skipped period.`,
     variables,
   });
+
+  // A model can answer with VALID but EMPTY JSON (reasoning models told
+  // "JSON only" often emit a bare object). That used to be accepted as a
+  // successful turn of nothing: no events, no summary, an invisible history
+  // entry — the game looked like it "did nothing" with no fallback either.
+  // An empty turn now counts as a failure and takes the fallback path.
+  const emptyTurn =
+    normalizeArray(payload?.events).length === 0 &&
+    !normalizeString(payload?.summary) &&
+    !payload?.catalyst;
+  if (emptyTurn) {
+    console.warn("[ai] jump returned an empty turn — using the deterministic fallback.");
+    payload = await fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate });
+  }
 
   const result = {
     catalyst: payload?.catalyst ?? null,

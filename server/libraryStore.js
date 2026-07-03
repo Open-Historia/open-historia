@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import fs from "fs";
 import path from "path";
 import url from "url";
@@ -17,6 +17,113 @@ const PMTILES_ASSETS_DIR = path.join(PUBLIC_DIR, "assets");
 
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
+
+// ---------------------------------------------------------------------------
+// One naming scheme for authors: FULL COUNTRY NAMES work everywhere a country
+// is referenced (ownership overrides, ownerCodes, polity keys, colors, the
+// played country). Known names canonicalize to their internal code — flags
+// and stock colors keep working — and unknown names simply ARE the
+// identifier. Codes remain valid input too.
+// ---------------------------------------------------------------------------
+const COUNTRY_NAMES_PATH = path.join(__dirname, "country-names.json");
+
+const loadCountryNameRegistry = () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(COUNTRY_NAMES_PATH, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const COUNTRY_NAME_REGISTRY = loadCountryNameRegistry(); // code -> name
+const NAME_TO_CODE = new Map(
+  Object.entries(COUNTRY_NAME_REGISTRY).map(([code, name]) => [String(name).trim().toLowerCase(), code]),
+);
+const KNOWN_CODES = new Set(Object.keys(COUNTRY_NAME_REGISTRY));
+
+// Resolve one author-supplied country reference (name or code) to the
+// canonical identifier. `world` extends the lookup with the scenario's own
+// polities (their names and aliases map to their codes).
+const canonicalizeCountryRef = (value, world) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return raw;
+  if (KNOWN_CODES.has(raw)) return raw;
+
+  const lower = raw.toLowerCase();
+  const overrides = world?.polityOverrides;
+  if (overrides && typeof overrides === "object") {
+    if (overrides[raw]) return raw; // already a scenario polity code
+    for (const [code, polity] of Object.entries(overrides)) {
+      if (!polity || typeof polity !== "object") continue;
+      if (String(polity.name ?? "").trim().toLowerCase() === lower) return polity.code || code;
+      if (Array.isArray(polity.aliases) &&
+          polity.aliases.some((alias) => String(alias).trim().toLowerCase() === lower)) {
+        return polity.code || code;
+      }
+    }
+  }
+
+  const byName = NAME_TO_CODE.get(lower);
+  if (byName) return byName;
+
+  // Unknown reference: it is its own identifier (custom polities may simply
+  // BE their name).
+  return raw;
+};
+
+// Canonicalize every country reference inside a world payload, in place-safe
+// copies. Region ids are untouched; only OWNER references translate.
+const canonicalizeWorldCountryRefs = (world) => {
+  if (!world || typeof world !== "object" || Array.isArray(world)) return world;
+  const next = { ...world };
+
+  if (next.regionOwnershipOverrides && typeof next.regionOwnershipOverrides === "object") {
+    next.regionOwnershipOverrides = Object.fromEntries(
+      Object.entries(next.regionOwnershipOverrides).map(([regionId, owner]) => [
+        regionId,
+        canonicalizeCountryRef(owner, world),
+      ]),
+    );
+  }
+
+  if (Array.isArray(next.ownerCodes)) {
+    next.ownerCodes = [...new Set(next.ownerCodes.map((entry) => canonicalizeCountryRef(entry, world)))];
+  }
+
+  if (next.polityOverrides && typeof next.polityOverrides === "object") {
+    next.polityOverrides = Object.fromEntries(
+      Object.entries(next.polityOverrides).map(([key, polity]) => {
+        const code = canonicalizeCountryRef(polity?.code || key, world);
+        return [code, polity && typeof polity === "object" ? { ...polity, code } : polity];
+      }),
+    );
+  }
+
+  if (Array.isArray(next.units)) {
+    next.units = next.units.map((unit) =>
+      unit && typeof unit === "object" && unit.ownerCode
+        ? { ...unit, ownerCode: canonicalizeCountryRef(unit.ownerCode, world) }
+        : unit,
+    );
+  }
+
+  return next;
+};
+
+// Colors may be keyed by name as well; keys canonicalize like everything else.
+const canonicalizeColorKeys = (colors, world) => {
+  if (!colors || typeof colors !== "object" || Array.isArray(colors)) return colors;
+  return Object.fromEntries(
+    Object.entries(colors).map(([key, value]) => [canonicalizeCountryRef(key, world), value]),
+  );
+};
+
+// The played country may be written as a full name too.
+const canonicalizeGameCountry = (game) => {
+  if (!game || typeof game !== "object" || Array.isArray(game) || !game.country) return game;
+  return { ...game, country: canonicalizeCountryRef(game.country, null) };
+};
 const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
 const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle";
 const SCENARIO_BUNDLE_VERSION = 1;
@@ -298,23 +405,25 @@ const getGameManifest = () => {
 
   if (manifest && Array.isArray(manifest.order)) {
     return {
-      activeGameId: String(manifest.activeGameId ?? "").trim() || DEFAULT_GAME_ID,
+      activeGameId: String(manifest.activeGameId ?? "").trim(),
       order: manifest.order,
       version: 2,
     };
   }
 
+  // No games yet — nothing is created implicitly; the player starts their
+  // first game from a scenario.
   return {
-    activeGameId: DEFAULT_GAME_ID,
-    order: [DEFAULT_GAME_ID],
+    activeGameId: "",
+    order: [],
     version: 2,
   };
 };
 
 const saveGameManifest = (manifest) => {
   writeJsonFile(GAME_MANIFEST_PATH, {
-    activeGameId: manifest.activeGameId,
-    order: Array.from(new Set(manifest.order ?? [DEFAULT_GAME_ID])),
+    activeGameId: manifest.activeGameId ?? "",
+    order: Array.from(new Set(manifest.order ?? [])),
                 version: 2,
   });
 };
@@ -568,52 +677,6 @@ const syncBuiltInScenarioSeedDate = () => {
   });
 };
 
-const syncBuiltInDefaultGameDate = () => {
-  const gameDataPath = getGameJsonPath(DEFAULT_GAME_ID, "game");
-  const currentGame = normalizeRecordValue(readJsonFile(gameDataPath, {}));
-  const snapshot = {
-    actions: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "actions"), []),
-    chat: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "chat"), []),
-    events: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "events"), []),
-    game: currentGame,
-    world: readJsonFile(getGameJsonPath(DEFAULT_GAME_ID, "world"), {}),
-  };
-
-  if (
-    scenarioLooksLikeRuntimeSnapshot(snapshot) ||
-    (Array.isArray(snapshot.events) && snapshot.events.length > 0) ||
-    Number(currentGame?.round ?? 1) > 1
-  ) {
-    return;
-  }
-
-  const baseGame = normalizeRecordValue(readDefaultScenarioJsonAsset("game"));
-  const currentStartDate = normalizeSnapshotString(currentGame?.startDate);
-  const currentGameDate = normalizeSnapshotString(currentGame?.gameDate);
-
-  if (
-    !shouldBackfillSeedDatePair({
-      baseGameDate: normalizeSnapshotString(baseGame?.gameDate),
-                                baseStartDate: normalizeSnapshotString(baseGame?.startDate),
-                                currentGameDate,
-                                currentStartDate,
-    })
-  ) {
-    return;
-  }
-
-  const scenarioGame = normalizeRecordValue(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "game"), {}));
-  const startDate =
-  normalizeSnapshotString(scenarioGame?.startDate) || BUILT_IN_SCENARIO_DEFAULT_DATE;
-  const gameDate = normalizeSnapshotString(scenarioGame?.gameDate) || startDate;
-
-  writeJsonFile(gameDataPath, {
-    ...cloneJson(currentGame),
-                ...(gameDate ? { gameDate } : {}),
-                ...(startDate ? { startDate } : {}),
-  });
-};
-
 const seedScenarioJsonFilesFromScenario = (scenarioId, sourceScenarioId) => {
   const scenarioSnapshot = {
     actions: readJsonFile(getScenarioJsonPath(sourceScenarioId, "actions"), []),
@@ -756,6 +819,13 @@ const ensureDefaultScenario = () => {
   ensureDirectory(SCENARIOS_DIR);
   const scenarioDir = getScenarioDirectory(DEFAULT_SCENARIO_ID);
 
+  // The built-in scenario is deletable (like the built-in game before it) — a
+  // deliberately deleted one must stay deleted across restarts. It is only
+  // (re)seeded on a true first run, i.e. before any scenario manifest exists.
+  if (fs.existsSync(SCENARIO_MANIFEST_PATH) && !fs.existsSync(scenarioDir)) {
+    return;
+  }
+
   ensureDirectory(scenarioDir);
   ensureDirectory(path.join(scenarioDir, "storage"));
 
@@ -780,51 +850,6 @@ const ensureDefaultScenario = () => {
   saveScenarioManifest(manifest);
 };
 
-const ensureDefaultGame = () => {
-  ensureDirectory(GAMES_DIR);
-  const gameDir = getGameDirectory(DEFAULT_GAME_ID);
-
-  ensureDirectory(gameDir);
-  ensureDirectory(path.join(gameDir, "storage"));
-
-  const scenarioMeta = readScenarioMeta(DEFAULT_SCENARIO_ID);
-
-  if (!fs.existsSync(getGameMetaPath(DEFAULT_GAME_ID))) {
-    writeJsonFile(getGameMetaPath(DEFAULT_GAME_ID), {
-      ...DEFAULT_GAME_META,
-      accentColor: scenarioMeta.accentColor,
-      createdAt: new Date().toISOString(),
-                  heroSubtitle: scenarioMeta.heroSubtitle,
-                  heroTitle: scenarioMeta.heroTitle,
-                  name: `${scenarioMeta.name} Session`,
-                  scenarioId: DEFAULT_SCENARIO_ID,
-                  subtitle: scenarioMeta.subtitle,
-                  updatedAt: new Date().toISOString(),
-    });
-  }
-
-  for (const [assetKey] of Object.entries(JSON_ASSET_FILES)) {
-    const targetPath = getGameJsonPath(DEFAULT_GAME_ID, assetKey);
-    if (!fs.existsSync(targetPath)) {
-      seedGameJsonFilesFromScenario(DEFAULT_GAME_ID, DEFAULT_SCENARIO_ID);
-      break;
-    }
-  }
-
-  if (readGameMeta(DEFAULT_GAME_ID).scenarioId === DEFAULT_SCENARIO_ID) {
-    syncBuiltInDefaultGameDate();
-  }
-
-  const manifest = getGameManifest();
-  if (!manifest.order.includes(DEFAULT_GAME_ID)) {
-    manifest.order.unshift(DEFAULT_GAME_ID);
-  }
-  if (!manifest.activeGameId) {
-    manifest.activeGameId = DEFAULT_GAME_ID;
-  }
-  saveGameManifest(manifest);
-};
-
 const ensureScenarioStore = () => {
   ensureDirectory(SERVER_DATA_DIR);
   ensureDirectory(SCENARIOS_DIR);
@@ -834,7 +859,6 @@ const ensureScenarioStore = () => {
 const ensureGameStore = () => {
   ensureScenarioStore();
   ensureDirectory(GAMES_DIR);
-  ensureDefaultGame();
 };
 
 const getScenarioAssetStatus = (scenarioId) => {
@@ -940,7 +964,9 @@ const getScenarioCatalog = () => {
       ...meta,
       assetStatus,
       cacheToken,
-      canDelete: scenarioId !== DEFAULT_SCENARIO_ID,
+      // Every scenario is deletable, the built-in one included (usage by
+      // existing games still blocks deletion in deleteScenario).
+      canDelete: true,
       coverImageUrl: assetStatus.cover
       ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
       : null,
@@ -949,9 +975,11 @@ const getScenarioCatalog = () => {
   })
   .filter(Boolean);
 
+  // Fall back to the first scenario that actually exists — the built-in one
+  // may have been deleted.
   const selectedScenarioId = scenarios.some((scenario) => scenario.id === manifest.selectedScenarioId)
   ? manifest.selectedScenarioId
-  : DEFAULT_SCENARIO_ID;
+  : (scenarios[0]?.id ?? "");
 
   if (selectedScenarioId !== manifest.selectedScenarioId) {
     saveScenarioManifest({
@@ -1000,7 +1028,7 @@ const getGameCatalog = () => {
       ...meta,
       assetStatus,
       cacheToken,
-      canDelete: gameId !== DEFAULT_GAME_ID,
+      canDelete: true,
       country: String(gameData?.country ?? "").trim(),
        coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
        currentDate: String(gameData?.gameDate ?? "").trim(),
@@ -1019,7 +1047,7 @@ const getGameCatalog = () => {
 
   const activeGameId = games.some((game) => game.id === manifest.activeGameId)
   ? manifest.activeGameId
-  : DEFAULT_GAME_ID;
+  : games[0]?.id ?? "";
 
   if (activeGameId !== manifest.activeGameId) {
     saveGameManifest({
@@ -1385,9 +1413,9 @@ const updateScenario = (
   });
 
   if (game && typeof game === "object") {
-    writeJsonFile(getScenarioJsonPath(scenarioId, "game"), game);
+    writeJsonFile(getScenarioJsonPath(scenarioId, "game"), canonicalizeGameCountry(game));
   } else if (gamePatch && typeof gamePatch === "object") {
-    mergeJsonAsset(getScenarioJsonPath(scenarioId, "game"), gamePatch, JSON_ASSET_DEFAULTS.game);
+    mergeJsonAsset(getScenarioJsonPath(scenarioId, "game"), canonicalizeGameCountry(gamePatch), JSON_ASSET_DEFAULTS.game);
   }
 
   if (prompts && typeof prompts === "object") {
@@ -1401,9 +1429,9 @@ const updateScenario = (
   }
 
   if (world && typeof world === "object") {
-    writeJsonFile(getScenarioJsonPath(scenarioId, "world"), world);
+    writeJsonFile(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(world));
   } else if (worldPatch && typeof worldPatch === "object") {
-    mergeJsonAsset(getScenarioJsonPath(scenarioId, "world"), worldPatch, JSON_ASSET_DEFAULTS.world);
+    mergeJsonAsset(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
   }
 
   if (storage && typeof storage === "object") {
@@ -1460,9 +1488,9 @@ const updateGame = (
   });
 
   if (game && typeof game === "object") {
-    writeJsonFile(getGameJsonPath(gameId, "game"), game);
+    writeJsonFile(getGameJsonPath(gameId, "game"), canonicalizeGameCountry(game));
   } else if (gamePatch && typeof gamePatch === "object") {
-    mergeJsonAsset(getGameJsonPath(gameId, "game"), gamePatch, JSON_ASSET_DEFAULTS.game);
+    mergeJsonAsset(getGameJsonPath(gameId, "game"), canonicalizeGameCountry(gamePatch), JSON_ASSET_DEFAULTS.game);
   }
 
   if (prompts && typeof prompts === "object") {
@@ -1472,9 +1500,9 @@ const updateGame = (
   }
 
   if (world && typeof world === "object") {
-    writeJsonFile(getGameJsonPath(gameId, "world"), world);
+    writeJsonFile(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(world));
   } else if (worldPatch && typeof worldPatch === "object") {
-    mergeJsonAsset(getGameJsonPath(gameId, "world"), worldPatch, JSON_ASSET_DEFAULTS.world);
+    mergeJsonAsset(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
   }
 
   if (storage && typeof storage === "object") {
@@ -1495,10 +1523,6 @@ const updateGame = (
 const deleteScenario = (scenarioId) => {
   ensureScenarioStore();
 
-  if (scenarioId === DEFAULT_SCENARIO_ID) {
-    throw new Error("The default scenario cannot be deleted.");
-  }
-
   const usageCount = getScenarioUsageCountMap().get(scenarioId) ?? 0;
   if (usageCount > 0) {
     throw new Error("This scenario is still used by one or more games.");
@@ -1518,11 +1542,13 @@ const deleteScenario = (scenarioId) => {
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
     (entry) => entry !== scenarioId,
   );
+  // Select the first remaining scenario (the deleted one may have been the
+  // built-in default — nothing resurrects it).
   const nextSelectedScenarioId =
-  manifest.selectedScenarioId === scenarioId ? DEFAULT_SCENARIO_ID : manifest.selectedScenarioId;
+  manifest.selectedScenarioId === scenarioId ? (nextOrder[0] ?? "") : manifest.selectedScenarioId;
 
   saveScenarioManifest({
-    order: nextOrder.length > 0 ? nextOrder : [DEFAULT_SCENARIO_ID],
+    order: nextOrder,
     selectedScenarioId: nextSelectedScenarioId,
   });
 
@@ -1531,10 +1557,6 @@ const deleteScenario = (scenarioId) => {
 
 const deleteGame = (gameId) => {
   ensureGameStore();
-
-  if (gameId === DEFAULT_GAME_ID) {
-    throw new Error("The default game cannot be deleted.");
-  }
 
   const gameDir = getGameDirectory(gameId);
   const resolved = path.resolve(gameDir);
@@ -1550,12 +1572,14 @@ const deleteGame = (gameId) => {
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
     (entry) => entry !== gameId,
   );
+  // Deleting the active game hands off to the next one; deleting the LAST
+  // game is fine too — the runtime falls back to the selected scenario's data.
   const nextActiveGameId =
-  manifest.activeGameId === gameId ? DEFAULT_GAME_ID : manifest.activeGameId;
+  manifest.activeGameId === gameId ? nextOrder[0] ?? "" : manifest.activeGameId;
 
   saveGameManifest({
     activeGameId: nextActiveGameId,
-    order: nextOrder.length > 0 ? nextOrder : [DEFAULT_GAME_ID],
+    order: nextOrder,
   });
 
   return getLibraryCatalog();
@@ -1721,33 +1745,54 @@ const getActiveRuntimeScenarioSummary = () => {
   return getScenarioSummary(activeGame.scenarioId);
 };
 
+// Every scenario renders the custom map style: worlds that never set the flag
+// (fresh scenarios, old imported bundles) get it injected in the SERVED payload
+// — their geometry is the Modern Day fallback in readRuntimeJsonAsset, and
+// their ownership overrides recolor it. Nothing is written to disk.
+const normalizeRuntimeWorld = (assetKey, data) => {
+  if (assetKey !== "world" || !data || typeof data !== "object" || Array.isArray(data)) {
+    return data;
+  }
+  return data.customRegions ? data : { ...data, customRegions: true };
+};
+
 const readRuntimeJsonAsset = (assetKey) => {
   ensureGameStore();
 
   // Custom region/city geometry is scenario-scoped (static map data). Resolve it
   // from the active game's scenario, mirroring how pmtiles overrides resolve.
-  // Absent => empty collection, so the game keeps its stock pmtiles rendering.
   if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
     const scenario = getActiveRuntimeScenarioSummary();
-    const overridePath = getScenarioUploadPath(scenario.id, assetKey);
-    const hasOverride = fs.existsSync(overridePath);
+    let sourcePath = getScenarioUploadPath(scenario.id, assetKey);
+    if (!fs.existsSync(sourcePath)) {
+      sourcePath = null;
+      // Scenarios without a map of their own use the built-in Modern Day
+      // geometry, so EVERY scenario renders with the custom map style (the
+      // scenario's ownership overrides still recolor it). Cities stay absent
+      // unless the scenario ships its own set.
+      if (assetKey === "regionsGeojson" && scenario.id !== DEFAULT_SCENARIO_ID) {
+        const defaultPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, assetKey);
+        if (fs.existsSync(defaultPath)) sourcePath = defaultPath;
+      }
+    }
     return {
       contentType: "application/json; charset=utf-8",
-      data: hasOverride ? readJsonFile(overridePath, EMPTY_FEATURE_COLLECTION) : cloneJson(EMPTY_FEATURE_COLLECTION),
-      sourcePath: hasOverride ? overridePath : null,
+      data: sourcePath ? readJsonFile(sourcePath, EMPTY_FEATURE_COLLECTION) : cloneJson(EMPTY_FEATURE_COLLECTION),
+      sourcePath,
     };
   }
 
+  // No games yet — runtime data resolves from the scenario below.
   const activeGame = getActiveGameSummary();
   const gamePath =
-  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES)
   ? getGameJsonPath(activeGame.id, assetKey)
   : null;
 
   if (gamePath && fs.existsSync(gamePath)) {
     return {
       contentType: "application/json; charset=utf-8",
-      data: readJsonFile(gamePath, JSON_ASSET_DEFAULTS[assetKey] ?? {}),
+      data: normalizeRuntimeWorld(assetKey, readJsonFile(gamePath, JSON_ASSET_DEFAULTS[assetKey] ?? {})),
       sourcePath: gamePath,
     };
   }
@@ -1761,7 +1806,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   if (scenarioPath && fs.existsSync(scenarioPath)) {
     return {
       contentType: "application/json; charset=utf-8",
-      data: readJsonFile(scenarioPath, JSON_ASSET_DEFAULTS[assetKey] ?? {}),
+      data: normalizeRuntimeWorld(assetKey, readJsonFile(scenarioPath, JSON_ASSET_DEFAULTS[assetKey] ?? {})),
       sourcePath: scenarioPath,
     };
   }
@@ -1797,9 +1842,41 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
 
-  const activeGameId = getActiveGameId();
+  let activeGameId = getActiveGameId();
+  if (!activeGameId) {
+    // With every game deleted, the map still renders (reads fall back to the
+    // selected scenario) so play LOOKS possible — but there was nowhere to
+    // save, and every AI feature died on this guard. The first stateful
+    // interaction now quietly creates a real session from the selected
+    // scenario instead, which is how it always felt back when a built-in
+    // game guaranteed a write target.
+    const scenario = getSelectedScenarioSummary();
+    if (!scenario) {
+      throw new Error("No active game — start a game from a scenario first.");
+    }
+    const details = createGame({
+      name: `${scenario.name} Session`,
+      scenarioId: scenario.id,
+      setActive: true,
+    });
+    activeGameId = details.game.id;
+    console.log(`No active game — created "${activeGameId}" from scenario "${scenario.id}".`);
+  }
+  // Authors and the AI may reference countries by full name anywhere; the
+  // stored form is canonical (see canonicalizeCountryRef).
+  let canonical = value;
+  if (assetKey === "world") {
+    canonical = canonicalizeWorldCountryRefs(value);
+  } else if (assetKey === "game") {
+    canonical = canonicalizeGameCountry(value);
+  } else if (assetKey === "colors") {
+    const worldPath = getGameJsonPath(activeGameId, "world");
+    const worldContext = fs.existsSync(worldPath) ? readJsonFile(worldPath, {}) : null;
+    canonical = canonicalizeColorKeys(value, worldContext);
+  }
+
   const targetPath = getGameJsonPath(activeGameId, assetKey);
-  writeJsonFile(targetPath, value);
+  writeJsonFile(targetPath, canonical);
   writeGameMeta(activeGameId, {});
   return readRuntimeJsonAsset(assetKey);
 };

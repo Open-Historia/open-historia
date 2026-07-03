@@ -1,3 +1,4 @@
+/*! Open Historia — portions (troop & era prompt additions) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 const normalizeString = (value) => String(value ?? "").trim();
 
 const PROMPT_ADVISOR_DEFAULT = `You are a senior strategic advisor to the leader of \${PLAYER_POLITY}.

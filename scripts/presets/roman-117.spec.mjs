@@ -1,4 +1,4 @@
-/*! Pax Historia — 117 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — 117 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Classical preset — 117 AD (Rome at its zenith).
 //
 // August 117: Trajan dies at Selinus and Hadrian takes the purple. The empire

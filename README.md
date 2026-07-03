@@ -1,4 +1,5 @@
-<h1 align="center">Pax Historia</h1>
+<!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
+<h1 align="center">Open Historia</h1>
 
 <div align="center">
   <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
@@ -25,13 +26,13 @@
 </div>
 
 <div align="center">
-  <sub>Built with ❤︎ by <a href="https://github.com/Tommi-K/pax-historia/graphs/contributors">contributors</a>.
+  <sub>Built with ❤︎ by <a href="https://github.com/Tommi-K/open-historia/graphs/contributors">contributors</a>.
 </div>
 
 <br />
 <br />
 
-![](https://github.com/Tommi-K/pax-historia/blob/main/public/screenshot.png?raw=true)
+![](https://github.com/Tommi-K/open-historia/blob/main/public/screenshot.png?raw=true)
 
 ---
 
@@ -52,22 +53,50 @@
 
 ### Easiest
 
-- **Windows:** double-click **`Launch Pax Historia.bat`**
-- **macOS:** double-click **`Launch Pax Historia.command`** (first run: right-click → *Open*)
-- **Linux:** run `./"Launch Pax Historia.sh"` in a terminal
+- **Windows:** double-click **`Launch Open Historia.bat`**
+- **macOS:** double-click **`Launch Open Historia.command`** (first run: right-click → *Open*)
+- **Linux:** run `./"Launch Open Historia.sh"` in a terminal
 
 The launcher checks Node.js, downloads the map data, installs dependencies, builds,
 and opens the game. To update an existing install later, run the matching
-**`Update Pax Historia`** script for your platform — it fetches the latest version
+**`Update Open Historia`** script for your platform — it fetches the latest version
 while preserving your saves, scenarios, and map data.
+
+#### Android app (thin APK)
+
+Easiest: download **`pax-historia.apk`** from the
+[**Android release**](https://github.com/Tommi-K/open-historia/releases/tag/android)
+and open it to install (allow installs from your browser when Android asks).
+On first launch the app finds the Termux server on the same phone by itself;
+to play against another machine, type its address once — it's remembered.
+It's a thin client: the game itself runs on the server it connects to.
+
+for it to work, you should have termux on your device setup
+
+<details>
+<summary>Build the APK yourself (needs the Android SDK)</summary>
+
+```bash
+cd mobile
+npm install
+npx cap sync android
+cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
+```
+
+The APK lands in `mobile/android/app/build/outputs/apk/debug/`. (Or open
+`mobile/android` in Android Studio and press Run.) Maintainers: the
+**Build Android APK** action in the Actions tab builds and republishes the
+release APK — run it after changing `mobile/`.
+
+</details>
 
 ### Manual
 
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
 
 ```bash
-git clone https://github.com/Tommi-K/pax-historia.git
-cd pax-historia
+git clone https://github.com/Tommi-K/open-historia.git
+cd open-historia
 git lfs install        # Set up Git LFS
 git lfs pull           # Pull large files (map tiles + editor seeds + world map)
 npm install            # Install dependencies (includes OpenLayers etc. for the editor)

@@ -1,3 +1,4 @@
+/*! Open Historia — portions (per-scenario era city layer) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import {

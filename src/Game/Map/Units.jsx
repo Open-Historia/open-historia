@@ -1,3 +1,4 @@
+/*! Open Historia — troop/unit map layer © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";

@@ -1,3 +1,4 @@
+/*! Open Historia — Forces panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useState } from "react";
 import {
   subscribeUnits,
@@ -9,6 +10,7 @@ import {
   clearInteractionMode,
 } from "../Map/unitsController.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
+import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.js";
 
 const TYPE_LABEL = {
   infantry: "Infantry",
@@ -69,7 +71,7 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
         {unit.name}
       </div>
       <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.55)" }}>
-        {TYPE_LABEL[unit.type] ?? unit.type} · {unit.ownerCode} · {unit.status}
+        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unit.status}
       </div>
     </div>
     <span style={{ fontSize: "12px", fontWeight: 700, color: unit.strength > 600 ? "#4ade80" : unit.strength > 250 ? "#fbbf24" : "#f87171" }}>
@@ -100,6 +102,12 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
     });
     return unsubscribe;
   }, []);
+
+  // Owner codes render as full names; re-render once the lookup is warm.
+  const [, setNamesEpoch] = useState(0);
+  useEffect(() => {
+    ensurePolityNames().then(() => setNamesEpoch((epoch) => epoch + 1)).catch(() => {});
+  }, [units.length]);
 
   // The scenario may restrict deployable troop types (e.g. no air in 1200).
   const availableTypes =

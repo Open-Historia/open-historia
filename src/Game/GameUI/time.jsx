@@ -1,4 +1,4 @@
-/*! Pax Historia — portions (defensive date rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import dayjs from "dayjs";
@@ -17,11 +17,13 @@ import {
     readGameData,
     readWorldState,
 } from "../../runtime/gameState.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 dayjs.extend(advancedFormat);
 
 const TIMELINE_STYLE_ID = "timeline-ui-style";
-const PANEL_WIDTH = "26.25rem";
+// Clamped so the timeline panel and widget always fit phone screens.
+const PANEL_WIDTH = "min(26.25rem, calc(100vw - 0.9rem))";
 
 const ensureTimelineStyles = () => {
     if (typeof document === "undefined" || document.getElementById(TIMELINE_STYLE_ID)) {
@@ -158,7 +160,7 @@ const widgetSurface = {
     padding: "0 0.5rem",
     position: "fixed",
     transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    width: "18rem",
+    width: "min(18rem, calc(100vw - 0.9rem))",
     zIndex: 9999,
 };
 
@@ -419,6 +421,43 @@ const getEventFocusBounds = (event, { countryBounds, regionBounds }) => {
     }
 
     return resolvedBounds;
+};
+
+// Every event moves the camera. When the impacts don't pin a location, fall
+// back to the chat participants, then to the countries the event's text
+// actually mentions.
+const deriveEventFocusBounds = (event, { countryBounds, regionBounds, polityLookup }) => {
+    const impactBounds = getEventFocusBounds(event, { countryBounds, regionBounds });
+    if (impactBounds) {
+        return impactBounds;
+    }
+
+    let bounds = null;
+    for (const chat of event?.impacts?.createdChats ?? []) {
+        for (const country of chat?.countries ?? []) {
+            if (country?.code) {
+                bounds = extendBounds(bounds, countryBounds.get(String(country.code)) || null);
+            }
+        }
+    }
+    if (bounds) {
+        return bounds;
+    }
+
+    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
+    for (const [code, name] of polityLookup) {
+        // Very short names ("Chad") false-match inside other words rarely
+        // enough to accept; sub-4-character names don't.
+        if (!name || String(name).length < 4) {
+            continue;
+        }
+
+        if (haystack.includes(String(name).toLowerCase())) {
+            bounds = extendBounds(bounds, countryBounds.get(code) || null);
+        }
+    }
+
+    return bounds;
 };
 
 const getMapInstance = (mapRef) => mapRef?.current?.getMap?.() ?? mapRef?.current ?? null;
@@ -926,7 +965,6 @@ const TimelineSkipPanel = ({
 
 const TimelineHistoryPanel = ({
     isOpen,
-    onFocusEvent,
     onRevealNextEvent,
     lookups,
     onClose,
@@ -970,31 +1008,12 @@ const TimelineHistoryPanel = ({
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {visibleEvents.map((event, index) => {
                 const isLastVisible = index === visibleEvents.length - 1;
-                const hasMapChanges = getEventMapChangeCount(event) > 0;
 
                 return (
                     <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
-                    <EventCard
-                    event={event}
-                    lookups={lookups}
-                    footer={(
-                        hasMapChanges ? (
-                            <div style={{ display: "flex", justifyContent: "center", marginTop: "0.15rem" }}>
-                            <button
-                            type="button"
-                            onClick={() => onFocusEvent(event)}
-                            style={{
-                                ...ghostButtonStyle,
-                                color: "#bfdbfe",
-                            }}
-                            >
-                            <MapIcon />
-                            <span>Show on map</span>
-                            </button>
-                            </div>
-                        ) : null
-                    )}
-                    />
+                    {/* No "Show on map" footer: the camera already flies to
+                        every event as it is revealed. */}
+                    <EventCard event={event} lookups={lookups} />
                     </div>
                 );
             })}
@@ -1038,6 +1057,7 @@ const DateWidget = ({
     const [error, setError] = useState("");
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
+    const isMobile = useIsMobile();
 
     useEffect(() => {
         ensureTimelineStyles();
@@ -1187,13 +1207,22 @@ const DateWidget = ({
     // dayjs("") / dayjs(null) is an Invalid Date, so guard before formatting.
     // Dates dayjs can't parse but that ARE text ("1200 BCE", ancient-era
     // scenarios) display verbatim instead of "Undated".
+    // Full display name, never the code: era polity name first, then the
+    // base country name, then the raw value as a last resort.
+    const playerCountryCode = gameData?.country || "";
+    const playerCountry = playerCountryCode
+    ? (worldState?.polityOverrides?.[playerCountryCode]?.name
+        || polityLookup.get(playerCountryCode)
+        || playerCountryCode)
+    : "";
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     const parsedGameDate = rawGameDate ? dayjs(rawGameDate) : null;
     const hasValidGameDate = Boolean(parsedGameDate && parsedGameDate.isValid());
+    // Mobile shares the row with the country name, so abbreviate the month.
     const displayDate = !gameData
     ? "Loading..."
     : hasValidGameDate
-    ? parsedGameDate.format("MMMM Do, YYYY")
+    ? parsedGameDate.format(isMobile && playerCountry ? "MMM Do, YYYY" : "MMMM Do, YYYY")
     : String(rawGameDate).trim() || "Undated";
     const currentDate = hasValidGameDate
     ? parsedGameDate.format("YYYY-MM-DD")
@@ -1203,14 +1232,16 @@ const DateWidget = ({
         setVisibleEventCount(1);
     }, [latestTurnRecord?.id]);
 
+    // The camera follows EVERY revealed event — impacts pin the exact spot,
+    // otherwise the countries the event involves do.
     useEffect(() => {
         if (!activeVisibleEvent) {
             return;
         }
 
-        const bounds = getEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds });
+        const bounds = deriveEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds, polityLookup });
         focusMapOnBounds(mapRef, bounds);
-    }, [activeVisibleEvent, countryBounds, mapRef, regionBounds]);
+    }, [activeVisibleEvent, countryBounds, mapRef, polityLookup, regionBounds]);
 
     const revealNextEvent = () => {
         setVisibleEventCount((current) => {
@@ -1220,11 +1251,6 @@ const DateWidget = ({
 
             return Math.min(totalVisibleEvents, current + 1);
         });
-    };
-
-    const focusEvent = (event) => {
-        const bounds = getEventFocusBounds(event, { countryBounds, regionBounds });
-        focusMapOnBounds(mapRef, bounds);
     };
 
     return (
@@ -1241,7 +1267,6 @@ const DateWidget = ({
         />
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
-        onFocusEvent={focusEvent}
         onRevealNextEvent={revealNextEvent}
         lookups={lookups}
         onClose={() => setPanel(null)}
@@ -1255,6 +1280,9 @@ const DateWidget = ({
             ...widgetSurface,
             right: rightShift,
             top: topOffset,
+            // On phones the country name moves in here (the standalone pill
+            // would cover the date), so stretch up to the settings button.
+            ...(isMobile ? { width: "min(24rem, calc(100vw - 5.75rem))" } : null),
         }}
         >
         <button
@@ -1279,9 +1307,32 @@ const DateWidget = ({
         </button>
 
         <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", minWidth: 0 }}>
-        <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
-        {displayDate}
-        </div>
+        {isMobile && playerCountry ? (
+            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}>
+            <span
+            style={{
+                color: "rgba(147,197,253,0.88)",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+            }}
+            >
+            {playerCountry}
+            </span>
+            <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: "0.82rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
+            {displayDate}
+            </span>
+            </div>
+        ) : (
+            <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
+            {displayDate}
+            </div>
+        )}
         </div>
 
         <button

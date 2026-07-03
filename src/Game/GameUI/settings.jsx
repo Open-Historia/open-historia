@@ -1,3 +1,4 @@
+/*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useState } from "react";
 import {
     DEFAULT_PROVIDER,
@@ -7,6 +8,11 @@ import {
     providerSupportsModelDiscovery,
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
+import {
+    getLanguageOptions,
+    getStoredLanguage,
+    setStoredLanguage,
+} from "../../runtime/i18n.js";
 
 const baseStyle = {
     position: "fixed",
@@ -86,6 +92,108 @@ function groupProviders(options) {
 
     return groups;
 }
+
+const LanguageSelector = () => {
+    const [query, setQuery] = useState("");
+    const [saving, setSaving] = useState(false);
+    const current = getStoredLanguage();
+    const options = getLanguageOptions();
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = normalizedQuery
+        ? options.filter((option) =>
+            `${option.name} ${option.native} ${option.code}`.toLowerCase().includes(normalizedQuery))
+        : options;
+
+    const applyLanguage = async (code) => {
+        if (!code || code === current || saving) {
+            return;
+        }
+
+        setSaving(true);
+        // Saves on the server too, so the phone app follows the same choice.
+        await setStoredLanguage(code);
+        // Reload so the translator starts (or stops) cleanly and every
+        // already-rendered string goes through it from scratch.
+        window.location.reload();
+    };
+
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>Language</label>
+        <input
+        style={{ ...inputStyle, marginBottom: "0.4rem" }}
+        type="text"
+        value={query}
+        placeholder="Search languages..."
+        onChange={(event) => setQuery(event.target.value)}
+        />
+        <select
+        data-no-translate
+        value={filtered.some((option) => option.code === current) ? current : ""}
+        onChange={(event) => applyLanguage(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
+        >
+        {!filtered.some((option) => option.code === current) && (
+            <option value="" disabled>
+            {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
+            </option>
+        )}
+        {filtered.map((option) => (
+            <option key={option.code} value={option.code} style={{ color: "black" }}>
+            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
+            </option>
+        ))}
+        </select>
+        </div>
+    );
+};
+
+// Placeholder for the union country-border pass; stays greyed out until it is
+// production-ready (it will read the country-borders-enabled localStorage key
+// that Nations.jsx already checks). Default is off.
+const ComingSoonToggle = ({ label, note }) => (
+    <div style={{ marginBottom: "1rem" }}>
+    <div
+    style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        opacity: 0.45,
+    }}
+    >
+    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    <button
+    type="button"
+    disabled
+    title={note}
+    style={{
+        width: "3.5rem",
+        height: "1.75rem",
+        borderRadius: "1rem",
+        border: "none",
+        cursor: "not-allowed",
+        position: "relative",
+        backgroundColor: "#4b5563",
+    }}
+    >
+    <div
+    style={{
+        position: "absolute",
+        top: "2px",
+        left: "2px",
+        width: "1.5rem",
+        height: "1.5rem",
+        backgroundColor: "white",
+        borderRadius: "50%",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+        pointerEvents: "none",
+    }}
+    />
+    </button>
+    </div>
+    <div style={{ ...helperStyle, marginTop: "0.2rem" }}>{note}</div>
+    </div>
+);
 
 const Toggle = ({ label, enabled, onToggle }) => (
     <div
@@ -546,6 +654,7 @@ const SettingsMenu = ({
     onApiProviderChange,
     providerSettings,
     onProviderSettingChange,
+    onOpenCheats,
     discordUrl,
     githubUrl,
 }) => {
@@ -559,7 +668,9 @@ const SettingsMenu = ({
             left: "0.5rem",
             width: "22rem",
             maxWidth: "calc(100vw - 1rem)",
-            maxHeight: "calc(100vh - 5rem)",
+            // Never taller than the space below the panel's own top edge — the old
+            // 100vh-5rem pushed the bottom (Discord/GitHub links) off short screens.
+            maxHeight: `calc(100vh - ${topOffset} - 5.25rem)`,
             overflowY: "auto",
             padding: "1rem",
             flexDirection: "column",
@@ -591,9 +702,53 @@ const SettingsMenu = ({
         onSettingChange={onProviderSettingChange ?? (() => {})}
         />
 
+        <LanguageSelector />
+
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
+        <div style={{ marginTop: "-0.85rem", marginBottom: "1rem" }}>
+        <span
+        style={{
+            backgroundColor: "rgba(245,158,11,0.16)",
+            border: "1px solid rgba(245,158,11,0.45)",
+            borderRadius: "999px",
+            color: "#fbbf24",
+            fontSize: "0.66rem",
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+            padding: "0.16rem 0.55rem",
+        }}
+        >
+        Very Experimental
+        </span>
+        </div>
         <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
+        <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
+
+        {typeof onOpenCheats === "function" && (
+            <button
+            type="button"
+            onClick={onOpenCheats}
+            style={{
+                alignItems: "center",
+                background: "rgba(124,58,237,0.22)",
+                border: "1px solid rgba(139,92,246,0.45)",
+                borderRadius: "8px",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                gap: "0.5rem",
+                justifyContent: "center",
+                marginBottom: "1rem",
+                padding: "0.6rem 0.7rem",
+                width: "100%",
+            }}
+            >
+            🧪 Cheats
+            </button>
+        )}
 
         <SocialLinks discordUrl={discordUrl} githubUrl={githubUrl} />
         </div>

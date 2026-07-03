@@ -1,0 +1,14 @@
+{
+  "appId": "io.github.arkniem.paxhistoria",
+  "appName": "Open Historia",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "hostname": "app.paxhistoria",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

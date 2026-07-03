@@ -1,4 +1,4 @@
-/*! Pax Historia — 1300 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — 1300 AD preset spec © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Mongol preset — 1300 AD (the Mongol world).
 //
 // The empire of Genghis Khan spans Eurasia, but two generations on it has

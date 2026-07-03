@@ -1,5 +1,8 @@
+/*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 const baseStyle = {
     position: "fixed",
     backgroundColor: "rgba(17, 24, 39, 0.9)",
@@ -16,12 +19,17 @@ const baseStyle = {
 };
 const Other = memo(function Other({ topOffset = "0.5rem" }) {
     const [country, setCountry] = useState(null);
+    const isMobile = useIsMobile();
+    // The player sees the FULL country name, never the code.
+    const displayName = useCountryDisplayName(country);
     useEffect(() => {
         readJson(JSON_URLS.game, { defaultValue: {} })
         .then((data) => setCountry(data.country))
         .catch((err) => console.error("Failed to load game.json:", err));
     }, []);
-    if (!country) return null;
+    // On phones the country name renders inside the date widget instead —
+    // this pill and the date widget would overlap on a portrait screen.
+    if (isMobile || !country) return null;
     return (
         <div
         style={{
@@ -44,7 +52,7 @@ const Other = memo(function Other({ topOffset = "0.5rem" }) {
             textOverflow: "ellipsis",
         }}
         >
-        {country}
+        {displayName}
         </span>
         </div>
     );

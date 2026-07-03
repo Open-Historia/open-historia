@@ -1,3 +1,4 @@
+/*! Open Historia — portions (server relay for OpenAI-style APIs + reasoning toggle) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import {
     getProviderSettings,
     getReasoningEnabled,
@@ -6,6 +7,8 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { languageDirective } from "../../runtime/i18n.js";
+import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     buildActionDisplayText,
@@ -141,6 +144,18 @@ function getGeminiUrl(model, apiKey) {
     return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${apiKey}`;
 }
 
+// OpenAI-style calls go through the game server's relay instead of straight to
+// the endpoint: self-hosted endpoints (llama.cpp, LM Studio, NVIDIA NIM...)
+// rarely send CORS headers, so the browser can't call them directly. The relay
+// is same-origin for us and plain server-to-server for the endpoint. Gemini and
+// Anthropic stay direct — both support browser calls explicitly.
+const relayFetch = (url, { method = "POST", headers = {}, payload } = {}) =>
+    fetch("/api/ai/relay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, method, headers, payload }),
+    });
+
 function toOpenAIMessages(systemPrompt, history) {
     const messages = [{ role: "system", content: systemPrompt }];
 
@@ -187,7 +202,7 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
     }
 
     try {
-        const response = await fetch(`${normalizedEndpoint}/models`, { headers });
+        const response = await relayFetch(`${normalizedEndpoint}/models`, { method: "GET", headers });
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
@@ -280,17 +295,16 @@ async function callOpenAIStyleChatCompletions({
     retryDelay = 15000,
 }) {
     for (let attempt = 1; attempt <= retries; attempt++) {
-        const response = await fetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
-            method: "POST",
+        const response = await relayFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
-            body: JSON.stringify({
+            payload: {
                 model,
                 messages: toOpenAIMessages(systemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways; models that reject it surface a
                 // clear API error so the user knows to pick a reasoning model.
                 ...(getReasoningEnabled() ? { reasoning_effort: "medium" } : {}),
-            }),
+            },
         });
 
         if (response.status === 429 || response.status === 503) {
@@ -446,6 +460,13 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
 }
 
 export async function callAI(systemPrompt, history, opts) {
+    // Non-English players get replies in their language at the source —
+    // native answers beat post-translating them (see runtime/i18n.js).
+    const directive = languageDirective();
+    if (directive) {
+        systemPrompt = `${systemPrompt}\n\n${directive}`;
+    }
+
     switch (getStoredProvider()) {
     case "openai":
         return callOpenAI(systemPrompt, history, opts);
@@ -704,7 +725,8 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    return renderTemplate(promptPack.leader, { ...variables, ...helperValues });
+    // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
+    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];
