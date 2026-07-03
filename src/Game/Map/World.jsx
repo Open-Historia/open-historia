@@ -143,24 +143,52 @@ const getStarfieldUrl = () => {
   return starfieldUrl;
 };
 
-// The sun: a fixed glow at the upper right of the view. GlobeEffects keeps the
-// lit hemisphere pointed at it, so as the earth turns beneath the camera,
-// countries sweep from day into night. The map canvas paints over it wherever
-// the globe is, so it only shines through the transparent space around it.
+// The sun: a glow whose screen position GlobeEffects drives from the sun's
+// WORLD longitude versus the camera — pan around the earth and it slides
+// across the sky, sets behind the globe, and rises again. The map canvas
+// paints over it wherever the globe is, so it only shines through space.
 const SunGlow = () => (
   <div
+    id="oh-sun-glow"
     aria-hidden
     style={{
       position: "absolute",
-      top: "6%",
-      right: "4%",
+      top: "-30rem",
+      left: "-30rem",
       width: "22rem",
       height: "22rem",
       borderRadius: "50%",
       pointerEvents: "none",
+      // Above the canvas: MapLibre's globe atmosphere paints space with a
+      // dark wash that would crush the soft glow. GlobeEffects fades it out
+      // whenever it would sit in front of the earth or behind the camera.
+      zIndex: 5,
       background:
         "radial-gradient(circle, rgba(255,252,240,1) 0%, rgba(255,238,180,0.9) 7%, " +
         "rgba(255,214,120,0.5) 16%, rgba(255,190,90,0.18) 34%, rgba(255,180,80,0) 62%)",
+    }}
+  />
+);
+
+// Sun-facing atmosphere: a soft ring hugging the globe's silhouette, masked
+// so it burns brightest toward the sun and thins to a faint band on the
+// night side. GlobeEffects sizes, aims and fades it every frame.
+const AtmosphereGlow = () => (
+  <div
+    id="oh-atmo-glow"
+    aria-hidden
+    style={{
+      position: "absolute",
+      left: "-200vmax",
+      top: 0,
+      borderRadius: "50%",
+      pointerEvents: "none",
+      opacity: 0,
+      // The div is sized 1.1× the globe's diameter; the bright band sits at
+      // 91-96% of the div radius = just OUTSIDE the globe's silhouette.
+      background:
+        "radial-gradient(circle, rgba(0,0,0,0) 0 86%, rgba(148,196,255,0.07) 89%, " +
+        "rgba(160,205,255,0.4) 92%, rgba(120,175,255,0.45) 94%, rgba(80,130,240,0.18) 97%, rgba(0,0,0,0) 100%)",
     }}
   />
 );
@@ -186,11 +214,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
 
   return (
     <div
+      id="oh-globe-space"
       style={{
         height: "100vh",
         width: "100vw",
         backgroundColor: "#000",
         position: "relative",
+        overflow: "hidden",
         backgroundImage: isGlobe ? `url(${getStarfieldUrl()})` : "none",
         backgroundRepeat: "repeat",
       }}
@@ -233,6 +263,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         <CountryInfoPanel />
         <UnitPopup />
       </Map>
+      {isGlobe && <AtmosphereGlow />}
     </div>
   );
 }
