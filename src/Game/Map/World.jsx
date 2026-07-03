@@ -8,18 +8,21 @@ import Cities from "./Cities";
 import Units from "./Units";
 import UnitPopup from "../Selection/Units";
 import {
+  SATELLITE_TILE_MAXZOOM,
   SATELLITE_TILE_TEMPLATE,
   TERRAIN_TILE_TEMPLATE,
 } from "../../runtime/assets.js";
 
 const SATELLITE_TILES = [SATELLITE_TILE_TEMPLATE];
+// Grading for the World_Terrain_Base style: it's a pale cartographic map, so
+// cap brightness to sit against the dark UI and skip the photo-specific
+// contrast/hue tweaks the old satellite imagery needed.
 const SATELLITE_PAINT = {
   "raster-resampling": "linear",
-  "raster-saturation": -0.25,
-  "raster-contrast": 0.35,
+  "raster-saturation": -0.15,
+  "raster-contrast": 0.08,
   "raster-brightness-min": 0.02,
-  "raster-brightness-max": 0.8,
-  "raster-hue-rotate": 18,
+  "raster-brightness-max": 0.78,
 };
 
 const WORLD_STYLE = {
@@ -35,6 +38,7 @@ const WORLD_STYLE = {
       type: "raster",
       tiles: SATELLITE_TILES,
       tileSize: 256,
+      maxzoom: SATELLITE_TILE_MAXZOOM,
     },
     "terrain-source": {
       type: "raster-dem",

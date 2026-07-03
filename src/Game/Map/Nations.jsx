@@ -214,6 +214,18 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
   return { type: "FeatureCollection", features };
 };
 
+// Union country borders ship disabled — the Settings toggle is greyed out
+// ("coming soon") until the pass is production-ready. Flip the key below in
+// localStorage to preview; keep it in sync with settings.jsx.
+const COUNTRY_BORDERS_KEY = "country-borders-enabled";
+const countryBordersEnabled = () => {
+  try {
+    return localStorage.getItem(COUNTRY_BORDERS_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
 // Era country borders (experiment, round 2): every owner's regions are
 // geometrically UNIONED and the union outline is the border — continuous by
 // construction even where neighbouring regions don't share vertices. Drawn
@@ -607,7 +619,7 @@ const WorldMap = () => {
   // ownerByRegionId every 5s, but border geometry only needs recomputing
   // when an owner actually changes.
   const ownershipKey = useMemo(() => {
-    if (!customActive) return "";
+    if (!customActive || !countryBordersEnabled()) return "";
     let key = "";
     for (const [regionId, owner] of ownerByRegionId) key += `${regionId}:${owner};`;
     return key;
@@ -615,7 +627,7 @@ const WorldMap = () => {
 
   const [ownerBorderData, setOwnerBorderData] = useState(EMPTY_FEATURE_COLLECTION);
   useEffect(() => {
-    if (!customActive) {
+    if (!customActive || !countryBordersEnabled()) {
       setOwnerBorderData(EMPTY_FEATURE_COLLECTION);
       return undefined;
     }

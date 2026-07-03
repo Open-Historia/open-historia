@@ -148,6 +148,53 @@ const LanguageSelector = () => {
     );
 };
 
+// Placeholder for the union country-border pass; stays greyed out until it is
+// production-ready (it will read the country-borders-enabled localStorage key
+// that Nations.jsx already checks). Default is off.
+const ComingSoonToggle = ({ label, note }) => (
+    <div style={{ marginBottom: "1rem" }}>
+    <div
+    style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        opacity: 0.45,
+    }}
+    >
+    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    <button
+    type="button"
+    disabled
+    title={note}
+    style={{
+        width: "3.5rem",
+        height: "1.75rem",
+        borderRadius: "1rem",
+        border: "none",
+        cursor: "not-allowed",
+        position: "relative",
+        backgroundColor: "#4b5563",
+    }}
+    >
+    <div
+    style={{
+        position: "absolute",
+        top: "2px",
+        left: "2px",
+        width: "1.5rem",
+        height: "1.5rem",
+        backgroundColor: "white",
+        borderRadius: "50%",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+        pointerEvents: "none",
+    }}
+    />
+    </button>
+    </div>
+    <div style={{ ...helperStyle, marginTop: "0.2rem" }}>{note}</div>
+    </div>
+);
+
 const Toggle = ({ label, enabled, onToggle }) => (
     <div
     style={{
@@ -660,6 +707,7 @@ const SettingsMenu = ({
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
         <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
+        <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
 
         {typeof onOpenCheats === "function" && (
             <button

@@ -62,8 +62,13 @@ export const JSON_URLS = {
   world: "",
 };
 
+// ESRI basemap. Sibling styles (World_Imagery, World_Shaded_Relief,
+// NatGeo_World_Map, ...) swap in by changing the service name.
 export const SATELLITE_TILE_TEMPLATE =
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}";
+// World_Terrain_Base serves levels 0-13; past that MapLibre must overscale
+// instead of requesting tiles that 404.
+export const SATELLITE_TILE_MAXZOOM = 13;
 export const TERRAIN_TILE_TEMPLATE =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
