@@ -20,6 +20,7 @@ import {
 } from "../../runtime/assets.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
+import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -213,23 +214,20 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
   return { type: "FeatureCollection", features };
 };
 
-// TRUE era borders for custom maps: the edges shared by regions with
-// DIFFERENT owners, computed from the seed geometry (neighboring regions
-// share their border vertices, so equal-edge hashing finds the boundary).
-// Without this, hiding the stock country borders left nothing visible at
-// world zoom — countries were only separated by fill colour.
-const buildOwnerBorderCollection = (regionsFC, ownerById) => {
-  const edges = new Map();
-  const keyOf = (a, b) => {
-    const ka = `${a[0].toFixed(4)},${a[1].toFixed(4)}`;
-    const kb = `${b[0].toFixed(4)},${b[1].toFixed(4)}`;
-    return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-  };
-
+// TRUE era borders for custom maps: every owner's regions are geometrically
+// UNIONED into one shape whose outline is the border. Edge matching was
+// tried first and left gaps along ~60% of frontiers — the simplified seed
+// geometry doesn't give neighbouring regions identical vertices. A union
+// doesn't care: both owners' outlines coincide along their shared frontier,
+// so the border line is always continuous (and coastlines get outlined like
+// the stock map). Without this, hiding the stock country borders left
+// nothing visible at world zoom.
+const computeOwnerBorderCollection = async (regionsFC, ownerById, isCancelled) => {
+  const byOwner = new Map();
   for (const feature of regionsFC?.features ?? []) {
     const props = feature.properties || {};
     const id = props.id != null ? String(props.id) : "";
-    // "~" marks unclaimed land as its own owner so its frontier gets a border.
+    // Unclaimed land is its own "owner" so its frontier is drawn too.
     const owner = (ownerById.get(id) ?? props.owner ?? "") || "~unclaimed";
     const geometry = feature.geometry;
     const polygons = geometry?.type === "Polygon"
@@ -237,40 +235,36 @@ const buildOwnerBorderCollection = (regionsFC, ownerById) => {
       : geometry?.type === "MultiPolygon"
         ? geometry.coordinates
         : [];
-    for (const polygon of polygons) {
-      for (const ring of polygon) {
-        for (let index = 1; index < ring.length; index += 1) {
-          const a = ring[index - 1];
-          const b = ring[index];
-          const key = keyOf(a, b);
-          let entry = edges.get(key);
-          if (!entry) {
-            entry = { a, b, owners: new Set() };
-            edges.set(key, entry);
-          }
-          entry.owners.add(owner);
-        }
-      }
-    }
+    if (!polygons.length) continue;
+    if (!byOwner.has(owner)) byOwner.set(owner, []);
+    byOwner.get(owner).push(...polygons);
   }
 
-  const lines = [];
-  for (const entry of edges.values()) {
-    if (entry.owners.size > 1) {
-      lines.push([entry.a, entry.b]);
-    }
-  }
-
-  if (!lines.length) return EMPTY_FEATURE_COLLECTION;
-  // Chunked MultiLineStrings keep the geojson source responsive.
   const features = [];
-  for (let start = 0; start < lines.length; start += 5000) {
-    features.push({
-      type: "Feature",
-      geometry: { type: "MultiLineString", coordinates: lines.slice(start, start + 5000) },
-      properties: {},
-    });
+  for (const [owner, polygons] of byOwner) {
+    // Yield between owners so big maps don't freeze the UI while merging.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (isCancelled()) return null;
+    try {
+      const merged = polygonClipping.union(...polygons);
+      if (merged?.length) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "MultiPolygon", coordinates: merged },
+          properties: { owner },
+        });
+      }
+    } catch {
+      // Degenerate geometry: draw this owner's raw shapes instead — internal
+      // seams for one owner beat a missing border.
+      features.push({
+        type: "Feature",
+        geometry: { type: "MultiPolygon", coordinates: polygons },
+        properties: { owner },
+      });
+    }
   }
+
   return { type: "FeatureCollection", features };
 };
 
@@ -571,9 +565,23 @@ const WorldMap = () => {
     return key;
   }, [customActive, ownerByRegionId]);
 
-  const ownerBorderData = useMemo(() => {
-    if (!customActive) return EMPTY_FEATURE_COLLECTION;
-    return buildOwnerBorderCollection(customRegionData, ownerLookupRef.current);
+  // Owner unions are asynchronous (they yield between owners) — borders
+  // appear a moment after the fills and refresh whenever ownership changes.
+  const [ownerBorderData, setOwnerBorderData] = useState(EMPTY_FEATURE_COLLECTION);
+  useEffect(() => {
+    if (!customActive) {
+      setOwnerBorderData(EMPTY_FEATURE_COLLECTION);
+      return undefined;
+    }
+    let cancelled = false;
+    computeOwnerBorderCollection(customRegionData, ownerLookupRef.current, () => cancelled)
+      .then((collection) => {
+        if (!cancelled && collection) setOwnerBorderData(collection);
+      })
+      .catch((error) => console.error("Failed to compute era borders:", error));
+    return () => {
+      cancelled = true;
+    };
     // ownershipKey stands in for ownerByRegionId's contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customActive, customRegionData, ownershipKey]);
