@@ -280,7 +280,7 @@ const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText }) =>
 
 const detailStat = { color: "rgba(255,255,255,0.75)", fontSize: "0.85rem" };
 
-const ScenarioDetail = ({ post, busy, onImport, onBack }) => (
+const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
   <div style={{ color: "#fff" }}>
     <button
       type="button"
@@ -289,6 +289,17 @@ const ScenarioDetail = ({ post, busy, onImport, onBack }) => (
     >
       ← Back
     </button>
+
+    {notice && (
+      <div style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.35)", borderRadius: "12px", color: "#bbf7d0", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
+        {notice}
+      </div>
+    )}
+    {error && (
+      <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "12px", color: "#fecaca", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
+        {error}
+      </div>
+    )}
 
     {post.coverImageUrl && (
       <img
@@ -454,6 +465,8 @@ const CommunityPanel = ({ onImported }) => {
           busy={busyId === selectedPost.id}
           onImport={handleImport}
           onBack={() => setSelectedPost(null)}
+          notice={notice}
+          error={error}
         />
       ) : (
         <>
