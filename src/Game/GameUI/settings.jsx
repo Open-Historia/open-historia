@@ -687,10 +687,11 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
         height: "4rem",
         width: "4rem",
         cursor: "pointer",
-        fontSize: "1.5rem",
+        fontSize: "1.8rem",
+        fontWeight: 700,
     }}
     >
-    ⚙️
+    ⋮
     </button>
 );
 
