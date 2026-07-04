@@ -109,28 +109,19 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // instance actually exists — mapReady (set from onLoad) is that signal.
   const [mapReady, setMapReady] = useState(false);
   const handleLoad = useCallback(() => setMapReady(true), []);
-  const interactionSettings = {
-    zoomSensitivity: useMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
-    reverseScrollZoom: useMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
-    disablePanInertia: useMapSetting(MAP_SETTING_KEYS.disablePanInertia),
-  };
+  const reverseScrollZoom = useMapSetting(MAP_SETTING_KEYS.reverseScrollZoom);
 
-  // MapLibre's scroll-zoom rate has no declarative prop — only the imperative
-  // handler exposes it. The rate's sign has no effect on zoom direction
-  // (ScrollZoomHandler.renderFrame takes Math.abs(delta * rate) for the
-  // magnitude and decides direction purely from the wheel delta's own sign)
-  // — it only ever controls sensitivity, so reversal can't be done by
-  // reconfiguring this handler. With reversal on, replace it outright:
-  // disable it and drive zoom directly from our own wheel listener with the
-  // sign flipped, so direction only ever depends on code we control.
+  // MapLibre decides scroll-zoom DIRECTION purely from the wheel delta's own
+  // sign, so reversal can't be done by reconfiguring the built-in handler.
+  // With reversal on, replace it outright: disable it and drive zoom from our
+  // own wheel listener with the sign flipped, so direction only ever depends
+  // on code we control.
   useEffect(() => {
     const map = mapRef?.current?.getMap?.();
     if (!map || !mapReady) return undefined;
 
-    if (!interactionSettings.reverseScrollZoom) {
+    if (!reverseScrollZoom) {
       map.scrollZoom.enable();
-      map.scrollZoom.setWheelZoomRate((1 / 450) * interactionSettings.zoomSensitivity);
-      map.scrollZoom.setZoomRate((1 / 100) * interactionSettings.zoomSensitivity);
       return undefined;
     }
 
@@ -143,7 +134,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       // integer "lines", not pixels — without this it takes hundreds of
       // notches to zoom at all.
       const value = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 40 : event.deltaY;
-      const zoomDelta = (value / 450) * interactionSettings.zoomSensitivity;
+      const zoomDelta = value / 450;
       const rect = container.getBoundingClientRect();
       const around = map.unproject([event.clientX - rect.left, event.clientY - rect.top]);
       map.easeTo({ zoom: map.getZoom() + zoomDelta, around, duration: 0 });
@@ -153,7 +144,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       container.removeEventListener("wheel", onWheel);
       map.scrollZoom.enable();
     };
-  }, [mapRef, mapReady, interactionSettings.reverseScrollZoom, interactionSettings.zoomSensitivity]);
+  }, [mapRef, mapReady, reverseScrollZoom]);
 
   const isGlobe = projection === "globe";
   const terrain = useMemo(
@@ -210,7 +201,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         dragRotate={false}
         touchPitch={false}
         pitchWithRotate={false}
-        dragPan={interactionSettings.disablePanInertia ? { maxSpeed: 0 } : true}
+        dragPan
         reuseMaps
         fadeDuration={0}
         collectResourceTiming={false}

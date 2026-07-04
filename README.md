@@ -110,31 +110,6 @@ Then open **http://localhost:3000** in your browser.
 > `server/data/scenarios/default/regions.geojson`) live in Git LFS. If you downloaded a
 > ZIP instead of cloning, run the launcher script for your platform — it fetches them automatically.
 
-#### Installing the app (PWA) on other devices
-
-The app can be installed as a standalone app (manifest + service worker). Installing from
-`http://localhost:3000` on the machine running the server works out of the box. Installing from
-another device on the same network — `http://192.168.x.x:3000` — does not, because a plain LAN
-address isn't a secure context and service workers refuse to register on it. To fix that:
-
-```bash
-node scripts/generate-dev-cert.mjs   # writes certs/dev-cert.pem + certs/dev-key.pem
-node server/server.js                # now serves https://<your-LAN-IP>:3000
-```
-
-> **Once the cert exists, port 3000 is HTTPS-only** — there's no separate HTTP port anymore. This
-> also affects the host machine itself: use `https://localhost:3000`, not `http://`, and the same
-> for the `Launch Open Historia` scripts and the Android app's connect address (both default to
-> `http://`). If you don't need LAN installs, don't run the generator and the port stays plain HTTP
-> exactly as before. Delete `certs/` to go back to HTTP.
-
-The cert is self-signed, so every other device must be told to trust it once — otherwise Chrome
-refuses the connection outright. Copy `certs/dev-cert.pem` to the device and install it as a
-trusted certificate (Android: Settings → Security → Install from storage → CA certificate; iOS:
-AirDrop/email the file, open it, then enable full trust under Settings → General → About →
-Certificate Trust Settings; Windows: double-click → Install Certificate → Local Machine → Trusted
-Root Certification Authorities). Re-run the generator if your LAN IP changes.
-
 ---
 
 ## 🌍 Scenarios

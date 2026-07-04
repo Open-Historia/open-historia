@@ -3,8 +3,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { resolveCountryDisplayName } from "../../runtime/assets.js";
-import { flagImageUrlFromGid, flagEmojiFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { flagImageUrlFromGid, flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { readWorldState } from "../../runtime/gameState.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
@@ -137,7 +136,6 @@ const RegionPopup = () => {
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
-    const blurSensitive = useMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags);
     const { current: map } = useMap();
 
     // Refresh the polity registry whenever a selection opens (cheap; keeps the
@@ -303,7 +301,6 @@ const RegionPopup = () => {
         ? "Unclaimed Territory"
         : polities[selection.GID_0]?.name
             || resolveCountryDisplayName(COUNTRY, selection.GID_0);
-    const shouldBlur = blurSensitive && isSensitiveFlag(selection.GID_0);
     const POPUP_WIDTH = 210;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
     const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
@@ -342,7 +339,7 @@ const RegionPopup = () => {
             <img
             src={flagState.imageUrl}
             alt={displayCountry}
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9, filter: shouldBlur ? "blur(4px)" : "none" }}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}
             />
         ) : (

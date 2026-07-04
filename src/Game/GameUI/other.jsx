@@ -3,8 +3,7 @@ import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { flagEmojiFromGid, flagImageUrlFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 
 const baseStyle = {
     position: "fixed",
@@ -62,17 +61,12 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
         setImageFailed(false);
     }, [country]);
 
-    // Hooks must run before the early return below (Rules of Hooks) — this
-    // one has to sit here, not next to where shouldBlur is computed.
-    const blurSensitive = useMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags);
-
     // On phones the country is already shown inside the date widget — this
     // badge and the date widget would overlap on a portrait screen.
     if (isMobile || !country) return null;
 
     const flagUrl = flagImageUrlFromGid(country);
     const flagEmoji = flagEmojiFromGid(country);
-    const shouldBlur = blurSensitive && isSensitiveFlag(country);
 
     return (
         <div
@@ -94,7 +88,7 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
             src={flagUrl}
             alt={displayName}
             onError={() => setImageFailed(true)}
-            style={{ borderRadius: "50%", height: "100%", objectFit: "cover", width: "100%", filter: shouldBlur ? "blur(4px)" : "none" }}
+            style={{ borderRadius: "50%", height: "100%", objectFit: "cover", width: "100%" }}
             />
         ) : flagEmoji ? (
             <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>{flagEmoji}</span>

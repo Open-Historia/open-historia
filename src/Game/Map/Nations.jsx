@@ -343,7 +343,6 @@ const WorldMap = ({ isGlobe = false }) => {
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
-    featureSize: useMapSetting(MAP_SETTING_KEYS.featureSize),
     borderWidth: useMapSetting(MAP_SETTING_KEYS.borderWidth),
   };
   // False until the first world.json read: before that we can't know whether
@@ -725,7 +724,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(mapDisplaySettings.featureSize, isGlobe),
+    "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
@@ -733,12 +732,12 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, mapDisplaySettings.featureSize, mapDisplaySettings.hideCountryLabels]);
+  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(mapDisplaySettings.featureSize, isGlobe),
+    "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
@@ -746,7 +745,7 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, mapDisplaySettings.featureSize, mapDisplaySettings.hideCountryLabels]);
+  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
 
   const labelLayerPaint = useMemo(() => ({
     "text-color": "#FFFFFF",

@@ -14,7 +14,6 @@ dist-ssr
 server/data/*
 !server/data/scenarios/
 .key
-certs/
 
 # Editor directories and files
 .vscode/*

@@ -10,25 +10,17 @@ export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
     reverseScrollZoom: "map_reverse_scroll_zoom",
-    disablePanInertia: "map_disable_pan_inertia",
-    zoomSensitivity: "map_zoom_sensitivity",
     borderWidth: "map_border_width",
-    featureSize: "map_feature_size",
-    blurSensitiveFlags: "map_blur_sensitive_flags",
 };
 
 const BOOLEAN_KEYS = new Set([
     MAP_SETTING_KEYS.hideCountryLabels,
     MAP_SETTING_KEYS.disableIdleRotation,
     MAP_SETTING_KEYS.reverseScrollZoom,
-    MAP_SETTING_KEYS.disablePanInertia,
-    MAP_SETTING_KEYS.blurSensitiveFlags,
 ]);
 
 const NUMBER_DEFAULTS = {
-    [MAP_SETTING_KEYS.zoomSensitivity]: 1,
     [MAP_SETTING_KEYS.borderWidth]: 1,
-    [MAP_SETTING_KEYS.featureSize]: 1,
 };
 
 export function getMapSetting(key) {

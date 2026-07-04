@@ -2,8 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { flagImageUrlFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { generateCountryStatSheet } from "../AI/gameplay.js";
 
@@ -85,7 +84,6 @@ const StatsPane = ({ active }) => {
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
-    const blurSensitive = useMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags);
     const displayName = useCountryDisplayName(targetCode);
 
     // Which game and which date are we in? Also seeds the target: your country.
@@ -164,7 +162,6 @@ const StatsPane = ({ active }) => {
     const sheet = state.sheet;
     const isPlayer = targetCode && targetCode.toUpperCase() === String(player.code).toUpperCase();
     const flagUrl = polity?.flag || flagImageUrlFromGid(targetCode);
-    const shouldBlur = blurSensitive && isSensitiveFlag(targetCode);
     const initials = String(targetCode).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
 
     const breakdown = useMemo(() => {
@@ -200,7 +197,7 @@ const StatsPane = ({ active }) => {
                 alt=""
                 src={flagUrl}
                 onError={() => setFlagFailed(true)}
-                style={{ height: "100%", objectFit: "cover", width: "100%", filter: shouldBlur ? "blur(4px)" : "none" }}
+                style={{ height: "100%", objectFit: "cover", width: "100%" }}
                 />
             ) : initials}
             </div>

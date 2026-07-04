@@ -740,11 +740,7 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
-        disablePanInertia: getMapSetting(MAP_SETTING_KEYS.disablePanInertia),
-        zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
         borderWidth: getMapSetting(MAP_SETTING_KEYS.borderWidth),
-        featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
-        blurSensitiveFlags: getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -832,19 +828,6 @@ const SettingsMenu = ({
         enabled={mapSettings.reverseScrollZoom}
         onToggle={() => updateMapSetting("reverseScrollZoom", MAP_SETTING_KEYS.reverseScrollZoom, !mapSettings.reverseScrollZoom)}
         />
-        <Toggle
-        label="Disable pan inertia"
-        enabled={mapSettings.disablePanInertia}
-        onToggle={() => updateMapSetting("disablePanInertia", MAP_SETTING_KEYS.disablePanInertia, !mapSettings.disablePanInertia)}
-        />
-        <Slider
-        label="Zoom sensitivity"
-        value={mapSettings.zoomSensitivity}
-        min={0.5}
-        max={3}
-        step={0.25}
-        onChange={(value) => updateMapSetting("zoomSensitivity", MAP_SETTING_KEYS.zoomSensitivity, value)}
-        />
         <Slider
         label="Border width"
         value={mapSettings.borderWidth}
@@ -852,19 +835,6 @@ const SettingsMenu = ({
         max={3}
         step={0.25}
         onChange={(value) => updateMapSetting("borderWidth", MAP_SETTING_KEYS.borderWidth, value)}
-        />
-        <Slider
-        label="Feature size"
-        value={mapSettings.featureSize}
-        min={0.25}
-        max={3}
-        step={0.25}
-        onChange={(value) => updateMapSetting("featureSize", MAP_SETTING_KEYS.featureSize, value)}
-        />
-        <Toggle
-        label="Blur sensitive flags"
-        enabled={mapSettings.blurSensitiveFlags}
-        onToggle={() => updateMapSetting("blurSensitiveFlags", MAP_SETTING_KEYS.blurSensitiveFlags, !mapSettings.blurSensitiveFlags)}
         />
         </div>
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />

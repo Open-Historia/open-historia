@@ -71,10 +71,3 @@ export const flagEmojiFromGid = (gid0) => {
         .toUpperCase()
         .replace(/./g, (ch) => String.fromCodePoint(0x1f1e6 + ch.charCodeAt(0) - 65));
 };
-
-// A starting list of commonly-disputed/contested polities, not an
-// authoritative or exhaustive standard — there is no single agreed-upon
-// source for this. Extend as needed; this is a first pass, not a policy.
-const SENSITIVE_GID0_CODES = new Set(["TWN", "XKO", "PSE", "ESH"]);
-
-export const isSensitiveFlag = (gid0) => SENSITIVE_GID0_CODES.has(String(gid0 ?? "").trim().toUpperCase());
