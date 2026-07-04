@@ -138,8 +138,15 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     const container = map.getCanvasContainer();
     const onWheel = (event) => {
       event.preventDefault();
-      const zoomDelta = (event.deltaY / 450) * interactionSettings.zoomSensitivity;
-      map.setZoom(map.getZoom() + zoomDelta);
+      // Match MapLibre's own normalization: a line-mode wheel event (e.g.
+      // Firefox on Windows with a physical mouse) reports deltaY in small
+      // integer "lines", not pixels — without this it takes hundreds of
+      // notches to zoom at all.
+      const value = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 40 : event.deltaY;
+      const zoomDelta = (value / 450) * interactionSettings.zoomSensitivity;
+      const rect = container.getBoundingClientRect();
+      const around = map.unproject([event.clientX - rect.left, event.clientY - rect.top]);
+      map.easeTo({ zoom: map.getZoom() + zoomDelta, around, duration: 0 });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => {
