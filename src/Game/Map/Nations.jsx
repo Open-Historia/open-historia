@@ -344,12 +344,14 @@ const WorldMap = ({ isGlobe = false }) => {
   const [mapDisplaySettings, setMapDisplaySettings] = useState(() => ({
     hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
     featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
+    borderWidth: getMapSetting(MAP_SETTING_KEYS.borderWidth),
   }));
 
   useEffect(() => {
     const onUpdated = () => setMapDisplaySettings({
       hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
       featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
+      borderWidth: getMapSetting(MAP_SETTING_KEYS.borderWidth),
     });
     window.addEventListener("mapSettings:updated", onUpdated);
     return () => window.removeEventListener("mapSettings:updated", onUpdated);
@@ -706,7 +708,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
   const countriesOutlinePaint = {
     "line-color": "#000",
-    "line-width": 1,
+    "line-width": mapDisplaySettings.borderWidth,
     "line-opacity": showStockCountries ? 1 : 0,
   };
   // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
@@ -716,7 +718,7 @@ const WorldMap = ({ isGlobe = false }) => {
   // borders. The far hairlines come from the seed geometry itself instead.
   const regionsOutlinePaint = {
     "line-color": "#000",
-    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
+    "line-width": ["*", mapDisplaySettings.borderWidth, ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0]],
     "line-opacity": worldKnown
       ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.6, 8, 0.7]
       : 0,
