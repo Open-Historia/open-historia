@@ -158,6 +158,16 @@ const mergeOwnerClusters = (clusters, joinDeg) => {
   return clusters;
 };
 
+// GADM assigns disputed / undetermined boundary areas the codes Z01-Z09 (the
+// slivers around India — Kashmir, Aksai Chin, Arunachal Pradesh). The base map
+// carries each as its own polity named with the bare code, which surfaced on the
+// map as "Z01" labels; show "Disputed (<claimant>)" instead, keyed to the main
+// country that administers/claims each (per server/country-names.json).
+const DISPUTED_TERRITORY_CLAIMANT = {
+  Z01: "India", Z02: "China", Z03: "China", Z04: "India", Z05: "India",
+  Z06: "Pakistan", Z07: "India", Z08: "China", Z09: "India",
+};
+
 const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameResolver) => {
   const perOwner = new Map(); // owner -> [{c:[lng,lat], area}]
   const countryNameByCode = new Map(); // gid0 -> modern country name (fallback labels)
@@ -204,7 +214,9 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
 
     mergeOwnerClusters(clusters, CLUSTER_JOIN_DEGREES);
     clusters.sort((a, b) => b.area - a.area);
-    const rawName = polityOverrides?.[owner]?.name || countryNameByCode.get(owner) || owner;
+    const rawName = DISPUTED_TERRITORY_CLAIMANT[owner]
+      ? `Disputed (${DISPUTED_TERRITORY_CLAIMANT[owner]})`
+      : polityOverrides?.[owner]?.name || countryNameByCode.get(owner) || owner;
     const name = String(nameResolver ? nameResolver(rawName, owner) : rawName).toUpperCase();
     for (let index = 0; index < clusters.length; index += 1) {
       const cluster = clusters[index];
