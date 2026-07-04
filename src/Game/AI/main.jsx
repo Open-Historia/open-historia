@@ -6,7 +6,7 @@ import {
     providerSupportsModelDiscovery,
     setProviderField,
 } from "./providerConfig.js";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
@@ -709,7 +709,90 @@ function buildWorldSummary(gameData, worldData, eventData) {
     ].join("\n");
 }
 
-function buildPromptVariables({
+// The advisor and diplomacy prompts share the same UPPER_SNAKE helper set as
+// the server-side simulation tasks, so this client path mirrors the handful of
+// context builders those helpers expect (see gameplay.js). Kept local because
+// gameplay.js imports callAI from here — importing back would be circular.
+function formatDateReadable(value) {
+    const parsed = value ? new Date(value) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) {
+        return String(value ?? "").trim();
+    }
+    return parsed.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function buildDifficultyGuidanceChats(difficulty) {
+    const normalized = String(difficulty ?? "").trim().toLowerCase();
+    const intro = "Diplomatic concessions and cooperation should scale with the difficulty.";
+    switch (normalized) {
+        case "very-easy":
+        case "very easy":
+            return `${intro} The world bends toward the player; be markedly receptive to their proposals.`;
+        case "easy":
+            return `${intro} The player can convert reasonable preparation into results relatively easily.`;
+        case "hard":
+            return `${intro} The player should need stronger leverage, preparation, and credibility before major outcomes stick.`;
+        case "very-hard":
+        case "very hard":
+        case "extreme":
+        case "impossible":
+            return `${intro} Major outcomes should require overwhelming preparation, sustained leverage, or unusually favorable conditions.`;
+        default:
+            return `${intro} Weigh proposals realistically on their merits and the player's demonstrated leverage.`;
+    }
+}
+
+function buildRecentRoundsWithDates(worldData, gameData) {
+    const history = Array.isArray(worldData?.simulationHistory) ? worldData.simulationHistory : [];
+    if (history.length === 0) {
+        return `Current round only: ${gameData?.gameDate || "unknown date"}`;
+    }
+    return history
+        .slice(0, 8)
+        .map((entry) => `${entry.fromDate || "unknown"} -> ${entry.toDate || entry.date || "unknown"}`)
+        .join("; ");
+}
+
+function buildUnitsSummaryText(worldData) {
+    const units = Array.isArray(worldData?.units) ? worldData.units : [];
+    if (units.length === 0) {
+        return "No military units are currently deployed on the map.";
+    }
+    return units
+        .slice(0, 60)
+        .map((unit) => {
+            const lat = Number(unit.lat);
+            const lng = Number(unit.lng);
+            const coords = Number.isFinite(lat) && Number.isFinite(lng)
+                ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+                : "unknown location";
+            return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+        })
+        .join("\n");
+}
+
+async function buildPlayerPolityRegionsText(gameData, worldData) {
+    const playerCode = String(gameData?.country ?? "").trim();
+    if (!playerCode) {
+        return "No player polity is currently set.";
+    }
+    const world = normalizeWorldState(worldData);
+    const regionEntries = Object.entries(world.regionOwnershipOverrides || {});
+    if (regionEntries.length === 0) {
+        return "No explicit player region override list is currently recorded.";
+    }
+    const regionCatalog = await loadRegionCatalog().catch(() => []);
+    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
+    const playerRegions = regionEntries
+        .filter(([, ownerCode]) => String(ownerCode ?? "").trim().toLowerCase() === playerCode.toLowerCase())
+        .slice(0, 24)
+        .map(([regionId]) => regionLookup.get(regionId)?.name || regionId);
+    return playerRegions.length > 0
+        ? playerRegions.join(", ")
+        : "No explicit player region override list is currently recorded.";
+}
+
+async function buildPromptVariables({
     actionData,
     advisorData,
     chatData,
@@ -722,6 +805,8 @@ function buildPromptVariables({
     const worldSummary = buildWorldSummary(gameData, worldData, eventData);
     const normalizedChats = normalizeChats(chatData);
     const currentChat = normalizedChats[0] ?? null;
+    const gameDate = gameData.gameDate ?? "";
+    const playerPolityRegions = await buildPlayerPolityRegionsText(gameData, worldData);
 
     return {
         actionInput: "",
@@ -736,20 +821,26 @@ function buildPromptVariables({
         chatParticipants: currentChat
             ? currentChat.countries.map((country) => country.name).join(", ")
             : "",
-        date: gameData.gameDate ?? "",
+        date: gameDate,
+        dateReadable: formatDateReadable(gameDate),
         difficulty: gameData.difficulty ?? "standard",
-        difficultyGuidanceChats: "Diplomatic flexibility should reflect the configured difficulty.",
+        difficultyGuidanceChats: buildDifficultyGuidanceChats(gameData.difficulty),
         gameMasterRequest: "",
         language: worldData.language ?? gameData.language ?? "English",
         lastSpeaker: currentChat?.messages?.at(-1)?.speaker ?? "",
         plannedActions: actionText || "No planned actions are currently queued.",
+        playerBattalionSummaries: buildUnitsSummaryText(worldData),
         playerPolity: gameData.country ?? "",
+        playerPolityRegions,
         recentEvents: buildEventHistoryText(eventData),
         recentEventsLong: buildEventHistoryText(eventData),
+        recentRoundsWithDates: buildRecentRoundsWithDates(worldData, gameData),
         respondingPolityName: speakingAs,
+        round: String(gameData.round ?? 1),
         simulationRules: worldData.simulationRules ?? "",
         startDate: gameData.startDate ?? "",
         targetDate: gameData.gameDate ?? "",
+        unitsSummary: buildUnitsSummaryText(worldData),
         worldBeforeRoundOne: worldData.startingTimelineText ?? "",
         worldSummary,
         worldSummaryNoCity: worldSummary,
@@ -785,7 +876,7 @@ async function buildAdvisorSystemPrompt() {
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
-    const variables = buildPromptVariables({
+    const variables = await buildPromptVariables({
         actionData,
         advisorData,
         chatData,
@@ -811,7 +902,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
     ]);
 
     const variables = {
-        ...buildPromptVariables({
+        ...(await buildPromptVariables({
             actionData,
             advisorData,
             chatData,
@@ -819,7 +910,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
             gameData,
             speakingAs: countries.find((country) => country !== playerCountry) || "",
             worldData,
-        }),
+        })),
         chatParticipants: participantList || "",
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);

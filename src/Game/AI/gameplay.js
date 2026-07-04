@@ -513,6 +513,7 @@ const buildTemplateVariables = async (
     recentEvents,
     recentEventsLong: buildEventHistoryText(bundle.events, { limit: 24 }),
     recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
+    round: String(bundle.game.round || 1),
     respondingPolityName:
       normalizedChat?.countries.find((country) => country.name !== bundle.game.country)?.name || "",
     simulationRules: normalizeString(bundle.world.simulationRules) || "No extra simulation rules were provided.",
