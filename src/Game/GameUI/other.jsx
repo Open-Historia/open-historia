@@ -3,7 +3,8 @@ import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { flagEmojiFromGid, flagImageUrlFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
+import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 
 const baseStyle = {
     position: "fixed",
@@ -68,6 +69,18 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
     const flagUrl = flagImageUrlFromGid(country);
     const flagEmoji = flagEmojiFromGid(country);
 
+    const [blurSensitive, setBlurSensitive] = useState(
+        () => getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags),
+    );
+
+    useEffect(() => {
+        const onUpdated = () => setBlurSensitive(getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags));
+        window.addEventListener("mapSettings:updated", onUpdated);
+        return () => window.removeEventListener("mapSettings:updated", onUpdated);
+    }, []);
+
+    const shouldBlur = blurSensitive && isSensitiveFlag(country);
+
     return (
         <div
         title={displayName}
@@ -88,7 +101,7 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
             src={flagUrl}
             alt={displayName}
             onError={() => setImageFailed(true)}
-            style={{ borderRadius: "50%", height: "100%", objectFit: "cover", width: "100%" }}
+            style={{ borderRadius: "50%", height: "100%", objectFit: "cover", width: "100%", filter: shouldBlur ? "blur(4px)" : "none" }}
             />
         ) : flagEmoji ? (
             <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>{flagEmoji}</span>
