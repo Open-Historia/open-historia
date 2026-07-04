@@ -36,6 +36,25 @@
 
 ---
 
+## 🍴 About this fork
+
+This is a personal fork ([`rsb1813/open-paxhistoria`](https://github.com/rsb1813/open-paxhistoria)) of
+[`Open-Historia/open-historia`](https://github.com/Open-Historia/open-historia), developed independently
+(not upstreamed). Changes on top of upstream:
+
+- **Anthropic custom endpoint** — point the Anthropic provider at a self-hosted proxy that speaks the
+  Messages API format (Settings → Anthropic → Endpoint), routed through the server relay for CORS safety.
+- **Per-provider custom parameters** — a JSON field per AI provider merged into outgoing request bodies,
+  for things like reasoning budget/effort limits the built-in UI doesn't expose.
+- **Globe country-label fix** — country name labels no longer render oversized at high latitudes in 3D
+  Globe mode; each label is now corrected for its own latitude, not the camera's.
+- **Settings icon + country badge** — settings toggle is now "⋮", and the player's country shows as a
+  small flag badge (bottom-right) instead of a text pill (custom/non-ISO polities fall back to a letter badge).
+- **Community hub cover images + detail view** — scenario cards show a cover image when the hub post has
+  one, and clicking a card opens a detail view with stats and an "Import & Play" button.
+
+---
+
 ## ✨ Features
 
 - __interactive world map:__ watch territory, borders, and nations shift as history unfolds
@@ -95,8 +114,8 @@ release APK — run it after changing `mobile/`.
 Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
 
 ```bash
-git clone https://github.com/Open-Historia/open-historia.git
-cd open-historia
+git clone https://github.com/rsb1813/open-paxhistoria.git
+cd open-paxhistoria
 git lfs install        # Set up Git LFS
 git lfs pull           # Pull large files (map tiles + editor seeds + world map)
 npm install            # Install dependencies (includes OpenLayers etc. for the editor)
