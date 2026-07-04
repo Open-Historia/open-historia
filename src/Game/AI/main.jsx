@@ -407,11 +407,21 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
         providerLabel: "Anthropic",
     });
 
+    // A custom endpoint is a self-hosted proxy — it can't be assumed to send the
+    // CORS headers the real API does, so it goes through the relay like
+    // OpenAI-compatible endpoints do. The default (blank) endpoint keeps calling
+    // the real API directly, unchanged from before.
+    const customEndpoint = normalizeEndpoint(settings.endpoint);
+    const usingCustomEndpoint = Boolean(customEndpoint);
+    const endpoint = customEndpoint || ANTHROPIC_API_ENDPOINT;
+
     const headers = {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
+        // Only the real API needs/accepts this browser-safety opt-in; a
+        // self-hosted proxy is called server-to-server via the relay instead.
+        ...(usingCustomEndpoint ? {} : { "anthropic-dangerous-direct-browser-access": "true" }),
     };
 
     // Reasoning toggle (settings): extended thinking. max_tokens must exceed the
@@ -420,17 +430,16 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     const reasoning = getReasoningEnabled();
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-        const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-                model,
-                system: systemPrompt,
-                max_tokens: reasoning ? 8192 : 1024,
-                ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-                messages: toAnthropicMessages(history),
-            }),
-        });
+        const body = {
+            model,
+            system: systemPrompt,
+            max_tokens: reasoning ? 8192 : 1024,
+            ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            messages: toAnthropicMessages(history),
+        };
+        const response = usingCustomEndpoint
+            ? await relayFetch(`${endpoint}/messages`, { headers, payload: body })
+            : await fetch(`${endpoint}/messages`, { method: "POST", headers, body: JSON.stringify(body) });
 
         if (response.status === 429 || response.status === 503) {
             if (attempt === retries) {
