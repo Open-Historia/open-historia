@@ -77,7 +77,7 @@ export const ESRI_BASEMAPS = [
   { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
-export const DEFAULT_BASEMAP_ID = "imagery";
+export const DEFAULT_BASEMAP_ID = "ocean";
 // Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
 const BASEMAP_STORAGE_KEY = "map_basemap_style";
 
