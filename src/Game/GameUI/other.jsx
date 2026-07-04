@@ -62,13 +62,8 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
         setImageFailed(false);
     }, [country]);
 
-    // On phones the country is already shown inside the date widget — this
-    // badge and the date widget would overlap on a portrait screen.
-    if (isMobile || !country) return null;
-
-    const flagUrl = flagImageUrlFromGid(country);
-    const flagEmoji = flagEmojiFromGid(country);
-
+    // All hooks must run before the early return below (Rules of Hooks) —
+    // this one has to sit here, not next to where shouldBlur is computed.
     const [blurSensitive, setBlurSensitive] = useState(
         () => getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags),
     );
@@ -79,6 +74,12 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
         return () => window.removeEventListener("mapSettings:updated", onUpdated);
     }, []);
 
+    // On phones the country is already shown inside the date widget — this
+    // badge and the date widget would overlap on a portrait screen.
+    if (isMobile || !country) return null;
+
+    const flagUrl = flagImageUrlFromGid(country);
+    const flagEmoji = flagEmojiFromGid(country);
     const shouldBlur = blurSensitive && isSensitiveFlag(country);
 
     return (
