@@ -730,9 +730,12 @@ const PanelChrome = ({
             bottom: isOpen ? "4.9rem" : "-34rem",
             display: "flex",
             flexDirection: "column",
-            height: "calc(100vh - 33rem)",
+            // Match the Actions/Chat panels: on short laptop screens the sliver
+            // calc(100vh - 33rem) collapsed to the 10rem floor, so grow to at
+            // least 30rem while still capping at calc(100vh - 9rem) to fit. (The
+            // min() already caps height, so no separate maxHeight is needed.)
+            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
             left: "0.5rem",
-            maxHeight: "calc(100vh - 33rem)",
             maxWidth: "calc(100vw - 1rem)",
             minHeight: "10rem",
             opacity: isOpen ? 1 : 0,
