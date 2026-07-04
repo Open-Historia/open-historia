@@ -63,7 +63,7 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
       name,
       kind,
       author: "",
-      basemap: "dark",
+      basemap: "ocean",
       view: { center: [0, 20], zoom: 2, rotation: 0 },
       reference: { image: null },
       createdAt: now,

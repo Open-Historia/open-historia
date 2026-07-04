@@ -9,14 +9,12 @@
 
 import Icon from "./Icon.jsx";
 import { panelSurface, inputStyle } from "./editorStyles.js";
+import { EDITOR_BASEMAPS } from "./basemaps.js";
 
 const BASEMAPS = [
-  { v: "osm", l: "Your Basemap" },
-  { v: "light", l: "Light" },
-  { v: "dark", l: "Dark" },
-  { v: "white", l: "White" },
-  { v: "grayscale", l: "Grayscale" },
-  { v: "black", l: "Black" },
+  ...EDITOR_BASEMAPS.map((b) => ({ v: b.id, l: b.label })),
+  { v: "osm", l: "OpenStreetMap" },
+  { v: "dark", l: "None (dark)" },
 ];
 
 const SAVE = {

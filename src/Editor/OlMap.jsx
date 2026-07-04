@@ -15,6 +15,8 @@ import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
+import XYZ from "ol/source/XYZ";
+import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
@@ -897,8 +899,16 @@ const OlMap = ({
       map.removeLayer(baseLayerRef.current);
       baseLayerRef.current = null;
     }
-    if (basemap === "osm" || basemap === "light") {
-      const base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
+    const esri = editorBasemapById(basemap);
+    let base = null;
+    if (esri) {
+      base = new TileLayer({
+        source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
+      });
+    } else if (basemap === "osm" || basemap === "light") {
+      base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
+    }
+    if (base) {
       base.setZIndex(0);
       map.addLayer(base);
       baseLayerRef.current = base;
