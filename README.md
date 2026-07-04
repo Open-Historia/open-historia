@@ -52,6 +52,13 @@ This is a personal fork ([`rsb1813/open-paxhistoria`](https://github.com/rsb1813
   small flag badge (bottom-right) instead of a text pill (custom/non-ISO polities fall back to a letter badge).
 - **Community hub cover images + detail view** — scenario cards show a cover image when the hub post has
   one, and clicking a card opens a detail view with stats and an "Import & Play" button.
+- **Map interaction & display settings** — a new Settings section with toggles for hiding country labels,
+  disabling idle globe rotation, reversing scroll-zoom direction, and disabling pan inertia, plus sliders
+  for zoom sensitivity, border width, and feature (label) size.
+- **Sensitive flag blur** — an opt-in setting that blurs flags for a small list of commonly-disputed
+  polities wherever a flag renders.
+- **Installable as a PWA** — the app can be installed as a standalone app (works reliably from
+  `localhost`; installing from a plain-HTTP LAN address may not prompt, since that isn't a secure context).
 
 ---
 
