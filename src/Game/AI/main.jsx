@@ -85,6 +85,29 @@ function extractErrorMessage(payload, fallback) {
     return fallback;
 }
 
+// Settings (per provider): an escape hatch for request-body fields the built-in
+// UI doesn't expose (e.g. reasoning budget/effort limits). Shallow-merged last
+// into the outgoing body, so a deliberately-set key can override a built-in
+// one; a nested built-in object (e.g. Gemini's generationConfig) must be
+// supplied whole to override any of its keys. Invalid input is ignored, not
+// fatal — a malformed settings field should never break a turn.
+function parseCustomParams(raw, providerLabel) {
+    const trimmed = (raw ?? "").trim();
+    if (!trimmed) return {};
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed;
+        }
+        console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
+    } catch (error) {
+        console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
+    }
+
+    return {};
+}
+
 function pickLikelyChatModel(models) {
     const modelIds = models
     .map((entry) => entry?.id)
@@ -238,6 +261,8 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
         providerLabel: "Gemini",
     });
 
+    const customParams = parseCustomParams(settings.customParams, "Gemini");
+
     for (let attempt = 1; attempt <= retries; attempt++) {
         const response = await fetch(getGeminiUrl(model, apiKey), {
             method: "POST",
@@ -249,6 +274,7 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
                 ...(getReasoningEnabled()
                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
                     : {}),
+                ...customParams,
             }),
         });
 
@@ -291,6 +317,7 @@ async function callOpenAIStyleChatCompletions({
     systemPrompt,
     history,
     providerLabel,
+    customParams = {},
     retries = 3,
     retryDelay = 15000,
 }) {
@@ -304,6 +331,7 @@ async function callOpenAIStyleChatCompletions({
                 // most OpenAI-compatible gateways; models that reject it surface a
                 // clear API error so the user knows to pick a reasoning model.
                 ...(getReasoningEnabled() ? { reasoning_effort: "medium" } : {}),
+                ...customParams,
             },
         });
 
@@ -360,6 +388,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         systemPrompt,
         history,
         providerLabel: "OpenAI",
+        customParams: parseCustomParams(settings.customParams, "OpenAI"),
         ...opts,
     });
 }
@@ -390,6 +419,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         systemPrompt,
         history,
         providerLabel: "OpenAI Compatible",
+        customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
         ...opts,
     });
 }
@@ -428,6 +458,7 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     // thinking budget, so it is raised alongside; thinking blocks are filtered out
     // by extractAnthropicText, which only reads text blocks.
     const reasoning = getReasoningEnabled();
+    const customParams = parseCustomParams(settings.customParams, "Anthropic");
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         const body = {
@@ -436,6 +467,7 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
             max_tokens: reasoning ? 8192 : 1024,
             ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             messages: toAnthropicMessages(history),
+            ...customParams,
         };
         const response = usingCustomEndpoint
             ? await relayFetch(`${endpoint}/messages`, { headers, payload: body })
