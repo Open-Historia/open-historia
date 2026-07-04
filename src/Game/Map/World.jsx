@@ -103,6 +103,12 @@ const WORLD_STYLE = {
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
+  // react-map-gl creates the underlying MapLibre instance asynchronously
+  // (after a dynamic import), so mapRef.current is still null on World's
+  // first mount pass. The imperative effects below need to re-run once the
+  // instance actually exists — mapReady (set from onLoad) is that signal.
+  const [mapReady, setMapReady] = useState(false);
+  const handleLoad = useCallback(() => setMapReady(true), []);
   const [interactionSettings, setInteractionSettings] = useState(() => ({
     zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
     reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
@@ -120,15 +126,37 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, []);
 
   // MapLibre's scroll-zoom rate has no declarative prop — only the imperative
-  // handler exposes it. A negative rate flips zoom direction with no custom
-  // wheel-event handling needed (see plan doc for the verified API).
+  // handler exposes it. The rate's sign has no effect on zoom direction
+  // (ScrollZoomHandler.renderFrame takes Math.abs(delta * rate) for the
+  // magnitude and decides direction purely from the wheel delta's own sign)
+  // — it only ever controls sensitivity, so reversal can't be done by
+  // reconfiguring this handler. With reversal on, replace it outright:
+  // disable it and drive zoom directly from our own wheel listener with the
+  // sign flipped, so direction only ever depends on code we control.
   useEffect(() => {
     const map = mapRef?.current?.getMap?.();
-    if (!map) return;
-    const sign = interactionSettings.reverseScrollZoom ? -1 : 1;
-    map.scrollZoom.setWheelZoomRate((1 / 450) * interactionSettings.zoomSensitivity * sign);
-    map.scrollZoom.setZoomRate((1 / 100) * interactionSettings.zoomSensitivity * sign);
-  }, [mapRef, interactionSettings.zoomSensitivity, interactionSettings.reverseScrollZoom]);
+    if (!map || !mapReady) return undefined;
+
+    if (!interactionSettings.reverseScrollZoom) {
+      map.scrollZoom.enable();
+      map.scrollZoom.setWheelZoomRate((1 / 450) * interactionSettings.zoomSensitivity);
+      map.scrollZoom.setZoomRate((1 / 100) * interactionSettings.zoomSensitivity);
+      return undefined;
+    }
+
+    map.scrollZoom.disable();
+    const container = map.getCanvasContainer();
+    const onWheel = (event) => {
+      event.preventDefault();
+      const zoomDelta = (event.deltaY / 450) * interactionSettings.zoomSensitivity;
+      map.setZoom(map.getZoom() + zoomDelta);
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+      map.scrollZoom.enable();
+    };
+  }, [mapRef, mapReady, interactionSettings.reverseScrollZoom, interactionSettings.zoomSensitivity]);
 
   const isGlobe = projection === "globe";
   const terrain = useMemo(
@@ -193,6 +221,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         projection={projection}
         terrain={terrain}
         mapStyle={WORLD_STYLE}
+        onLoad={handleLoad}
         onIdle={handleIdle}
       >
         <Nations isGlobe={isGlobe} />
