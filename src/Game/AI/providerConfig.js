@@ -43,6 +43,9 @@ const PROVIDER_SETTINGS = {
     },
     anthropic: {
         apiKey: { storageKey: "anthropic_api_key", defaultValue: "" },
+        // Empty means "use the real Anthropic API" (main.jsx's ANTHROPIC_API_ENDPOINT
+        // default) — set this to point at a self-hosted Anthropic-compatible proxy.
+        endpoint: { storageKey: "anthropic_endpoint", defaultValue: "" },
         model: { storageKey: "anthropic_model", defaultValue: "claude-haiku-4-5" },
     },
     "openai-compatible": {
@@ -66,6 +69,7 @@ const FORM_FIELD_MAP = {
     openaiApiKey: { provider: "openai", field: "apiKey" },
     openaiModel: { provider: "openai", field: "model" },
     anthropicApiKey: { provider: "anthropic", field: "apiKey" },
+    anthropicEndpoint: { provider: "anthropic", field: "endpoint" },
     anthropicModel: { provider: "anthropic", field: "model" },
     openaiCompatibleApiKey: { provider: "openai-compatible", field: "apiKey" },
     openaiCompatibleEndpoint: { provider: "openai-compatible", field: "endpoint" },

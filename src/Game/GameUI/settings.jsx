@@ -490,6 +490,13 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="claude-haiku-4-5"
             helperText="Claude model ids are manual here. Leave blank to use the built-in default."
             />
+            <SettingsInput
+            label="Anthropic Endpoint (optional)"
+            value={settings.anthropicEndpoint ?? ""}
+            onChange={(value) => onSettingChange("anthropicEndpoint", value)}
+            placeholder="https://api.anthropic.com/v1"
+            helperText="Leave blank to use the real Anthropic API. Set this to point at a self-hosted proxy that speaks the Anthropic Messages API format."
+            />
             </>
         )}
 
