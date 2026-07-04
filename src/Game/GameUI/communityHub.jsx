@@ -384,18 +384,21 @@ const CommunityPanel = ({ onImported }) => {
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
 
-  // A notice/error from one post (e.g. "Imported X") must not leak into a
-  // different post's detail view when the selection changes.
-  const selectPost = (post) => {
-    setSelectedPost(post);
+  const clearBanners = () => {
     setNotice(null);
     setError(null);
   };
 
+  // A notice/error from one post (e.g. "Imported X") must not leak into a
+  // different post's detail view when the selection changes.
+  const selectPost = (post) => {
+    setSelectedPost(post);
+    clearBanners();
+  };
+
   const backToGrid = () => {
     setSelectedPost(null);
-    setNotice(null);
-    setError(null);
+    clearBanners();
   };
 
   const load = (force) => {
@@ -435,8 +438,7 @@ const CommunityPanel = ({ onImported }) => {
   const handleImport = async (post) => {
     if (!post.bundleUrl || busyId) return;
     setBusyId(post.id);
-    setNotice(null);
-    setError(null);
+    clearBanners();
     try {
       const response = await fetch(`/api/hub/file?url=${encodeURIComponent(post.bundleUrl)}`);
       if (!response.ok) {
