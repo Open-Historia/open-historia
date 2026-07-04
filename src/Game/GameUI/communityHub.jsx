@@ -9,7 +9,7 @@
 // server's /api/hub proxy. Publishing exports the chosen scenario locally and
 // opens a prefilled hub post where the author drags the bundle in.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   exportScenarioBundle,
   importScenarioBundle,
@@ -33,6 +33,13 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // through the download-counted URL; the raw mirror below it serves old clients.
 const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.json|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
+
+// First image in the issue body — markdown ![alt](url) or GitHub's own
+// <img src="..."> attachment markup (issue bodies mix both depending on how
+// the image was pasted). Used as the card/detail-view cover; posts with no
+// image simply get coverImageUrl: null (existing text-only card, no error).
+const COVER_IMAGE_PATTERN =
+  /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 
 let hubCache = { at: 0, posts: null };
 
@@ -65,6 +72,8 @@ const parsePost = (issue, installsByFile) => {
     .replace(/^Scenario file:\s*$/gim, "")
     .replace(/\s+/g, " ")
     .trim();
+  const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
+  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -87,6 +96,7 @@ const parsePost = (issue, installsByFile) => {
     bundleUrl,
     // null = not trackable (issue attachment), a number = release download count.
     installs: bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) ?? null : null,
+    coverImageUrl,
   };
 };
 
@@ -162,8 +172,24 @@ const rowTitleStyle = {
   margin: "0 0 0.55rem",
 };
 
-const ScenarioCard = ({ post, busy, onImport }) => (
-  <div style={cardSurface}>
+const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
+  <div
+    style={{ ...cardSurface, cursor: "pointer" }}
+    onClick={() => onSelect(post)}
+  >
+    {post.coverImageUrl && (
+      <img
+        src={post.coverImageUrl}
+        alt=""
+        onError={(event) => { event.currentTarget.style.display = "none"; }}
+        style={{
+          aspectRatio: "16 / 9",
+          borderRadius: "10px",
+          objectFit: "cover",
+          width: "100%",
+        }}
+      />
+    )}
     <div style={{ alignItems: "center", display: "flex", gap: "0.55rem" }}>
       {post.avatarUrl && (
         <img src={post.avatarUrl} alt={post.author} style={{ borderRadius: "50%", height: "1.6rem", width: "1.6rem" }} />
@@ -206,13 +232,19 @@ const ScenarioCard = ({ post, busy, onImport }) => (
       <span title="Liked (👍 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>👍 {post.upvotes}</span>
       <span title="Comments" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>💬 {post.comments}</span>
       <div style={{ flex: 1 }} />
-      <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, minHeight: "1.8rem", textDecoration: "none" }}>
+      <a
+        href={post.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => event.stopPropagation()}
+        style={{ ...pillButton, minHeight: "1.8rem", textDecoration: "none" }}
+      >
         View ↗
       </a>
       <button
         type="button"
         disabled={!post.bundleUrl || busy}
-        onClick={() => onImport(post)}
+        onClick={(event) => { event.stopPropagation(); onImport(post); }}
         title={post.bundleUrl ? "Import into your Scenarios" : "This post has no scenario file attached"}
         style={{
           ...pillButton,
@@ -229,7 +261,7 @@ const ScenarioCard = ({ post, busy, onImport }) => (
   </div>
 );
 
-const ScenarioRow = ({ title, posts, busyId, onImport, emptyText }) => (
+const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText }) => (
   <div style={{ marginBottom: "1.15rem" }}>
     <div style={rowTitleStyle}>{title}</div>
     {posts.length === 0 ? (
@@ -239,10 +271,107 @@ const ScenarioRow = ({ title, posts, busyId, onImport, emptyText }) => (
     ) : (
       <div style={{ display: "flex", gap: "0.8rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} />
         ))}
       </div>
     )}
+  </div>
+);
+
+const detailStat = { color: "rgba(255,255,255,0.75)", fontSize: "0.85rem" };
+
+// Shared by the grid view and ScenarioDetail so the two can't drift out of
+// sync in style/wording — each rendered its own copy of this before.
+const StatusBanner = ({ notice, error }) => (
+  <>
+    {notice && (
+      <div style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.35)", borderRadius: "12px", color: "#bbf7d0", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
+        {notice}
+      </div>
+    )}
+    {error && (
+      <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "12px", color: "#fecaca", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
+        {error}
+      </div>
+    )}
+  </>
+);
+
+const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
+  <div style={{ color: "#fff" }}>
+    <button
+      type="button"
+      onClick={onBack}
+      style={{ ...pillButton, marginBottom: "0.9rem" }}
+    >
+      ← Back
+    </button>
+
+    <StatusBanner notice={notice} error={error} />
+
+    {post.coverImageUrl && (
+      <img
+        src={post.coverImageUrl}
+        alt=""
+        onError={(event) => { event.currentTarget.style.display = "none"; }}
+        style={{
+          aspectRatio: "16 / 9",
+          borderRadius: "14px",
+          marginBottom: "0.9rem",
+          objectFit: "cover",
+          width: "100%",
+        }}
+      />
+    )}
+
+    <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.3rem" }}>
+      {post.avatarUrl && (
+        <img src={post.avatarUrl} alt={post.author} style={{ borderRadius: "50%", height: "1.8rem", width: "1.8rem" }} />
+      )}
+      <h3 style={{ fontSize: "1.3rem", fontWeight: 800, margin: 0 }}>
+        {post.pinned ? "📌 " : ""}{post.title}
+      </h3>
+    </div>
+    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.8rem", marginBottom: "0.9rem" }}>
+      by {post.author} · {new Date(post.createdAt).toLocaleDateString()}
+    </div>
+
+    <div style={{ display: "flex", gap: "1.1rem", marginBottom: "1rem" }}>
+      {post.installs != null && <span style={detailStat}>⬇ {post.installs} installs</span>}
+      <span style={detailStat}>🚀 {post.plays} played</span>
+      <span style={detailStat}>👍 {post.upvotes} liked</span>
+      <span style={detailStat}>💬 {post.comments} comments</span>
+    </div>
+
+    <p style={{ color: "rgba(240,244,255,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
+      {post.description || "No description."}
+    </p>
+
+    <div style={{ display: "flex", gap: "0.6rem" }}>
+      <button
+        type="button"
+        disabled={!post.bundleUrl || busy}
+        onClick={() => onImport(post)}
+        style={{
+          alignItems: "center",
+          background: post.bundleUrl ? "rgba(124,58,237,0.85)" : "rgba(255,255,255,0.08)",
+          border: "none",
+          borderRadius: "10px",
+          color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
+          cursor: post.bundleUrl && !busy ? "pointer" : "default",
+          display: "flex",
+          fontSize: "1rem",
+          fontWeight: 700,
+          justifyContent: "center",
+          padding: "0.8rem 1.6rem",
+        }}
+      >
+        {busy ? "Importing…" : "▶ Import & Play"}
+      </button>
+      <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
+        View on GitHub ↗
+      </a>
+    </div>
   </div>
 );
 
@@ -253,6 +382,34 @@ const CommunityPanel = ({ onImported }) => {
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
+  const [selectedPost, setSelectedPost] = useState(null);
+
+  // handleImport is async (network + import can take several seconds); by the
+  // time it resolves the user may have navigated to a different post or back
+  // to the grid. This ref holds the up-to-date selection so a delayed result
+  // can tell whether it still applies, without a stale closure over
+  // `selectedPost` from when the import started.
+  const selectedPostRef = useRef(null);
+  useEffect(() => {
+    selectedPostRef.current = selectedPost;
+  }, [selectedPost]);
+
+  const clearBanners = () => {
+    setNotice(null);
+    setError(null);
+  };
+
+  // A notice/error from one post (e.g. "Imported X") must not leak into a
+  // different post's detail view when the selection changes.
+  const selectPost = (post) => {
+    setSelectedPost(post);
+    clearBanners();
+  };
+
+  const backToGrid = () => {
+    setSelectedPost(null);
+    clearBanners();
+  };
 
   const load = (force) => {
     setError(null);
@@ -291,8 +448,7 @@ const CommunityPanel = ({ onImported }) => {
   const handleImport = async (post) => {
     if (!post.bundleUrl || busyId) return;
     setBusyId(post.id);
-    setNotice(null);
-    setError(null);
+    clearBanners();
     try {
       const response = await fetch(`/api/hub/file?url=${encodeURIComponent(post.bundleUrl)}`);
       if (!response.ok) {
@@ -301,13 +457,22 @@ const CommunityPanel = ({ onImported }) => {
       }
       const bundle = await response.json();
       const details = await importScenarioBundle(bundle);
-      setNotice(
-        `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
-          `Enjoyed it? React 🚀 (played it) or 👍 (liked it) on the hub post.`,
-      );
+      // The user may have navigated to a different post's detail view while
+      // this was in flight — don't attribute this result to whatever happens
+      // to be on screen now unless it's still this post (or the grid).
+      const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
+      if (stillRelevant) {
+        setNotice(
+          `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
+            `Enjoyed it? React 🚀 (played it) or 👍 (liked it) on the hub post.`,
+        );
+      }
       onImported?.(details);
     } catch (nextError) {
-      setError(`Import failed: ${nextError.message}`);
+      const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
+      if (stillRelevant) {
+        setError(`Import failed: ${nextError.message}`);
+      }
     } finally {
       setBusyId(null);
     }
@@ -337,70 +502,75 @@ const CommunityPanel = ({ onImported }) => {
 
   return (
     <div style={{ color: "#fff", maxHeight: "calc(100vh - 11rem)", overflowY: "auto", paddingRight: "0.2rem" }}>
-      <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
-        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
-          Community scenarios from the hub — ⬇ = installs (counted automatically), 🚀 = played it, 👍 = liked it (react on the post to vote).
-          {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
-        </div>
-        <div style={{ flex: 1 }} />
-        <button type="button" onClick={() => load(true)} style={pillButton}>Refresh</button>
-        <button
-          type="button"
-          onClick={() => setPublishPickerOpen((open) => !open)}
-          style={{ ...pillButton, background: "rgba(124,58,237,0.3)", borderColor: "rgba(124,58,237,0.5)" }}
-        >
-          ⬆ Publish to Hub
-        </button>
-        <a href={HUB_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
-          Open Hub ↗
-        </a>
-      </div>
-
-      {publishPickerOpen && (
-        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "14px", marginBottom: "0.9rem", padding: "0.8rem" }}>
-          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.8rem", marginBottom: "0.55rem" }}>
-            Pick a scenario to publish. Its bundle downloads to your computer, and a prefilled hub post opens —
-            drag the downloaded file into the Description box there and submit.
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-            {scenarios.map((scenario) => (
-              <button key={scenario.id} type="button" onClick={() => handlePublish(scenario)} style={pillButton}>
-                {scenario.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {notice && (
-        <div style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.35)", borderRadius: "12px", color: "#bbf7d0", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
-          {notice}
-        </div>
-      )}
-      {error && (
-        <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "12px", color: "#fecaca", fontSize: "0.82rem", marginBottom: "0.9rem", padding: "0.7rem 0.85rem" }}>
-          {error}
-        </div>
-      )}
-
-      {!posts && !error && (
-        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
-          Loading community scenarios…
-        </div>
-      )}
-
-      {rows && (
+      {selectedPost ? (
+        <ScenarioDetail
+          post={selectedPost}
+          busy={busyId === selectedPost.id}
+          onImport={handleImport}
+          onBack={backToGrid}
+          notice={notice}
+          error={error}
+        />
+      ) : (
         <>
-          <ScenarioRow
-            title="📌 Pinned"
-            posts={rows.pinned}
-            busyId={busyId}
-            onImport={handleImport}
-            emptyText="No pinned scenarios right now."
-          />
-          <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} />
-          <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} />
-          <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} />
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
+              Community scenarios from the hub — ⬇ = installs (counted automatically), 🚀 = played it, 👍 = liked it (react on the post to vote).
+              {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
+            </div>
+            <div style={{ flex: 1 }} />
+            <button type="button" onClick={() => load(true)} style={pillButton}>Refresh</button>
+            <button
+              type="button"
+              onClick={() => setPublishPickerOpen((open) => !open)}
+              style={{ ...pillButton, background: "rgba(124,58,237,0.3)", borderColor: "rgba(124,58,237,0.5)" }}
+            >
+              ⬆ Publish to Hub
+            </button>
+            <a href={HUB_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
+              Open Hub ↗
+            </a>
+          </div>
+
+          {publishPickerOpen && (
+            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "14px", marginBottom: "0.9rem", padding: "0.8rem" }}>
+              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.8rem", marginBottom: "0.55rem" }}>
+                Pick a scenario to publish. Its bundle downloads to your computer, and a prefilled hub post opens —
+                drag the downloaded file into the Description box there and submit.
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+                {scenarios.map((scenario) => (
+                  <button key={scenario.id} type="button" onClick={() => handlePublish(scenario)} style={pillButton}>
+                    {scenario.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <StatusBanner notice={notice} error={error} />
+
+          {!posts && !error && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
+              Loading community scenarios…
+            </div>
+          )}
+
+          {rows && (
+            <>
+              <ScenarioRow
+                title="📌 Pinned"
+                posts={rows.pinned}
+                busyId={busyId}
+                onImport={handleImport}
+                onSelect={selectPost}
+                emptyText="No pinned scenarios right now."
+              />
+              <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+              <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+              <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+            </>
+          )}
         </>
       )}
     </div>

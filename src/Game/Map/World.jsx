@@ -9,21 +9,22 @@ import Cities from "./Cities";
 import Units from "./Units";
 import UnitPopup from "../Selection/Units";
 import {
-  BASEMAP_PROTOCOL_TEMPLATE,
-  SATELLITE_TILE_MAXZOOM,
-  SATELLITE_TILE_TEMPLATE,
   TERRAIN_TILE_TEMPLATE,
+  basemapMaxZoom,
+  basemapProtocolTemplate,
   ensureBasemapProtocol,
+  esriTileTemplate,
 } from "../../runtime/assets.js";
 import { SKYBOX_SIZE, getSkyboxUrl } from "./skybox.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
 ensureBasemapProtocol();
 
-// Grading for the World_Terrain_Base style: it's a pale cartographic map, so
-// cap brightness to sit against the dark UI and skip the photo-specific
-// contrast/hue tweaks the old satellite imagery needed.
+// Grading applied to whichever ESRI basemap is picked: cap brightness so it
+// sits against the dark UI, with a little desaturation/contrast that suits both
+// the satellite imagery and the paler cartographic styles.
 const SATELLITE_PAINT = {
   "raster-resampling": "linear",
   "raster-saturation": -0.15,
@@ -32,21 +33,21 @@ const SATELLITE_PAINT = {
   "raster-brightness-max": 0.78,
 };
 
-const WORLD_STYLE = {
+const buildWorldStyle = (basemapId) => ({
   version: 8,
   sources: {
     "satellite-lowres": {
       type: "raster",
       // Levels 0-2 always have real data — no placeholder handling needed.
-      tiles: [SATELLITE_TILE_TEMPLATE],
+      tiles: [esriTileTemplate(basemapId)],
       tileSize: 256,
       maxzoom: 2,
     },
     satellite: {
       type: "raster",
-      tiles: [BASEMAP_PROTOCOL_TEMPLATE],
+      tiles: [basemapProtocolTemplate(basemapId)],
       tileSize: 256,
-      maxzoom: SATELLITE_TILE_MAXZOOM,
+      maxzoom: basemapMaxZoom(basemapId),
     },
     "terrain-source": {
       type: "raster-dem",
@@ -98,10 +99,13 @@ const WORLD_STYLE = {
   sky: {
     "atmosphere-blend": 0,
   },
-};
+});
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
+  const basemapId = useMapSetting(MAP_SETTING_KEYS.basemapStyle);
+  const worldStyle = useMemo(() => buildWorldStyle(basemapId), [basemapId]);
+
   const isGlobe = projection === "globe";
   const terrain = useMemo(
     () =>
@@ -164,10 +168,10 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         renderWorldCopies
         projection={projection}
         terrain={terrain}
-        mapStyle={WORLD_STYLE}
+        mapStyle={worldStyle}
         onIdle={handleIdle}
       >
-        <Nations />
+        <Nations isGlobe={isGlobe} />
         <Cities />
         <Units />
         <GlobeEffects active={isGlobe} />

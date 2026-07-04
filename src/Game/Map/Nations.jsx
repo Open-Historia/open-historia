@@ -20,21 +20,34 @@ import {
 } from "../../runtime/assets.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
-const buildCountryTextSize = (multiplier = 1) => ([
-  "interpolate", ["exponential", 2], ["zoom"],
-  0, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, -16]]],
-  4, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, -12]]],
-  8, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, -8]]],
-  12, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, -4]]],
-  16, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, 0]]],
-  20, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, 4]]],
-  24, ["*", multiplier, ["*", ["get", "areaScale"], ["^", 2, 8]]],
-]);
+// Globe projection renders a label's own high-latitude countries oversized
+// relative to their outline — confirmed (issue #6) to be text-only (fills
+// stay correctly scaled) and tied to each FEATURE's own latitude, not the
+// camera's. cos(lat) undoes it; only applied in globe mode; flat/mercator
+// keeps the exact same sizing it always has (this factor is 1 at lat 0 and
+// visibly wrong in mercator at high latitude, so never enable it there).
+const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math.PI / 180]];
+
+const buildCountryTextSize = (multiplier = 1, correctForGlobe = false) => {
+  const scale = correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier;
+
+  return [
+    "interpolate", ["exponential", 2], ["zoom"],
+    0, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -16]]],
+    4, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -12]]],
+    8, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -8]]],
+    12, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -4]]],
+    16, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 0]]],
+    20, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 4]]],
+    24, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 8]]],
+  ];
+};
 
 const buildFallbackColorExpression = () => ([
   "rgb",
@@ -206,6 +219,8 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
           name,
           areaScale: Math.sqrt(cluster.area) * 17500,
           rotation: 0,
+          // See GLOBE_LAT_CORRECTION — same globe text-size fix (issue #6).
+          lat: cluster.cy,
         },
       });
     }
@@ -322,10 +337,13 @@ const buildOwnerFallbackColorExpression = () => ([
   ["+", 64, ["*", ["index-of", ["slice", ["coalesce", ["get", "owner"], "ZZZ"], 1, 2], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
 ]);
 
-const WorldMap = () => {
+const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
+  const mapDisplaySettings = {
+    hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+  };
   // False until the first world.json read: before that we can't know whether
   // this game uses the stock map or a custom one, so NO political layer
   // renders — this kills the "modern world flashes, then the real map loads"
@@ -697,26 +715,28 @@ const WorldMap = () => {
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(),
+    "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
-  }), []);
+    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
+  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(),
+    "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
-  }), []);
+    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
+  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
 
   const labelLayerPaint = useMemo(() => ({
     "text-color": "#FFFFFF",

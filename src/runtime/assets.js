@@ -62,17 +62,46 @@ export const JSON_URLS = {
   world: "",
 };
 
-// ESRI basemap. Sibling styles (World_Imagery, World_Shaded_Relief,
-// NatGeo_World_Map, ...) swap in by changing the service name.
-export const SATELLITE_TILE_TEMPLATE =
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-// World_Terrain_Base serves levels 0-13; past that MapLibre must overscale
-// instead of requesting tiles that 404.
-export const SATELLITE_TILE_MAXZOOM = 13;
-// The high-res basemap source goes through this protocol so ESRI's baked-in
-// "Map Data Not Yet Available" placeholder tiles can be replaced with an
-// upscaled crop of the nearest ancestor tile that has real data.
-export const BASEMAP_PROTOCOL_TEMPLATE = "ohbase://{z}/{y}/{x}";
+// ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
+// path under .../rest/services/; `maxZoom` is that layer's deepest native level
+// (past it MapLibre overscales instead of requesting tiles that 404).
+export const ESRI_BASEMAPS = [
+  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
+  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
+  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
+  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13 },
+  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13 },
+  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8 },
+  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16 },
+  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
+  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
+];
+export const DEFAULT_BASEMAP_ID = "imagery";
+// Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
+const BASEMAP_STORAGE_KEY = "map_basemap_style";
+
+const basemapById = (id) => ESRI_BASEMAPS.find((b) => b.id === id) ?? ESRI_BASEMAPS[0];
+const esriServiceTemplate = (service) =>
+  `https://server.arcgisonline.com/ArcGIS/rest/services/${service}/MapServer/tile/{z}/{y}/{x}`;
+
+// Direct ESRI XYZ template for a basemap id — used for the low-zoom source and
+// cache-warming. The high-zoom source goes through basemapProtocolTemplate().
+export const esriTileTemplate = (id) => esriServiceTemplate(basemapById(id).service);
+export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
+// The high-res source goes through this protocol, with the basemap id baked in
+// so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
+// placeholders can be swapped for an upscaled crop of the nearest real ancestor.
+export const basemapProtocolTemplate = (id) => `ohbase://${basemapById(id).id}/{z}/{y}/{x}`;
+// The picked basemap id straight from localStorage — used by preload before
+// React mounts (mapSettings.js drives it reactively once mounted).
+export const selectedBasemapId = () => {
+  try {
+    return localStorage.getItem(BASEMAP_STORAGE_KEY) || DEFAULT_BASEMAP_ID;
+  } catch {
+    return DEFAULT_BASEMAP_ID;
+  }
+};
 export const TERRAIN_TILE_TEMPLATE =
   "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
@@ -276,10 +305,10 @@ export const ensurePmtilesProtocol = () => {
 // Levels 0-9 have global coverage; placeholders only appear above that.
 const PLACEHOLDER_MIN_ZOOM = 9;
 let basemapProtocolReady = false;
-let placeholderRefPromise = null;
+const placeholderRefByService = new Map();
 
-const fetchBasemapTileBytes = async (z, y, x, signal) => {
-  const url = buildTileUrl(SATELLITE_TILE_TEMPLATE, { x, y, z });
+const fetchBasemapTileBytes = async (service, z, y, x, signal) => {
+  const url = buildTileUrl(esriServiceTemplate(service), { x, y, z });
   const response = await fetch(url, { cache: "force-cache", signal });
   if (!response.ok) {
     throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
@@ -301,31 +330,31 @@ const bytesEqual = (a, b) => {
 // detail (Arctic ocean, remote South Pacific). Only trust the reference when
 // both agree — if ESRI ever changes coverage there, detection simply turns
 // itself off and deep-zoom behaves like before.
-const loadPlaceholderRef = () => {
-  if (!placeholderRefPromise) {
-    placeholderRefPromise = (async () => {
+const loadPlaceholderRef = (service) => {
+  if (!placeholderRefByService.has(service)) {
+    placeholderRefByService.set(service, (async () => {
       try {
         const [a, b] = await Promise.all([
-          fetchBasemapTileBytes(13, 0, 0),
-          fetchBasemapTileBytes(13, 5091, 1365),
+          fetchBasemapTileBytes(service, 13, 0, 0),
+          fetchBasemapTileBytes(service, 13, 5091, 1365),
         ]);
         return bytesEqual(a, b) ? new Uint8Array(a) : null;
       } catch {
         return null;
       }
-    })();
+    })());
   }
-  return placeholderRefPromise;
+  return placeholderRefByService.get(service);
 };
 
-const synthesizeFromAncestor = async (z, y, x, placeholderRef, signal) => {
+const synthesizeFromAncestor = async (service, z, y, x, placeholderRef, signal) => {
   for (let pz = z - 1; pz >= 0; pz -= 1) {
     const shift = z - pz;
     const px = x >> shift;
     const py = y >> shift;
     let parentBytes;
     try {
-      parentBytes = await fetchBasemapTileBytes(pz, py, px, signal);
+      parentBytes = await fetchBasemapTileBytes(service, pz, py, px, signal);
     } catch {
       continue;
     }
@@ -361,21 +390,22 @@ const synthesizeFromAncestor = async (z, y, x, placeholderRef, signal) => {
 };
 
 const basemapTileLoader = async (params, abortController) => {
-  const match = /^ohbase:\/\/(\d+)\/(\d+)\/(\d+)$/.exec(params.url);
+  const match = /^ohbase:\/\/([^/]+)\/(\d+)\/(\d+)\/(\d+)$/.exec(params.url);
   if (!match) throw new Error(`Bad basemap tile URL: ${params.url}`);
-  const z = Number(match[1]);
-  const y = Number(match[2]);
-  const x = Number(match[3]);
+  const service = basemapById(match[1]).service;
+  const z = Number(match[2]);
+  const y = Number(match[3]);
+  const x = Number(match[4]);
   const signal = abortController?.signal;
 
-  const data = await fetchBasemapTileBytes(z, y, x, signal);
+  const data = await fetchBasemapTileBytes(service, z, y, x, signal);
   if (z <= PLACEHOLDER_MIN_ZOOM) return { data };
 
-  const ref = await loadPlaceholderRef();
+  const ref = await loadPlaceholderRef(service);
   if (!ref || !bytesEqual(data, ref)) return { data };
 
   try {
-    const synthesized = await synthesizeFromAncestor(z, y, x, ref, signal);
+    const synthesized = await synthesizeFromAncestor(service, z, y, x, ref, signal);
     if (synthesized) return { data: synthesized };
   } catch {
     // Fall through: the placeholder beats a missing tile.
