@@ -9,7 +9,7 @@
 // server's /api/hub proxy. Publishing exports the chosen scenario locally and
 // opens a prefilled hub post where the author drags the bundle in.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   exportScenarioBundle,
   importScenarioBundle,
@@ -384,6 +384,16 @@ const CommunityPanel = ({ onImported }) => {
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
 
+  // handleImport is async (network + import can take several seconds); by the
+  // time it resolves the user may have navigated to a different post or back
+  // to the grid. This ref holds the up-to-date selection so a delayed result
+  // can tell whether it still applies, without a stale closure over
+  // `selectedPost` from when the import started.
+  const selectedPostRef = useRef(null);
+  useEffect(() => {
+    selectedPostRef.current = selectedPost;
+  }, [selectedPost]);
+
   const clearBanners = () => {
     setNotice(null);
     setError(null);
@@ -447,13 +457,22 @@ const CommunityPanel = ({ onImported }) => {
       }
       const bundle = await response.json();
       const details = await importScenarioBundle(bundle);
-      setNotice(
-        `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
-          `Enjoyed it? React 🚀 (played it) or 👍 (liked it) on the hub post.`,
-      );
+      // The user may have navigated to a different post's detail view while
+      // this was in flight — don't attribute this result to whatever happens
+      // to be on screen now unless it's still this post (or the grid).
+      const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
+      if (stillRelevant) {
+        setNotice(
+          `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
+            `Enjoyed it? React 🚀 (played it) or 👍 (liked it) on the hub post.`,
+        );
+      }
       onImported?.(details);
     } catch (nextError) {
-      setError(`Import failed: ${nextError.message}`);
+      const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
+      if (stillRelevant) {
+        setError(`Import failed: ${nextError.message}`);
+      }
     } finally {
       setBusyId(null);
     }
