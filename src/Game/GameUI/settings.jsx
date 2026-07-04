@@ -379,20 +379,33 @@ const SettingsInput = ({
     placeholder,
     type = "text",
     helperText,
+    multiline = false,
 }) => (
     <div style={fieldGroupStyle}>
     <label style={labelStyle}>
     {label}
     </label>
-    <input
-    type={type}
-    value={value}
-    onChange={(event) => onChange(event.target.value)}
-    placeholder={placeholder}
-    autoComplete="off"
-    spellCheck={false}
-    style={inputStyle}
-    />
+    {multiline ? (
+        <textarea
+        rows={4}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        style={{ ...inputStyle, fontFamily: "monospace", resize: "vertical" }}
+        />
+    ) : (
+        <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        style={inputStyle}
+        />
+    )}
     {helperText && (
         <div style={helperStyle}>
         {helperText}
@@ -446,6 +459,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="gemini-3.1-flash-lite-preview"
             helperText="Leave blank to use the built-in Gemini default."
             />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.geminiCustomParams ?? ""}
+            onChange={(value) => onSettingChange("geminiCustomParams", value)}
+            placeholder='{"generationConfig": {"topP": 0.9}}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
             </>
         )}
 
@@ -469,6 +490,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
                     ? "Leave blank to auto-pick a chat-capable model from /v1/models."
                     : "Enter the exact model id."
             }
+            />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.openaiCustomParams ?? ""}
+            onChange={(value) => onSettingChange("openaiCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
@@ -497,6 +526,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="https://api.anthropic.com/v1"
             helperText="Leave blank to use the real Anthropic API. Set this to point at a self-hosted proxy that speaks the Anthropic Messages API format."
             />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.anthropicCustomParams ?? ""}
+            onChange={(value) => onSettingChange("anthropicCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
             </>
         )}
 
@@ -523,6 +560,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("openaiCompatibleModel", value)}
             placeholder="llama / qwen / gpt / mistral"
             helperText="Leave blank to auto-pick a model from /models."
+            />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.openaiCompatibleCustomParams ?? ""}
+            onChange={(value) => onSettingChange("openaiCompatibleCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
