@@ -20,6 +20,7 @@ import {
 } from "../../runtime/assets.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
+import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
@@ -340,6 +341,19 @@ const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
+  const [mapDisplaySettings, setMapDisplaySettings] = useState(() => ({
+    hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+    featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
+  }));
+
+  useEffect(() => {
+    const onUpdated = () => setMapDisplaySettings({
+      hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+      featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
+    });
+    window.addEventListener("mapSettings:updated", onUpdated);
+    return () => window.removeEventListener("mapSettings:updated", onUpdated);
+  }, []);
   // False until the first world.json read: before that we can't know whether
   // this game uses the stock map or a custom one, so NO political layer
   // renders — this kills the "modern world flashes, then the real map loads"
@@ -711,26 +725,28 @@ const WorldMap = ({ isGlobe = false }) => {
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(1, isGlobe),
+    "text-size": buildCountryTextSize(mapDisplaySettings.featureSize, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
-  }), [isGlobe]);
+    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
+  }), [isGlobe, mapDisplaySettings.featureSize, mapDisplaySettings.hideCountryLabels]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-    "text-size": buildCountryTextSize(1, isGlobe),
+    "text-size": buildCountryTextSize(mapDisplaySettings.featureSize, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
-  }), [isGlobe]);
+    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
+  }), [isGlobe, mapDisplaySettings.featureSize, mapDisplaySettings.hideCountryLabels]);
 
   const labelLayerPaint = useMemo(() => ({
     "text-color": "#FFFFFF",
