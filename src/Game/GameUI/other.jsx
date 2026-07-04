@@ -4,7 +4,7 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 const baseStyle = {
     position: "fixed",
@@ -62,17 +62,9 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
         setImageFailed(false);
     }, [country]);
 
-    // All hooks must run before the early return below (Rules of Hooks) —
-    // this one has to sit here, not next to where shouldBlur is computed.
-    const [blurSensitive, setBlurSensitive] = useState(
-        () => getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags),
-    );
-
-    useEffect(() => {
-        const onUpdated = () => setBlurSensitive(getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags));
-        window.addEventListener("mapSettings:updated", onUpdated);
-        return () => window.removeEventListener("mapSettings:updated", onUpdated);
-    }, []);
+    // Hooks must run before the early return below (Rules of Hooks) — this
+    // one has to sit here, not next to where shouldBlur is computed.
+    const blurSensitive = useMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags);
 
     // On phones the country is already shown inside the date widget — this
     // badge and the date widget would overlap on a portrait screen.

@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer, useMap } from "react-map-gl/maplibre";
 import { SKYBOX_SUN_U, SKYBOX_SUN_V } from "./skybox.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 // The camera orbits the earth once every 10 minutes.
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
@@ -82,15 +82,7 @@ const GlobeEffects = ({ active }) => {
   const { current: map } = useMap();
   const [sunLngState, setSunLngState] = useState(() => sunWorldLng ?? 0);
 
-  const [autoRotateDisabled, setAutoRotateDisabled] = useState(
-    () => getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
-  );
-
-  useEffect(() => {
-    const onUpdated = () => setAutoRotateDisabled(getMapSetting(MAP_SETTING_KEYS.disableIdleRotation));
-    window.addEventListener("mapSettings:updated", onUpdated);
-    return () => window.removeEventListener("mapSettings:updated", onUpdated);
-  }, []);
+  const autoRotateDisabled = useMapSetting(MAP_SETTING_KEYS.disableIdleRotation);
 
   useEffect(() => {
     if (!active || !map) return undefined;

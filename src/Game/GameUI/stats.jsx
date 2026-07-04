@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid, isSensitiveFlag } from "../../runtime/countryFlags.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { generateCountryStatSheet } from "../AI/gameplay.js";
 
@@ -85,9 +85,7 @@ const StatsPane = ({ active }) => {
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
-    const [blurSensitive, setBlurSensitive] = useState(
-        () => getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags),
-    );
+    const blurSensitive = useMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags);
     const displayName = useCountryDisplayName(targetCode);
 
     // Which game and which date are we in? Also seeds the target: your country.
@@ -113,12 +111,6 @@ const StatsPane = ({ active }) => {
             cancelled = true;
         };
     }, [active]);
-
-    useEffect(() => {
-        const onUpdated = () => setBlurSensitive(getMapSetting(MAP_SETTING_KEYS.blurSensitiveFlags));
-        window.addEventListener("mapSettings:updated", onUpdated);
-        return () => window.removeEventListener("mapSettings:updated", onUpdated);
-    }, []);
 
     // While the pane is showing, clicking any country on the map inspects it.
     useEffect(() => {
