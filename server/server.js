@@ -1,6 +1,7 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import express from "express";
 import fs from "fs";
+import https from "https";
 import path from "path";
 import url from "url";
 import {
@@ -572,9 +573,25 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-const httpServer = app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+// A LAN address (e.g. http://192.168.1.20:3000) is not a secure context, so
+// service workers — and with them, PWA install — never work on it, only on
+// localhost. If `node scripts/generate-dev-cert.mjs` has been run, its cert
+// is picked up here so other devices on the network can install the app too
+// (each device must first be told to trust the cert once — see that script).
+const certKeyPath = path.join(__dirname, "../certs/dev-key.pem");
+const certPath = path.join(__dirname, "../certs/dev-cert.pem");
+const hasDevCert = fs.existsSync(certKeyPath) && fs.existsSync(certPath);
+
+const httpServer = hasDevCert
+  ? https.createServer(
+      { key: fs.readFileSync(certKeyPath), cert: fs.readFileSync(certPath) },
+      app,
+    ).listen(PORT, () => {
+      console.log(`Server running at https://localhost:${PORT} (dev cert active)`);
+    })
+  : app.listen(PORT, () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+    });
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers
 // then reported as a bare "Server stopped." — say what actually happened.

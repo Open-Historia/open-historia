@@ -57,8 +57,9 @@ This is a personal fork ([`rsb1813/open-paxhistoria`](https://github.com/rsb1813
   for zoom sensitivity, border width, and feature (label) size.
 - **Sensitive flag blur** — an opt-in setting that blurs flags for a small list of commonly-disputed
   polities wherever a flag renders.
-- **Installable as a PWA** — the app can be installed as a standalone app (works reliably from
-  `localhost`; installing from a plain-HTTP LAN address may not prompt, since that isn't a secure context).
+- **Installable as a PWA** — the app can be installed as a standalone app. Works out of the box from
+  `localhost`; installing from other devices on the LAN needs a self-signed HTTPS cert (see
+  [Installing the app (PWA) on other devices](#installing-the-app-pwa-on-other-devices)).
 
 ---
 
@@ -135,6 +136,25 @@ Then open **http://localhost:3000** in your browser.
 > **Note:** the large map assets (`*.pmtiles`, `public/assets/*-seed.*`, and
 > `server/data/scenarios/default/regions.geojson`) live in Git LFS. If you downloaded a
 > ZIP instead of cloning, run the launcher script for your platform — it fetches them automatically.
+
+#### Installing the app (PWA) on other devices
+
+The app can be installed as a standalone app (manifest + service worker). Installing from
+`http://localhost:3000` on the machine running the server works out of the box. Installing from
+another device on the same network — `http://192.168.x.x:3000` — does not, because a plain LAN
+address isn't a secure context and service workers refuse to register on it. To fix that:
+
+```bash
+node scripts/generate-dev-cert.mjs   # writes certs/dev-cert.pem + certs/dev-key.pem
+node server/server.js                # now serves https://<your-LAN-IP>:3000
+```
+
+The cert is self-signed, so every other device must be told to trust it once — otherwise Chrome
+refuses the connection outright. Copy `certs/dev-cert.pem` to the device and install it as a
+trusted certificate (Android: Settings → Security → Install from storage → CA certificate; iOS:
+AirDrop/email the file, open it, then enable full trust under Settings → General → About →
+Certificate Trust Settings; Windows: double-click → Install Certificate → Local Machine → Trusted
+Root Certification Authorities). Re-run the generator if your LAN IP changes.
 
 ---
 
