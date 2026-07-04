@@ -582,16 +582,22 @@ const certKeyPath = path.join(__dirname, "../certs/dev-key.pem");
 const certPath = path.join(__dirname, "../certs/dev-cert.pem");
 const hasDevCert = fs.existsSync(certKeyPath) && fs.existsSync(certPath);
 
-const httpServer = hasDevCert
-  ? https.createServer(
-      { key: fs.readFileSync(certKeyPath), cert: fs.readFileSync(certPath) },
-      app,
-    ).listen(PORT, () => {
-      console.log(`Server running at https://localhost:${PORT} (dev cert active)`);
-    })
-  : app.listen(PORT, () => {
-      console.log(`Server running at http://localhost:${PORT}`);
+let httpServer;
+if (hasDevCert) {
+  try {
+    const options = { key: fs.readFileSync(certKeyPath), cert: fs.readFileSync(certPath) };
+    httpServer = https.createServer(options, app).listen(PORT, () => {
+      console.log(`Server running at https://localhost:${PORT} (dev cert active) — this port is HTTPS-only now, so use https:// everywhere, including localhost.`);
     });
+  } catch (error) {
+    console.error(`Dev cert at certs/ is unreadable or malformed (${error.message}) — falling back to plain HTTP. Re-run \`node scripts/generate-dev-cert.mjs\`.`);
+  }
+}
+if (!httpServer) {
+  httpServer = app.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+  });
+}
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers
 // then reported as a bare "Server stopped." — say what actually happened.
