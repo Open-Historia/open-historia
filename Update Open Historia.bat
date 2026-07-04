@@ -148,6 +148,29 @@ if exist "%SRC%\server\data\scenarios" (
     if errorlevel 8 goto :copyfail
 )
 
+REM 3b) ...except the built-in "default" scenario, which is shipped app content
+REM     (prompts, world, colors, cover image, template state), not player data -
+REM     so its files are always refreshed, otherwise shipped updates to it never
+REM     reach an existing install. Its large LFS map geometry (regions.geojson)
+REM     is only a pointer in a codeload zip, so it is excluded here and handled
+REM     by the LFS resolver in 3c. Saved games (server\data\games) are untouched.
+if exist "%SRC%\server\data\scenarios\default" (
+    robocopy "%SRC%\server\data\scenarios\default" "%CD%\server\data\scenarios\default" /E /XF *.geojson *.pmtiles /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 goto :copyfail
+)
+
+REM 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content. A
+REM     codeload zip only carries pointers, so no LFS file would otherwise ever
+REM     update on a ZIP install. This downloads any that changed from GitHub's
+REM     media host and checksum-verifies them. Best-effort - needs Node (which
+REM     running the game already requires); a missing Node just leaves files as-is.
+where node >nul 2>&1
+if not errorlevel 1 (
+    if exist "scripts\resolve-lfs.mjs" (
+        node "scripts\resolve-lfs.mjs" "%SRC%" "%REPO_OWNER%" "%REPO_NAME%" "%REPO_BRANCH%"
+    )
+)
+
 rmdir /s /q "%WORKDIR%" 2>nul
 
 REM Force a rebuild on next launch so the update actually takes effect.
