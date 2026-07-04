@@ -1,5 +1,5 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useCallback, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Map from "react-map-gl/maplibre";
 import Nations from "./Nations";
 import GlobeEffects from "./GlobeEffects.jsx";
@@ -16,6 +16,7 @@ import {
   ensureBasemapProtocol,
 } from "../../runtime/assets.js";
 import { SKYBOX_SIZE, getSkyboxUrl } from "./skybox.js";
+import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -102,6 +103,33 @@ const WORLD_STYLE = {
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
+  const [interactionSettings, setInteractionSettings] = useState(() => ({
+    zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
+    reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
+    disablePanInertia: getMapSetting(MAP_SETTING_KEYS.disablePanInertia),
+  }));
+
+  useEffect(() => {
+    const onUpdated = () => setInteractionSettings({
+      zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
+      reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
+      disablePanInertia: getMapSetting(MAP_SETTING_KEYS.disablePanInertia),
+    });
+    window.addEventListener("mapSettings:updated", onUpdated);
+    return () => window.removeEventListener("mapSettings:updated", onUpdated);
+  }, []);
+
+  // MapLibre's scroll-zoom rate has no declarative prop — only the imperative
+  // handler exposes it. A negative rate flips zoom direction with no custom
+  // wheel-event handling needed (see plan doc for the verified API).
+  useEffect(() => {
+    const map = mapRef?.current?.getMap?.();
+    if (!map) return;
+    const sign = interactionSettings.reverseScrollZoom ? -1 : 1;
+    map.scrollZoom.setWheelZoomRate((1 / 450) * interactionSettings.zoomSensitivity * sign);
+    map.scrollZoom.setZoomRate((1 / 100) * interactionSettings.zoomSensitivity * sign);
+  }, [mapRef, interactionSettings.zoomSensitivity, interactionSettings.reverseScrollZoom]);
+
   const isGlobe = projection === "globe";
   const terrain = useMemo(
     () =>
@@ -157,7 +185,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         dragRotate={false}
         touchPitch={false}
         pitchWithRotate={false}
-        dragPan
+        dragPan={interactionSettings.disablePanInertia ? { maxSpeed: 0 } : true}
         reuseMaps
         fadeDuration={0}
         collectResourceTiming={false}
