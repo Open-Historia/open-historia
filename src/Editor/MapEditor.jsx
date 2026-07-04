@@ -23,6 +23,7 @@ import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import SearchBar from "./SearchBar.jsx";
 import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
+import { loadBackgroundFile, rebuildPersistedBackground } from "./customBackground.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -39,8 +40,23 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [applying, setApplying] = useState(false); // writing the map into the scenario
   const [cityPopup, setCityPopup] = useState(null); // {id, x, y, isNew} — inline city editor
+  const [customBg, setCustomBg] = useState(null); // live uploaded background descriptor
 
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
+
+  const uploadBackground = async (file) => {
+    if (!file) return;
+    try {
+      setCustomBg(await loadBackgroundFile(file));
+    } catch (e) {
+      console.warn("[editor] background upload failed:", e);
+      window.alert(`Could not load that background: ${e?.message || e}`);
+    }
+  };
+  const clearBackground = () => {
+    setCustomBg(null);
+    d.patchMetadata({ customBackground: null });
+  };
 
   const buildPayload = () => ({
     name: d.name,
@@ -85,6 +101,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     setDocId(null);
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
     else api?.reseedWorld();
+    setCustomBg(null);
     d.setSaveStatus("saved");
   };
 
@@ -100,6 +117,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         features: doc.features || [],
       });
       api?.loadRegions(doc.regions);
+      setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
       setDocId(doc.id);
       d.setSaveStatus("saved");
     } catch (e) {
@@ -216,6 +234,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         }}
         onHistory={setHistory}
         onReady={setApi}
+        customBackground={customBg}
+        onCustomBackgroundSave={(saved) => d.patchMetadata({ customBackground: saved })}
       />
 
       <DocumentsMenu
@@ -361,6 +381,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         counts={d.counts}
         basemap={d.basemap}
         onBasemapChange={d.setBasemap}
+        onUploadBackground={uploadBackground}
+        hasCustomBackground={Boolean(customBg)}
+        onClearBackground={clearBackground}
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
