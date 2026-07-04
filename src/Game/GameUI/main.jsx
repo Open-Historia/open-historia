@@ -274,7 +274,7 @@ const Main = ({
         forcesOpen={isForcesOpen}
         onToggleForces={() => setIsForcesOpen((v) => !v)}
       />
-      <Other topOffset={TOP_BAR_OFFSET} />
+      <Other rightShift={rightShift} />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
