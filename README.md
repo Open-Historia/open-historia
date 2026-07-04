@@ -149,6 +149,12 @@ node scripts/generate-dev-cert.mjs   # writes certs/dev-cert.pem + certs/dev-key
 node server/server.js                # now serves https://<your-LAN-IP>:3000
 ```
 
+> **Once the cert exists, port 3000 is HTTPS-only** — there's no separate HTTP port anymore. This
+> also affects the host machine itself: use `https://localhost:3000`, not `http://`, and the same
+> for the `Launch Open Historia` scripts and the Android app's connect address (both default to
+> `http://`). If you don't need LAN installs, don't run the generator and the port stays plain HTTP
+> exactly as before. Delete `certs/` to go back to HTTP.
+
 The cert is self-signed, so every other device must be told to trust it once — otherwise Chrome
 refuses the connection outright. Copy `certs/dev-cert.pem` to the device and install it as a
 trusted certificate (Android: Settings → Security → Install from storage → CA certificate; iOS:
