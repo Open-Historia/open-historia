@@ -10,7 +10,10 @@ import {
 import { getStoredLanguage } from "./i18n.js";
 import { translateLabel } from "./translator.js";
 
-const COUNTRY_LABELS_CACHE_KEY = "country-labels-v2";
+// v3: label features now carry `lat` (globe text-size correction, issue #6) —
+// bumped so returning users' persisted v2 cache (no `lat`) doesn't silently
+// serve pre-fix data forever.
+const COUNTRY_LABELS_CACHE_KEY = "country-labels-v3";
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 const EMPTY_COUNTRY_LABELS = {
   curvedLabelData: EMPTY_FEATURE_COLLECTION,
