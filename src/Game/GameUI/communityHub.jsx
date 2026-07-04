@@ -34,6 +34,13 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.json|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
+// First image in the issue body — markdown ![alt](url) or GitHub's own
+// <img src="..."> attachment markup (issue bodies mix both depending on how
+// the image was pasted). Used as the card/detail-view cover; posts with no
+// image simply get coverImageUrl: null (existing text-only card, no error).
+const COVER_IMAGE_PATTERN =
+  /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
+
 let hubCache = { at: 0, posts: null };
 
 // Installs per bundle file (release-asset download counts). Community posts
@@ -65,6 +72,8 @@ const parsePost = (issue, installsByFile) => {
     .replace(/^Scenario file:\s*$/gim, "")
     .replace(/\s+/g, " ")
     .trim();
+  const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
+  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -87,6 +96,7 @@ const parsePost = (issue, installsByFile) => {
     bundleUrl,
     // null = not trackable (issue attachment), a number = release download count.
     installs: bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) ?? null : null,
+    coverImageUrl,
   };
 };
 
@@ -164,6 +174,19 @@ const rowTitleStyle = {
 
 const ScenarioCard = ({ post, busy, onImport }) => (
   <div style={cardSurface}>
+    {post.coverImageUrl && (
+      <img
+        src={post.coverImageUrl}
+        alt=""
+        onError={(event) => { event.currentTarget.style.display = "none"; }}
+        style={{
+          aspectRatio: "16 / 9",
+          borderRadius: "10px",
+          objectFit: "cover",
+          width: "100%",
+        }}
+      />
+    )}
     <div style={{ alignItems: "center", display: "flex", gap: "0.55rem" }}>
       {post.avatarUrl && (
         <img src={post.avatarUrl} alt={post.author} style={{ borderRadius: "50%", height: "1.6rem", width: "1.6rem" }} />
