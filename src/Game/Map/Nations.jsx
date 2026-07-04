@@ -20,7 +20,7 @@ import {
 } from "../../runtime/assets.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
@@ -341,21 +341,11 @@ const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const [worldState, setWorldState] = useState({ regionOwnershipOverrides: {} });
-  const [mapDisplaySettings, setMapDisplaySettings] = useState(() => ({
-    hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
-    featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
-    borderWidth: getMapSetting(MAP_SETTING_KEYS.borderWidth),
-  }));
-
-  useEffect(() => {
-    const onUpdated = () => setMapDisplaySettings({
-      hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
-      featureSize: getMapSetting(MAP_SETTING_KEYS.featureSize),
-      borderWidth: getMapSetting(MAP_SETTING_KEYS.borderWidth),
-    });
-    window.addEventListener("mapSettings:updated", onUpdated);
-    return () => window.removeEventListener("mapSettings:updated", onUpdated);
-  }, []);
+  const mapDisplaySettings = {
+    hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+    featureSize: useMapSetting(MAP_SETTING_KEYS.featureSize),
+    borderWidth: useMapSetting(MAP_SETTING_KEYS.borderWidth),
+  };
   // False until the first world.json read: before that we can't know whether
   // this game uses the stock map or a custom one, so NO political layer
   // renders — this kills the "modern world flashes, then the real map loads"

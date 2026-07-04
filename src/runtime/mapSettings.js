@@ -1,9 +1,10 @@
 /*! Open Historia — portions (map interaction/display settings) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Map interaction/display settings — localStorage-backed, same getter/setter
-// pattern as src/Game/AI/providerConfig.js. Consumers (World.jsx, Nations.jsx,
-// GlobeEffects.jsx) listen for "mapSettings:updated" instead of receiving
-// these as props threaded through GameUI/main.jsx, mirroring how
-// runtime/i18n.js dispatches "i18n:updated".
+// pattern as src/Game/AI/providerConfig.js. Consumers subscribe via
+// useMapSetting() below instead of receiving these as props threaded through
+// GameUI/main.jsx, mirroring how useCountryDisplayName (polityNames.js) sits
+// beside the data it subscribes to.
+import { useEffect, useState } from "react";
 
 export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
@@ -48,4 +49,17 @@ export function setMapSetting(key, value) {
     }
 
     window.dispatchEvent(new Event("mapSettings:updated"));
+}
+
+export function useMapSetting(key) {
+    const [value, setValue] = useState(() => getMapSetting(key));
+
+    useEffect(() => {
+        setValue(getMapSetting(key));
+        const onUpdated = () => setValue(getMapSetting(key));
+        window.addEventListener("mapSettings:updated", onUpdated);
+        return () => window.removeEventListener("mapSettings:updated", onUpdated);
+    }, [key]);
+
+    return value;
 }

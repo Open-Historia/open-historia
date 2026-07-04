@@ -16,7 +16,7 @@ import {
   ensureBasemapProtocol,
 } from "../../runtime/assets.js";
 import { SKYBOX_SIZE, getSkyboxUrl } from "./skybox.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -109,21 +109,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // instance actually exists — mapReady (set from onLoad) is that signal.
   const [mapReady, setMapReady] = useState(false);
   const handleLoad = useCallback(() => setMapReady(true), []);
-  const [interactionSettings, setInteractionSettings] = useState(() => ({
-    zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
-    reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
-    disablePanInertia: getMapSetting(MAP_SETTING_KEYS.disablePanInertia),
-  }));
-
-  useEffect(() => {
-    const onUpdated = () => setInteractionSettings({
-      zoomSensitivity: getMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
-      reverseScrollZoom: getMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
-      disablePanInertia: getMapSetting(MAP_SETTING_KEYS.disablePanInertia),
-    });
-    window.addEventListener("mapSettings:updated", onUpdated);
-    return () => window.removeEventListener("mapSettings:updated", onUpdated);
-  }, []);
+  const interactionSettings = {
+    zoomSensitivity: useMapSetting(MAP_SETTING_KEYS.zoomSensitivity),
+    reverseScrollZoom: useMapSetting(MAP_SETTING_KEYS.reverseScrollZoom),
+    disablePanInertia: useMapSetting(MAP_SETTING_KEYS.disablePanInertia),
+  };
 
   // MapLibre's scroll-zoom rate has no declarative prop — only the imperative
   // handler exposes it. The rate's sign has no effect on zoom direction
