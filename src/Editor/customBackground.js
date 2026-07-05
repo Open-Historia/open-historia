@@ -26,12 +26,25 @@ export const BACKGROUND_ACCEPT =
 
 const extOf = (name) => (name.split(".").pop() || "").toLowerCase();
 
-// Uploaded vector data reads as reference geometry — a soft blue outline, no fill
-// heavy enough to hide the regions drawn on top of it.
-const vectorStyle = new Style({
+// A generic uploaded vector reads as reference geometry — a soft blue outline that
+// doesn't hide the regions drawn on top. But a feature that carries its own `fill`
+// colour (the generated biome basemap) is painted with it, so the terrain backdrop
+// actually shows — matching how the game renders the same background.
+const referenceStyle = new Style({
   stroke: new Stroke({ color: "rgba(96,165,250,0.9)", width: 1.2 }),
   fill: new Fill({ color: "rgba(96,165,250,0.10)" }),
 });
+const biomeStyleCache = new Map();
+const vectorStyle = (feature) => {
+  const fill = feature.get("fill");
+  if (!fill) return referenceStyle;
+  let style = biomeStyleCache.get(fill);
+  if (!style) {
+    style = new Style({ fill: new Fill({ color: fill }), stroke: new Stroke({ color: "rgba(0,0,0,0.12)", width: 0.5 }) });
+    biomeStyleCache.set(fill, style);
+  }
+  return style;
+};
 
 const readAsFeatures = (parseFn) => {
   const source = new VectorSource({ features: parseFn() });

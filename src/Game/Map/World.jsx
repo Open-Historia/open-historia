@@ -81,8 +81,12 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson } },
       layers: [
         { id: "custom-bg-sea", type: "background", paint: { "background-color": "#0b1a2b" } },
-        { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#33435c" } },
-        { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(255,255,255,0.5)", "line-width": 1 } },
+        // A fill layer only draws (Multi)Polygons, so no geometry-type filter is
+        // needed — and the old "Polygon"-only filter silently dropped the dissolved
+        // MultiPolygon biomes, so the basemap rendered nothing. Each feature carries
+        // its own biome colour in `fill`.
+        { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", paint: { "fill-color": ["coalesce", ["get", "fill"], "#33435c"] } },
+        { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(0,0,0,0.18)", "line-width": 0.4 } },
       ],
       sky: { "atmosphere-blend": 0 },
     };
