@@ -177,6 +177,16 @@ REM Force a rebuild on next launch so the update actually takes effect.
 if exist "dist" rmdir /s /q "dist"
 
 :finish
+REM Refresh the vendored Fantasy Map Generator from its repo (the map editor's
+REM world generator). Best-effort - needs Node + deps (the launcher keeps those
+REM installed); a failure never blocks the update.
+where node >nul 2>&1
+if not errorlevel 1 (
+    if exist "scripts\fetch-fmg.mjs" (
+        echo Refreshing the Fantasy Map Generator ^(map editor world generator^)...
+        node "scripts\fetch-fmg.mjs"
+    )
+)
 echo.
 echo ===================================================
 echo   Update complete.

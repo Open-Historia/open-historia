@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+
+# Vendored Fantasy Map Generator (fetched at runtime by scripts/fetch-fmg.mjs)
+/fmg/
 server/data/*
 !server/data/scenarios/
 .key
