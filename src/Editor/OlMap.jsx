@@ -946,7 +946,9 @@ const OlMap = ({
         if (ex && Number.isFinite(ex[0]) && ex[0] !== Infinity) {
           map.getView().fit(ex, { padding: [60, 60, 60, 60], duration: 300, maxZoom: 10 });
         }
-        onCustomBackgroundSaveRef.current?.({ kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) });
+        // Skip re-emitting a restored background (persisted) — only fresh uploads
+        // need to be written into the document.
+        if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) });
       }
       return () => {
         map.removeLayer(bg.layer);
@@ -962,7 +964,9 @@ const OlMap = ({
     });
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
-    onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
+    // Only fresh uploads write back into the document; a restored (persisted)
+    // background is already in the doc/scenario, so don't re-dirty it on open.
+    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
     return () => {
       map.removeLayer(imageLayer);
     };
