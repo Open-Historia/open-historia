@@ -59,6 +59,7 @@ export const JSON_URLS = {
   prompts: "",
   regionsGeojson: "",
   citiesGeojson: "",
+  backgroundData: "",
   world: "",
 };
 
@@ -77,7 +78,7 @@ export const ESRI_BASEMAPS = [
   { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
-export const DEFAULT_BASEMAP_ID = "imagery";
+export const DEFAULT_BASEMAP_ID = "ocean";
 // Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
 const BASEMAP_STORAGE_KEY = "map_basemap_style";
 
@@ -149,6 +150,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.prompts = withRuntimeToken("/api/runtime/json/prompts");
   JSON_URLS.regionsGeojson = withRuntimeToken("/api/runtime/json/regionsGeojson");
   JSON_URLS.citiesGeojson = withRuntimeToken("/api/runtime/json/citiesGeojson");
+  JSON_URLS.backgroundData = withRuntimeToken("/api/runtime/json/backgroundData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
 
   PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");

@@ -22,7 +22,10 @@ import SelectionInspector from "./SelectionInspector.jsx";
 import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import SearchBar from "./SearchBar.jsx";
+import BasemapPicker from "./BasemapPicker.jsx";
 import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
+import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
+import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -39,8 +42,61 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [applying, setApplying] = useState(false); // writing the map into the scenario
   const [cityPopup, setCityPopup] = useState(null); // {id, x, y, isNew} — inline city editor
+  const [customBg, setCustomBg] = useState(null); // live background applied to the map
+  const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
+  const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
 
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
+
+  // An OpenLayers-loaded background in the persistable form the library stores.
+  const normalizeBackground = (bg) => {
+    if (bg?.kind === "image" && bg.dataUrl) return { kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect };
+    if (bg?.kind === "vector" && bg.layer) return { kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) };
+    return null;
+  };
+
+  // Pick a built-in ESRI preset: drop any custom background so the preset shows.
+  const selectBuiltinBasemap = (id) => {
+    d.setBasemap(id);
+    setCustomBg(null);
+    setCustomBgId(null);
+    d.patchMetadata({ customBackground: null });
+  };
+
+  // Pick one of the user's saved basemaps: fetch its payload and apply it.
+  const selectLibraryBasemap = async (bm) => {
+    try {
+      const payload = await getBasemapPayload(bm.id);
+      const saved =
+        bm.kind === "vector"
+          ? { kind: "vector", geojson: payload.geojson }
+          : { kind: "image", dataUrl: payload.dataUrl, aspect: bm.aspect };
+      setCustomBg(rebuildPersistedBackground(saved, { persisted: false }));
+      setCustomBgId(bm.id);
+    } catch (e) {
+      window.alert(`Could not load that basemap: ${e?.message || e}`);
+    }
+  };
+
+  // Upload a new basemap: apply it now AND save it to the library for reuse.
+  const uploadBasemap = async (file) => {
+    if (!file) return;
+    const bg = await loadBackgroundFile(file);
+    setCustomBg(bg); // applies immediately (image / vector / raster)
+    const normalized = normalizeBackground(bg);
+    if (!normalized) {
+      setCustomBgId(null); // raster (GeoTIFF/PMTiles) is session-only reference, not saved
+      return;
+    }
+    const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
+    try {
+      const meta = await addBackgroundToLibrary(normalized, name, { author: d.author || "" });
+      setCustomBgId(meta?.id || null);
+    } catch (e) {
+      console.warn("[editor] save basemap to library failed:", e);
+      setCustomBgId(null);
+    }
+  };
 
   const buildPayload = () => ({
     name: d.name,
@@ -85,6 +141,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     setDocId(null);
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
     else api?.reseedWorld();
+    setCustomBg(null);
+    setCustomBgId(null);
     d.setSaveStatus("saved");
   };
 
@@ -100,6 +158,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         features: doc.features || [],
       });
       api?.loadRegions(doc.regions);
+      setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
+      setCustomBgId(null);
       setDocId(doc.id);
       d.setSaveStatus("saved");
     } catch (e) {
@@ -125,6 +185,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     hydratedRef.current = true;
     const base = createDocument({ name: initialMap.name || "Scenario Map", kind: "import-world" });
     base.metadata.author = initialMap.author || "";
+    // Restore the chosen built-in basemap so re-opening shows it (not the default).
+    if (initialMap.basemap) base.metadata.basemap = initialMap.basemap;
+    // Carry the restored background in the document metadata so Apply & Play
+    // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
+    // clearing the scenario's background when the user re-opens and re-applies.
+    if (initialMap.background) base.metadata.customBackground = initialMap.background;
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),
@@ -143,6 +209,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     if (initialMap.colors) d.mergeColors(initialMap.colors);
     if (initialMap.regions) api.loadRegions(initialMap.regions);
     else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
+    // Restore the scenario's custom map background so re-opening its map editor
+    // shows the uploaded map, not a blank basemap. It's marked persisted, so the
+    // OlMap effect renders it without re-emitting (no dirty/autosave on open).
+    setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
+    setCustomBgId(null);
     d.setSaveStatus("saved");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, initialMap]);
@@ -216,6 +287,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         }}
         onHistory={setHistory}
         onReady={setApi}
+        customBackground={customBg}
+        onCustomBackgroundSave={(saved) => d.patchMetadata({ customBackground: saved })}
       />
 
       <DocumentsMenu
@@ -360,7 +433,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       <BottomBar
         counts={d.counts}
         basemap={d.basemap}
-        onBasemapChange={d.setBasemap}
+        hasCustomBackground={Boolean(customBg)}
+        onOpenBasemaps={() => setBasemapPickerOpen(true)}
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
@@ -391,6 +465,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
             }}
           />
         }
+      />
+
+      <BasemapPicker
+        open={basemapPickerOpen}
+        onClose={() => setBasemapPickerOpen(false)}
+        currentBasemap={d.basemap}
+        currentCustomId={customBgId}
+        onSelectBuiltin={selectBuiltinBasemap}
+        onSelectCustom={selectLibraryBasemap}
+        onUpload={uploadBasemap}
       />
     </div>
   );

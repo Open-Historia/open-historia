@@ -6,40 +6,17 @@
 // beside the data it subscribes to.
 import { useEffect, useState } from "react";
 
-// Keep in sync with assets.js DEFAULT_BASEMAP_ID.
-const DEFAULT_BASEMAP_ID = "imagery";
-
 export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
-    basemapStyle: "map_basemap_style",
-};
-
-const BOOLEAN_KEYS = new Set([
-    MAP_SETTING_KEYS.hideCountryLabels,
-    MAP_SETTING_KEYS.disableIdleRotation,
-]);
-
-const STRING_DEFAULTS = {
-    [MAP_SETTING_KEYS.basemapStyle]: DEFAULT_BASEMAP_ID,
 };
 
 export function getMapSetting(key) {
-    if (BOOLEAN_KEYS.has(key)) {
-        return localStorage.getItem(key) === "1";
-    }
-
-    // String-valued settings (e.g. the basemap picker): stored value or default.
-    return localStorage.getItem(key) || STRING_DEFAULTS[key];
+    return localStorage.getItem(key) === "1";
 }
 
 export function setMapSetting(key, value) {
-    if (BOOLEAN_KEYS.has(key)) {
-        localStorage.setItem(key, value ? "1" : "0");
-    } else {
-        localStorage.setItem(key, String(value));
-    }
-
+    localStorage.setItem(key, value ? "1" : "0");
     window.dispatchEvent(new Event("mapSettings:updated"));
 }
 

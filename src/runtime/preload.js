@@ -5,6 +5,7 @@ import {
   buildTileUrl,
   esriTileTemplate,
   loadCountryNames,
+  readJson,
   selectedBasemapId,
   warmJson,
   warmPmtilesArchive,
@@ -99,8 +100,13 @@ const STARTUP_TASKS = [
     id: "textures",
     label: "Warming world textures",
     weight: 20,
-    run: ({ signal }) =>
-      warmRemoteResources(
+    run: async ({ signal }) => {
+      // A custom map background replaces the ESRI basemap + terrain entirely, so
+      // for such scenarios the map never requests those tiles — don't warm them.
+      // world.json was already warmed into cache by the "state" task above.
+      const world = await readJson(JSON_URLS.world, { defaultValue: {} }).catch(() => ({}));
+      if (world?.background?.kind) return undefined;
+      return warmRemoteResources(
         [
           ...buildGlobalTextureUrls(esriTileTemplate(selectedBasemapId()), 2),
           ...buildInitialViewportTextureUrls(esriTileTemplate(selectedBasemapId())),
@@ -108,7 +114,8 @@ const STARTUP_TASKS = [
           ...buildInitialViewportTextureUrls(TERRAIN_TILE_TEMPLATE),
         ],
         { concurrency: 6, signal },
-      ),
+      );
+    },
   },
   {
     id: "countries",

@@ -102,6 +102,31 @@ const buildCitiesForGame = (features) => ({
     })),
 });
 
+// Turn the editor's persisted custom background (doc.metadata.customBackground)
+// into what the game needs: a light descriptor for world.json (just the kind) and
+// the heavy payload for the backgroundData asset (loaded once, off the 5s world
+// poll). Images carry a data URL — the game stretches them across the whole world
+// to fully replace Earth; vectors carry their GeoJSON. Raster uploads
+// (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
+// reach here. Returns { background: null } when there's nothing.
+const buildBackgroundForGame = (customBackground) => {
+  const bg = customBackground;
+  if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
+  if (bg.kind === "image" && bg.dataUrl) {
+    return {
+      background: { kind: "image" },
+      backgroundData: { dataUrl: bg.dataUrl },
+    };
+  }
+  if (bg.kind === "vector" && bg.geojson && Array.isArray(bg.geojson.features)) {
+    return {
+      background: { kind: "vector" },
+      backgroundData: { geojson: bg.geojson },
+    };
+  }
+  return { background: null, backgroundData: null };
+};
+
 export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {}) => {
   const regionOwnershipOverrides = {};
   const owners = new Set();
@@ -148,10 +173,23 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
+  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground);
   const world = {
     regionOwnershipOverrides,
     polityOverrides,
-    customRegions: hasCustomGeometry,
+    // A custom background replaces Earth, so it must also hide the stock modern
+    // political overlay (country fills, borders, "Russia"/"France" labels) — those
+    // are gated on customRegions in the game, so force it on whenever there's a
+    // background, even for a re-ownership map that ships no drawn geometry.
+    customRegions: hasCustomGeometry || Boolean(background),
+    // Custom map background (image placed by extent, or a vector overlay). null
+    // clears any previously applied background. The heavy payload rides in the
+    // seed's backgroundData below, uploaded as a separate scenario asset.
+    background,
+    // The chosen built-in basemap (an ESRI preset id) so the game renders THAT
+    // basemap, not always the ocean default. Ignored when a custom background
+    // replaces it. Falls back to ocean in-game if unset/unknown.
+    basemap: doc.metadata?.basemap || null,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.
@@ -185,5 +223,8 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     regions: gameRegions,
     // cities is the authored era city set (cities.geojson in the scenario).
     cities: gameCities,
+    // Heavy background payload ({ dataUrl } or { geojson }) — uploaded as the
+    // backgroundData scenario asset; null when there's no custom background.
+    backgroundData,
   };
 };

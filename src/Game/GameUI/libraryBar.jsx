@@ -1463,6 +1463,11 @@ const LibraryTopBar = () => {
         customCities: seed.world?.customCities ?? false,
         author: seed.world?.author ?? "",
         mapCredit: seed.world?.mapCredit ?? "",
+        // Custom map background descriptor (kind + placement); null clears it. The
+        // heavy payload goes to the backgroundData asset just below.
+        background: seed.world?.background ?? null,
+        // The chosen built-in basemap so the game renders it (not always ocean).
+        basemap: seed.world?.basemap ?? null,
       },
       game: {
         ...currentGame,
@@ -1494,6 +1499,20 @@ const LibraryTopBar = () => {
         type: "application/json",
       }),
     );
+
+    // The custom background's heavy payload (image data URL / vector GeoJSON) is a
+    // separate scenario asset so world.json stays light. Clear it when the map has
+    // no background, so re-applying a map that dropped its background doesn't leave
+    // a stale image behind.
+    if (seed.backgroundData) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "backgroundData",
+        new Blob([JSON.stringify(seed.backgroundData)], { type: "application/json" }),
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+    }
 
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
@@ -1883,7 +1902,16 @@ const LibraryTopBar = () => {
               downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
               downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
               downloadScenarioJsonAsset(scenario.id, "colors"),
-            ]).then(([regions, cities, colors]) => {
+              // The custom map background so re-opening the editor restores it.
+              world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+            ]).then(([regions, cities, colors, bgData]) => {
+              const bgDesc = world.background;
+              const background =
+                bgDesc?.kind === "image" && bgData?.dataUrl
+                  ? { kind: "image", dataUrl: bgData.dataUrl }
+                  : bgDesc?.kind === "vector" && bgData?.geojson
+                    ? { kind: "vector", geojson: bgData.geojson }
+                    : null;
               setMapEditorSeed({
                 name: scenario.name || "",
                 author: world.author || "",
@@ -1891,6 +1919,8 @@ const LibraryTopBar = () => {
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+                background,
+                basemap: world.basemap || null,
               });
             });
           }

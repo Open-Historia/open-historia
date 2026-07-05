@@ -4,20 +4,12 @@
  */
 
 // Bottom status bar: Regions / Features / Types counts (clickable to open their
-// managers), a Layers button, the reference-map (basemap) selector, the map name,
-// and the save-status dot — mirroring the official editor's bottom chrome.
+// managers), a Layers button, the Basemap picker button (opens the full basemap
+// overlay), the map name, and the save-status dot.
 
 import Icon from "./Icon.jsx";
 import { panelSurface, inputStyle } from "./editorStyles.js";
-
-const BASEMAPS = [
-  { v: "osm", l: "Your Basemap" },
-  { v: "light", l: "Light" },
-  { v: "dark", l: "Dark" },
-  { v: "white", l: "White" },
-  { v: "grayscale", l: "Grayscale" },
-  { v: "black", l: "Black" },
-];
+import { editorBasemapById } from "./basemaps.js";
 
 const SAVE = {
   saved: { color: "#22c55e", label: "All saved" },
@@ -52,7 +44,8 @@ const Chip = ({ icon, label, active, onClick }) => (
 const BottomBar = ({
   counts,
   basemap,
-  onBasemapChange,
+  hasCustomBackground,
+  onOpenBasemaps,
   name,
   onNameChange,
   saveStatus,
@@ -61,6 +54,7 @@ const BottomBar = ({
   search,
 }) => {
   const save = SAVE[saveStatus] || SAVE.saved;
+  const basemapLabel = hasCustomBackground ? "Custom" : editorBasemapById(basemap)?.label || "Basemap";
   return (
     <div
       style={{
@@ -85,20 +79,23 @@ const BottomBar = ({
 
       <div style={{ flex: 1 }} />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <Icon name="layers" size={15} style={{ opacity: 0.6 }} />
-        <select
-          value={basemap}
-          onChange={(e) => onBasemapChange(e.target.value)}
-          style={{ ...inputStyle, width: "auto", padding: "6px 8px", cursor: "pointer" }}
-        >
-          {BASEMAPS.map((b) => (
-            <option key={b.v} value={b.v} style={{ color: "#000" }}>
-              {b.l}
-            </option>
-          ))}
-        </select>
-      </div>
+      <button
+        type="button"
+        onClick={() => onOpenBasemaps?.()}
+        title="Choose a built-in basemap, one of your uploaded basemaps, or upload a new one"
+        style={{
+          ...inputStyle,
+          width: "auto",
+          padding: "6px 11px",
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <Icon name="layers" size={14} style={{ opacity: 0.75 }} />
+        Basemap: {basemapLabel}
+      </button>
 
       <input
         value={name}

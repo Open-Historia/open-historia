@@ -186,6 +186,11 @@ const SCENARIO_GEOJSON_ASSET_FILES = {
   // Era-accurate custom cities (points). When world.customCities is set the game
   // renders these instead of the modern cities.pmtiles labels.
   citiesGeojson: "cities.geojson",
+  // A custom map background uploaded in the editor (an image placed by extent, or
+  // a vector overlay). Small descriptor lives in world.background; this holds the
+  // heavy payload ({ dataUrl } for images, { geojson } for vector) so world.json
+  // stays light for the 5s poll. Loaded once by the game when world.background is set.
+  backgroundData: "background.json",
 };
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -1994,6 +1999,9 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson", mode),
+      // The custom map background travels with the scenario (always embedded, like
+      // the geometry) so a shared/imported custom map isn't blank.
+      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData", mode),
     },
     data: {
       actions: cloneJson(details.data.actions),

@@ -39,6 +39,13 @@ import {
   getMapEditorDocument,
   updateMapEditorDocument,
 } from "./mapEditorStore.js";
+import {
+  createBasemap,
+  deleteBasemap,
+  ensureBasemapStore,
+  getBasemapCatalog,
+  getBasemapPayload,
+} from "./basemapStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const app = express();
@@ -70,6 +77,7 @@ app.use((req, res, next) => {
 ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
+ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -512,14 +520,18 @@ app.get("/api/hub/file", async (req, res) => {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }
 
-    const text = await upstream.text();
-    if (text.length > HUB_MAX_BUNDLE_BYTES) {
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > HUB_MAX_BUNDLE_BYTES) {
       return sendError(res, 413, new Error("Scenario bundle is too large."));
     }
 
     res.setHeader("Cache-Control", "no-store");
-    res.type("application/json");
-    res.send(text);
+    // Pass the upstream content type through untouched. JSON bundles still parse
+    // via response.json() (which ignores the header), while binary bundles (.zip)
+    // and raw basemap images (.png/.jpg) arrive byte-for-byte — the old text()
+    // path UTF-8-decoded them and corrupted every non-text byte.
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+    res.send(buffer);
   } catch (error) {
     sendError(res, 502, error);
   }
@@ -561,6 +573,39 @@ app.put("/api/mapeditor/documents/:id", largeJsonParser, (req, res) => {
 app.delete("/api/mapeditor/documents/:id", (req, res) => {
   try {
     res.json(deleteMapEditorDocument(req.params.id));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// ---- Basemap library ("Your basemaps") -----------------------------------
+app.get("/api/basemaps", (_req, res) => {
+  try {
+    res.json(getBasemapCatalog());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/basemaps", largeJsonParser, (req, res) => {
+  try {
+    res.status(201).json(createBasemap(req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/basemaps/:id/payload", (req, res) => {
+  try {
+    res.json(getBasemapPayload(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.delete("/api/basemaps/:id", (req, res) => {
+  try {
+    res.json(deleteBasemap(req.params.id));
   } catch (error) {
     sendError(res, 400, error);
   }
