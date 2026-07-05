@@ -1900,7 +1900,16 @@ const LibraryTopBar = () => {
               downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
               downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
               downloadScenarioJsonAsset(scenario.id, "colors"),
-            ]).then(([regions, cities, colors]) => {
+              // The custom map background so re-opening the editor restores it.
+              world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+            ]).then(([regions, cities, colors, bgData]) => {
+              const bgDesc = world.background;
+              const background =
+                bgDesc?.kind === "image" && bgData?.dataUrl
+                  ? { kind: "image", dataUrl: bgData.dataUrl }
+                  : bgDesc?.kind === "vector" && bgData?.geojson
+                    ? { kind: "vector", geojson: bgData.geojson }
+                    : null;
               setMapEditorSeed({
                 name: scenario.name || "",
                 author: world.author || "",
@@ -1908,6 +1917,7 @@ const LibraryTopBar = () => {
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+                background,
               });
             });
           }

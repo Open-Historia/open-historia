@@ -143,6 +143,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     hydratedRef.current = true;
     const base = createDocument({ name: initialMap.name || "Scenario Map", kind: "import-world" });
     base.metadata.author = initialMap.author || "";
+    // Carry the restored background in the document metadata so Apply & Play
+    // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
+    // clearing the scenario's background when the user re-opens and re-applies.
+    if (initialMap.background) base.metadata.customBackground = initialMap.background;
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),
@@ -161,6 +165,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     if (initialMap.colors) d.mergeColors(initialMap.colors);
     if (initialMap.regions) api.loadRegions(initialMap.regions);
     else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
+    // Restore the scenario's custom map background so re-opening its map editor
+    // shows the uploaded map, not a blank basemap. It's marked persisted, so the
+    // OlMap effect renders it without re-emitting (no dirty/autosave on open).
+    setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
     d.setSaveStatus("saved");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, initialMap]);

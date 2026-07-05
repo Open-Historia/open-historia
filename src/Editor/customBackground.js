@@ -147,12 +147,16 @@ export const vectorLayerFromGeoJSON = (geojson) =>
 // PMTiles) is session-only, so it never round-trips through here.
 export const rebuildPersistedBackground = (saved) => {
   if (!saved) return null;
+  // `persisted` marks a background restored from a saved doc/scenario (vs a fresh
+  // upload) so the OlMap effect doesn't re-emit it back into the document and mark
+  // it dirty on open — which would trigger an autosave and create a stray doc.
   if (saved.kind === "vector") {
-    return { kind: "vector", layer: vectorLayerFromGeoJSON(saved.geojson) };
+    return { kind: "vector", persisted: true, layer: vectorLayerFromGeoJSON(saved.geojson) };
   }
   if (saved.kind === "image") {
     return {
       kind: "image",
+      persisted: true,
       url: saved.dataUrl,
       dataUrl: saved.dataUrl,
       aspect: saved.aspect || 1,

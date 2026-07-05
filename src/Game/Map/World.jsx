@@ -34,24 +34,44 @@ const SATELLITE_PAINT = {
   "raster-brightness-max": 0.78,
 };
 
-// Full-world image corners (TL, TR, BR, BL) — a custom map stretches across the
-// whole mercator world so it fully replaces Earth.
-const WORLD_IMAGE_COORDS = [
+// Full-map image corners (TL, TR, BR, BL). The flat mercator map only reaches
+// ±85.0511° (the projection limit), but the globe shows all the way to the poles
+// — so on the globe the image stretches nearly to ±90° to cover the pole caps.
+// NOT exactly ±90: mercatorYfromLat(±90) is ±Infinity, which makes MapLibre's
+// ImageSource.setCoordinates throw — so we stop a hair short (the custom-bg-base
+// layer fills the negligible remaining sliver).
+const WORLD_IMAGE_COORDS_FLAT = [
   [-180, 85.0511],
   [180, 85.0511],
   [180, -85.0511],
   [-180, -85.0511],
 ];
+const WORLD_IMAGE_COORDS_GLOBE = [
+  [-180, 89.9],
+  [180, 89.9],
+  [180, -89.9],
+  [-180, -89.9],
+];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
   if (customBg?.kind === "image" && customBg.imageUrl) {
     return {
       version: 8,
-      sources: { "custom-bg": { type: "image", url: customBg.imageUrl, coordinates: WORLD_IMAGE_COORDS } },
-      layers: [{ id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } }],
+      sources: {
+        "custom-bg": {
+          type: "image",
+          url: customBg.imageUrl,
+          coordinates: isGlobe ? WORLD_IMAGE_COORDS_GLOBE : WORLD_IMAGE_COORDS_FLAT,
+        },
+      },
+      layers: [
+        // Solid base beneath the image so no edge/pole ever shows a transparent hole.
+        { id: "custom-bg-base", type: "background", paint: { "background-color": "#0b1a2b" } },
+        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } },
+      ],
       sky: { "atmosphere-blend": 0 },
     };
   }
@@ -154,12 +174,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared } = useCustomBackground();
-  const worldStyle = useMemo(
-    () => buildWorldStyle(DEFAULT_BASEMAP_ID, customBg, bgDeclared),
-    [customBg, bgDeclared],
-  );
-
   const isGlobe = projection === "globe";
+  const worldStyle = useMemo(
+    () => buildWorldStyle(DEFAULT_BASEMAP_ID, customBg, bgDeclared, isGlobe),
+    [customBg, bgDeclared, isGlobe],
+  );
   // Earth's terrain DEM has no meaning over a custom map, and its source is dropped
   // from the style, so disable 3D terrain whenever a custom background is active.
   const terrain = useMemo(
