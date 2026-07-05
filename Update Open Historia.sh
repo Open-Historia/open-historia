@@ -147,6 +147,29 @@ main() {
         rsync -a --ignore-existing "$SRC/server/data/scenarios/" "./server/data/scenarios/" || fail_copy
     fi
 
+    # 3b) ...except the built-in "default" scenario, which is shipped app content
+    #     (prompts, world, colors, cover image, template state), not player data
+    #     - so its files are always refreshed, otherwise shipped updates to it
+    #     never reach an existing install. Its large map geometry (regions.geojson)
+    #     is LFS-backed and arrives as a pointer stub in a codeload zip, so it is
+    #     excluded here and handled by the LFS resolver in 3c. Saved games
+    #     (server/data/games) are untouched regardless.
+    if [ -d "$SRC/server/data/scenarios/default" ]; then
+        rsync -a --exclude='*.geojson' --exclude='*.pmtiles' \
+            "$SRC/server/data/scenarios/default/" "./server/data/scenarios/default/" || fail_copy
+    fi
+
+    # 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content.
+    #     A codeload zip only carries pointers, so none of the LFS files skipped
+    #     above (or KEEP-excluded from the copies) would otherwise ever update on
+    #     a ZIP install. This downloads any that actually changed from GitHub's
+    #     media host and checksum-verifies them. Best-effort: it needs Node (which
+    #     running the game already requires) and never fails the update - a missing
+    #     Node or a failed download just leaves the existing files in place.
+    if command -v node >/dev/null 2>&1 && [ -f "scripts/resolve-lfs.mjs" ]; then
+        node "scripts/resolve-lfs.mjs" "$SRC" "$REPO_OWNER" "$REPO_NAME" "$REPO_BRANCH" || true
+    fi
+
     rm -rf "$WORKDIR"
 
     # Force a rebuild on next launch so the update actually takes effect.

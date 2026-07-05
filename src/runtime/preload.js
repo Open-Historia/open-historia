@@ -1,10 +1,11 @@
 import {
   JSON_URLS,
   PMTILES_ARCHIVES,
-  SATELLITE_TILE_TEMPLATE,
   TERRAIN_TILE_TEMPLATE,
   buildTileUrl,
+  esriTileTemplate,
   loadCountryNames,
+  selectedBasemapId,
   warmJson,
   warmPmtilesArchive,
   warmRemoteResources,
@@ -101,8 +102,8 @@ const STARTUP_TASKS = [
     run: ({ signal }) =>
       warmRemoteResources(
         [
-          ...buildGlobalTextureUrls(SATELLITE_TILE_TEMPLATE, 2),
-          ...buildInitialViewportTextureUrls(SATELLITE_TILE_TEMPLATE),
+          ...buildGlobalTextureUrls(esriTileTemplate(selectedBasemapId()), 2),
+          ...buildInitialViewportTextureUrls(esriTileTemplate(selectedBasemapId())),
           ...buildGlobalTextureUrls(TERRAIN_TILE_TEMPLATE, 2),
           ...buildInitialViewportTextureUrls(TERRAIN_TILE_TEMPLATE),
         ],

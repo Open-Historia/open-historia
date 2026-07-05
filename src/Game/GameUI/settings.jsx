@@ -13,6 +13,12 @@ import {
     getStoredLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
+import { ESRI_BASEMAPS } from "../../runtime/assets.js";
+import {
+    MAP_SETTING_KEYS,
+    getMapSetting,
+    setMapSetting,
+} from "../../runtime/mapSettings.js";
 
 const baseStyle = {
     position: "fixed",
@@ -379,20 +385,33 @@ const SettingsInput = ({
     placeholder,
     type = "text",
     helperText,
+    multiline = false,
 }) => (
     <div style={fieldGroupStyle}>
     <label style={labelStyle}>
     {label}
     </label>
-    <input
-    type={type}
-    value={value}
-    onChange={(event) => onChange(event.target.value)}
-    placeholder={placeholder}
-    autoComplete="off"
-    spellCheck={false}
-    style={inputStyle}
-    />
+    {multiline ? (
+        <textarea
+        rows={4}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        style={{ ...inputStyle, fontFamily: "monospace", resize: "vertical" }}
+        />
+    ) : (
+        <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        style={inputStyle}
+        />
+    )}
     {helperText && (
         <div style={helperStyle}>
         {helperText}
@@ -446,6 +465,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="gemini-3.1-flash-lite-preview"
             helperText="Leave blank to use the built-in Gemini default."
             />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.geminiCustomParams ?? ""}
+            onChange={(value) => onSettingChange("geminiCustomParams", value)}
+            placeholder='{"generationConfig": {"topP": 0.9}}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
             </>
         )}
 
@@ -470,6 +497,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
                     : "Enter the exact model id."
             }
             />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.openaiCustomParams ?? ""}
+            onChange={(value) => onSettingChange("openaiCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
             </>
         )}
 
@@ -489,6 +524,14 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("anthropicModel", value)}
             placeholder="claude-haiku-4-5"
             helperText="Claude model ids are manual here. Leave blank to use the built-in default."
+            />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.anthropicCustomParams ?? ""}
+            onChange={(value) => onSettingChange("anthropicCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
@@ -516,6 +559,49 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("openaiCompatibleModel", value)}
             placeholder="llama / qwen / gpt / mistral"
             helperText="Leave blank to auto-pick a model from /models."
+            />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.openaiCompatibleCustomParams ?? ""}
+            onChange={(value) => onSettingChange("openaiCompatibleCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
+            </>
+        )}
+
+        {provider === "anthropic-compatible" && (
+            <>
+            <SettingsInput
+            label="API Endpoint"
+            value={settings.anthropicCompatibleEndpoint ?? ""}
+            onChange={(value) => onSettingChange("anthropicCompatibleEndpoint", value)}
+            placeholder="https://my-proxy.example/v1"
+            helperText="Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages). Routed through the game server to avoid CORS."
+            />
+            <SettingsInput
+            label="API Key (optional)"
+            type="password"
+            value={settings.anthropicCompatibleApiKey ?? ""}
+            onChange={(value) => onSettingChange("anthropicCompatibleApiKey", value)}
+            placeholder="Sent as x-api-key if set"
+            helperText="Leave empty if your proxy doesn't require a key."
+            />
+            <SettingsInput
+            label="Model"
+            value={settings.anthropicCompatibleModel ?? ""}
+            onChange={(value) => onSettingChange("anthropicCompatibleModel", value)}
+            placeholder="claude-haiku-4-5"
+            helperText="The model id your proxy expects. Leave blank to use the built-in default."
+            />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={settings.anthropicCompatibleCustomParams ?? ""}
+            onChange={(value) => onSettingChange("anthropicCompatibleCustomParams", value)}
+            placeholder='{"top_p": 0.9}'
+            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
@@ -635,10 +721,11 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
         height: "4rem",
         width: "4rem",
         cursor: "pointer",
-        fontSize: "1.5rem",
+        fontSize: "1.8rem",
+        fontWeight: 700,
     }}
     >
-    ⚙️
+    ⋮
     </button>
 );
 
@@ -659,6 +746,17 @@ const SettingsMenu = ({
     githubUrl,
 }) => {
     const selectedProvider = apiProvider ?? DEFAULT_PROVIDER;
+
+    const [mapSettings, setMapSettingsState] = useState(() => ({
+        hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+        disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
+        basemapStyle: getMapSetting(MAP_SETTING_KEYS.basemapStyle),
+    }));
+
+    const updateMapSetting = (stateKey, settingKey, value) => {
+        setMapSetting(settingKey, value);
+        setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
+    };
 
     return (
         <div
@@ -723,6 +821,34 @@ const SettingsMenu = ({
         </span>
         </div>
         <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Map</div>
+        <Toggle
+        label="Hide country labels"
+        enabled={mapSettings.hideCountryLabels}
+        onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)}
+        />
+        <Toggle
+        label="Disable idle globe rotation"
+        enabled={mapSettings.disableIdleRotation}
+        onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)}
+        />
+        <div style={{ marginBottom: "0.5rem" }}>
+        <div style={{ fontSize: "0.9rem", marginBottom: "0.4rem" }}>Map style</div>
+        <select
+        data-no-translate
+        value={mapSettings.basemapStyle}
+        onChange={(event) => updateMapSetting("basemapStyle", MAP_SETTING_KEYS.basemapStyle, event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        {ESRI_BASEMAPS.map((basemap) => (
+            <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>
+            {basemap.label}
+            </option>
+        ))}
+        </select>
+        </div>
+        </div>
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
 
         {typeof onOpenCheats === "function" && (

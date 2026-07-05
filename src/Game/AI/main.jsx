@@ -6,7 +6,7 @@ import {
     providerSupportsModelDiscovery,
     setProviderField,
 } from "./providerConfig.js";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
@@ -83,6 +83,29 @@ function extractErrorMessage(payload, fallback) {
     if (payload.message) return payload.message;
     if (typeof payload.rawText === "string" && payload.rawText.trim()) return payload.rawText.trim();
     return fallback;
+}
+
+// Settings (per provider): an escape hatch for request-body fields the built-in
+// UI doesn't expose (e.g. reasoning budget/effort limits). Shallow-merged last
+// into the outgoing body, so a deliberately-set key can override a built-in
+// one; a nested built-in object (e.g. Gemini's generationConfig) must be
+// supplied whole to override any of its keys. Invalid input is ignored, not
+// fatal — a malformed settings field should never break a turn.
+function parseCustomParams(raw, providerLabel) {
+    const trimmed = (raw ?? "").trim();
+    if (!trimmed) return {};
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed;
+        }
+        console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
+    } catch (error) {
+        console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
+    }
+
+    return {};
 }
 
 function pickLikelyChatModel(models) {
@@ -238,6 +261,8 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
         providerLabel: "Gemini",
     });
 
+    const customParams = parseCustomParams(settings.customParams, "Gemini");
+
     for (let attempt = 1; attempt <= retries; attempt++) {
         const response = await fetch(getGeminiUrl(model, apiKey), {
             method: "POST",
@@ -249,6 +274,7 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
                 ...(getReasoningEnabled()
                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
                     : {}),
+                ...customParams,
             }),
         });
 
@@ -291,6 +317,7 @@ async function callOpenAIStyleChatCompletions({
     systemPrompt,
     history,
     providerLabel,
+    customParams = {},
     retries = 3,
     retryDelay = 15000,
 }) {
@@ -304,6 +331,7 @@ async function callOpenAIStyleChatCompletions({
                 // most OpenAI-compatible gateways; models that reject it surface a
                 // clear API error so the user knows to pick a reasoning model.
                 ...(getReasoningEnabled() ? { reasoning_effort: "medium" } : {}),
+                ...customParams,
             },
         });
 
@@ -360,6 +388,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         systemPrompt,
         history,
         providerLabel: "OpenAI",
+        customParams: parseCustomParams(settings.customParams, "OpenAI"),
         ...opts,
     });
 }
@@ -390,6 +419,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         systemPrompt,
         history,
         providerLabel: "OpenAI Compatible",
+        customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
         ...opts,
     });
 }
@@ -418,18 +448,21 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     // thinking budget, so it is raised alongside; thinking blocks are filtered out
     // by extractAnthropicText, which only reads text blocks.
     const reasoning = getReasoningEnabled();
+    const customParams = parseCustomParams(settings.customParams, "Anthropic");
 
     for (let attempt = 1; attempt <= retries; attempt++) {
+        const body = {
+            model,
+            system: systemPrompt,
+            max_tokens: reasoning ? 8192 : 1024,
+            ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            messages: toAnthropicMessages(history),
+            ...customParams,
+        };
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
             headers,
-            body: JSON.stringify({
-                model,
-                system: systemPrompt,
-                max_tokens: reasoning ? 8192 : 1024,
-                ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-                messages: toAnthropicMessages(history),
-            }),
+            body: JSON.stringify(body),
         });
 
         if (response.status === 429 || response.status === 503) {
@@ -459,6 +492,70 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     }
 }
 
+async function callAnthropicCompatible(systemPrompt, history, { retries = 3, retryDelay = 15000 } = {}) {
+    const settings = getProviderSettings("anthropic-compatible");
+    const endpoint = normalizeEndpoint(settings.endpoint);
+
+    if (!endpoint) {
+        throw new Error("Go to **settings**, select Anthropic Compatible, and enter your endpoint (a self-hosted Anthropic Messages API proxy).");
+    }
+
+    const apiKey = settings.apiKey.trim();
+    const model = await resolveModel("anthropic-compatible", {
+        fallbackModel: ANTHROPIC_DEFAULT_MODEL,
+        providerLabel: "Anthropic Compatible",
+    });
+
+    // Self-hosted proxy: called server-to-server through the relay (it can't be
+    // assumed to send browser CORS headers), so the browser-access opt-in the
+    // real API needs is dropped and the key rides as x-api-key only if provided.
+    const headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        ...(apiKey ? { "x-api-key": apiKey } : {}),
+    };
+
+    const reasoning = getReasoningEnabled();
+    const customParams = parseCustomParams(settings.customParams, "Anthropic Compatible");
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        const body = {
+            model,
+            system: systemPrompt,
+            max_tokens: reasoning ? 8192 : 1024,
+            ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            messages: toAnthropicMessages(history),
+            ...customParams,
+        };
+        const response = await relayFetch(`${endpoint}/messages`, { headers, payload: body });
+
+        if (response.status === 429 || response.status === 503) {
+            if (attempt === retries) {
+                const payload = await readErrorPayload(response);
+                throw new Error(extractErrorMessage(payload, "The Anthropic-compatible endpoint is busy right now. Try again in a moment."));
+            }
+
+            console.warn(`Anthropic-compatible endpoint is busy. Retrying in ${retryDelay / 1000}s... (attempt ${attempt}/${retries})`);
+            await sleep(retryDelay);
+            continue;
+        }
+
+        if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            throw new Error(extractErrorMessage(payload, `Anthropic-compatible request failed (${response.status})`));
+        }
+
+        const data = await response.json();
+        const text = extractAnthropicText(data);
+
+        if (!text) {
+            throw new Error("Anthropic-compatible response did not contain text.");
+        }
+
+        return text;
+    }
+}
+
 export async function callAI(systemPrompt, history, opts) {
     // Non-English players get replies in their language at the source —
     // native answers beat post-translating them (see runtime/i18n.js).
@@ -472,6 +569,8 @@ export async function callAI(systemPrompt, history, opts) {
         return callOpenAI(systemPrompt, history, opts);
     case "anthropic":
         return callAnthropic(systemPrompt, history, opts);
+    case "anthropic-compatible":
+        return callAnthropicCompatible(systemPrompt, history, opts);
     case "openai-compatible":
         return callOpenAICompatible(systemPrompt, history, opts);
     case "gemini":
@@ -610,7 +709,90 @@ function buildWorldSummary(gameData, worldData, eventData) {
     ].join("\n");
 }
 
-function buildPromptVariables({
+// The advisor and diplomacy prompts share the same UPPER_SNAKE helper set as
+// the server-side simulation tasks, so this client path mirrors the handful of
+// context builders those helpers expect (see gameplay.js). Kept local because
+// gameplay.js imports callAI from here — importing back would be circular.
+function formatDateReadable(value) {
+    const parsed = value ? new Date(value) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) {
+        return String(value ?? "").trim();
+    }
+    return parsed.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function buildDifficultyGuidanceChats(difficulty) {
+    const normalized = String(difficulty ?? "").trim().toLowerCase();
+    const intro = "Diplomatic concessions and cooperation should scale with the difficulty.";
+    switch (normalized) {
+        case "very-easy":
+        case "very easy":
+            return `${intro} The world bends toward the player; be markedly receptive to their proposals.`;
+        case "easy":
+            return `${intro} The player can convert reasonable preparation into results relatively easily.`;
+        case "hard":
+            return `${intro} The player should need stronger leverage, preparation, and credibility before major outcomes stick.`;
+        case "very-hard":
+        case "very hard":
+        case "extreme":
+        case "impossible":
+            return `${intro} Major outcomes should require overwhelming preparation, sustained leverage, or unusually favorable conditions.`;
+        default:
+            return `${intro} Weigh proposals realistically on their merits and the player's demonstrated leverage.`;
+    }
+}
+
+function buildRecentRoundsWithDates(worldData, gameData) {
+    const history = Array.isArray(worldData?.simulationHistory) ? worldData.simulationHistory : [];
+    if (history.length === 0) {
+        return `Current round only: ${gameData?.gameDate || "unknown date"}`;
+    }
+    return history
+        .slice(0, 8)
+        .map((entry) => `${entry.fromDate || "unknown"} -> ${entry.toDate || entry.date || "unknown"}`)
+        .join("; ");
+}
+
+function buildUnitsSummaryText(worldData) {
+    const units = Array.isArray(worldData?.units) ? worldData.units : [];
+    if (units.length === 0) {
+        return "No military units are currently deployed on the map.";
+    }
+    return units
+        .slice(0, 60)
+        .map((unit) => {
+            const lat = Number(unit.lat);
+            const lng = Number(unit.lng);
+            const coords = Number.isFinite(lat) && Number.isFinite(lng)
+                ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+                : "unknown location";
+            return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+        })
+        .join("\n");
+}
+
+async function buildPlayerPolityRegionsText(gameData, worldData) {
+    const playerCode = String(gameData?.country ?? "").trim();
+    if (!playerCode) {
+        return "No player polity is currently set.";
+    }
+    const world = normalizeWorldState(worldData);
+    const regionEntries = Object.entries(world.regionOwnershipOverrides || {});
+    if (regionEntries.length === 0) {
+        return "No explicit player region override list is currently recorded.";
+    }
+    const regionCatalog = await loadRegionCatalog().catch(() => []);
+    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
+    const playerRegions = regionEntries
+        .filter(([, ownerCode]) => String(ownerCode ?? "").trim().toLowerCase() === playerCode.toLowerCase())
+        .slice(0, 24)
+        .map(([regionId]) => regionLookup.get(regionId)?.name || regionId);
+    return playerRegions.length > 0
+        ? playerRegions.join(", ")
+        : "No explicit player region override list is currently recorded.";
+}
+
+async function buildPromptVariables({
     actionData,
     advisorData,
     chatData,
@@ -623,6 +805,8 @@ function buildPromptVariables({
     const worldSummary = buildWorldSummary(gameData, worldData, eventData);
     const normalizedChats = normalizeChats(chatData);
     const currentChat = normalizedChats[0] ?? null;
+    const gameDate = gameData.gameDate ?? "";
+    const playerPolityRegions = await buildPlayerPolityRegionsText(gameData, worldData);
 
     return {
         actionInput: "",
@@ -637,20 +821,26 @@ function buildPromptVariables({
         chatParticipants: currentChat
             ? currentChat.countries.map((country) => country.name).join(", ")
             : "",
-        date: gameData.gameDate ?? "",
+        date: gameDate,
+        dateReadable: formatDateReadable(gameDate),
         difficulty: gameData.difficulty ?? "standard",
-        difficultyGuidanceChats: "Diplomatic flexibility should reflect the configured difficulty.",
+        difficultyGuidanceChats: buildDifficultyGuidanceChats(gameData.difficulty),
         gameMasterRequest: "",
         language: worldData.language ?? gameData.language ?? "English",
         lastSpeaker: currentChat?.messages?.at(-1)?.speaker ?? "",
         plannedActions: actionText || "No planned actions are currently queued.",
+        playerBattalionSummaries: buildUnitsSummaryText(worldData),
         playerPolity: gameData.country ?? "",
+        playerPolityRegions,
         recentEvents: buildEventHistoryText(eventData),
         recentEventsLong: buildEventHistoryText(eventData),
+        recentRoundsWithDates: buildRecentRoundsWithDates(worldData, gameData),
         respondingPolityName: speakingAs,
+        round: String(gameData.round ?? 1),
         simulationRules: worldData.simulationRules ?? "",
         startDate: gameData.startDate ?? "",
         targetDate: gameData.gameDate ?? "",
+        unitsSummary: buildUnitsSummaryText(worldData),
         worldBeforeRoundOne: worldData.startingTimelineText ?? "",
         worldSummary,
         worldSummaryNoCity: worldSummary,
@@ -686,7 +876,7 @@ async function buildAdvisorSystemPrompt() {
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
-    const variables = buildPromptVariables({
+    const variables = await buildPromptVariables({
         actionData,
         advisorData,
         chatData,
@@ -712,7 +902,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
     ]);
 
     const variables = {
-        ...buildPromptVariables({
+        ...(await buildPromptVariables({
             actionData,
             advisorData,
             chatData,
@@ -720,7 +910,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
             gameData,
             speakingAs: countries.find((country) => country !== playerCountry) || "",
             worldData,
-        }),
+        })),
         chatParticipants: participantList || "",
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
