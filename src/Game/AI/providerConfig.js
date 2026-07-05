@@ -167,8 +167,10 @@ export function getProviderSettings(provider) {
 // (Gemini thinkingConfig, OpenAI/compatible reasoning_effort, Anthropic thinking).
 const REASONING_STORAGE_KEY = "ai_reasoning_enabled";
 
+// Reasoning is ON by default: only an explicit "0" (the user turned it off) disables
+// it, so a fresh install or cleared storage gets model reasoning without opting in.
 export function getReasoningEnabled() {
-    return localStorage.getItem(REASONING_STORAGE_KEY) === "1";
+    return localStorage.getItem(REASONING_STORAGE_KEY) !== "0";
 }
 
 export function setReasoningEnabled(enabled) {
