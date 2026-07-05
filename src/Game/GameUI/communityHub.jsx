@@ -16,7 +16,13 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
-import { dedupeScenarioBundleBackground, resolveScenarioBundleBackground } from "../../runtime/communityBasemaps.js";
+import {
+  dedupeScenarioBundleBackground,
+  embedScenarioBundleImage,
+  resolveScenarioBundleBackground,
+  splitScenarioBundleImage,
+} from "../../runtime/communityBasemaps.js";
+import { unzipBundle, zipBundle } from "../../runtime/bundleZip.js";
 
 // The one and only hub. Not configurable by design.
 const HUB_OWNER = "Arkniem";
@@ -33,7 +39,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // body = the bundle. Release links come first in official posts so imports go
 // through the download-counted URL; the raw mirror below it serves old clients.
 const BUNDLE_LINK_PATTERN =
-  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.json|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
+  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
 // First image in the issue body — markdown ![alt](url) or GitHub's own
 // <img src="..."> attachment markup (issue bodies mix both depending on how
@@ -125,8 +131,7 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   return posts;
 };
 
-const saveJsonToDisk = (data, fileName) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+const saveBlobToDisk = (blob, fileName) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -136,6 +141,9 @@ const saveJsonToDisk = (data, fileName) => {
   anchor.remove();
   URL.revokeObjectURL(url);
 };
+
+const saveJsonToDisk = (data, fileName) =>
+  saveBlobToDisk(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }), fileName);
 
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
@@ -456,7 +464,19 @@ const CommunityPanel = ({ onImported }) => {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
       }
-      const bundle = await response.json();
+      // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
+      // basemap image + preview); everything else is a plain JSON bundle.
+      let bundle;
+      if (/\.zip(\?|$)/i.test(post.bundleUrl)) {
+        const zip = await unzipBundle(await response.arrayBuffer());
+        const scenarioText = await zip.text("scenario.json");
+        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+        bundle = JSON.parse(scenarioText);
+        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif)$/i.test(n));
+        if (imageName) embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+      } else {
+        bundle = await response.json();
+      }
       // A shared scenario may reference a community basemap instead of embedding
       // it — fetch and inline it before importing so the map isn't blank.
       await resolveScenarioBundleBackground(bundle);
@@ -492,18 +512,36 @@ const CommunityPanel = ({ onImported }) => {
       // If this scenario's custom basemap is already on the community hub,
       // reference it instead of re-embedding the whole image (smaller bundle).
       const dedup = await dedupeScenarioBundleBackground(bundle).catch(() => ({ referenced: false, needsPublish: false }));
-      const fileName = `${scenario.id}-scenario.json`;
-      saveJsonToDisk(bundle, fileName);
-      window.open(
-        `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}`,
-        "_blank",
-        "noopener",
-      );
-      const extra = dedup.referenced
-        ? " Its custom basemap was reused from the community hub, so the file stays small."
-        : dedup.needsPublish
-          ? " Tip: this map uses a custom basemap that isn't shared yet — open the editor's Basemap picker and hit ⤴ on it to publish it, so future scenarios can reuse it instead of re-bundling the image."
+      // A not-yet-shared custom image basemap ships bundled as ONE .zip
+      // (scenario.json + the raw basemap image + a preview) so the author drags a
+      // single file and the image travels as real bytes, not a bloated data URL.
+      const split = dedup.referenced ? null : await splitScenarioBundleImage(bundle).catch(() => null);
+      let fileName;
+      let extra;
+      if (split) {
+        delete bundle.assets.backgroundData; // the image now rides in the zip as a real file
+        const files = { "scenario.json": JSON.stringify(bundle), [split.imageName]: split.imageBytes };
+        if (split.previewBytes) files[split.previewName] = split.previewBytes;
+        fileName = `${scenario.id}-scenario.zip`;
+        saveBlobToDisk(await zipBundle(files), fileName);
+        extra =
+          " Its custom basemap is bundled inside the .zip, so the scenario is self-contained — just drag the one file." +
+          " (To also list the basemap on its own in the community Basemaps tab, open the editor's Basemap picker and hit ⤴ on it.)";
+      } else {
+        fileName = `${scenario.id}-scenario.json`;
+        saveJsonToDisk(bundle, fileName);
+        extra = dedup.referenced
+          ? " Its custom basemap was reused from the community hub, so the file stays small."
           : "";
+      }
+      // When the scenario carries a basemap, tag the post with the basemap hash so
+      // the community Basemaps browser (which surfaces scenario-carried basemaps) can
+      // dedupe it against dedicated posts. Harmless if the scenario form has no such
+      // field — GitHub just ignores the unknown prefill param.
+      const scenarioUrl =
+        `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
+        (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: image`)}` : "");
+      window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
         `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,
       );

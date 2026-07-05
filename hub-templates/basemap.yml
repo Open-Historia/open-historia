@@ -1,0 +1,43 @@
+name: Basemap
+description: Share a custom map background others can use in the map editor.
+title: "[Basemap] "
+labels: ["basemap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a basemap! **Drag your image file into the "Basemap image" box below** — that image is both the map itself and the preview shown in the community grid.
+
+        The two lines under **Technical info** are filled in for you. Please don't edit them — they let the game find and dedupe this basemap.
+  - type: input
+    id: name
+    attributes:
+      label: Basemap name
+      placeholder: e.g. Fantasy Pangaea
+    validations:
+      required: true
+  - type: input
+    id: author
+    attributes:
+      label: Author / credit
+      placeholder: Your name (optional)
+    validations:
+      required: false
+  - type: textarea
+    id: image
+    attributes:
+      label: Basemap image
+      description: Drag your basemap image (.png or .jpg) here. For a vector basemap, drag the .geojson file instead.
+      placeholder: Drop your image (or .geojson) file here…
+    validations:
+      required: true
+  - type: textarea
+    id: technical
+    attributes:
+      label: Technical info (do not edit)
+      description: Auto-filled. Lets the game find and dedupe this basemap.
+      value: |
+        Basemap-Hash:
+        Basemap-Kind: image
+    validations:
+      required: true

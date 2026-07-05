@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
-import { fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
+import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 
 const overlay = {
   position: "fixed",
@@ -225,7 +225,10 @@ const BasemapPicker = ({
   const handlePublish = async (bm) => {
     try {
       const payload = await getBasemapPayload(bm.id);
-      publishBasemap(bm, payload);
+      const { fileName } = publishBasemap(bm, payload);
+      window.alert(
+        `"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the "Basemap image" box, then submit.`,
+      );
     } catch (e) {
       window.alert(`Could not prepare that basemap for publishing: ${e?.message || e}`);
     }
@@ -332,7 +335,9 @@ const BasemapPicker = ({
                 <div style={dim}>No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card.</div>
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))", gap: "0.8rem" }}>
-                  {community.map((post) => (
+                  {community.map((post) => {
+                    const canInstall = basemapPostInstallable(post);
+                    return (
                     <div key={post.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
                       <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#0b1020" }}>
                         {post.coverImageUrl ? (
@@ -349,27 +354,31 @@ const BasemapPicker = ({
                         {post.kind === "vector" && (
                           <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>vector</span>
                         )}
+                        {post.fromScenario && (
+                          <span title="Shared as part of a scenario — installing pulls the map out of that scenario's file" style={{ position: "absolute", right: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>from scenario</span>
+                        )}
                       </div>
                       <div style={{ padding: "0.5rem 0.6rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                         <div style={{ fontSize: "0.8rem", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{post.title}</div>
                         <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.5)" }}>by {post.author}</div>
                         <button
                           type="button"
-                          disabled={!post.bundleUrl || busyId === post.id}
+                          disabled={!canInstall || busyId === post.id}
                           onClick={() => handleInstall(post)}
-                          title={post.bundleUrl ? "Install into Your basemaps" : "This post has no basemap file attached"}
+                          title={canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
                           style={{
                             ...tabBtn(false),
-                            background: post.bundleUrl ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.04)",
-                            cursor: post.bundleUrl && busyId !== post.id ? "pointer" : "default",
-                            opacity: post.bundleUrl ? 1 : 0.5,
+                            background: canInstall ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.04)",
+                            cursor: canInstall && busyId !== post.id ? "pointer" : "default",
+                            opacity: canInstall ? 1 : 0.5,
                           }}
                         >
                           {busyId === post.id ? "Installing…" : "⬇ Install"}
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
