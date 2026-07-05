@@ -17,8 +17,8 @@ import { unzipBundle } from "./bundleZip.js";
 const utf8ToBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
 const base64ToUtf8 = (b64) => decodeURIComponent(escape(atob(b64)));
 
-const HUB_OWNER = "Arkniem";
-const HUB_REPO = "pax-historia-scenarios";
+const HUB_OWNER = "Open-Historia";
+const HUB_REPO = "Open-historia-scenarios";
 const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 const HUB_API_BASEMAPS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=basemap&per_page=100`;
 // Scenario posts are scanned too: one shipped as a .zip carries a custom basemap,
