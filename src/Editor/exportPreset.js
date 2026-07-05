@@ -186,6 +186,10 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     // clears any previously applied background. The heavy payload rides in the
     // seed's backgroundData below, uploaded as a separate scenario asset.
     background,
+    // The chosen built-in basemap (an ESRI preset id) so the game renders THAT
+    // basemap, not always the ocean default. Ignored when a custom background
+    // replaces it. Falls back to ocean in-game if unset/unknown.
+    basemap: doc.metadata?.basemap || null,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.

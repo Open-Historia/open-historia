@@ -185,6 +185,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     hydratedRef.current = true;
     const base = createDocument({ name: initialMap.name || "Scenario Map", kind: "import-world" });
     base.metadata.author = initialMap.author || "";
+    // Restore the chosen built-in basemap so re-opening shows it (not the default).
+    if (initialMap.basemap) base.metadata.basemap = initialMap.basemap;
     // Carry the restored background in the document metadata so Apply & Play
     // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
     // clearing the scenario's background when the user re-opens and re-applies.

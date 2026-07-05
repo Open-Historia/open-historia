@@ -48,7 +48,12 @@ function GameApp() {
     const saved = localStorage.getItem("Terrain");
     return saved !== null ? JSON.parse(saved) : true;
   });
-  const { token: libraryToken } = useLibraryState();
+  // Key the map/UI on the active GAME id, not the library token. The token also
+  // bumps on scenario/asset writes, so Apply & Play (which saves the scenario and
+  // uploads several assets before activating the new game) would otherwise remount
+  // the map ~8 times — the repeated flashing/reloading. The game id changes once,
+  // when the new game activates, so the map remounts exactly once.
+  const { activeGameId } = useLibraryState();
 
   useEffect(() => {
     localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled));
@@ -160,7 +165,7 @@ function GameApp() {
     <>
     <div style={WorldShell}>
     <Map
-    key={`map-${libraryToken || "default"}`}
+    key={`map-${activeGameId || "default"}`}
     mapRef={mapRef}
     projection={isGlobeEnabled ? "globe" : "mercator"}
     terrainEnabled={isTerrainEnabled}
@@ -170,7 +175,7 @@ function GameApp() {
     </div>
     {isReady && (
       <UI
-      key={`ui-${libraryToken || "default"}`}
+      key={`ui-${activeGameId || "default"}`}
       isGlobeEnabled={isGlobeEnabled}
       isTerrainEnabled={isTerrainEnabled}
       mapRef={mapRef}

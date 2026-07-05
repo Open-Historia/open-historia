@@ -173,11 +173,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // the world is fixed to the ocean preset (the in-game basemap picker was removed).
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
-  const { background: customBg, declared: bgDeclared } = useCustomBackground();
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
   const worldStyle = useMemo(
-    () => buildWorldStyle(DEFAULT_BASEMAP_ID, customBg, bgDeclared, isGlobe),
-    [customBg, bgDeclared, isGlobe],
+    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, isGlobe),
+    [customBg, bgDeclared, isGlobe, worldBasemap],
   );
   // Earth's terrain DEM has no meaning over a custom map, and its source is dropped
   // from the style, so disable 3D terrain whenever a custom background is active.
