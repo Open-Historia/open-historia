@@ -74,10 +74,21 @@ const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const parsePost = (issue, installsByFile) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
-  const description = body
-    .replace(BUNDLE_LINK_PATTERN, "")
-    .replace(/^#+\s*(Description|Made by)\s*$/gim, "")
-    .replace(/^Scenario file:\s*$/gim, "")
+  // The issue-form body is a series of "### <label>\n<value>" sections. Show only
+  // the author's Description prose: strip the attached-file link and never surface
+  // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
+  // metadata, not copy. Falls back to the whole body for old, non-form posts.
+  const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
+  const description = (descSection ? descSection[1] : body)
+    .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
+    .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")            // images
+    .replace(/<img[^>]*>/gi, "")
+    .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
+    .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
+    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
+    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
+    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
     .replace(/\s+/g, " ")
     .trim();
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
