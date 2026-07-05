@@ -37,8 +37,9 @@ const hexToRgb = (hex) => {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 };
 
-// A short, unique, stable owner code for a state — the editor keys ownership by code.
-const stateCode = (state) => `${(String(state.name || "").replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || "ST")}${state.i}`;
+// Ownership is keyed by the state's REAL NAME — no synthetic codes, so the game and
+// editor show "Kuizltan", never "KUI55". FMG gives each state a distinct name.
+const nameOf = (state) => String(state?.name || "").trim();
 
 // ---- coordinate fit: FMG lon/lat bbox -> target extent, aspect-preserving ----
 const boundsOf = (features) => {
@@ -131,9 +132,10 @@ export const fmgToEditorSeed = (data, options = {}) => {
   for (const [key, g] of regionGroups) {
     const state = stateById.get(g.stateId);
     if (!state || state.i === 0) continue; // neutral/unclaimed land isn't a region
+    const owner = nameOf(state);
+    if (!owner) continue; // a nameless state can't be a named country
     const geometry = dissolve(g.geoms);
     if (!geometry) continue;
-    const owner = stateCode(state);
     const province = provinceById.get(g.provinceId);
     regionFeatures.push({
       type: "Feature",
@@ -154,9 +156,10 @@ export const fmgToEditorSeed = (data, options = {}) => {
   const colors = {};
   for (const s of states) {
     if (!s || s.i === 0 || s.removed) continue;
-    const code = stateCode(s);
+    const code = nameOf(s);
+    if (!code) continue;
     colors[code] = hexToRgb(s.color);
-    polities.push({ code, name: s.name || code, color: s.color || "#888888" });
+    polities.push({ code, name: code, color: s.color || "#888888" });
   }
 
   // ---- cities from burgs ----

@@ -70,6 +70,55 @@ export const makeImageThumbnail = (dataUrl, maxDim = 200) =>
     img.src = dataUrl;
   });
 
+// Render a small preview of a vector basemap by painting each feature with its own
+// `fill` colour (the biome map) over a sea background. Lets vector basemaps show a
+// real thumbnail in the picker instead of a blank card. Returns a JPEG data URL, or
+// null on failure. Pure canvas — no map library needed.
+export const makeVectorThumbnail = (geojson, maxDim = 220) => {
+  try {
+    const feats = geojson?.features || [];
+    if (!feats.length) return null;
+    const eachRings = (geom, fn) => {
+      if (!geom) return;
+      if (geom.type === "Polygon") fn(geom.coordinates);
+      else if (geom.type === "MultiPolygon") geom.coordinates.forEach(fn);
+    };
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const f of feats) eachRings(f.geometry, (rings) => {
+      for (const ring of rings) for (const [x, y] of ring) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    });
+    if (!Number.isFinite(minX)) return null;
+    const w = maxX - minX || 1, h = maxY - minY || 1;
+    const scale = Math.min(maxDim / w, maxDim / h);
+    const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0b1a2b";
+    ctx.fillRect(0, 0, cw, ch);
+    const px = (x) => (x - minX) * scale;
+    const py = (y) => ch - (y - minY) * scale; // flip Y so north is up
+    for (const f of feats) {
+      ctx.fillStyle = f.properties?.fill || "#33435c";
+      ctx.beginPath();
+      eachRings(f.geometry, (rings) => {
+        for (const ring of rings) {
+          ring.forEach(([x, y], i) => (i ? ctx.lineTo(px(x), py(y)) : ctx.moveTo(px(x), py(y))));
+          ctx.closePath();
+        }
+      });
+      ctx.fill("evenodd");
+    }
+    return canvas.toDataURL("image/jpeg", 0.75);
+  } catch {
+    return null;
+  }
+};
+
 // Persist a normalized background into the library. `normalized` is
 // { kind:"image", dataUrl, aspect } or { kind:"vector", geojson }. Returns the
 // stored basemap metadata (deduped server-side by content hash).
@@ -91,11 +140,12 @@ export const addBackgroundToLibrary = async (normalized, name, extra = {}) => {
     });
   }
   if (normalized.kind === "vector" && normalized.geojson) {
+    const thumbnail = makeVectorThumbnail(normalized.geojson);
     const contentHash = await sha256Hex(JSON.stringify(normalized.geojson));
     return createBasemap({
       name,
       kind: "vector",
-      thumbnail: null,
+      thumbnail,
       contentHash,
       payload: { geojson: normalized.geojson },
       ...extra,
