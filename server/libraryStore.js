@@ -1999,6 +1999,9 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson", mode),
+      // The custom map background travels with the scenario (always embedded, like
+      // the geometry) so a shared/imported custom map isn't blank.
+      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData", mode),
     },
     data: {
       actions: cloneJson(details.data.actions),

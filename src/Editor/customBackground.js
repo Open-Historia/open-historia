@@ -145,18 +145,19 @@ export const vectorLayerFromGeoJSON = (geojson) =>
 // Rebuild a live background descriptor from what was saved in the document
 // (vector GeoJSON, or an image data URL + WGS84 placement). Raster (GeoTIFF/
 // PMTiles) is session-only, so it never round-trips through here.
-export const rebuildPersistedBackground = (saved) => {
+// `persisted` (default true) marks a background restored from a saved doc/scenario
+// so the OlMap effect renders it WITHOUT re-emitting it into the document (which
+// would dirty it and trigger a stray autosave). Pass persisted:false when the user
+// deliberately picks a basemap — that IS an edit and should save.
+export const rebuildPersistedBackground = (saved, { persisted = true } = {}) => {
   if (!saved) return null;
-  // `persisted` marks a background restored from a saved doc/scenario (vs a fresh
-  // upload) so the OlMap effect doesn't re-emit it back into the document and mark
-  // it dirty on open — which would trigger an autosave and create a stray doc.
   if (saved.kind === "vector") {
-    return { kind: "vector", persisted: true, layer: vectorLayerFromGeoJSON(saved.geojson) };
+    return { kind: "vector", persisted, layer: vectorLayerFromGeoJSON(saved.geojson) };
   }
   if (saved.kind === "image") {
     return {
       kind: "image",
-      persisted: true,
+      persisted,
       url: saved.dataUrl,
       dataUrl: saved.dataUrl,
       aspect: saved.aspect || 1,

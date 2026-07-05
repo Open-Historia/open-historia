@@ -16,6 +16,7 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
+import { dedupeScenarioBundleBackground, resolveScenarioBundleBackground } from "../../runtime/communityBasemaps.js";
 
 // The one and only hub. Not configurable by design.
 const HUB_OWNER = "Arkniem";
@@ -456,6 +457,9 @@ const CommunityPanel = ({ onImported }) => {
         throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
       }
       const bundle = await response.json();
+      // A shared scenario may reference a community basemap instead of embedding
+      // it — fetch and inline it before importing so the map isn't blank.
+      await resolveScenarioBundleBackground(bundle);
       const details = await importScenarioBundle(bundle);
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
@@ -485,6 +489,9 @@ const CommunityPanel = ({ onImported }) => {
     setError(null);
     try {
       const bundle = await exportScenarioBundle(scenario.id, "light");
+      // If this scenario's custom basemap is already on the community hub,
+      // reference it instead of re-embedding the whole image (smaller bundle).
+      const dedup = await dedupeScenarioBundleBackground(bundle).catch(() => ({ referenced: false, needsPublish: false }));
       const fileName = `${scenario.id}-scenario.json`;
       saveJsonToDisk(bundle, fileName);
       window.open(
@@ -492,8 +499,13 @@ const CommunityPanel = ({ onImported }) => {
         "_blank",
         "noopener",
       );
+      const extra = dedup.referenced
+        ? " Its custom basemap was reused from the community hub, so the file stays small."
+        : dedup.needsPublish
+          ? " Tip: this map uses a custom basemap that isn't shared yet — open the editor's Basemap picker and hit ⤴ on it to publish it, so future scenarios can reuse it instead of re-bundling the image."
+          : "";
       setNotice(
-        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.`,
+        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,
       );
     } catch (nextError) {
       setError(`Publish failed: ${nextError.message}`);
