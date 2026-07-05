@@ -19,6 +19,7 @@ import { enqueueStrings } from "../../runtime/translator.js";
 import {
   dedupeScenarioBundleBackground,
   embedScenarioBundleImage,
+  embedScenarioBundleVector,
   resolveScenarioBundleBackground,
   splitScenarioBundleImage,
 } from "../../runtime/communityBasemaps.js";
@@ -465,15 +466,21 @@ const CommunityPanel = ({ onImported }) => {
         throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
       }
       // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-      // basemap image + preview); everything else is a plain JSON bundle.
+      // basemap file + preview); everything else is a plain JSON bundle. The basemap
+      // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
       let bundle;
       if (/\.zip(\?|$)/i.test(post.bundleUrl)) {
         const zip = await unzipBundle(await response.arrayBuffer());
         const scenarioText = await zip.text("scenario.json");
         if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
         bundle = JSON.parse(scenarioText);
-        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif)$/i.test(n));
-        if (imageName) embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+        if (imageName) {
+          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+        } else {
+          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
+        }
       } else {
         bundle = await response.json();
       }
@@ -540,7 +547,7 @@ const CommunityPanel = ({ onImported }) => {
       // field — GitHub just ignores the unknown prefill param.
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
-        (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: image`)}` : "");
+        (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: ${split.kind}`)}` : "");
       window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
         `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,

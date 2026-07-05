@@ -9,7 +9,7 @@
 // re-embedding it. Publishing is the token-less flow scenarios use: the app hands
 // the author the real image file and opens a prefilled issue form to drag it into.
 
-import { createBasemap, makeImageThumbnail, sha256Hex } from "./basemapLibrary.js";
+import { createBasemap, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle } from "./bundleZip.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -217,9 +217,16 @@ const loadBasemapPayload = async (post) => {
     const r = await fetchHubResponse(post.scenarioZipUrl);
     const zip = await unzipBundle(await r.arrayBuffer());
     const imageName = zip.names().find((n) => /(^|\/)basemap\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (!imageName) throw new Error("That scenario has no basemap image inside it.");
-    const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
-    return { meta: {}, kind: "image", payload: { dataUrl } };
+    if (imageName) {
+      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
+      return { meta: {}, kind: "image", payload: { dataUrl } };
+    }
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+    if (vectorName) {
+      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
+      return { meta: {}, kind: "vector", payload: { geojson } };
+    }
+    throw new Error("That scenario has no basemap inside it.");
   }
   // An image the post links as a file (e.g. an .svg GitHub attaches rather than
   // rendering inline) is the image payload, not a data file.
@@ -404,23 +411,42 @@ export const resolveScenarioBundleBackground = async (bundle) => {
 };
 
 // ---- Scenario zip bundle (image travels as a real file, not base64) -------
-// Split a scenario bundle's embedded background image out into raw bytes so the
-// scenario can ship as a .zip (json + png + preview) instead of one base64 blob.
-// Returns null when there's nothing to split (no background, or a vector/ref).
+// Split a scenario bundle's embedded background out into raw bytes so the scenario
+// can ship as a .zip (scenario.json + the basemap file + a preview) instead of one
+// base64 blob. Handles both an image basemap (→ basemap.png/jpg…) and a generated
+// VECTOR basemap (→ basemap.geojson, with a rendered preview). Returns null when
+// there's nothing to split (no background, or an already-referenced one).
 export const splitScenarioBundleImage = async (bundle) => {
   const bg = await readBundleBackground(bundle).catch(() => null);
-  if (!bg || bg.kind !== "image" || !bg.payload?.dataUrl) return null;
-  const { bytes, mime } = dataUrlToBytes(bg.payload.dataUrl);
-  const ext = mimeToExt(mime);
-  const preview = await makeImageThumbnail(bg.payload.dataUrl, 320).catch(() => null);
-  return {
-    imageBytes: bytes,
-    imageName: `basemap.${ext}`,
-    imageMime: mime,
-    previewBytes: preview ? dataUrlToBytes(preview).bytes : null,
-    previewName: "preview.jpg",
-    hash: bg.hash,
-  };
+  if (!bg) return null;
+  if (bg.kind === "image" && bg.payload?.dataUrl) {
+    const { bytes, mime } = dataUrlToBytes(bg.payload.dataUrl);
+    const ext = mimeToExt(mime);
+    const preview = await makeImageThumbnail(bg.payload.dataUrl, 320).catch(() => null);
+    return {
+      kind: "image",
+      imageBytes: bytes,
+      imageName: `basemap.${ext}`,
+      imageMime: mime,
+      previewBytes: preview ? dataUrlToBytes(preview).bytes : null,
+      previewName: "preview.jpg",
+      hash: bg.hash,
+    };
+  }
+  if (bg.kind === "vector" && bg.payload?.geojson) {
+    const bytes = new TextEncoder().encode(JSON.stringify(bg.payload.geojson));
+    const preview = makeVectorThumbnail(bg.payload.geojson, 320);
+    return {
+      kind: "vector",
+      imageBytes: bytes,
+      imageName: "basemap.geojson",
+      imageMime: "application/geo+json",
+      previewBytes: preview ? dataUrlToBytes(preview).bytes : null,
+      previewName: "preview.jpg",
+      hash: bg.hash,
+    };
+  }
+  return null;
 };
 
 // Re-embed a zip's basemap image back into the scenario bundle before import, so
@@ -433,6 +459,26 @@ export const embedScenarioBundleImage = (bundle, imageBytes, imageName) => {
   bundle.assets.backgroundData = {
     mode: "embedded",
     data: utf8ToBase64(JSON.stringify({ dataUrl })),
+    fileName: "background.json",
+    contentType: "application/json",
+  };
+  return bundle;
+};
+
+// Re-embed a zip's basemap GEOJSON back into the scenario bundle before import, so
+// the server sees a normal embedded (vector) background bundle. Pairs with a
+// scenario whose world.background.kind is already "vector".
+export const embedScenarioBundleVector = (bundle, geojsonBytes) => {
+  if (!bundle?.assets) return bundle;
+  let geojson;
+  try {
+    geojson = JSON.parse(new TextDecoder().decode(geojsonBytes));
+  } catch {
+    return bundle;
+  }
+  bundle.assets.backgroundData = {
+    mode: "embedded",
+    data: utf8ToBase64(JSON.stringify({ geojson })),
     fileName: "background.json",
     contentType: "application/json",
   };
