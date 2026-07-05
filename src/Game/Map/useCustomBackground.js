@@ -14,8 +14,9 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 //     available once the payload has loaded. Its reference is kept STABLE while
 //     unchanged so the map style isn't rebuilt on every 5s poll.
 export function useCustomBackground() {
-  const [state, setState] = useState({ background: null, declared: false });
+  const [state, setState] = useState({ background: null, declared: false, basemap: null });
   const keyRef = useRef("");
+  const basemapRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -23,22 +24,30 @@ export function useCustomBackground() {
     const poll = async () => {
       const world = await readJson(JSON_URLS.world, { defaultValue: {}, force: true }).catch(() => ({}));
       if (cancelled) return;
+      // The scenario's chosen built-in basemap (an ESRI preset id) — the game
+      // renders it when there's no custom background. Rarely changes (no in-game
+      // picker), so we only re-render when it actually does.
+      const basemap = world?.basemap || null;
+      basemapRef.current = basemap;
       const desc = world?.background;
       const key = desc && desc.kind ? String(desc.kind) : "";
-      if (key === keyRef.current) return; // unchanged — keep the stable reference
+      if (key === keyRef.current) {
+        setState((s) => (s.basemap === basemap ? s : { ...s, basemap })); // keep stable ref
+        return;
+      }
       keyRef.current = key;
       if (!key) {
-        setState({ background: null, declared: false });
+        setState({ background: null, declared: false, basemap });
         return;
       }
       // Commit to "no ESRI" from the light descriptor right away, then load the
       // heavy payload and swap in the actual image/vector.
-      setState({ background: null, declared: true });
+      setState({ background: null, declared: true, basemap });
       const data = await readJson(JSON_URLS.backgroundData, { defaultValue: null, force: true }).catch(() => null);
       if (cancelled || keyRef.current !== key) return; // superseded while loading
-      if (desc.kind === "image" && data?.dataUrl) setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true });
-      else if (desc.kind === "vector" && data?.geojson) setState({ background: { kind: "vector", geojson: data.geojson }, declared: true });
-      else setState({ background: null, declared: false });
+      if (desc.kind === "image" && data?.dataUrl) setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap: basemapRef.current });
+      else if (desc.kind === "vector" && data?.geojson) setState({ background: { kind: "vector", geojson: data.geojson }, declared: true, basemap: basemapRef.current });
+      else setState({ background: null, declared: false, basemap: basemapRef.current });
     };
 
     poll();

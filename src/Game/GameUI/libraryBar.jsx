@@ -1466,6 +1466,8 @@ const LibraryTopBar = () => {
         // Custom map background descriptor (kind + placement); null clears it. The
         // heavy payload goes to the backgroundData asset just below.
         background: seed.world?.background ?? null,
+        // The chosen built-in basemap so the game renders it (not always ocean).
+        basemap: seed.world?.basemap ?? null,
       },
       game: {
         ...currentGame,
@@ -1918,6 +1920,7 @@ const LibraryTopBar = () => {
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
                 background,
+                basemap: world.basemap || null,
               });
             });
           }
