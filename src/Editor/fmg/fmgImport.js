@@ -201,7 +201,16 @@ export const fmgToEditorSeed = (data, options = {}) => {
     if (geometry) bgFeatures.push({ type: "Feature", geometry, properties });
   };
 
-  // Ocean, shaded into a few depth bands (bottom layer).
+  // Base ocean covering the WHOLE world, so every part of the map that isn't land
+  // reads as water — not just a shaded ring around the continents where FMG happens
+  // to have ocean cells. Depth bands and land paint on top of it.
+  bgFeatures.push({
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]] },
+    properties: { water: "ocean", fill: "#0b1a2b" },
+  });
+
+  // Ocean, shaded into a few depth bands (on top of the base ocean).
   const oceanBands = new Map();
   for (const f of allCells) {
     const p = f.properties || {};
