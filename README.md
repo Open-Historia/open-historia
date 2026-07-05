@@ -116,7 +116,7 @@ Then open **http://localhost:3000** in your browser.
 
 **Modern Day** is the only built-in scenario. All other official presets — *WWII 1939*,
 *Medieval 1200*, *Rome 117 AD*, *Mongol World 1300*, *New World 1650* — live on the
-[**Scenario Hub**](https://github.com/Arkniem/pax-historia-scenarios), pinned at the top of
+[**Scenario Hub**](https://github.com/Open-Historia/Open-historia-scenarios), pinned at the top of
 the in-game **Community** tab. Import any of them with one click, or publish your own.
 
 To rebuild an official preset from source (specs live in `scripts/presets/`):
