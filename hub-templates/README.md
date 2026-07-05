@@ -7,7 +7,7 @@ alongside the client code that links to them.
 To take effect, copy them into the hub repo:
 
 ```
-Arkniem/pax-historia-scenarios/.github/ISSUE_TEMPLATE/basemap.yml
+Open-Historia/Open-historia-scenarios/.github/ISSUE_TEMPLATE/basemap.yml
 ```
 
 - **`basemap.yml`** — the "Share a basemap" form. The editor's Basemap picker links

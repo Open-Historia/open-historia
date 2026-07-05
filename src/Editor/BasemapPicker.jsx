@@ -319,7 +319,7 @@ const BasemapPicker = ({
                 <div style={{ ...rowTitle, margin: 0 }}>Community basemaps</div>
                 <div style={{ flex: 1 }} />
                 <a
-                  href="https://github.com/Arkniem/pax-historia-scenarios/issues?q=is%3Aissue+is%3Aopen+label%3Abasemap"
+                  href="https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+is%3Aopen+label%3Abasemap"
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ ...tabBtn(false), textDecoration: "none" }}

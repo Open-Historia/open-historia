@@ -25,8 +25,8 @@ import {
 import { unzipBundle, zipBundle } from "../../runtime/bundleZip.js";
 
 // The one and only hub. Not configurable by design.
-const HUB_OWNER = "Arkniem";
-const HUB_REPO = "pax-historia-scenarios";
+const HUB_OWNER = "Open-Historia";
+const HUB_REPO = "Open-historia-scenarios";
 const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 const HUB_API_ISSUES = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
 // Official bundles live as assets on the "bundles" release — GitHub counts
