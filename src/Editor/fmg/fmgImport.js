@@ -37,8 +37,9 @@ const hexToRgb = (hex) => {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 };
 
-// A short, unique, stable owner code for a state — the editor keys ownership by code.
-const stateCode = (state) => `${(String(state.name || "").replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || "ST")}${state.i}`;
+// Ownership is keyed by the state's REAL NAME — no synthetic codes, so the game and
+// editor show "Kuizltan", never "KUI55". FMG gives each state a distinct name.
+const nameOf = (state) => String(state?.name || "").trim();
 
 // ---- coordinate fit: FMG lon/lat bbox -> target extent, aspect-preserving ----
 const boundsOf = (features) => {
@@ -131,9 +132,10 @@ export const fmgToEditorSeed = (data, options = {}) => {
   for (const [key, g] of regionGroups) {
     const state = stateById.get(g.stateId);
     if (!state || state.i === 0) continue; // neutral/unclaimed land isn't a region
+    const owner = nameOf(state);
+    if (!owner) continue; // a nameless state can't be a named country
     const geometry = dissolve(g.geoms);
     if (!geometry) continue;
-    const owner = stateCode(state);
     const province = provinceById.get(g.provinceId);
     regionFeatures.push({
       type: "Feature",
@@ -154,9 +156,10 @@ export const fmgToEditorSeed = (data, options = {}) => {
   const colors = {};
   for (const s of states) {
     if (!s || s.i === 0 || s.removed) continue;
-    const code = stateCode(s);
+    const code = nameOf(s);
+    if (!code) continue;
     colors[code] = hexToRgb(s.color);
-    polities.push({ code, name: s.name || code, color: s.color || "#888888" });
+    polities.push({ code, name: code, color: s.color || "#888888" });
   }
 
   // ---- cities from burgs ----
@@ -177,9 +180,49 @@ export const fmgToEditorSeed = (data, options = {}) => {
     });
   }
 
-  // ---- vector basemap: land dissolved by biome, each feature carries its fill ----
-  // A data-driven renderer paints these biome colours; a plain vector renderer just
-  // shows land vs sea. Either way it's sharp at any zoom (no raster to pixelate).
+  // ---- vector basemap: WATER (ocean shaded by depth + lakes) UNDER land dissolved
+  // by biome. Each feature carries its own `fill`, so the sea reads as textured water
+  // instead of an empty void. Sharp at any zoom (no raster to pixelate). Feature order
+  // = paint order: ocean (bottom) → land biomes → lakes (water sitting inside land).
+  const allCells = cells.features || [];
+  const isLake = (p) => p.type === "lake";
+  const isOcean = (p) => p.type === "ocean" || (Number(p.height) < SEA_LEVEL && !isLake(p));
+  // Depth ramp: deepest matches the sea background so it blends, lightening toward the
+  // coast. Banded (not per-cell) so the ocean dissolves into a handful of polygons.
+  const oceanFill = (h) => {
+    const d = Math.max(0, Math.min(SEA_LEVEL, Number(h) || 0)); // 0..20, deeper = lower
+    return d < 4 ? "#0b1a2b" : d < 8 ? "#102437" : d < 12 ? "#163246" : d < 16 ? "#1e4159" : "#27536e";
+  };
+  const LAKE_FILL = "#39627f";
+
+  const bgFeatures = [];
+  const pushDissolved = (geoms, properties) => {
+    const geometry = dissolve(geoms);
+    if (geometry) bgFeatures.push({ type: "Feature", geometry, properties });
+  };
+
+  // Base ocean covering the WHOLE world, so every part of the map that isn't land
+  // reads as water — not just a shaded ring around the continents where FMG happens
+  // to have ocean cells. Depth bands and land paint on top of it.
+  bgFeatures.push({
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]] },
+    properties: { water: "ocean", fill: "#0b1a2b" },
+  });
+
+  // Ocean, shaded into a few depth bands (on top of the base ocean).
+  const oceanBands = new Map();
+  for (const f of allCells) {
+    const p = f.properties || {};
+    if (!isOcean(p)) continue;
+    const fill = oceanFill(p.height);
+    const g = oceanBands.get(fill) || [];
+    g.push(mapGeom(f.geometry, fit));
+    oceanBands.set(fill, g);
+  }
+  for (const [fill, geoms] of oceanBands) pushDissolved(geoms, { water: "ocean", fill });
+
+  // Land, dissolved by biome (middle layer, on top of the ocean).
   const biomeGroups = new Map();
   for (const f of landCells) {
     const bid = Number((f.properties || {}).biome) || 0;
@@ -187,17 +230,14 @@ export const fmgToEditorSeed = (data, options = {}) => {
     g.push(mapGeom(f.geometry, fit));
     biomeGroups.set(bid, g);
   }
-  const bgFeatures = [];
   for (const [bid, geoms] of biomeGroups) {
-    const geometry = dissolve(geoms);
-    if (!geometry) continue;
     const biome = biomeById.get(bid);
-    bgFeatures.push({
-      type: "Feature",
-      geometry,
-      properties: { biome: biome?.name || String(bid), fill: biome?.color || "#8aa66a" },
-    });
+    pushDissolved(geoms, { biome: biome?.name || String(bid), fill: biome?.color || "#8aa66a" });
   }
+
+  // Lakes (top layer — freshwater sitting inside the land).
+  const lakeGeoms = allCells.filter((f) => isLake(f.properties || {})).map((f) => mapGeom(f.geometry, fit));
+  if (lakeGeoms.length) pushDissolved(lakeGeoms, { water: "lake", fill: LAKE_FILL });
 
   return {
     regions: { type: "FeatureCollection", features: regionFeatures },

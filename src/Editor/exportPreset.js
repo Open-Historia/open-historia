@@ -130,6 +130,7 @@ const buildBackgroundForGame = (customBackground) => {
 export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {}) => {
   const regionOwnershipOverrides = {};
   const owners = new Set();
+  const ownerNames = new Map(); // owner code -> real display name carried on region.country
   let customCount = 0;
 
   for (const f of regionsFC?.features || []) {
@@ -141,6 +142,8 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     if (owner) {
       regionOwnershipOverrides[id] = owner;
       owners.add(owner);
+      const cname = props.country ? String(props.country).trim() : "";
+      if (cname && !ownerNames.has(owner)) ownerNames.set(owner, cname);
     }
   }
 
@@ -157,12 +160,14 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     } else {
       // owner not in the base palette — give it a stable color; add a polity entry
       // only for genuinely custom (non-GADM) codes so the game/AI know the name.
+      // Name comes from the region's country property (the real country name), never
+      // the code, so the game shows "Kuizltan", not a raw identifier.
       const rgb = codeToColor(owner);
       colors[owner] = rgb;
       if (!/^[A-Z]{2,3}$/.test(owner)) {
         polityOverrides[owner] = {
           code: owner,
-          name: owner,
+          name: ownerNames.get(owner) || owner,
           aliases: [],
           color: `#${rgb.map((n) => n.toString(16).padStart(2, "0")).join("")}`,
           note: "",

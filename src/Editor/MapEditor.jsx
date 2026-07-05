@@ -135,7 +135,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       const savedBg = { kind: "vector", geojson: seed.background.geojson };
       setCustomBg(rebuildPersistedBackground(savedBg, { persisted: false }));
       d.patchMetadata({ customBackground: savedBg });
-      setCustomBgId(null);
+      // Save the generated biome basemap to "Your basemaps" so it can be reused.
+      try {
+        const tmpl = params.template && params.template !== "random" ? params.template : "generated";
+        const bmName = `${tmpl.charAt(0).toUpperCase()}${tmpl.slice(1)} world basemap`;
+        const bm = await addBackgroundToLibrary(savedBg, bmName, { author: d.author || "" });
+        setCustomBgId(bm?.id || null);
+        if (bm?.id) fmgLogLine("Saved this basemap to “Your basemaps”.");
+      } catch (e) {
+        console.warn("[editor] save generated basemap to library failed:", e);
+        setCustomBgId(null);
+      }
       d.setSaveStatus("dirty");
       fmgLogLine(`✓ Imported ${seed.stats.regions} regions, ${seed.stats.polities} countries, ${seed.stats.cities} cities.`);
       api.fitToData?.();
