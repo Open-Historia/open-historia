@@ -39,6 +39,13 @@ import {
   getMapEditorDocument,
   updateMapEditorDocument,
 } from "./mapEditorStore.js";
+import {
+  createBasemap,
+  deleteBasemap,
+  ensureBasemapStore,
+  getBasemapCatalog,
+  getBasemapPayload,
+} from "./basemapStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const app = express();
@@ -70,6 +77,7 @@ app.use((req, res, next) => {
 ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
+ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -561,6 +569,39 @@ app.put("/api/mapeditor/documents/:id", largeJsonParser, (req, res) => {
 app.delete("/api/mapeditor/documents/:id", (req, res) => {
   try {
     res.json(deleteMapEditorDocument(req.params.id));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// ---- Basemap library ("Your basemaps") -----------------------------------
+app.get("/api/basemaps", (_req, res) => {
+  try {
+    res.json(getBasemapCatalog());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/basemaps", largeJsonParser, (req, res) => {
+  try {
+    res.status(201).json(createBasemap(req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/basemaps/:id/payload", (req, res) => {
+  try {
+    res.json(getBasemapPayload(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.delete("/api/basemaps/:id", (req, res) => {
+  try {
+    res.json(deleteBasemap(req.params.id));
   } catch (error) {
     sendError(res, 400, error);
   }

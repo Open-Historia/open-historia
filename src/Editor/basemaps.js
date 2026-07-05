@@ -22,3 +22,8 @@ export const editorBasemapById = (id) => EDITOR_BASEMAPS.find((b) => b.id === id
 // so these render without reprojection.
 export const esriXyzUrl = (service) =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/${service}/MapServer/tile/{z}/{y}/{x}`;
+
+// The z0 tile is the whole world in a single ~20 KB image — a perfect low-res
+// preview for the basemap picker (no extra generation, cached by the browser).
+export const esriPreviewUrl = (service) =>
+  `https://server.arcgisonline.com/ArcGIS/rest/services/${service}/MapServer/tile/0/0/0`;
