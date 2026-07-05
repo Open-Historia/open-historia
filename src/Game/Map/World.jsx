@@ -2,7 +2,7 @@
 import React, { useCallback, useMemo, useRef } from "react";
 import Map from "react-map-gl/maplibre";
 import Nations from "./Nations";
-import CustomMapBackground from "./CustomMapBackground.jsx";
+import { useCustomBackground } from "./useCustomBackground.js";
 import GlobeEffects from "./GlobeEffects.jsx";
 import RegionPopup from "../Selection/Regions";
 import CountryInfoPanel from "../Selection/CountryPanel.jsx";
@@ -34,7 +34,51 @@ const SATELLITE_PAINT = {
   "raster-brightness-max": 0.78,
 };
 
-const buildWorldStyle = (basemapId) => ({
+// Full-world image corners (TL, TR, BR, BL) — a custom map stretches across the
+// whole mercator world so it fully replaces Earth.
+const WORLD_IMAGE_COORDS = [
+  [-180, 85.0511],
+  [180, 85.0511],
+  [180, -85.0511],
+  [-180, -85.0511],
+];
+
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared) => {
+  // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
+  // terrain tiles load at all (saves those requests), the uploaded map is the
+  // base layer, and the regions/labels from <Nations> paint on top of it.
+  if (customBg?.kind === "image" && customBg.imageUrl) {
+    return {
+      version: 8,
+      sources: { "custom-bg": { type: "image", url: customBg.imageUrl, coordinates: WORLD_IMAGE_COORDS } },
+      layers: [{ id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } }],
+      sky: { "atmosphere-blend": 0 },
+    };
+  }
+  if (customBg?.kind === "vector" && customBg.geojson) {
+    return {
+      version: 8,
+      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson } },
+      layers: [
+        { id: "custom-bg-sea", type: "background", paint: { "background-color": "#0b1a2b" } },
+        { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#33435c" } },
+        { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(255,255,255,0.5)", "line-width": 1 } },
+      ],
+      sky: { "atmosphere-blend": 0 },
+    };
+  }
+  // A background is declared but its payload hasn't loaded yet — show a neutral
+  // placeholder (no ESRI/terrain sources) so a custom-map game never flashes
+  // satellite Earth or fires basemap tile requests it won't use.
+  if (backgroundDeclared) {
+    return {
+      version: 8,
+      sources: {},
+      layers: [{ id: "custom-bg-loading", type: "background", paint: { "background-color": "#0b1a2b" } }],
+      sky: { "atmosphere-blend": 0 },
+    };
+  }
+  return {
   version: 8,
   sources: {
     "satellite-lowres": {
@@ -100,23 +144,33 @@ const buildWorldStyle = (basemapId) => ({
   sky: {
     "atmosphere-blend": 0,
   },
-});
+  };
+};
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
-  // Fixed to the ocean preset — the in-game basemap picker was removed.
-  const worldStyle = useMemo(() => buildWorldStyle(DEFAULT_BASEMAP_ID), []);
+  // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
+  // the world is fixed to the ocean preset (the in-game basemap picker was removed).
+  // `declared` flips on from the light world.json poll (before the heavy payload)
+  // so the map drops ESRI immediately rather than flashing satellite Earth.
+  const { background: customBg, declared: bgDeclared } = useCustomBackground();
+  const worldStyle = useMemo(
+    () => buildWorldStyle(DEFAULT_BASEMAP_ID, customBg, bgDeclared),
+    [customBg, bgDeclared],
+  );
 
   const isGlobe = projection === "globe";
+  // Earth's terrain DEM has no meaning over a custom map, and its source is dropped
+  // from the style, so disable 3D terrain whenever a custom background is active.
   const terrain = useMemo(
     () =>
-      terrainEnabled
+      terrainEnabled && !customBg && !bgDeclared
         ? {
             source: "terrain-source",
             exaggeration: 15,
           }
         : null,
-    [terrainEnabled],
+    [terrainEnabled, customBg, bgDeclared],
   );
   const handleIdle = useCallback(() => {
     if (hasReportedInitialIdleRef.current) return;
@@ -172,10 +226,6 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         mapStyle={worldStyle}
         onIdle={handleIdle}
       >
-        {/* Renders BEFORE Nations so its layers sit above the ESRI basemap but
-            beneath the region fills — a custom uploaded map shows through as the
-            world's backdrop while regions/borders stay on top. */}
-        <CustomMapBackground />
         <Nations isGlobe={isGlobe} />
         <Cities />
         <Units />

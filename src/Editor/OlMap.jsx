@@ -34,8 +34,7 @@ import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
 import ImageStatic from "ol/source/ImageStatic";
-import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
-import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
+import { fromLonLat, toLonLat } from "ol/proj";
 import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
@@ -52,11 +51,9 @@ const BASEMAP_BG = {
   light: "#0b1020",
 };
 
-// Move/resize handles for a placed image background.
-const CUSTOM_BG_FRAME_STYLE = new Style({
-  stroke: new Stroke({ color: "rgba(59,130,246,0.95)", width: 2, lineDash: [6, 4] }),
-  fill: new Fill({ color: "rgba(59,130,246,0.06)" }),
-});
+// Web-Mercator world extent (±180° lon, ±85.0511° lat) — a custom image
+// background is stretched across all of it so it fully replaces the basemap.
+const WORLD_EXTENT_3857 = [-20037508.342789244, -20037508.342789244, 20037508.342789244, 20037508.342789244];
 
 const LABEL_MIN_ZOOM = 4;
 
@@ -913,13 +910,16 @@ const OlMap = ({
       map.removeLayer(baseLayerRef.current);
       baseLayerRef.current = null;
     }
-    const esri = editorBasemapById(basemap);
+    // A custom uploaded map (image or vector) replaces the basemap — don't load
+    // any ESRI tiles at all while it's active, to save the requests.
+    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector";
+    const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
     if (esri) {
       base = new TileLayer({
         source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
       });
-    } else if (basemap === "osm" || basemap === "light") {
+    } else if (!customActive && (basemap === "osm" || basemap === "light")) {
       base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
     }
     if (base) {
@@ -928,8 +928,8 @@ const OlMap = ({
       baseLayerRef.current = base;
     }
     const el = map.getTargetElement();
-    if (el) el.style.background = BASEMAP_BG[basemap] || "#0b1020";
-  }, [basemap]);
+    if (el) el.style.background = customActive ? "#0b1a2b" : BASEMAP_BG[basemap] || "#0b1020";
+  }, [basemap, customBackground]);
 
   // Custom uploaded background: a georeferenced vector/raster layer beneath the
   // regions, or a plain image placed with a draggable/resizable frame.
@@ -954,66 +954,17 @@ const OlMap = ({
       };
     }
 
-    // Plain image: ImageStatic's extent is immutable, so on each drag we swap in
-    // a fresh image layer sized to the frame's new extent.
-    let extent = bg.extentWgs84 ? transformExtent(bg.extentWgs84, "EPSG:4326", "EPSG:3857") : null;
-    if (!extent) {
-      const ve = map.getView().calculateExtent(map.getSize() || [900, 600]);
-      const vw = ve[2] - ve[0];
-      const vh = ve[3] - ve[1];
-      let w = vw * 0.7;
-      let h = w / (bg.aspect || 1);
-      if (h > vh * 0.7) {
-        h = vh * 0.7;
-        w = h * (bg.aspect || 1);
-      }
-      const cx = (ve[0] + ve[2]) / 2;
-      const cy = (ve[1] + ve[3]) / 2;
-      extent = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
-    }
-    const makeImageLayer = (ext) => {
-      const layer = new ImageLayer({
-        source: new ImageStatic({ url: bg.url, imageExtent: ext, projection: "EPSG:3857" }),
-        opacity: 0.92,
-      });
-      layer.setZIndex(5);
-      return layer;
-    };
-    let imageLayer = makeImageLayer(extent);
+    // Plain image: stretch it across the whole world so it fully replaces the
+    // basemap (a fantasy map you draw regions on). No placement frame — it always
+    // covers the entire map; the regions/labels sit above it (z >= 10).
+    const imageLayer = new ImageLayer({
+      source: new ImageStatic({ url: bg.url, imageExtent: WORLD_EXTENT_3857, projection: "EPSG:3857" }),
+    });
+    imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
-    const frameSource = new VectorSource();
-    const frameFeature = new Feature(polygonFromExtent(extent));
-    frameSource.addFeature(frameFeature);
-    const frameLayer = new VectorLayer({ source: frameSource, style: CUSTOM_BG_FRAME_STYLE });
-    frameLayer.setZIndex(6);
-    map.addLayer(frameLayer);
-    const translate = new Translate({ features: new Collection([frameFeature]) });
-    const modify = new Modify({ source: frameSource });
-    const emitSave = (ext) =>
-      onCustomBackgroundSaveRef.current?.({
-        kind: "image",
-        dataUrl: bg.dataUrl,
-        aspect: bg.aspect,
-        extentWgs84: transformExtent(ext, "EPSG:3857", "EPSG:4326"),
-      });
-    const sync = () => {
-      const e = frameFeature.getGeometry().getExtent();
-      frameFeature.setGeometry(polygonFromExtent(e)); // re-square after corner drags
-      map.removeLayer(imageLayer);
-      imageLayer = makeImageLayer(e);
-      map.addLayer(imageLayer);
-      emitSave(e);
-    };
-    translate.on("translateend", sync);
-    modify.on("modifyend", sync);
-    map.addInteraction(translate);
-    map.addInteraction(modify);
-    emitSave(extent);
+    onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
     return () => {
       map.removeLayer(imageLayer);
-      map.removeLayer(frameLayer);
-      map.removeInteraction(translate);
-      map.removeInteraction(modify);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customBackground]);

@@ -103,25 +103,18 @@ const buildCitiesForGame = (features) => ({
 });
 
 // Turn the editor's persisted custom background (doc.metadata.customBackground)
-// into what the game needs: a light descriptor for world.json (kind + placement)
-// and the heavy payload for the backgroundData asset (loaded once, off the 5s
-// world poll). Images carry a data URL + the four map corners MapLibre's image
-// source wants ([TL, TR, BR, BL] as [lng, lat]); vectors carry their GeoJSON.
-// Raster uploads (GeoTIFF/PMTiles) are editor-only reference and don't persist,
-// so they never reach here. Returns { background: null } when there's nothing.
-const cornersFromExtent = ([minX, minY, maxX, maxY]) => [
-  [minX, maxY],
-  [maxX, maxY],
-  [maxX, minY],
-  [minX, minY],
-];
-
+// into what the game needs: a light descriptor for world.json (just the kind) and
+// the heavy payload for the backgroundData asset (loaded once, off the 5s world
+// poll). Images carry a data URL — the game stretches them across the whole world
+// to fully replace Earth; vectors carry their GeoJSON. Raster uploads
+// (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
+// reach here. Returns { background: null } when there's nothing.
 const buildBackgroundForGame = (customBackground) => {
   const bg = customBackground;
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
-  if (bg.kind === "image" && bg.dataUrl && Array.isArray(bg.extentWgs84) && bg.extentWgs84.length === 4) {
+  if (bg.kind === "image" && bg.dataUrl) {
     return {
-      background: { kind: "image", coordinates: cornersFromExtent(bg.extentWgs84) },
+      background: { kind: "image" },
       backgroundData: { dataUrl: bg.dataUrl },
     };
   }
@@ -184,7 +177,11 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
   const world = {
     regionOwnershipOverrides,
     polityOverrides,
-    customRegions: hasCustomGeometry,
+    // A custom background replaces Earth, so it must also hide the stock modern
+    // political overlay (country fills, borders, "Russia"/"France" labels) — those
+    // are gated on customRegions in the game, so force it on whenever there's a
+    // background, even for a re-ownership map that ships no drawn geometry.
+    customRegions: hasCustomGeometry || Boolean(background),
     // Custom map background (image placed by extent, or a vector overlay). null
     // clears any previously applied background. The heavy payload rides in the
     // seed's backgroundData below, uploaded as a separate scenario asset.
