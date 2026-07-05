@@ -30,6 +30,7 @@ const FmgPanel = ({ open, onToggle, busy, log = [], onGenerate }) => {
   const [size, setSize] = useState("medium");
   const [states, setStates] = useState(12);
   const [cultures, setCultures] = useState(8);
+  const [cities, setCities] = useState("");
   const [useProvinces, setUseProvinces] = useState(true);
 
   const run = () => {
@@ -40,6 +41,7 @@ const FmgPanel = ({ open, onToggle, busy, log = [], onGenerate }) => {
       points: SIZES.find((s) => s.id === size)?.points || 10000,
       states: Math.max(1, Number(states) || 12),
       cultures: Math.max(1, Number(cultures) || 8),
+      cities: Math.max(0, Math.round(Number(cities) || 0)),
       useProvinces,
     });
   };
@@ -128,6 +130,11 @@ const FmgPanel = ({ open, onToggle, busy, log = [], onGenerate }) => {
               <span style={label}>Cultures</span>
               <input type="number" min={1} max={40} value={cultures} onChange={(e) => setCultures(e.target.value)} style={inputStyle} />
             </div>
+          </div>
+
+          <div style={field}>
+            <span style={label}>Cities (blank = auto, scales with map size)</span>
+            <input type="number" min={0} max={1000} value={cities} onChange={(e) => setCities(e.target.value)} placeholder="auto" style={inputStyle} />
           </div>
 
           <label style={{ ...field, flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>

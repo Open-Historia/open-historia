@@ -75,6 +75,11 @@ const need = (cond, what) => {
 const setup = (win, params) => {
   const states = Math.min(100, Math.max(1, Math.round(Number(params.states) || 12)));
   const cultures = Math.min(30, Math.max(1, Math.round(Number(params.cultures) || 8)));
+  // Cities: FMG's burgs = one capital per state + `manors` non-capital towns. The
+  // panel's count is a TOTAL, so towns = total − capitals (clamped to FMG's 0–999;
+  // 1000 = "auto"). 0/blank leaves manors unlocked → FMG auto-scales cities to the map.
+  const cities = Math.max(0, Math.round(Number(params.cities) || 0));
+  const towns = cities > 0 ? Math.min(999, Math.max(0, cities - states)) : -1;
   const points = Number(params.points) || 0;
   const density = points >= 20000 ? 5 : points >= 10000 ? 4 : 3; // cellsDensityMap level
   const template = resolveTemplate(params);
@@ -90,6 +95,7 @@ const setup = (win, params) => {
       lk('points');
       set('statesNumber',${states}); lk('statesNumber');
       set('culturesInput',${cultures}); set('culturesOutput',${cultures}); lk('cultures');
+      ${towns >= 0 ? `set('manorsInput',${towns}); lk('manors');` : ``}
       (function(){var s=byId('templateInput'); if(!s) return; var v=${JSON.stringify(template)};
         if(typeof applyOption==='function'){ applyOption(s,v,v); }
         else { if(!Array.from(s.options).some(function(o){return o.value===v;})) s.options.add(new Option(v,v)); s.value=v; }
