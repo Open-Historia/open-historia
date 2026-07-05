@@ -29,6 +29,9 @@ import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLib
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
+import FmgPanel from "./fmg/FmgPanel.jsx";
+import { generateFmgWorld } from "./fmg/fmgDriver.js";
+import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
 const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}) => {
   const d = useMapDocument();
@@ -45,6 +48,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
   const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
+  const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
+  const [fmgBusy, setFmgBusy] = useState(false);
+  const [fmgLog, setFmgLog] = useState([]);
 
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
@@ -95,6 +101,49 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     } catch (e) {
       console.warn("[editor] save basemap to library failed:", e);
       setCustomBgId(null);
+    }
+  };
+
+  // ---- Fantasy Map Generator: generate a world and import it into this map ----
+  const fmgLogLine = (msg) => setFmgLog((l) => [...l, msg]);
+  const generateFromFmg = async (params) => {
+    if (!api || fmgBusy) return;
+    setFmgBusy(true);
+    setFmgLog([]);
+    try {
+      const raw = await generateFmgWorld(params, fmgLogLine);
+      fmgLogLine("Building regions, countries and cities…");
+      const seed = fmgToEditorSeed(raw, { groupBy: params.useProvinces ? "province" : "state" });
+      api.loadRegions(seed.regions);
+      d.setFeatures(
+        seed.cities.features
+          .map((f) => ({
+            id: newId("feat"),
+            name: f.properties?.city || "",
+            type: "Coordinate",
+            symbol: "square",
+            coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
+            country: "",
+            owner: null,
+            regionId: null,
+            population: f.properties?.population || 0,
+            tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
+          }))
+          .filter((f) => Array.isArray(f.coord)),
+      );
+      d.mergeColors(seed.colors);
+      const savedBg = { kind: "vector", geojson: seed.background.geojson };
+      setCustomBg(rebuildPersistedBackground(savedBg, { persisted: false }));
+      d.patchMetadata({ customBackground: savedBg });
+      setCustomBgId(null);
+      d.setSaveStatus("dirty");
+      fmgLogLine(`✓ Imported ${seed.stats.regions} regions, ${seed.stats.polities} countries, ${seed.stats.cities} cities.`);
+      api.fitToData?.();
+    } catch (e) {
+      fmgLogLine(`✗ ${e?.message || e}`);
+      console.warn("[editor] FMG generate failed:", e);
+    } finally {
+      setFmgBusy(false);
     }
   };
 
@@ -475,6 +524,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         onSelectBuiltin={selectBuiltinBasemap}
         onSelectCustom={selectLibraryBasemap}
         onUpload={uploadBasemap}
+      />
+
+      <FmgPanel
+        open={fmgOpen}
+        onToggle={() => setFmgOpen((o) => !o)}
+        busy={fmgBusy}
+        log={fmgLog}
+        onGenerate={generateFromFmg}
       />
     </div>
   );
