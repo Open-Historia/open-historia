@@ -84,6 +84,43 @@ const sendError = (res, statusCode, error) => {
   res.status(statusCode).json({ error: message });
 };
 
+// Block cross-origin state-changing requests (CSRF / drive-by protection).
+// The blanket CORS above is needed so the Android connect screen (on the
+// WebView's own origin) can *probe* this server — a GET. But it also let any
+// web page the user happens to be visiting POST/PUT/DELETE to localhost:
+// delete saved maps and games, drive the AI relay at internal hosts, or hit
+// /api/server/shutdown. The app serves its own SPA, so real gameplay writes
+// are same-origin (Origin absent, or Origin host === Host); a foreign Origin
+// on a write is rejected. Set OH_ALLOW_CROSS_ORIGIN=1 to restore the old
+// fully-open behavior if a client setup genuinely needs cross-origin writes.
+const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
+const CROSS_ORIGIN_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+app.use((req, res, next) => {
+  if (ALLOW_CROSS_ORIGIN_WRITES || CROSS_ORIGIN_SAFE_METHODS.has(req.method)) {
+    return next();
+  }
+  const origin = req.headers.origin;
+  if (!origin) {
+    // No Origin header: same-origin non-CORS request or a native (non-browser)
+    // client. Browsers always attach Origin to cross-site writes.
+    return next();
+  }
+  let originHost;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return sendError(res, 403, new Error("Cross-origin request blocked (invalid Origin)."));
+  }
+  if (originHost === req.headers.host) {
+    return next();
+  }
+  return sendError(
+    res,
+    403,
+    new Error("Cross-origin write blocked. Set OH_ALLOW_CROSS_ORIGIN=1 on the server to allow it."),
+  );
+});
+
 const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet-stream") => {
   const stats = fs.statSync(sourcePath);
   const totalSize = stats.size;
@@ -100,19 +137,26 @@ const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet
   }
 
   const match = /bytes=(\d*)-(\d*)/i.exec(rangeHeader);
-  if (!match) {
-    res.status(416).end();
+  if (!match || (!match[1] && !match[2])) {
+    res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
     return;
   }
 
-  const start = match[1] ? Number.parseInt(match[1], 10) : 0;
-  const end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
-  const clampedStart = Number.isFinite(start) ? Math.max(0, Math.min(start, totalSize - 1)) : 0;
-  const clampedEnd = Number.isFinite(end)
-    ? Math.max(clampedStart, Math.min(end, totalSize - 1))
-    : totalSize - 1;
+  let clampedStart;
+  let clampedEnd;
+  if (!match[1]) {
+    // Suffix range "bytes=-N": the final N bytes of the file, not the first N.
+    const suffix = Number.parseInt(match[2], 10);
+    clampedStart = Math.max(0, totalSize - suffix);
+    clampedEnd = totalSize - 1;
+  } else {
+    const start = Number.parseInt(match[1], 10);
+    const end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
+    clampedStart = Math.max(0, Math.min(start, totalSize - 1));
+    clampedEnd = Math.max(clampedStart, Math.min(end, totalSize - 1));
+  }
 
-  if (clampedStart >= totalSize || clampedEnd >= totalSize) {
+  if (clampedStart >= totalSize) {
     res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
     return;
   }
@@ -508,14 +552,35 @@ app.post("/api/server/shutdown", (_req, res) => {
   setTimeout(() => process.exit(0), 300);
 });
 
+const isAllowedHubUrl = (candidate) =>
+  candidate.protocol === "https:" && HUB_DOWNLOAD_HOSTS.has(candidate.hostname);
+
 app.get("/api/hub/file", async (req, res) => {
   try {
-    const target = new URL(String(req.query.url ?? ""));
-    if (target.protocol !== "https:" || !HUB_DOWNLOAD_HOSTS.has(target.hostname)) {
+    let current = new URL(String(req.query.url ?? ""));
+    if (!isAllowedHubUrl(current)) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
     }
 
-    const upstream = await fetch(target, { redirect: "follow" });
+    // Follow redirects manually so every hop is re-checked against the host
+    // allowlist. `redirect: "follow"` would chase a github.com redirect to an
+    // attacker-controlled host (SSRF); GitHub's own release redirect
+    // (github.com -> objects.githubusercontent.com) stays inside the allowlist.
+    let upstream;
+    for (let hop = 0; ; hop += 1) {
+      if (hop > 5) {
+        return sendError(res, 502, new Error("Too many redirects fetching scenario file."));
+      }
+      upstream = await fetch(current, { redirect: "manual" });
+      if (upstream.status < 300 || upstream.status >= 400) break;
+      const location = upstream.headers.get("location");
+      if (!location) break;
+      const next = new URL(location, current);
+      if (!isAllowedHubUrl(next)) {
+        return sendError(res, 400, new Error("Scenario file redirected off GitHub."));
+      }
+      current = next;
+    }
     if (!upstream.ok) {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }

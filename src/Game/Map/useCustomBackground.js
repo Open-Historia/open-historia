@@ -30,7 +30,10 @@ export function useCustomBackground() {
       const basemap = world?.basemap || null;
       basemapRef.current = basemap;
       const desc = world?.background;
-      const key = desc && desc.kind ? String(desc.kind) : "";
+      // Key on the whole descriptor, not just kind: swapping one image
+      // background for another (both kind "image") kept showing the old one
+      // until a full reload, because the key never changed.
+      const key = desc && desc.kind ? JSON.stringify(desc) : "";
       if (key === keyRef.current) {
         setState((s) => (s.basemap === basemap ? s : { ...s, basemap })); // keep stable ref
         return;
@@ -43,11 +46,25 @@ export function useCustomBackground() {
       // Commit to "no ESRI" from the light descriptor right away, then load the
       // heavy payload and swap in the actual image/vector.
       setState({ background: null, declared: true, basemap });
-      const data = await readJson(JSON_URLS.backgroundData, { defaultValue: null, force: true }).catch(() => null);
+      // Read without a default so a transient fetch failure rejects (rather than
+      // silently resolving to null) and we can tell it apart from a genuinely
+      // empty payload.
+      let data = null;
+      let payloadFailed = false;
+      try {
+        data = await readJson(JSON_URLS.backgroundData, { force: true });
+      } catch {
+        payloadFailed = true;
+      }
       if (cancelled || keyRef.current !== key) return; // superseded while loading
       if (desc.kind === "image" && data?.dataUrl) setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap: basemapRef.current });
       else if (desc.kind === "vector" && data?.geojson) setState({ background: { kind: "vector", geojson: data.geojson }, declared: true, basemap: basemapRef.current });
-      else setState({ background: null, declared: false, basemap: basemapRef.current });
+      else {
+        // Don't pin a permanent blank after a failed payload fetch — clear the
+        // cached key so the next poll retries instead of short-circuiting above.
+        if (payloadFailed) keyRef.current = "";
+        setState({ background: null, declared: false, basemap: basemapRef.current });
+      }
     };
 
     poll();
