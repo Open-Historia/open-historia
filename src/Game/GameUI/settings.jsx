@@ -750,6 +750,7 @@ const SettingsMenu = ({
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
+        disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         basemapStyle: getMapSetting(MAP_SETTING_KEYS.basemapStyle),
     }));
 
@@ -832,6 +833,11 @@ const SettingsMenu = ({
         label="Disable idle globe rotation"
         enabled={mapSettings.disableIdleRotation}
         onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)}
+        />
+        <Toggle
+        label="Disable camera movement during events"
+        enabled={mapSettings.disableEventCamera}
+        onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)}
         />
         <div style={{ marginBottom: "0.5rem" }}>
         <div style={{ fontSize: "0.9rem", marginBottom: "0.4rem" }}>Map style</div>

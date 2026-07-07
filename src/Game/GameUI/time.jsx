@@ -18,6 +18,7 @@ import {
     readWorldState,
 } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 dayjs.extend(advancedFormat);
 
@@ -1061,6 +1062,7 @@ const DateWidget = ({
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
+    const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
 
     useEffect(() => {
         ensureTimelineStyles();
@@ -1236,15 +1238,16 @@ const DateWidget = ({
     }, [latestTurnRecord?.id]);
 
     // The camera follows EVERY revealed event — impacts pin the exact spot,
-    // otherwise the countries the event involves do.
+    // otherwise the countries the event involves do. Opt out via the
+    // "Disable camera movement during events" map setting.
     useEffect(() => {
-        if (!activeVisibleEvent) {
+        if (!activeVisibleEvent || disableEventCamera) {
             return;
         }
 
         const bounds = deriveEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds, polityLookup });
         focusMapOnBounds(mapRef, bounds);
-    }, [activeVisibleEvent, countryBounds, mapRef, polityLookup, regionBounds]);
+    }, [activeVisibleEvent, countryBounds, disableEventCamera, mapRef, polityLookup, regionBounds]);
 
     const revealNextEvent = () => {
         setVisibleEventCount((current) => {
@@ -1283,9 +1286,14 @@ const DateWidget = ({
             ...widgetSurface,
             right: rightShift,
             top: topOffset,
-            // On phones the country name moves in here (the standalone pill
-            // would cover the date), so stretch up to the settings button.
-            ...(isMobile ? { width: "min(24rem, calc(100vw - 5.75rem))" } : null),
+            // The player's country sits beside the date. On phones the standalone
+            // pill would cover the date, so stretch the widget; on desktop cap the
+            // width so a long fantasy country name ellipsizes instead of sprawling.
+            ...(isMobile
+                ? { width: "min(24rem, calc(100vw - 5.75rem))" }
+                : playerCountry
+                ? { maxWidth: "min(28rem, calc(100vw - 8rem))" }
+                : null),
         }}
         >
         <button
@@ -1310,12 +1318,12 @@ const DateWidget = ({
         </button>
 
         <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", minWidth: 0 }}>
-        {isMobile && playerCountry ? (
+        {playerCountry ? (
             <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}>
             <span
             style={{
                 color: "rgba(147,197,253,0.88)",
-                fontSize: "0.68rem",
+                fontSize: isMobile ? "0.68rem" : "0.8rem",
                 fontWeight: 700,
                 letterSpacing: "0.05em",
                 minWidth: 0,
@@ -1327,7 +1335,7 @@ const DateWidget = ({
             >
             {playerCountry}
             </span>
-            <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: "0.82rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
+            <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: isMobile ? "0.82rem" : "0.95rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
             {displayDate}
             </span>
             </div>
