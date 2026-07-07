@@ -913,18 +913,11 @@ const EditorDrawer = ({
       {editorSection === "bundles" && kind === "scenario" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.82rem", lineHeight: 1.5, marginBottom: "0.85rem" }}>
-            Download the scenario as one JSON file. Use the lightweight export for quick sharing on default assets, or embed PMTiles when you want a fully portable bundle.
+            Download the scenario as one self-contained JSON file — any custom map geometry, cities and basemap travel inside it, so it's ready to share or re-import.
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
             <button onClick={() => onExportBundle("light")} style={actionButtonStyle} type="button">
               Download JSON
-            </button>
-            <button
-              onClick={() => onExportBundle("full")}
-              style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(124,58,237,0.36)" }}
-              type="button"
-            >
-              Download JSON + PMTiles
             </button>
           </div>
         </div>
