@@ -12,12 +12,14 @@ const DEFAULT_BASEMAP_ID = "imagery";
 export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
+    disableEventCamera: "map_disable_event_camera",
     basemapStyle: "map_basemap_style",
 };
 
 const BOOLEAN_KEYS = new Set([
     MAP_SETTING_KEYS.hideCountryLabels,
     MAP_SETTING_KEYS.disableIdleRotation,
+    MAP_SETTING_KEYS.disableEventCamera,
 ]);
 
 const STRING_DEFAULTS = {
