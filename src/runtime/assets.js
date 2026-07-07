@@ -22,6 +22,17 @@ if (typeof caches !== "undefined" && caches?.keys) {
     .catch(() => {});
 }
 const JSON_HEADERS = { "Content-Type": "application/json" };
+
+// A Response constructed from a string gets no Content-Length, and the Cache
+// Storage match returns the stored header list verbatim — so the HEAD freshness
+// check (which compares the cached body length against the server's) is silently
+// disabled for every URL the client has written, and a second device keeps
+// serving its stale cached copy. Stamp the real UTF-8 byte length so the check
+// works.
+const jsonHeadersFor = (payload) => ({
+  ...JSON_HEADERS,
+  "Content-Length": String(new TextEncoder().encode(payload).length),
+});
 const FALLBACK_THREADS = 4;
 const remoteValueCache = new Map();
 const remoteRequestCache = new Map();
@@ -135,6 +146,22 @@ let countryNamesPromise = null;
 let countryNamesPromiseKey = "";
 let regionCatalogPromise = null;
 let regionCatalogPromiseKey = "";
+
+// getNationColors and loadCountryNames memoize on the scenario token, which only
+// changes on a scenario/library switch — never on a runtime write. So after the
+// AI (or a cheat) writes new colors or creates a polity mid-game, those caches
+// keep serving the pre-write value for the rest of the session. A write to the
+// underlying asset must drop the derived cache so the next read recomputes.
+const invalidateDerivedCachesForWrite = (url) => {
+  if (url && url === JSON_URLS.colors) {
+    nationColorsPromise = null;
+    nationColorsPromiseKey = "";
+  }
+  if (url && url === JSON_URLS.world) {
+    countryNamesPromise = null;
+    countryNamesPromiseKey = "";
+  }
+};
 let mapRuntimeConfigured = false;
 let vectorTileModulesPromise = null;
 
@@ -483,10 +510,11 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
   }
 
   primeJson(url, data);
+  invalidateDerivedCachesForWrite(url);
   persistResponse(
     url,
     new Response(payload, {
-      headers: JSON_HEADERS,
+      headers: jsonHeadersFor(payload),
       status: 200,
       statusText: "OK",
     }),
@@ -546,7 +574,7 @@ export const writeRuntimeJson = async (
   await persistResponse(
     buildRuntimeCacheUrl(key),
     new Response(payload, {
-      headers: JSON_HEADERS,
+      headers: jsonHeadersFor(payload),
       status: 200,
       statusText: "OK",
     }),
@@ -852,8 +880,15 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       // (reg_* ids) and seed-only regions — get their names from the active
       // scenario's own geometry, so the AI can talk about them by name instead
       // of raw ids. Usually already in the JSON cache (the map fetched it).
+      let customRegionsResolved = true;
       try {
         const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null });
+        // readJson returns the default WITHOUT caching on a transient failure,
+        // but DOES cache a genuine "no custom geometry" result. That lets us
+        // tell a dropped fetch (retry) apart from a scenario that simply has no
+        // custom regions (stock names are correct) — so one failed request on a
+        // custom map can't pin a blank political map for the whole session.
+        customRegionsResolved = jsonValueCache.has(JSON_URLS.regionsGeojson);
         for (const feature of custom?.features ?? []) {
           const props = feature?.properties ?? {};
           const id = props.id != null ? String(props.id) : "";
@@ -867,7 +902,12 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
           });
         }
       } catch {
-        // No custom geometry (or fetch hiccup) — stock names only.
+        customRegionsResolved = false;
+      }
+
+      if (!customRegionsResolved && regionCatalogPromise === promise) {
+        // Don't pin a stock-only catalog after a failed custom fetch — retry.
+        regionCatalogPromise = null;
       }
 
       return Array.from(seen.values()).sort((left, right) => {

@@ -230,12 +230,15 @@ const JSON_ASSET_DEFAULTS = {
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "allowedUnitTypes",
 "author",
+"background",
+"basemap",
 "customCities",
 "customRegions",
 "difficulty",
 "language",
 "mapCredit",
 "notes",
+"ownerCodes",
 "polityOverrides",
 "regionOwnershipOverrides",
 "simulationRules",
@@ -346,7 +349,23 @@ const removeFileIfPresent = (targetPath) => {
   }
 };
 
-const getScenarioDirectory = (scenarioId) => path.join(SCENARIOS_DIR, scenarioId);
+// Guard against path traversal. An id must resolve to a direct child of its
+// base directory; anything containing ../ or a path separator (including the
+// %2f Express decodes back into "/") would otherwise escape the data dir and
+// let an unauthenticated request read, overwrite or delete arbitrary .json
+// files. Only create paths were normalized before — read/update/delete took
+// the raw id straight into path.join.
+const resolveWithinDirectory = (baseDir, id, label) => {
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, String(id ?? ""));
+  if (path.dirname(resolved) !== base) {
+    throw new Error(`Invalid ${label}: ${id}`);
+  }
+  return resolved;
+};
+
+const getScenarioDirectory = (scenarioId) =>
+  resolveWithinDirectory(SCENARIOS_DIR, scenarioId, "scenario id");
 const getScenarioMetaPath = (scenarioId) => path.join(getScenarioDirectory(scenarioId), "scenario.json");
 const getScenarioJsonPath = (scenarioId, assetKey) =>
 path.join(
@@ -356,7 +375,7 @@ path.join(
 const getScenarioUploadPath = (scenarioId, assetKey) =>
 path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
 
-const getGameDirectory = (gameId) => path.join(GAMES_DIR, gameId);
+const getGameDirectory = (gameId) => resolveWithinDirectory(GAMES_DIR, gameId, "game id");
 const getGameMetaPath = (gameId) => path.join(getGameDirectory(gameId), "game-instance.json");
 const getGameJsonPath = (gameId, assetKey) =>
 path.join(
