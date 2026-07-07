@@ -441,7 +441,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             const world = await readWorldState({ force: true });
                             const overrides = { ...world.regionOwnershipOverrides };
                             if (wholeCountry) {
-                                const source = props.owner || props.GID_0 || props.gid0;
+                                // Resolve the clicked region's CURRENT owner. On a stock
+                                // map a region reassigned via regionOwnershipOverrides still
+                                // carries its original GID_0 in the tile, so reading the raw
+                                // property annexed the wrong country — consult the override
+                                // for this region id first.
+                                const clickedId =
+                                    props.id != null
+                                        ? String(props.id)
+                                        : props.GID_1 != null
+                                            ? String(props.GID_1)
+                                            : "";
+                                const source =
+                                    (clickedId && overrides[clickedId]) || props.owner || props.GID_0 || props.gid0;
                                 if (!source || source === owner) return;
                                 const catalog = await loadRegionCatalog();
                                 let count = 0;
