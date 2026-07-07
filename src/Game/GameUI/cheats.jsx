@@ -24,6 +24,7 @@ const EMPTY_FEATURES = { type: "FeatureCollection", features: [] };
 
 const TOOLS = [
     { id: "master-ai", title: "Master AI", subtitle: "Full control over the game with AI assistance" },
+    { id: "roll-back-turn", title: "Roll Back Turn", subtitle: "Restore the game to the start of an earlier turn" },
     { id: "your-country", title: "Your Country", subtitle: "Change which country you're playing as" },
     { id: "difficulty", title: "Difficulty", subtitle: "Adjust the game difficulty level" },
     { id: "annex-country", title: "Annex Country", subtitle: "Click a country to annex it into another" },
@@ -92,24 +93,53 @@ const rgbToHex = (rgb) =>
         ? `#${rgb.map((part) => Math.max(0, Math.min(255, Math.round(part))).toString(16).padStart(2, "0")).join("")}`
         : "#888888";
 
-// Every country the game knows: the base map list, plus era polities from the
-// world (which win the name when both exist).
+// The countries that ACTUALLY exist in the current game — enumerated from the map,
+// not a fixed world list. Every defined polity, every current region owner, and the
+// owners of the rendered geometry (the scenario's own custom regions when it has
+// them, else the stock catalog), each resolved to its display NAME. On a fantasy
+// map this yields the invented nations only, never real-Earth countries; a country
+// you just created shows up too (it's in polityOverrides).
 const loadPolities = async () => {
-    const [countries, world] = await Promise.all([
-        loadCountryNames().catch(() => []),
-        readWorldState({ force: true }),
-    ]);
-    const merged = new Map();
-    for (const entry of countries ?? []) {
-        if (entry?.code) merged.set(entry.code, { code: entry.code, name: entry.name || entry.code });
+    const world = await readWorldState({ force: true });
+    const overrides = world.regionOwnershipOverrides ?? {};
+    const polityOverrides = world.polityOverrides ?? {};
+
+    // identifier -> display name (stock ISO names first, era/custom polity names win).
+    const nameByCode = new Map();
+    for (const entry of (await loadCountryNames().catch(() => [])) ?? []) {
+        if (entry?.code) nameByCode.set(String(entry.code), entry.name || String(entry.code));
     }
-    for (const polity of Object.values(world.polityOverrides ?? {})) {
-        if (polity?.code) merged.set(polity.code, { code: polity.code, name: polity.name || polity.code });
+    for (const [code, polity] of Object.entries(polityOverrides)) {
+        if (code && polity?.name) nameByCode.set(String(code), polity.name);
     }
-    return {
-        polities: Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name)),
-        world,
-    };
+
+    const owners = new Set();
+    for (const code of Object.keys(polityOverrides)) if (code) owners.add(String(code));
+    for (const owner of Object.values(overrides)) if (owner) owners.add(String(owner));
+    for (const code of world.ownerCodes ?? []) if (code) owners.add(String(code));
+
+    // Owners of the actually-rendered geometry, with current overrides applied: the
+    // scenario's own custom regions when present, otherwise the stock GADM catalog.
+    const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
+    if (Array.isArray(custom?.features) && custom.features.length) {
+        for (const feature of custom.features) {
+            const props = feature?.properties ?? {};
+            const id = props.id != null ? String(props.id) : "";
+            const owner = overrides[id] ?? props.owner ?? props.gid0;
+            if (owner) owners.add(String(owner));
+        }
+    } else {
+        for (const region of await loadRegionCatalog().catch(() => [])) {
+            const owner = overrides[region.id] ?? region.countryCode;
+            if (owner) owners.add(String(owner));
+        }
+    }
+
+    const polities = Array.from(owners)
+        .filter((code) => code && code.toLowerCase() !== "unclaimed")
+        .map((code) => ({ code, name: nameByCode.get(code) || code }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    return { polities, world };
 };
 
 const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country…" }) => (
@@ -301,6 +331,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         if (tool === "events") {
             readEventsState({ force: true }).then(setItems).catch(() => setItems([]));
         }
+        if (tool === "roll-back-turn") {
+            readJson(JSON_URLS.snapshots, { defaultValue: [], force: true })
+                .then((list) => setItems(Array.isArray(list) ? list : []))
+                .catch(() => setItems([]));
+        }
         if (tool === "edit-feature" || tool === "clear-features") {
             readJson(JSON_URLS.citiesGeojson, { defaultValue: EMPTY_FEATURES, force: true })
                 .then((geojson) => setItems(geojson?.features ?? []))
@@ -347,6 +382,79 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             </button>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.5rem" }}>
             The AI interprets the command, applies its impacts to the map and countries, and records it as a game-master event.
+            </div>
+            {statusLine}
+            </div>
+            </>
+        );
+    }
+
+    if (tool === "roll-back-turn") {
+        const snapshots = items ?? [];
+        return (
+            <>
+            {header(meta.title, meta.subtitle)}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem", marginBottom: "0.5rem" }}>
+            Restore the game to how it was at the start of an earlier turn. This permanently discards every turn played after the one you pick.
+            </div>
+            {items === null && (
+                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.76rem" }}>Loading restore points…</div>
+            )}
+            {items !== null && snapshots.length === 0 && (
+                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.76rem" }}>
+                No restore points yet — one is captured automatically at the start of each turn. Play a turn, then come back.
+                </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", overflowY: "auto" }}>
+            {snapshots.map((snap, index) => {
+                const confirming = editingId === snap.id;
+                const dateLabel = snap.fromDate ? String(snap.fromDate) : "";
+                return (
+                    <div key={snap.id} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.6rem" }}>
+                    <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: "0.82rem", fontWeight: 700 }}>Round {snap.round}{dateLabel ? ` · ${dateLabel}` : ""}</div>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
+                    {index === 0 ? "undoes the most recent turn" : `undoes the last ${index + 1} turns`}
+                    </div>
+                    </div>
+                    {confirming ? (
+                        <div style={{ display: "flex", flexShrink: 0, gap: "0.3rem" }}>
+                        <button
+                        type="button"
+                        disabled={busy}
+                        style={{ ...primaryButtonStyle, padding: "0.25rem 0.55rem" }}
+                        onClick={() => runBusy(async () => {
+                            const s = snap.state ?? {};
+                            await Promise.all([
+                                writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
+                                writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
+                                writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
+                                writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
+                                writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
+                                writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
+                            ]);
+                            // Drop this restore point and every newer one — those turns no longer happened.
+                            const remaining = snapshots.slice(index + 1);
+                            await writeJson(JSON_URLS.snapshots, remaining);
+                            setItems(remaining);
+                            setEditingId(null);
+                            await refresh();
+                            return `Rolled back to Round ${snap.round}. The map, date and panels catch up within a few seconds.`;
+                        })}
+                        >
+                        Confirm
+                        </button>
+                        <button type="button" style={{ ...buttonStyle, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(null)}>Cancel</button>
+                        </div>
+                    ) : (
+                        <button type="button" disabled={busy} style={{ ...buttonStyle, flexShrink: 0, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(snap.id)}>Roll back</button>
+                    )}
+                    </div>
+                    </div>
+                );
+            })}
             </div>
             {statusLine}
             </div>
@@ -486,11 +594,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const adding = tool === "add-country";
         const applyCountry = () => runBusy(async () => {
             const name = (fields.name ?? "").trim();
-            // One naming scheme: the full name alone is enough — it becomes
-            // the identifier when no short code is given.
-            const code = adding
-                ? ((fields.code ?? "").trim().toUpperCase() || name)
-                : (target || "").trim();
+            // One naming scheme, no codes: the country's NAME is its identifier.
+            const code = adding ? name : (target || "").trim();
             const colorHex = (fields.color ?? "").trim();
             if (!code) throw new Error(adding ? "Give the country a name." : "Pick a country first.");
             const world = await readWorldState({ force: true });
@@ -512,20 +617,15 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             }
             await refresh();
             return adding
-                ? `${nextOverride.name} (${code}) created. Use Annex Country/Regions to give it territory.`
-                : `${nextOverride.name} (${code}) updated. The map picks up colors within a few seconds.`;
+                ? `${nextOverride.name} created. Use Annex Country or Annex Regions to give it territory.`
+                : `${nextOverride.name} updated. The map picks up colors within a few seconds.`;
         });
 
         return (
             <>
             {header(meta.title, meta.subtitle)}
             <div style={{ overflowY: "auto" }}>
-            {adding ? (
-                <>
-                <label style={labelStyle}>Code (optional — the name works on its own)</label>
-                <input style={inputStyle} value={fields.code ?? ""} maxLength={5} onChange={(event) => setFields({ ...fields, code: event.target.value.toUpperCase() })} placeholder="ATL" />
-                </>
-            ) : (
+            {!adding && (
                 <>
                 <label style={labelStyle}>Country</label>
                 <PolitySelect polities={polities} value={target} onChange={(code) => { setTarget(code); setFields({}); }} />
