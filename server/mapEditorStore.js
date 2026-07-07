@@ -44,7 +44,17 @@ const normalizeId = (raw, fallback = "map") => {
   return base || fallback;
 };
 
-const docPath = (id) => path.join(DOCS_DIR, `${id}.json`);
+// Guard against path traversal: read/update/delete pass the raw route :id
+// straight here (only create normalizes), so an id like ..%2f..%2ffoo would
+// escape DOCS_DIR. Require the file to resolve to a direct child of DOCS_DIR.
+const docPath = (id) => {
+  const base = path.resolve(DOCS_DIR);
+  const resolved = path.resolve(base, `${String(id ?? "")}.json`);
+  if (path.dirname(resolved) !== base) {
+    throw new Error(`Invalid map id: ${id}`);
+  }
+  return resolved;
+};
 
 const getManifest = () => {
   const m = readJson(MANIFEST_PATH, null);
