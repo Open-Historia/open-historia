@@ -11,6 +11,7 @@
 import fs from "fs";
 import path from "path";
 import url from "url";
+import { resolveChildPath } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
@@ -44,17 +45,9 @@ const normalizeId = (raw, fallback = "map") => {
   return base || fallback;
 };
 
-// Guard against path traversal: read/update/delete pass the raw route :id
-// straight here (only create normalizes), so an id like ..%2f..%2ffoo would
-// escape DOCS_DIR. Require the file to resolve to a direct child of DOCS_DIR.
-const docPath = (id) => {
-  const base = path.resolve(DOCS_DIR);
-  const resolved = path.resolve(base, `${String(id ?? "")}.json`);
-  if (path.dirname(resolved) !== base) {
-    throw new Error(`Invalid map id: ${id}`);
-  }
-  return resolved;
-};
+// Read/update/delete pass the raw route :id here (only create normalizes), so
+// the shared containment guard keeps ..%2f..%2f from escaping DOCS_DIR.
+const docPath = (id) => resolveChildPath(DOCS_DIR, `${id}.json`, "map id");
 
 const getManifest = () => {
   const m = readJson(MANIFEST_PATH, null);
