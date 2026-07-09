@@ -90,3 +90,13 @@ test("isAllowedHubUrl: https GitHub hosts only", () => {
   assert.equal(isAllowedHubUrl(new URL("https://evil.com/x"), hosts), false);
   assert.equal(isAllowedHubUrl(new URL("http://github.com/a/b"), hosts), false);
 });
+
+test("isAllowedHubUrl: any *.githubusercontent.com CDN host is allowed on redirect", () => {
+  const hosts = new Set(["github.com"]); // release-assets host deliberately NOT listed
+  // GitHub redirects release-asset downloads here — must be accepted.
+  assert.equal(isAllowedHubUrl(new URL("https://release-assets.githubusercontent.com/x"), hosts), true);
+  assert.equal(isAllowedHubUrl(new URL("https://objects.githubusercontent.com/y"), hosts), true);
+  // Lookalike hosts must NOT slip through.
+  assert.equal(isAllowedHubUrl(new URL("https://githubusercontent.com.evil.com/x"), hosts), false);
+  assert.equal(isAllowedHubUrl(new URL("https://notgithubusercontent.com/x"), hosts), false);
+});
