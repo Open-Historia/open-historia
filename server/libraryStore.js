@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import url from "url";
+import { resolveChildPath as resolveWithinDirectory } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -347,21 +348,6 @@ const removeFileIfPresent = (targetPath) => {
   if (fs.existsSync(targetPath)) {
     fs.rmSync(targetPath, { force: true });
   }
-};
-
-// Guard against path traversal. An id must resolve to a direct child of its
-// base directory; anything containing ../ or a path separator (including the
-// %2f Express decodes back into "/") would otherwise escape the data dir and
-// let an unauthenticated request read, overwrite or delete arbitrary .json
-// files. Only create paths were normalized before — read/update/delete took
-// the raw id straight into path.join.
-const resolveWithinDirectory = (baseDir, id, label) => {
-  const base = path.resolve(baseDir);
-  const resolved = path.resolve(base, String(id ?? ""));
-  if (path.dirname(resolved) !== base) {
-    throw new Error(`Invalid ${label}: ${id}`);
-  }
-  return resolved;
 };
 
 const getScenarioDirectory = (scenarioId) =>
@@ -1544,6 +1530,19 @@ const updateGame = (
   return getGameDetails(gameId);
 };
 
+// Soft-delete: move a scenario/game directory into server/data/.trash instead
+// of unlinking it, so an accidental delete (or, before the traversal fix, a
+// malicious one) is recoverable — the user can restore or empty .trash by hand.
+const TRASH_DIR = path.join(SERVER_DATA_DIR, ".trash");
+const moveDirectoryToTrash = (sourceDir, kind, id) => {
+  ensureDirectory(TRASH_DIR);
+  const safeId = String(id).replace(/[^a-z0-9_-]+/gi, "_").slice(0, 60) || "item";
+  let dest = path.join(TRASH_DIR, `${kind}-${safeId}`);
+  let n = 2;
+  while (fs.existsSync(dest)) dest = path.join(TRASH_DIR, `${kind}-${safeId}-${n++}`);
+  fs.renameSync(sourceDir, dest);
+};
+
 const deleteScenario = (scenarioId) => {
   ensureScenarioStore();
 
@@ -1560,7 +1559,7 @@ const deleteScenario = (scenarioId) => {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
 
-  fs.rmSync(resolved, { force: true, recursive: true });
+  moveDirectoryToTrash(resolved, "scenario", scenarioId);
 
   const manifest = getScenarioManifest();
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
@@ -1590,7 +1589,7 @@ const deleteGame = (gameId) => {
     throw new Error(`Game not found: ${gameId}`);
   }
 
-  fs.rmSync(resolved, { force: true, recursive: true });
+  moveDirectoryToTrash(resolved, "game", gameId);
 
   const manifest = getGameManifest();
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
