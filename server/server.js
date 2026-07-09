@@ -47,6 +47,11 @@ import {
   getBasemapCatalog,
   getBasemapPayload,
 } from "./basemapStore.js";
+import {
+  crossOriginWriteAllowed,
+  isAllowedHubUrl,
+  parseByteRange,
+} from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const app = express();
@@ -91,28 +96,20 @@ const sendError = (res, statusCode, error) => {
 // web page the user happens to be visiting POST/PUT/DELETE to localhost:
 // delete saved maps and games, drive the AI relay at internal hosts, or hit
 // /api/server/shutdown. The app serves its own SPA, so real gameplay writes
-// are same-origin (Origin absent, or Origin host === Host); a foreign Origin
-// on a write is rejected. Set OH_ALLOW_CROSS_ORIGIN=1 to restore the old
-// fully-open behavior if a client setup genuinely needs cross-origin writes.
+// are same-origin (Origin host === Host). No-Origin writes are trusted only
+// from loopback — a native client on the same machine — so a curl from another
+// host on the LAN can't slip past with no Origin header. Set
+// OH_ALLOW_CROSS_ORIGIN=1 to restore the old fully-open behavior.
 const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
-const CROSS_ORIGIN_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 app.use((req, res, next) => {
-  if (ALLOW_CROSS_ORIGIN_WRITES || CROSS_ORIGIN_SAFE_METHODS.has(req.method)) {
-    return next();
-  }
-  const origin = req.headers.origin;
-  if (!origin) {
-    // No Origin header: same-origin non-CORS request or a native (non-browser)
-    // client. Browsers always attach Origin to cross-site writes.
-    return next();
-  }
-  let originHost;
-  try {
-    originHost = new URL(origin).host;
-  } catch {
-    return sendError(res, 403, new Error("Cross-origin request blocked (invalid Origin)."));
-  }
-  if (originHost === req.headers.host) {
+  const decision = crossOriginWriteAllowed({
+    method: req.method,
+    origin: req.headers.origin,
+    host: req.headers.host,
+    remoteAddress: req.socket?.remoteAddress,
+    allowAll: ALLOW_CROSS_ORIGIN_WRITES,
+  });
+  if (decision.allowed) {
     return next();
   }
   return sendError(
@@ -137,30 +134,12 @@ const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet
     return;
   }
 
-  const match = /bytes=(\d*)-(\d*)/i.exec(rangeHeader);
-  if (!match || (!match[1] && !match[2])) {
+  const range = parseByteRange(rangeHeader, totalSize);
+  if (range.status === 416) {
     res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
     return;
   }
-
-  let clampedStart;
-  let clampedEnd;
-  if (!match[1]) {
-    // Suffix range "bytes=-N": the final N bytes of the file, not the first N.
-    const suffix = Number.parseInt(match[2], 10);
-    clampedStart = Math.max(0, totalSize - suffix);
-    clampedEnd = totalSize - 1;
-  } else {
-    const start = Number.parseInt(match[1], 10);
-    const end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
-    clampedStart = Math.max(0, Math.min(start, totalSize - 1));
-    clampedEnd = Math.max(clampedStart, Math.min(end, totalSize - 1));
-  }
-
-  if (clampedStart >= totalSize) {
-    res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
-    return;
-  }
+  const { start: clampedStart, end: clampedEnd } = range;
 
   res.status(206);
   res.setHeader("Content-Length", clampedEnd - clampedStart + 1);
@@ -553,16 +532,6 @@ app.post("/api/server/shutdown", (_req, res) => {
   setTimeout(() => process.exit(0), 300);
 });
 
-// Allow the fixed GitHub hosts plus ANY *.githubusercontent.com CDN host.
-// GitHub serves release/attachment downloads off a rotating family of those
-// hosts (objects., release-assets., …) — release assets now redirect to
-// release-assets.githubusercontent.com, which a fixed list missed and wrongly
-// rejected as "redirected off GitHub". Every *.githubusercontent.com host is
-// GitHub-controlled, so this stays safe against redirect-to-internal SSRF.
-const isAllowedHubUrl = (candidate) =>
-  candidate.protocol === "https:" &&
-  (HUB_DOWNLOAD_HOSTS.has(candidate.hostname) || candidate.hostname.endsWith(".githubusercontent.com"));
-
 // Cache fetched bundles on disk so re-importing the same scenario doesn't keep
 // bumping its GitHub download count — the second import onward is served locally
 // and never touches GitHub. Bundle URLs are immutable (a new version gets a new
@@ -577,7 +546,7 @@ app.get("/api/hub/file", async (req, res) => {
   try {
     const fileUrl = String(req.query.url ?? "");
     let current = new URL(fileUrl);
-    if (!isAllowedHubUrl(current)) {
+    if (!isAllowedHubUrl(current, HUB_DOWNLOAD_HOSTS)) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
     }
 
@@ -606,7 +575,7 @@ app.get("/api/hub/file", async (req, res) => {
       const location = upstream.headers.get("location");
       if (!location) break;
       const next = new URL(location, current);
-      if (!isAllowedHubUrl(next)) {
+      if (!isAllowedHubUrl(next, HUB_DOWNLOAD_HOSTS)) {
         return sendError(res, 400, new Error("Scenario file redirected off GitHub."));
       }
       current = next;

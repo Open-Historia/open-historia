@@ -15,6 +15,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import url from "url";
+import { resolveChildPath } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
@@ -48,20 +49,10 @@ const normalizeId = (raw, fallback = "basemap") => {
   return base || fallback;
 };
 
-// Guard against path traversal: get/delete pass the raw route :id here (only
-// create normalizes), so an id like ..%2f..%2ffoo would escape BASEMAPS_DIR.
-// Require the file to resolve to a direct child of BASEMAPS_DIR.
-const basemapFilePath = (id, suffix) => {
-  const base = path.resolve(BASEMAPS_DIR);
-  const resolved = path.resolve(base, `${String(id ?? "")}${suffix}`);
-  if (path.dirname(resolved) !== base) {
-    throw new Error(`Invalid basemap id: ${id}`);
-  }
-  return resolved;
-};
-
-const metaPath = (id) => basemapFilePath(id, ".json");
-const payloadPath = (id) => basemapFilePath(id, ".payload.json");
+// get/delete pass the raw route :id here (only create normalizes), so the
+// shared containment guard keeps ..%2f..%2f from escaping BASEMAPS_DIR.
+const metaPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.json`, "basemap id");
+const payloadPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.payload.json`, "basemap id");
 
 const getManifest = () => {
   const m = readJson(MANIFEST_PATH, null);
