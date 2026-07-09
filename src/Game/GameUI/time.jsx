@@ -10,7 +10,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { loadRollbackSnapshots, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import {
     normalizeActions,
     readEventsState,
@@ -846,6 +846,7 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
 };
 
 const TimelineSkipPanel = ({
+    canUndo,
     currentDate,
     error,
     isLoading,
@@ -853,7 +854,9 @@ const TimelineSkipPanel = ({
     onAutoJump,
     onClose,
     onJump,
+    onUndo,
     topOffset,
+    undoCount,
 }) => {
     const jumpOptions = [
         { label: "1 week", sublabel: dayjs(currentDate).add(7, "day").format("M/D/YYYY"), days: 7 },
@@ -879,6 +882,32 @@ const TimelineSkipPanel = ({
             gap: 0,
         }}
         >
+        {canUndo && (
+            <>
+            <button
+            type="button"
+            disabled={isLoading}
+            onClick={() => { if (!isLoading) onUndo(); }}
+            style={{
+                background: "rgba(180,83,9,0.18)",
+                border: "1px solid rgba(245,158,11,0.5)",
+                borderRadius: "10px",
+                color: "#fcd9a8",
+                cursor: isLoading ? "default" : "pointer",
+                opacity: isLoading ? 0.7 : 1,
+                padding: "0.38rem 0",
+                textAlign: "center",
+                width: "12.5rem",
+            }}
+            >
+            <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>↩ Undo last turn</div>
+            <div style={{ color: "rgba(252,211,77,0.72)", fontSize: "0.7rem" }}>
+            {undoCount} turn{undoCount === 1 ? "" : "s"} can be undone
+            </div>
+            </button>
+            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+            </>
+        )}
         <div
         style={{
             background: "rgba(109,40,217,0.2)",
@@ -1060,6 +1089,7 @@ const DateWidget = ({
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const [visibleEventCount, setVisibleEventCount] = useState(1);
+    const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
     const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
@@ -1184,6 +1214,43 @@ const DateWidget = ({
         }
     };
 
+    // How many turns can be undone (a restore point is captured at the start of
+    // each turn). Re-checked whenever the round changes — after a jump or undo.
+    useEffect(() => {
+        let active = true;
+        loadRollbackSnapshots().then((list) => {
+            if (active) setUndoCount(list.length);
+        });
+        return () => { active = false; };
+    }, [gameData?.round]);
+
+    const runUndo = async () => {
+        if (isLoading || undoCount <= 0) {
+            return;
+        }
+
+        setPanel("skip");
+        setIsLoading(true);
+        setError("");
+
+        try {
+            const result = await rollBackToSnapshot(0);
+            if (result) {
+                setGameData(result.bundle.game);
+                setEvents(result.bundle.events);
+                setWorldState(result.bundle.world);
+                setVisibleEventCount(1);
+                setUndoCount(result.remaining);
+                setPanel("history");
+            }
+        } catch (undoError) {
+            console.error("Failed to undo turn:", undoError);
+            setError(undoError.message || "Failed to undo the last turn.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
@@ -1262,6 +1329,7 @@ const DateWidget = ({
     return (
         <>
         <TimelineSkipPanel
+        canUndo={undoCount > 0}
         currentDate={currentDate}
         error={error}
         isLoading={isLoading}
@@ -1269,7 +1337,9 @@ const DateWidget = ({
         onAutoJump={() => runJump(365, "auto")}
         onClose={() => setPanel(null)}
         onJump={(days) => runJump(days, "jump")}
+        onUndo={runUndo}
         topOffset={topOffset}
+        undoCount={undoCount}
         />
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
