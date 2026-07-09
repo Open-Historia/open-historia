@@ -643,6 +643,37 @@ app.get("/api/hub/file", async (req, res) => {
   }
 });
 
+// Best-effort scenario-import telemetry. On a successful import the client pings
+// here; we forward it to the self-hosted counter (a Cloudflare Worker — see
+// tools/import-counter/) so the hub owner can see how many people imported each
+// scenario, including attachment scenarios GitHub can't count. Deduped per
+// install: only the FIRST successful import of a given bundle counts, so a
+// re-import never inflates the number. Disabled (silent no-op) until
+// OH_IMPORT_COUNTER_URL is set to the deployed Worker URL.
+const IMPORT_COUNTER_URL = (process.env.OH_IMPORT_COUNTER_URL || "").replace(/\/+$/, "");
+const IMPORT_PING_DIR = path.join(__dirname, "data", "import-pings");
+app.post("/api/hub/import-log", jsonParser, (req, res) => {
+  res.json({ ok: true }); // ack at once — telemetry must never delay or fail the import
+  (async () => {
+    try {
+      const { url: fileUrl, id, title } = req.body ?? {};
+      if (!IMPORT_COUNTER_URL || !fileUrl) return;
+      // One marker per bundle URL — a repeat import on this install is a no-op.
+      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(String(fileUrl)).digest("hex"));
+      if (fs.existsSync(marker)) return;
+      fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
+      fs.writeFileSync(marker, String(id ?? fileUrl));
+      await fetch(`${IMPORT_COUNTER_URL}/hit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: String(id ?? fileUrl).slice(0, 120), title: String(title ?? "").slice(0, 200) }),
+      }).catch(() => {});
+    } catch {
+      // best-effort telemetry — swallow everything
+    }
+  })();
+});
+
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
   try {
