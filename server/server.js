@@ -1,4 +1,5 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import crypto from "crypto";
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -531,11 +532,33 @@ app.post("/api/server/shutdown", (_req, res) => {
   setTimeout(() => process.exit(0), 300);
 });
 
+// Cache fetched bundles on disk so re-importing the same scenario doesn't keep
+// bumping its GitHub download count — the second import onward is served locally
+// and never touches GitHub. Bundle URLs are immutable (a new version gets a new
+// URL), so a cached copy can't go stale. Keyed on the requested URL.
+const HUB_CACHE_DIR = path.join(__dirname, "data", "hub-cache");
+const hubCachePaths = (fileUrl) => {
+  const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
+  return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
+};
+
 app.get("/api/hub/file", async (req, res) => {
   try {
-    let current = new URL(String(req.query.url ?? ""));
+    const fileUrl = String(req.query.url ?? "");
+    let current = new URL(fileUrl);
     if (!isAllowedHubUrl(current, HUB_DOWNLOAD_HOSTS)) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
+    }
+
+    // Already fetched once? Serve the cached copy without touching GitHub, so a
+    // re-import by the same person doesn't bump the scenario's download count.
+    const cache = hubCachePaths(fileUrl);
+    if (fs.existsSync(cache.body)) {
+      let cachedType = "application/octet-stream";
+      try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", cachedType);
+      return fs.createReadStream(cache.body).pipe(res);
     }
 
     // Follow redirects manually so every hop is re-checked against the host
@@ -566,15 +589,88 @@ app.get("/api/hub/file", async (req, res) => {
       return sendError(res, 413, new Error("Scenario bundle is too large."));
     }
 
+    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    // Cache for next time — best-effort; a cache write failure must not fail the
+    // import. Temp file + rename so a concurrent serve never sees a half-written body.
+    try {
+      fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
+      fs.writeFileSync(`${cache.body}.tmp`, buffer);
+      fs.renameSync(`${cache.body}.tmp`, cache.body);
+      fs.writeFileSync(cache.type, contentType);
+    } catch (cacheError) {
+      console.warn("[hub] cache write failed:", cacheError.message);
+    }
+
     res.setHeader("Cache-Control", "no-store");
     // Pass the upstream content type through untouched. JSON bundles still parse
     // via response.json() (which ignores the header), while binary bundles (.zip)
-    // and raw basemap images (.png/.jpg) arrive byte-for-byte — the old text()
-    // path UTF-8-decoded them and corrupted every non-text byte.
-    res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+    // and raw basemap images (.png/.jpg) arrive byte-for-byte.
+    res.setHeader("Content-Type", contentType);
     res.send(buffer);
   } catch (error) {
     sendError(res, 502, error);
+  }
+});
+
+// Best-effort scenario-import telemetry. On a successful import the client pings
+// here; we forward it to the self-hosted counter (a Cloudflare Worker — see
+// tools/import-counter/) so the hub owner can see how many people imported each
+// scenario, including attachment scenarios GitHub can't count. Deduped per
+// install: only the FIRST successful import of a given bundle counts, so a
+// re-import never inflates the number. Points at the hub's deployed counter
+// Worker (tools/import-counter); OH_IMPORT_COUNTER_URL overrides it, and an
+// empty value disables the ping entirely (silent no-op).
+const IMPORT_COUNTER_URL = (
+  process.env.OH_IMPORT_COUNTER_URL ?? "https://oh-import-counter.nichojkrol.workers.dev"
+).replace(/\/+$/, "");
+const IMPORT_PING_DIR = path.join(__dirname, "data", "import-pings");
+app.post("/api/hub/import-log", jsonParser, (req, res) => {
+  res.json({ ok: true }); // ack at once — telemetry must never delay or fail the import
+  (async () => {
+    try {
+      const { url: fileUrl, id, title } = req.body ?? {};
+      if (!IMPORT_COUNTER_URL || (id == null && !fileUrl)) return;
+      // One ping per scenario per install, EVER. Key the marker on the scenario
+      // id (its hub issue number) so re-importing — an updated version, or just
+      // mashing the Import button — never counts twice. The marker is created
+      // atomically (wx: fails if it already exists) so even racing requests
+      // can't both slip a ping through.
+      const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
+      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
+      fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
+      try {
+        fs.writeFileSync(marker, markerKey, { flag: "wx" });
+      } catch {
+        return; // marker already exists — this scenario was counted on this install
+      }
+      await fetch(`${IMPORT_COUNTER_URL}/hit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: String(id ?? fileUrl).slice(0, 120), title: String(title ?? "").slice(0, 200) }),
+      }).catch(() => {});
+    } catch {
+      // best-effort telemetry — swallow everything
+    }
+  })();
+});
+
+// Read the self-hosted import counts back for the Community tab. Proxied (not
+// fetched from the Worker in the browser) so the client stays URL-agnostic and
+// same-origin. Lightly cached so a hub refresh doesn't hammer the Worker.
+let importCountsCache = { at: 0, data: null };
+app.get("/api/hub/import-counts", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!IMPORT_COUNTER_URL) return res.json({});
+  if (importCountsCache.data && Date.now() - importCountsCache.at < 60000) {
+    return res.json(importCountsCache.data);
+  }
+  try {
+    const upstream = await fetch(`${IMPORT_COUNTER_URL}/counts`);
+    const data = upstream.ok ? await upstream.json() : {};
+    importCountsCache = { at: Date.now(), data };
+    res.json(data);
+  } catch {
+    res.json(importCountsCache.data || {});
   }
 });
 

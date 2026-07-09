@@ -78,7 +78,13 @@ export const parseByteRange = (rangeHeader, totalSize) => {
   return { start, end };
 };
 
-// A hub download URL must be https and on the GitHub host allowlist — checked on
-// the initial URL AND every redirect hop.
+// A hub download URL must be https and either on the fixed GitHub host allowlist
+// OR any *.githubusercontent.com CDN host — checked on the initial URL AND every
+// redirect hop. GitHub serves release/attachment downloads off a rotating family
+// of those hosts (objects., release-assets., …); release assets now redirect to
+// release-assets.githubusercontent.com, which a fixed list missed and wrongly
+// rejected as "redirected off GitHub". Every *.githubusercontent.com host is
+// GitHub-controlled, so this stays safe against redirect-to-internal SSRF.
 export const isAllowedHubUrl = (candidate, allowedHosts) =>
-  candidate.protocol === "https:" && allowedHosts.has(candidate.hostname);
+  candidate.protocol === "https:" &&
+  (allowedHosts.has(candidate.hostname) || candidate.hostname.endsWith(".githubusercontent.com"));
