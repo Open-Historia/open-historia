@@ -1,0 +1,12 @@
+# Cloudflare Worker config for the Open Historia scenario import counter.
+# Deploy steps are in README.md.
+name = "oh-import-counter"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+# The KV namespace that stores the counts. Create it once with:
+#   wrangler kv namespace create IMPORTS
+# then paste the printed id below (replace PASTE_KV_NAMESPACE_ID).
+[[kv_namespaces]]
+binding = "IMPORTS"
+id = "666b3ec9f2744a91a812284927a1a290"

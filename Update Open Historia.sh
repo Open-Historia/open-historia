@@ -182,6 +182,13 @@ finish() {
     # ZIP extraction can lose the executable bit - restore it.
     chmod +x "Launch Open Historia.sh" "Update Open Historia.sh" \
              "Launch Open Historia.command" "Update Open Historia.command" 2>/dev/null
+    # Refresh the vendored Fantasy Map Generator from its repo (the map editor's
+    # world generator). Best-effort - needs Node + deps, which the launcher keeps
+    # installed; a failure here never blocks the update.
+    if command -v node >/dev/null 2>&1 && [ -f "scripts/fetch-fmg.mjs" ]; then
+        echo "Refreshing the Fantasy Map Generator (map editor world generator)..."
+        node "scripts/fetch-fmg.mjs" || true
+    fi
     echo ""
     echo "==================================================="
     echo "  Update complete."

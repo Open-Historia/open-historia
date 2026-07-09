@@ -15,6 +15,8 @@ import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
+import XYZ from "ol/source/XYZ";
+import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
@@ -30,7 +32,10 @@ import Snap from "ol/interaction/Snap";
 import Feature from "ol/Feature";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
+import ImageLayer from "ol/layer/Image";
+import ImageStatic from "ol/source/ImageStatic";
 import { fromLonLat, toLonLat } from "ol/proj";
+import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
 import { loadSeedFeatures } from "./regionImport.js";
@@ -45,6 +50,10 @@ const BASEMAP_BG = {
   osm: "#0b1020",
   light: "#0b1020",
 };
+
+// Web-Mercator world extent (±180° lon, ±85.0511° lat) — a custom image
+// background is stretched across all of it so it fully replaces the basemap.
+const WORLD_EXTENT_3857 = [-20037508.342789244, -20037508.342789244, 20037508.342789244, 20037508.342789244];
 
 const LABEL_MIN_ZOOM = 4;
 
@@ -86,6 +95,8 @@ const OlMap = ({
   onFeatureRemove,
   onHistory,
   onReady,
+  customBackground = null,
+  onCustomBackgroundSave,
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -95,6 +106,8 @@ const OlMap = ({
   const pointSourceRef = useRef(null);
   const pointLayerRef = useRef(null);
   const baseLayerRef = useRef(null);
+  const onCustomBackgroundSaveRef = useRef(onCustomBackgroundSave);
+  onCustomBackgroundSaveRef.current = onCustomBackgroundSave;
   const interactionsRef = useRef([]);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
@@ -897,15 +910,68 @@ const OlMap = ({
       map.removeLayer(baseLayerRef.current);
       baseLayerRef.current = null;
     }
-    if (basemap === "osm" || basemap === "light") {
-      const base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
+    // A custom uploaded map (image or vector) replaces the basemap — don't load
+    // any ESRI tiles at all while it's active, to save the requests.
+    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector";
+    const esri = customActive ? null : editorBasemapById(basemap);
+    let base = null;
+    if (esri) {
+      base = new TileLayer({
+        source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
+      });
+    } else if (!customActive && (basemap === "osm" || basemap === "light")) {
+      base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
+    }
+    if (base) {
       base.setZIndex(0);
       map.addLayer(base);
       baseLayerRef.current = base;
     }
     const el = map.getTargetElement();
-    if (el) el.style.background = BASEMAP_BG[basemap] || "#0b1020";
-  }, [basemap]);
+    if (el) el.style.background = customActive ? "#0b1a2b" : BASEMAP_BG[basemap] || "#0b1020";
+  }, [basemap, customBackground]);
+
+  // Custom uploaded background: a georeferenced vector/raster layer beneath the
+  // regions, or a plain image placed with a draggable/resizable frame.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !customBackground) return undefined;
+    const bg = customBackground;
+
+    if (bg.kind === "vector" || bg.kind === "raster") {
+      bg.layer.setZIndex(5);
+      map.addLayer(bg.layer);
+      if (bg.kind === "vector") {
+        const ex = bg.layer.getSource().getExtent();
+        if (ex && Number.isFinite(ex[0]) && ex[0] !== Infinity) {
+          map.getView().fit(ex, { padding: [60, 60, 60, 60], duration: 300, maxZoom: 10 });
+        }
+        // Skip re-emitting a restored background (persisted) — only fresh uploads
+        // need to be written into the document.
+        if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) });
+      }
+      return () => {
+        map.removeLayer(bg.layer);
+        bg.cleanup?.();
+      };
+    }
+
+    // Plain image: stretch it across the whole world so it fully replaces the
+    // basemap (a fantasy map you draw regions on). No placement frame — it always
+    // covers the entire map; the regions/labels sit above it (z >= 10).
+    const imageLayer = new ImageLayer({
+      source: new ImageStatic({ url: bg.url, imageExtent: WORLD_EXTENT_3857, projection: "EPSG:3857" }),
+    });
+    imageLayer.setZIndex(5);
+    map.addLayer(imageLayer);
+    // Only fresh uploads write back into the document; a restored (persisted)
+    // background is already in the doc/scenario, so don't re-dirty it on open.
+    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
+    return () => {
+      map.removeLayer(imageLayer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customBackground]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

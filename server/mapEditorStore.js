@@ -11,6 +11,7 @@
 import fs from "fs";
 import path from "path";
 import url from "url";
+import { resolveChildPath } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
@@ -44,7 +45,9 @@ const normalizeId = (raw, fallback = "map") => {
   return base || fallback;
 };
 
-const docPath = (id) => path.join(DOCS_DIR, `${id}.json`);
+// Read/update/delete pass the raw route :id here (only create normalizes), so
+// the shared containment guard keeps ..%2f..%2f from escaping DOCS_DIR.
+const docPath = (id) => resolveChildPath(DOCS_DIR, `${id}.json`, "map id");
 
 const getManifest = () => {
   const m = readJson(MANIFEST_PATH, null);

@@ -149,56 +149,6 @@ const editorSectionLabels = {
 
 const normalizeString = (value) => String(value ?? "").trim();
 
-const formatCountryOverrides = (overrides) => {
-  if (!overrides || typeof overrides !== "object") {
-    return "";
-  }
-
-  return Object.entries(overrides)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key} = ${value}`)
-    .join("\n");
-};
-
-const parseCountryOverrides = (value) => {
-  const trimmed = normalizeString(value);
-  if (!trimmed) {
-    return {};
-  }
-
-  if (trimmed.startsWith("{")) {
-    const parsed = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Country overrides must be an object.");
-    }
-    return parsed;
-  }
-
-  const overrides = {};
-
-  for (const line of trimmed.split(/\r?\n/)) {
-    const entry = line.trim();
-    if (!entry || entry.startsWith("#") || entry.startsWith("//")) {
-      continue;
-    }
-
-    const separatorIndex = entry.includes("=") ? entry.indexOf("=") : entry.indexOf(":");
-    if (separatorIndex <= 0) {
-      throw new Error("Use `CODE = New Name` or JSON for country overrides.");
-    }
-
-    const key = entry.slice(0, separatorIndex).trim();
-    const resolvedValue = entry.slice(separatorIndex + 1).trim();
-    if (!key || !resolvedValue) {
-      throw new Error("Country override rows must include both key and value.");
-    }
-
-    overrides[key] = resolvedValue;
-  }
-
-  return overrides;
-};
-
 const buildScenarioEditorState = (details) => {
   const scenario = details?.scenario ?? {};
   const game = details?.data?.game ?? {};
@@ -209,9 +159,7 @@ const buildScenarioEditorState = (details) => {
     accentColor: scenario.accentColor ?? "#7c3aed",
     allowedUnitTypes: Array.isArray(world.allowedUnitTypes) ? world.allowedUnitTypes : [...UNIT_TYPES],
     country: game.country ?? "",
-    countryOverridesText: formatCountryOverrides(scenario.countryNameOverrides),
     description: scenario.description ?? "",
-    difficulty: game.difficulty ?? world.difficulty ?? "standard",
     eyebrow: scenario.eyebrow ?? "",
     gameDate: game.gameDate ?? "",
     heroSubtitle: scenario.heroSubtitle ?? "",
@@ -235,7 +183,6 @@ const buildGameEditorState = (details) => {
     accentColor: gameMeta.accentColor ?? "#7c3aed",
     country: game.country ?? "",
     description: gameMeta.description ?? "",
-    difficulty: game.difficulty ?? world.difficulty ?? "standard",
     eyebrow: gameMeta.eyebrow ?? "",
     gameDate: game.gameDate ?? "",
     heroSubtitle: gameMeta.heroSubtitle ?? "",
@@ -737,17 +684,6 @@ const EditorDrawer = ({
               <label style={fieldLabelStyle}>Hero Subtitle</label>
               <textarea style={{ ...textareaStyle, minHeight: "5rem" }} value={formState.heroSubtitle} onChange={(event) => onChange("heroSubtitle", event.target.value)} />
             </div>
-            {kind === "scenario" && (
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={fieldLabelStyle}>Country Name Overrides</label>
-                <textarea
-                  style={{ ...textareaStyle, minHeight: "6rem" }}
-                  placeholder={"DEU = German Empire\nRUS = Russian State"}
-                  value={formState.countryOverridesText}
-                  onChange={(event) => onChange("countryOverridesText", event.target.value)}
-                />
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -766,10 +702,6 @@ const EditorDrawer = ({
             <div>
               <label style={fieldLabelStyle}>Language</label>
               <input style={inputStyle} value={formState.language} onChange={(event) => onChange("language", event.target.value)} />
-            </div>
-            <div>
-              <label style={fieldLabelStyle}>Difficulty</label>
-              <input style={inputStyle} value={formState.difficulty} onChange={(event) => onChange("difficulty", event.target.value)} />
             </div>
             {kind === "scenario" && (
               <div style={{ gridColumn: "1 / -1" }}>
@@ -1184,13 +1116,11 @@ const LibraryTopBar = () => {
         const currentWorld = editorDetails.data?.world ?? {};
         const details = await saveScenario(editorDetails.scenario.id, {
           accentColor: editorState.accentColor,
-          countryNameOverrides: parseCountryOverrides(editorState.countryOverridesText),
           description: editorState.description,
           eyebrow: editorState.eyebrow,
           game: {
             ...currentGame,
             country: editorState.country,
-            difficulty: editorState.difficulty,
             gameDate: editorState.gameDate,
             language: editorState.language,
             startDate: editorState.gameDate || currentGame.startDate || "",
@@ -1205,7 +1135,6 @@ const LibraryTopBar = () => {
             allowedUnitTypes: Array.isArray(editorState.allowedUnitTypes)
               ? editorState.allowedUnitTypes
               : [...UNIT_TYPES],
-            difficulty: editorState.difficulty,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
             startingTimelineText: editorState.startingTimelineText,
@@ -1223,7 +1152,6 @@ const LibraryTopBar = () => {
           game: {
             ...currentGame,
             country: editorState.country,
-            difficulty: editorState.difficulty,
             gameDate: editorState.gameDate,
             language: editorState.language,
           },
@@ -1234,7 +1162,6 @@ const LibraryTopBar = () => {
           subtitle: editorState.subtitle,
           world: {
             ...currentWorld,
-            difficulty: editorState.difficulty,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
             startingTimelineText: editorState.startingTimelineText,
@@ -1456,6 +1383,11 @@ const LibraryTopBar = () => {
         customCities: seed.world?.customCities ?? false,
         author: seed.world?.author ?? "",
         mapCredit: seed.world?.mapCredit ?? "",
+        // Custom map background descriptor (kind + placement); null clears it. The
+        // heavy payload goes to the backgroundData asset just below.
+        background: seed.world?.background ?? null,
+        // The chosen built-in basemap so the game renders it (not always ocean).
+        basemap: seed.world?.basemap ?? null,
       },
       game: {
         ...currentGame,
@@ -1487,6 +1419,20 @@ const LibraryTopBar = () => {
         type: "application/json",
       }),
     );
+
+    // The custom background's heavy payload (image data URL / vector GeoJSON) is a
+    // separate scenario asset so world.json stays light. Clear it when the map has
+    // no background, so re-applying a map that dropped its background doesn't leave
+    // a stale image behind.
+    if (seed.backgroundData) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "backgroundData",
+        new Blob([JSON.stringify(seed.backgroundData)], { type: "application/json" }),
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+    }
 
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
@@ -1876,7 +1822,16 @@ const LibraryTopBar = () => {
               downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
               downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
               downloadScenarioJsonAsset(scenario.id, "colors"),
-            ]).then(([regions, cities, colors]) => {
+              // The custom map background so re-opening the editor restores it.
+              world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+            ]).then(([regions, cities, colors, bgData]) => {
+              const bgDesc = world.background;
+              const background =
+                bgDesc?.kind === "image" && bgData?.dataUrl
+                  ? { kind: "image", dataUrl: bgData.dataUrl }
+                  : bgDesc?.kind === "vector" && bgData?.geojson
+                    ? { kind: "vector", geojson: bgData.geojson }
+                    : null;
               setMapEditorSeed({
                 name: scenario.name || "",
                 author: world.author || "",
@@ -1884,6 +1839,8 @@ const LibraryTopBar = () => {
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+                background,
+                basemap: world.basemap || null,
               });
             });
           }

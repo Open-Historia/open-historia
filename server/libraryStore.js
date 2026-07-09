@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import url from "url";
+import { resolveChildPath as resolveWithinDirectory } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -195,6 +196,11 @@ const SCENARIO_GEOJSON_ASSET_FILES = {
   // Era-accurate custom cities (points). When world.customCities is set the game
   // renders these instead of the modern cities.pmtiles labels.
   citiesGeojson: "cities.geojson",
+  // A custom map background uploaded in the editor (an image placed by extent, or
+  // a vector overlay). Small descriptor lives in world.background; this holds the
+  // heavy payload ({ dataUrl } for images, { geojson } for vector) so world.json
+  // stays light for the 5s poll. Loaded once by the game when world.background is set.
+  backgroundData: "background.json",
 };
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -235,12 +241,15 @@ const JSON_ASSET_DEFAULTS = {
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "allowedUnitTypes",
 "author",
+"background",
+"basemap",
 "customCities",
 "customRegions",
 "difficulty",
 "language",
 "mapCredit",
 "notes",
+"ownerCodes",
 "polityOverrides",
 "regionOwnershipOverrides",
 "simulationRules",
@@ -351,7 +360,8 @@ const removeFileIfPresent = (targetPath) => {
   }
 };
 
-const getScenarioDirectory = (scenarioId) => path.join(SCENARIOS_DIR, scenarioId);
+const getScenarioDirectory = (scenarioId) =>
+  resolveWithinDirectory(SCENARIOS_DIR, scenarioId, "scenario id");
 const getScenarioMetaPath = (scenarioId) => path.join(getScenarioDirectory(scenarioId), "scenario.json");
 const getScenarioJsonPath = (scenarioId, assetKey) =>
 path.join(
@@ -361,7 +371,7 @@ path.join(
 const getScenarioUploadPath = (scenarioId, assetKey) =>
 path.join(getScenarioDirectory(scenarioId), UPLOADABLE_SCENARIO_ASSET_FILES[assetKey]);
 
-const getGameDirectory = (gameId) => path.join(GAMES_DIR, gameId);
+const getGameDirectory = (gameId) => resolveWithinDirectory(GAMES_DIR, gameId, "game id");
 const getGameMetaPath = (gameId) => path.join(getGameDirectory(gameId), "game-instance.json");
 const getGameJsonPath = (gameId, assetKey) =>
 path.join(
@@ -1530,6 +1540,19 @@ const updateGame = (
   return getGameDetails(gameId);
 };
 
+// Soft-delete: move a scenario/game directory into server/data/.trash instead
+// of unlinking it, so an accidental delete (or, before the traversal fix, a
+// malicious one) is recoverable — the user can restore or empty .trash by hand.
+const TRASH_DIR = path.join(SERVER_DATA_DIR, ".trash");
+const moveDirectoryToTrash = (sourceDir, kind, id) => {
+  ensureDirectory(TRASH_DIR);
+  const safeId = String(id).replace(/[^a-z0-9_-]+/gi, "_").slice(0, 60) || "item";
+  let dest = path.join(TRASH_DIR, `${kind}-${safeId}`);
+  let n = 2;
+  while (fs.existsSync(dest)) dest = path.join(TRASH_DIR, `${kind}-${safeId}-${n++}`);
+  fs.renameSync(sourceDir, dest);
+};
+
 const deleteScenario = (scenarioId) => {
   ensureScenarioStore();
 
@@ -1546,7 +1569,7 @@ const deleteScenario = (scenarioId) => {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
 
-  fs.rmSync(resolved, { force: true, recursive: true });
+  moveDirectoryToTrash(resolved, "scenario", scenarioId);
 
   const manifest = getScenarioManifest();
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
@@ -1576,7 +1599,7 @@ const deleteGame = (gameId) => {
     throw new Error(`Game not found: ${gameId}`);
   }
 
-  fs.rmSync(resolved, { force: true, recursive: true });
+  moveDirectoryToTrash(resolved, "game", gameId);
 
   const manifest = getGameManifest();
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
@@ -2004,6 +2027,9 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson", mode),
+      // The custom map background travels with the scenario (always embedded, like
+      // the geometry) so a shared/imported custom map isn't blank.
+      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData", mode),
     },
     data: {
       actions: cloneJson(details.data.actions),

@@ -1,4 +1,5 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import crypto from "crypto";
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -39,6 +40,18 @@ import {
   getMapEditorDocument,
   updateMapEditorDocument,
 } from "./mapEditorStore.js";
+import {
+  createBasemap,
+  deleteBasemap,
+  ensureBasemapStore,
+  getBasemapCatalog,
+  getBasemapPayload,
+} from "./basemapStore.js";
+import {
+  crossOriginWriteAllowed,
+  isAllowedHubUrl,
+  parseByteRange,
+} from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const app = express();
@@ -70,11 +83,41 @@ app.use((req, res, next) => {
 ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
+ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
   res.status(statusCode).json({ error: message });
 };
+
+// Block cross-origin state-changing requests (CSRF / drive-by protection).
+// The blanket CORS above is needed so the Android connect screen (on the
+// WebView's own origin) can *probe* this server — a GET. But it also let any
+// web page the user happens to be visiting POST/PUT/DELETE to localhost:
+// delete saved maps and games, drive the AI relay at internal hosts, or hit
+// /api/server/shutdown. The app serves its own SPA, so real gameplay writes
+// are same-origin (Origin host === Host). No-Origin writes are trusted only
+// from loopback — a native client on the same machine — so a curl from another
+// host on the LAN can't slip past with no Origin header. Set
+// OH_ALLOW_CROSS_ORIGIN=1 to restore the old fully-open behavior.
+const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
+app.use((req, res, next) => {
+  const decision = crossOriginWriteAllowed({
+    method: req.method,
+    origin: req.headers.origin,
+    host: req.headers.host,
+    remoteAddress: req.socket?.remoteAddress,
+    allowAll: ALLOW_CROSS_ORIGIN_WRITES,
+  });
+  if (decision.allowed) {
+    return next();
+  }
+  return sendError(
+    res,
+    403,
+    new Error("Cross-origin write blocked. Set OH_ALLOW_CROSS_ORIGIN=1 on the server to allow it."),
+  );
+});
 
 const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet-stream") => {
   const stats = fs.statSync(sourcePath);
@@ -91,23 +134,12 @@ const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet
     return;
   }
 
-  const match = /bytes=(\d*)-(\d*)/i.exec(rangeHeader);
-  if (!match) {
-    res.status(416).end();
-    return;
-  }
-
-  const start = match[1] ? Number.parseInt(match[1], 10) : 0;
-  const end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
-  const clampedStart = Number.isFinite(start) ? Math.max(0, Math.min(start, totalSize - 1)) : 0;
-  const clampedEnd = Number.isFinite(end)
-    ? Math.max(clampedStart, Math.min(end, totalSize - 1))
-    : totalSize - 1;
-
-  if (clampedStart >= totalSize || clampedEnd >= totalSize) {
+  const range = parseByteRange(rangeHeader, totalSize);
+  if (range.status === 416) {
     res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
     return;
   }
+  const { start: clampedStart, end: clampedEnd } = range;
 
   res.status(206);
   res.setHeader("Content-Length", clampedEnd - clampedStart + 1);
@@ -500,28 +532,145 @@ app.post("/api/server/shutdown", (_req, res) => {
   setTimeout(() => process.exit(0), 300);
 });
 
+// Cache fetched bundles on disk so re-importing the same scenario doesn't keep
+// bumping its GitHub download count — the second import onward is served locally
+// and never touches GitHub. Bundle URLs are immutable (a new version gets a new
+// URL), so a cached copy can't go stale. Keyed on the requested URL.
+const HUB_CACHE_DIR = path.join(__dirname, "data", "hub-cache");
+const hubCachePaths = (fileUrl) => {
+  const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
+  return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
+};
+
 app.get("/api/hub/file", async (req, res) => {
   try {
-    const target = new URL(String(req.query.url ?? ""));
-    if (target.protocol !== "https:" || !HUB_DOWNLOAD_HOSTS.has(target.hostname)) {
+    const fileUrl = String(req.query.url ?? "");
+    let current = new URL(fileUrl);
+    if (!isAllowedHubUrl(current, HUB_DOWNLOAD_HOSTS)) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
     }
 
-    const upstream = await fetch(target, { redirect: "follow" });
+    // Already fetched once? Serve the cached copy without touching GitHub, so a
+    // re-import by the same person doesn't bump the scenario's download count.
+    const cache = hubCachePaths(fileUrl);
+    if (fs.existsSync(cache.body)) {
+      let cachedType = "application/octet-stream";
+      try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", cachedType);
+      return fs.createReadStream(cache.body).pipe(res);
+    }
+
+    // Follow redirects manually so every hop is re-checked against the host
+    // allowlist. `redirect: "follow"` would chase a github.com redirect to an
+    // attacker-controlled host (SSRF); GitHub's own release redirect
+    // (github.com -> objects.githubusercontent.com) stays inside the allowlist.
+    let upstream;
+    for (let hop = 0; ; hop += 1) {
+      if (hop > 5) {
+        return sendError(res, 502, new Error("Too many redirects fetching scenario file."));
+      }
+      upstream = await fetch(current, { redirect: "manual" });
+      if (upstream.status < 300 || upstream.status >= 400) break;
+      const location = upstream.headers.get("location");
+      if (!location) break;
+      const next = new URL(location, current);
+      if (!isAllowedHubUrl(next, HUB_DOWNLOAD_HOSTS)) {
+        return sendError(res, 400, new Error("Scenario file redirected off GitHub."));
+      }
+      current = next;
+    }
     if (!upstream.ok) {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }
 
-    const text = await upstream.text();
-    if (text.length > HUB_MAX_BUNDLE_BYTES) {
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > HUB_MAX_BUNDLE_BYTES) {
       return sendError(res, 413, new Error("Scenario bundle is too large."));
     }
 
+    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    // Cache for next time — best-effort; a cache write failure must not fail the
+    // import. Temp file + rename so a concurrent serve never sees a half-written body.
+    try {
+      fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
+      fs.writeFileSync(`${cache.body}.tmp`, buffer);
+      fs.renameSync(`${cache.body}.tmp`, cache.body);
+      fs.writeFileSync(cache.type, contentType);
+    } catch (cacheError) {
+      console.warn("[hub] cache write failed:", cacheError.message);
+    }
+
     res.setHeader("Cache-Control", "no-store");
-    res.type("application/json");
-    res.send(text);
+    // Pass the upstream content type through untouched. JSON bundles still parse
+    // via response.json() (which ignores the header), while binary bundles (.zip)
+    // and raw basemap images (.png/.jpg) arrive byte-for-byte.
+    res.setHeader("Content-Type", contentType);
+    res.send(buffer);
   } catch (error) {
     sendError(res, 502, error);
+  }
+});
+
+// Best-effort scenario-import telemetry. On a successful import the client pings
+// here; we forward it to the self-hosted counter (a Cloudflare Worker — see
+// tools/import-counter/) so the hub owner can see how many people imported each
+// scenario, including attachment scenarios GitHub can't count. Deduped per
+// install: only the FIRST successful import of a given bundle counts, so a
+// re-import never inflates the number. Points at the hub's deployed counter
+// Worker (tools/import-counter); OH_IMPORT_COUNTER_URL overrides it, and an
+// empty value disables the ping entirely (silent no-op).
+const IMPORT_COUNTER_URL = (
+  process.env.OH_IMPORT_COUNTER_URL ?? "https://oh-import-counter.nichojkrol.workers.dev"
+).replace(/\/+$/, "");
+const IMPORT_PING_DIR = path.join(__dirname, "data", "import-pings");
+app.post("/api/hub/import-log", jsonParser, (req, res) => {
+  res.json({ ok: true }); // ack at once — telemetry must never delay or fail the import
+  (async () => {
+    try {
+      const { url: fileUrl, id, title } = req.body ?? {};
+      if (!IMPORT_COUNTER_URL || (id == null && !fileUrl)) return;
+      // One ping per scenario per install, EVER. Key the marker on the scenario
+      // id (its hub issue number) so re-importing — an updated version, or just
+      // mashing the Import button — never counts twice. The marker is created
+      // atomically (wx: fails if it already exists) so even racing requests
+      // can't both slip a ping through.
+      const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
+      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
+      fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
+      try {
+        fs.writeFileSync(marker, markerKey, { flag: "wx" });
+      } catch {
+        return; // marker already exists — this scenario was counted on this install
+      }
+      await fetch(`${IMPORT_COUNTER_URL}/hit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: String(id ?? fileUrl).slice(0, 120), title: String(title ?? "").slice(0, 200) }),
+      }).catch(() => {});
+    } catch {
+      // best-effort telemetry — swallow everything
+    }
+  })();
+});
+
+// Read the self-hosted import counts back for the Community tab. Proxied (not
+// fetched from the Worker in the browser) so the client stays URL-agnostic and
+// same-origin. Lightly cached so a hub refresh doesn't hammer the Worker.
+let importCountsCache = { at: 0, data: null };
+app.get("/api/hub/import-counts", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!IMPORT_COUNTER_URL) return res.json({});
+  if (importCountsCache.data && Date.now() - importCountsCache.at < 60000) {
+    return res.json(importCountsCache.data);
+  }
+  try {
+    const upstream = await fetch(`${IMPORT_COUNTER_URL}/counts`);
+    const data = upstream.ok ? await upstream.json() : {};
+    importCountsCache = { at: Date.now(), data };
+    res.json(data);
+  } catch {
+    res.json(importCountsCache.data || {});
   }
 });
 
@@ -565,6 +714,47 @@ app.delete("/api/mapeditor/documents/:id", (req, res) => {
     sendError(res, 400, error);
   }
 });
+
+// ---- Basemap library ("Your basemaps") -----------------------------------
+app.get("/api/basemaps", (_req, res) => {
+  try {
+    res.json(getBasemapCatalog());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/basemaps", largeJsonParser, (req, res) => {
+  try {
+    res.status(201).json(createBasemap(req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/basemaps/:id/payload", (req, res) => {
+  try {
+    res.json(getBasemapPayload(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.delete("/api/basemaps/:id", (req, res) => {
+  try {
+    res.json(deleteBasemap(req.params.id));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// Vendored Fantasy Map Generator (Azgaar, MIT), built to ../fmg/dist by the
+// updater (scripts/fetch-fmg.mjs) and served same-origin so the map editor's
+// "Generate" console can run it in a hidden iframe and read its data. Present
+// only after it's been vendored — otherwise /fmg 404s and the editor says so.
+// Mounted before the SPA fallback so /fmg/* isn't swallowed by index.html.
+const fmgDistDir = path.join(__dirname, "../fmg/dist");
+if (fs.existsSync(fmgDistDir)) app.use("/fmg", express.static(fmgDistDir));
 
 app.use(express.static(distDir));
 

@@ -16,6 +16,14 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
+import {
+  dedupeScenarioBundleBackground,
+  embedScenarioBundleImage,
+  embedScenarioBundleVector,
+  resolveScenarioBundleBackground,
+  splitScenarioBundleImage,
+} from "../../runtime/communityBasemaps.js";
+import { unzipBundle, zipBundle } from "../../runtime/bundleZip.js";
 
 // The one and only hub. Not configurable by design.
 const HUB_OWNER = "Open-Historia";
@@ -32,7 +40,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // body = the bundle. Release links come first in official posts so imports go
 // through the download-counted URL; the raw mirror below it serves old clients.
 const BUNDLE_LINK_PATTERN =
-  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.json|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
+  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
 // First image in the issue body — markdown ![alt](url) or GitHub's own
 // <img src="..."> attachment markup (issue bodies mix both depending on how
@@ -59,21 +67,52 @@ const fetchInstallCounts = async () => {
   }
 };
 
+// Self-hosted import counts (keyed by hub issue number), read back through the
+// server proxy from our own counter Worker. Unlike GitHub's release download
+// counts, this covers EVERY scenario — including attachment posts — and is
+// deduped per person. Empty object if the counter isn't configured/reachable.
+const fetchImportCounts = async () => {
+  try {
+    const response = await fetch("/api/hub/import-counts");
+    if (!response.ok) return {};
+    const data = await response.json();
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+};
+
 // Official = posted by someone with real access to the hub repo, as reported
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-const parsePost = (issue, installsByFile) => {
+const parsePost = (issue, installsByFile, importsById) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
-  const description = body
-    .replace(BUNDLE_LINK_PATTERN, "")
-    .replace(/^#+\s*(Description|Made by)\s*$/gim, "")
-    .replace(/^Scenario file:\s*$/gim, "")
+  // The issue-form body is a series of "### <label>\n<value>" sections. Show only
+  // the author's Description prose: strip the attached-file link and never surface
+  // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
+  // metadata, not copy. Falls back to the whole body for old, non-form posts.
+  const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
+  const description = (descSection ? descSection[1] : body)
+    .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
+    .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")            // images
+    .replace(/<img[^>]*>/gi, "")
+    .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
+    .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
+    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
+    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
+    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
     .replace(/\s+/g, " ")
     .trim();
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
   const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
+  // Import count: prefer our own counter (covers every scenario, deduped per
+  // person); fall back to the GitHub release download count; null if neither.
+  const selfHostedImports = importsById?.[String(issue.number)]?.count;
+  const githubInstalls = bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) : undefined;
+  const installs = selfHostedImports != null ? selfHostedImports : (githubInstalls ?? null);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -90,12 +129,10 @@ const parsePost = (issue, installsByFile) => {
     // title does nothing.
     official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
     upvotes: issue.reactions?.["+1"] ?? 0,
-    plays: issue.reactions?.rocket ?? 0,
     comments: issue.comments ?? 0,
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
     bundleUrl,
-    // null = not trackable (issue attachment), a number = release download count.
-    installs: bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) ?? null : null,
+    installs,
     coverImageUrl,
   };
 };
@@ -105,9 +142,10 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
     return hubCache.posts;
   }
-  const [response, installsByFile] = await Promise.all([
+  const [response, installsByFile, importsById] = await Promise.all([
     fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
     fetchInstallCounts(),
+    fetchImportCounts(),
   ]);
   if (!response.ok) {
     throw new Error(
@@ -119,13 +157,12 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   const issues = await response.json();
   const posts = (Array.isArray(issues) ? issues : [])
     .filter((issue) => !issue.pull_request)
-    .map((issue) => parsePost(issue, installsByFile));
+    .map((issue) => parsePost(issue, installsByFile, importsById));
   hubCache = { at: Date.now(), posts };
   return posts;
 };
 
-const saveJsonToDisk = (data, fileName) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+const saveBlobToDisk = (blob, fileName) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -135,6 +172,9 @@ const saveJsonToDisk = (data, fileName) => {
   anchor.remove();
   URL.revokeObjectURL(url);
 };
+
+const saveJsonToDisk = (data, fileName) =>
+  saveBlobToDisk(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }), fileName);
 
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
@@ -226,20 +266,20 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
     </div>
     <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
       {post.installs != null && (
-        <span title="Installs (downloads of the scenario file, counted by GitHub)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
+        <span title="Times this scenario has been imported" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
       )}
-      <span title="Played (🚀 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>🚀 {post.plays}</span>
       <span title="Liked (👍 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>👍 {post.upvotes}</span>
-      <span title="Comments" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>💬 {post.comments}</span>
+      <span title="Comments on the hub post" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>💬 {post.comments}</span>
       <div style={{ flex: 1 }} />
       <a
         href={post.url}
         target="_blank"
         rel="noopener noreferrer"
         onClick={(event) => event.stopPropagation()}
+        title="Open the GitHub post to 👍 like or 💬 comment"
         style={{ ...pillButton, minHeight: "1.8rem", textDecoration: "none" }}
       >
-        View ↗
+        👍 Like ↗
       </a>
       <button
         type="button"
@@ -336,11 +376,13 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
       by {post.author} · {new Date(post.createdAt).toLocaleDateString()}
     </div>
 
-    <div style={{ display: "flex", gap: "1.1rem", marginBottom: "1rem" }}>
-      {post.installs != null && <span style={detailStat}>⬇ {post.installs} installs</span>}
-      <span style={detailStat}>🚀 {post.plays} played</span>
-      <span style={detailStat}>👍 {post.upvotes} liked</span>
-      <span style={detailStat}>💬 {post.comments} comments</span>
+    <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.1rem", marginBottom: "0.55rem" }}>
+      {post.installs != null && <span style={detailStat}>⬇ {post.installs} imported</span>}
+      <a href={post.url} target="_blank" rel="noopener noreferrer" title="Like this scenario on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>👍 {post.upvotes} liked</a>
+      <a href={post.url} target="_blank" rel="noopener noreferrer" title="Comment on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>💬 {post.comments} comments</a>
+    </div>
+    <div style={{ color: "rgba(196,181,253,0.9)", fontSize: "0.78rem", marginBottom: "1rem" }}>
+      Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>
 
     <p style={{ color: "rgba(240,244,255,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
@@ -369,7 +411,7 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
         {busy ? "Importing…" : "▶ Import & Play"}
       </button>
       <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
-        View on GitHub ↗
+        👍 Like / 💬 Comment ↗
       </a>
     </div>
   </div>
@@ -432,15 +474,14 @@ const CommunityPanel = ({ onImported }) => {
     if (!posts) return null;
     const pinned = posts.filter((post) => post.pinned);
     // Installs (real download counts) rank first; posts GitHub can't count
-    // (attachment bundles) fall back to their 🚀 played reactions.
+    // (attachment bundles) fall back to likes, then recency.
     const byInstalls = [...posts].sort(
       (a, b) =>
         (b.installs ?? -1) - (a.installs ?? -1) ||
-        b.plays - a.plays ||
         b.upvotes - a.upvotes ||
         b.createdAt.localeCompare(a.createdAt),
     );
-    const byLikes = [...posts].sort((a, b) => b.upvotes - a.upvotes || b.plays - a.plays || b.createdAt.localeCompare(a.createdAt));
+    const byLikes = [...posts].sort((a, b) => b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
     const byRecent = [...posts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return { pinned, byInstalls, byLikes, byRecent };
   }, [posts]);
@@ -455,8 +496,37 @@ const CommunityPanel = ({ onImported }) => {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
       }
-      const bundle = await response.json();
+      // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
+      // basemap file + preview); everything else is a plain JSON bundle. The basemap
+      // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
+      let bundle;
+      if (/\.zip(\?|$)/i.test(post.bundleUrl)) {
+        const zip = await unzipBundle(await response.arrayBuffer());
+        const scenarioText = await zip.text("scenario.json");
+        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+        bundle = JSON.parse(scenarioText);
+        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+        if (imageName) {
+          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+        } else {
+          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
+        }
+      } else {
+        bundle = await response.json();
+      }
+      // A shared scenario may reference a community basemap instead of embedding
+      // it — fetch and inline it before importing so the map isn't blank.
+      await resolveScenarioBundleBackground(bundle);
       const details = await importScenarioBundle(bundle);
+      // Best-effort: tell the server this import succeeded so it can count it
+      // (once per install) on the hub's self-hosted import counter. Never blocks
+      // or fails the import — fire and forget.
+      fetch("/api/hub/import-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
+      }).catch(() => {});
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
@@ -464,7 +534,7 @@ const CommunityPanel = ({ onImported }) => {
       if (stillRelevant) {
         setNotice(
           `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
-            `Enjoyed it? React 🚀 (played it) or 👍 (liked it) on the hub post.`,
+            `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
       }
       onImported?.(details);
@@ -485,15 +555,41 @@ const CommunityPanel = ({ onImported }) => {
     setError(null);
     try {
       const bundle = await exportScenarioBundle(scenario.id, "light");
-      const fileName = `${scenario.id}-scenario.json`;
-      saveJsonToDisk(bundle, fileName);
-      window.open(
-        `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}`,
-        "_blank",
-        "noopener",
-      );
+      // If this scenario's custom basemap is already on the community hub,
+      // reference it instead of re-embedding the whole image (smaller bundle).
+      const dedup = await dedupeScenarioBundleBackground(bundle).catch(() => ({ referenced: false, needsPublish: false }));
+      // A not-yet-shared custom image basemap ships bundled as ONE .zip
+      // (scenario.json + the raw basemap image + a preview) so the author drags a
+      // single file and the image travels as real bytes, not a bloated data URL.
+      const split = dedup.referenced ? null : await splitScenarioBundleImage(bundle).catch(() => null);
+      let fileName;
+      let extra;
+      if (split) {
+        delete bundle.assets.backgroundData; // the image now rides in the zip as a real file
+        const files = { "scenario.json": JSON.stringify(bundle), [split.imageName]: split.imageBytes };
+        if (split.previewBytes) files[split.previewName] = split.previewBytes;
+        fileName = `${scenario.id}-scenario.zip`;
+        saveBlobToDisk(await zipBundle(files), fileName);
+        extra =
+          " Its custom basemap is bundled inside the .zip, so the scenario is self-contained — just drag the one file." +
+          " (To also list the basemap on its own in the community Basemaps tab, open the editor's Basemap picker and hit ⤴ on it.)";
+      } else {
+        fileName = `${scenario.id}-scenario.json`;
+        saveJsonToDisk(bundle, fileName);
+        extra = dedup.referenced
+          ? " Its custom basemap was reused from the community hub, so the file stays small."
+          : "";
+      }
+      // When the scenario carries a basemap, tag the post with the basemap hash so
+      // the community Basemaps browser (which surfaces scenario-carried basemaps) can
+      // dedupe it against dedicated posts. Harmless if the scenario form has no such
+      // field — GitHub just ignores the unknown prefill param.
+      const scenarioUrl =
+        `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
+        (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: ${split.kind}`)}` : "");
+      window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
-        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.`,
+        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,
       );
     } catch (nextError) {
       setError(`Publish failed: ${nextError.message}`);
@@ -515,7 +611,7 @@ const CommunityPanel = ({ onImported }) => {
         <>
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
-              Community scenarios from the hub — ⬇ = installs (counted automatically), 🚀 = played it, 👍 = liked it (react on the post to vote).
+              Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
               {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
             </div>
             <div style={{ flex: 1 }} />

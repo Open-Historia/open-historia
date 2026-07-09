@@ -13,7 +13,6 @@ import {
     getStoredLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { ESRI_BASEMAPS } from "../../runtime/assets.js";
 import {
     MAP_SETTING_KEYS,
     getMapSetting,
@@ -751,7 +750,6 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        basemapStyle: getMapSetting(MAP_SETTING_KEYS.basemapStyle),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -851,21 +849,6 @@ const SettingsMenu = ({
         enabled={mapSettings.disableEventCamera}
         onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)}
         />
-        <div style={{ marginBottom: "0.5rem" }}>
-        <div style={{ fontSize: "0.9rem", marginBottom: "0.4rem" }}>Map style</div>
-        <select
-        data-no-translate
-        value={mapSettings.basemapStyle}
-        onChange={(event) => updateMapSetting("basemapStyle", MAP_SETTING_KEYS.basemapStyle, event.target.value)}
-        style={{ ...inputStyle, cursor: "pointer" }}
-        >
-        {ESRI_BASEMAPS.map((basemap) => (
-            <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>
-            {basemap.label}
-            </option>
-        ))}
-        </select>
-        </div>
         </div>
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
 

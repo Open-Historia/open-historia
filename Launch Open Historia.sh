@@ -117,13 +117,12 @@ ensure_asset "server/data/scenarios/default/regions.geojson"
 echo ""
 
 # ---- 3. Install dependencies -----------------------------
-if [ ! -d "node_modules" ]; then
-    echo "Installing dependencies (first run - this can take a few minutes)..."
-    npm install || { echo ""; echo "[ERROR] Setup failed - see the messages above for details."; exit 1; }
-else
-    echo "[OK] Dependencies already installed."
-    echo "     (Delete the \"node_modules\" folder to force a clean reinstall.)"
-fi
+# Always run npm install: it's a fast no-op when nothing changed, but it also
+# installs any NEW dependency a code update added. Gating this on "node_modules
+# missing" skipped those, so a newly-required package (e.g. jszip) never got
+# installed and the production build failed to resolve it.
+echo "Installing / updating dependencies (fast if already up to date)..."
+npm install || { echo ""; echo "[ERROR] Setup failed - see the messages above for details."; exit 1; }
 echo ""
 
 # ---- 4. Build the client ---------------------------------
