@@ -749,6 +749,7 @@ const SettingsMenu = ({
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
+        disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -827,9 +828,26 @@ const SettingsMenu = ({
         onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)}
         />
         <Toggle
+        label="Reduce motion"
+        enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+        onToggle={() => {
+            // Umbrella accessibility control: on = stop both the idle globe spin
+            // and the fly-to during events; the two toggles below stay for
+            // granular control and reflect the result.
+            const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
+            updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
+            updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
+        }}
+        />
+        <Toggle
         label="Disable idle globe rotation"
         enabled={mapSettings.disableIdleRotation}
         onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)}
+        />
+        <Toggle
+        label="Disable camera movement during events"
+        enabled={mapSettings.disableEventCamera}
+        onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)}
         />
         </div>
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
