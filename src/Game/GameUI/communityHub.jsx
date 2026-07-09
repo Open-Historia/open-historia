@@ -67,11 +67,26 @@ const fetchInstallCounts = async () => {
   }
 };
 
+// Self-hosted import counts (keyed by hub issue number), read back through the
+// server proxy from our own counter Worker. Unlike GitHub's release download
+// counts, this covers EVERY scenario — including attachment posts — and is
+// deduped per person. Empty object if the counter isn't configured/reachable.
+const fetchImportCounts = async () => {
+  try {
+    const response = await fetch("/api/hub/import-counts");
+    if (!response.ok) return {};
+    const data = await response.json();
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+};
+
 // Official = posted by someone with real access to the hub repo, as reported
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-const parsePost = (issue, installsByFile) => {
+const parsePost = (issue, installsByFile, importsById) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   // The issue-form body is a series of "### <label>\n<value>" sections. Show only
@@ -93,6 +108,11 @@ const parsePost = (issue, installsByFile) => {
     .trim();
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
   const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
+  // Import count: prefer our own counter (covers every scenario, deduped per
+  // person); fall back to the GitHub release download count; null if neither.
+  const selfHostedImports = importsById?.[String(issue.number)]?.count;
+  const githubInstalls = bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) : undefined;
+  const installs = selfHostedImports != null ? selfHostedImports : (githubInstalls ?? null);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -112,8 +132,7 @@ const parsePost = (issue, installsByFile) => {
     comments: issue.comments ?? 0,
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
     bundleUrl,
-    // null = not trackable (issue attachment), a number = release download count.
-    installs: bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) ?? null : null,
+    installs,
     coverImageUrl,
   };
 };
@@ -123,9 +142,10 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
     return hubCache.posts;
   }
-  const [response, installsByFile] = await Promise.all([
+  const [response, installsByFile, importsById] = await Promise.all([
     fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
     fetchInstallCounts(),
+    fetchImportCounts(),
   ]);
   if (!response.ok) {
     throw new Error(
@@ -137,7 +157,7 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   const issues = await response.json();
   const posts = (Array.isArray(issues) ? issues : [])
     .filter((issue) => !issue.pull_request)
-    .map((issue) => parsePost(issue, installsByFile));
+    .map((issue) => parsePost(issue, installsByFile, importsById));
   hubCache = { at: Date.now(), posts };
   return posts;
 };
@@ -246,7 +266,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
     </div>
     <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
       {post.installs != null && (
-        <span title="Installs (downloads of the scenario file, counted by GitHub)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
+        <span title="Times this scenario has been imported" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
       )}
       <span title="Liked (👍 reactions on the hub post)" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>👍 {post.upvotes}</span>
       <span title="Comments on the hub post" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>💬 {post.comments}</span>
@@ -357,7 +377,7 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
     </div>
 
     <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.1rem", marginBottom: "0.55rem" }}>
-      {post.installs != null && <span style={detailStat}>⬇ {post.installs} installs</span>}
+      {post.installs != null && <span style={detailStat}>⬇ {post.installs} imported</span>}
       <a href={post.url} target="_blank" rel="noopener noreferrer" title="Like this scenario on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>👍 {post.upvotes} liked</a>
       <a href={post.url} target="_blank" rel="noopener noreferrer" title="Comment on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>💬 {post.comments} comments</a>
     </div>
@@ -591,7 +611,7 @@ const CommunityPanel = ({ onImported }) => {
         <>
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
-              Community scenarios from the hub — ⬇ = installs (counted automatically), 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
+              Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
               {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
             </div>
             <div style={{ flex: 1 }} />

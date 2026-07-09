@@ -660,12 +660,20 @@ app.post("/api/hub/import-log", jsonParser, (req, res) => {
   (async () => {
     try {
       const { url: fileUrl, id, title } = req.body ?? {};
-      if (!IMPORT_COUNTER_URL || !fileUrl) return;
-      // One marker per bundle URL — a repeat import on this install is a no-op.
-      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(String(fileUrl)).digest("hex"));
-      if (fs.existsSync(marker)) return;
+      if (!IMPORT_COUNTER_URL || (id == null && !fileUrl)) return;
+      // One ping per scenario per install, EVER. Key the marker on the scenario
+      // id (its hub issue number) so re-importing — an updated version, or just
+      // mashing the Import button — never counts twice. The marker is created
+      // atomically (wx: fails if it already exists) so even racing requests
+      // can't both slip a ping through.
+      const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
+      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
       fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
-      fs.writeFileSync(marker, String(id ?? fileUrl));
+      try {
+        fs.writeFileSync(marker, markerKey, { flag: "wx" });
+      } catch {
+        return; // marker already exists — this scenario was counted on this install
+      }
       await fetch(`${IMPORT_COUNTER_URL}/hit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -675,6 +683,26 @@ app.post("/api/hub/import-log", jsonParser, (req, res) => {
       // best-effort telemetry — swallow everything
     }
   })();
+});
+
+// Read the self-hosted import counts back for the Community tab. Proxied (not
+// fetched from the Worker in the browser) so the client stays URL-agnostic and
+// same-origin. Lightly cached so a hub refresh doesn't hammer the Worker.
+let importCountsCache = { at: 0, data: null };
+app.get("/api/hub/import-counts", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!IMPORT_COUNTER_URL) return res.json({});
+  if (importCountsCache.data && Date.now() - importCountsCache.at < 60000) {
+    return res.json(importCountsCache.data);
+  }
+  try {
+    const upstream = await fetch(`${IMPORT_COUNTER_URL}/counts`);
+    const data = upstream.ok ? await upstream.json() : {};
+    importCountsCache = { at: Date.now(), data };
+    res.json(data);
+  } catch {
+    res.json(importCountsCache.data || {});
+  }
 });
 
 // ---- Map editor documents ------------------------------------------------
