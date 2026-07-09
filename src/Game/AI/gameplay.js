@@ -879,6 +879,66 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
   };
 };
 
+const MAX_ROLLBACK_SNAPSHOTS = 12;
+
+// Persist the PRE-turn state so the cheats menu's "Roll back turn" can restore it.
+// A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
+// a scenario or dragged through the 5s poll — capped so a long game can't grow it
+// without bound. Purely best-effort: a snapshot failure must never break a turn.
+const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors }) => {
+  try {
+    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+    const list = Array.isArray(prior) ? prior : [];
+    const snapshot = {
+      id: `snap-${round}-${Date.now()}`,
+      round,
+      fromDate,
+      toDate,
+      capturedAt: new Date().toISOString(),
+      state: {
+        game: cloneValue(game),
+        world: cloneValue(world),
+        events: cloneValue(events),
+        actions: cloneValue(actions),
+        chat: cloneValue(chat),
+        colors: cloneValue(colors),
+      },
+    };
+    await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS));
+  } catch (error) {
+    console.warn("[rollback] snapshot capture failed:", error);
+  }
+};
+
+// Restore points, newest first (index 0 = undo the most recent turn). Shared by
+// the cheats menu and the timeline's Undo control.
+export const loadRollbackSnapshots = async () => {
+  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+  return Array.isArray(list) ? list : [];
+};
+
+// Roll back to the start of the turn captured at `index`: restore the six
+// per-turn assets, discard that restore point and every newer one (those turns
+// no longer happened), and return the freshly-normalized bundle so the caller
+// can update immediately. Returns null if there is no such snapshot.
+export const rollBackToSnapshot = async (index = 0) => {
+  const snapshots = await loadRollbackSnapshots();
+  const snap = snapshots[index];
+  if (!snap) return null;
+  const s = snap.state ?? {};
+  await Promise.all([
+    writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
+    writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
+    writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
+    writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
+    writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
+    writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
+  ]);
+  await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
+  const bundle = await readGameStateBundle({ force: true });
+  return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+};
+
 const applySimulationResult = async ({
   baseActions,
   baseChats,
@@ -948,6 +1008,19 @@ const applySimulationResult = async ({
     writeJson(JSON_URLS.colors, nextColors, { pretty: true }),
     writeWorldState(worldWithImpacts),
   ]);
+
+  // Snapshot the state we just replaced so it can be rolled back to (best-effort).
+  await captureRollbackSnapshot({
+    round: baseGame.round || 1,
+    fromDate: baseGame.gameDate || baseGame.startDate || "",
+    toDate: nextGame.gameDate || "",
+    game: baseGame,
+    world: baseWorld,
+    events: baseEvents,
+    actions: baseActions,
+    chat: baseChats,
+    colors: baseColors,
+  });
 
   return {
     actions: nextActions,

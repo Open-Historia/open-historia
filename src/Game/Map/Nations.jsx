@@ -372,6 +372,18 @@ const WorldMap = ({ isGlobe = false }) => {
   // instead of showing a blank world.
   const customFlag = Boolean(worldState?.customRegions);
   const customActive = customFlag && Array.isArray(customRegionData?.features) && customRegionData.features.length > 0;
+  // True for maps with their OWN drawn/generated geometry (region ids like
+  // "reg_fmg_…", no dot) rather than re-ownership on the stock GADM tiles (ids like
+  // "USA.1_1"). On such a map the stock regions-fill layer is Earth left over
+  // underneath — clicking the fantasy ocean would otherwise resolve to whatever
+  // real country sits at that lat/lon (Russia, Canada…), so we must NOT query it.
+  const hasDrawnGeometry = useMemo(
+    () =>
+      customActive &&
+      Array.isArray(customRegionData?.features) &&
+      customRegionData.features.some((feature) => !/\./.test(String(feature?.properties?.id ?? ""))),
+    [customActive, customRegionData],
+  );
   // Re-read on each render so a runtime token change (switching games/scenarios)
   // refetches the geometry, mirroring the live-URL world poll below.
   const regionsGeojsonUrl = JSON_URLS.regionsGeojson;
@@ -458,10 +470,15 @@ const WorldMap = ({ isGlobe = false }) => {
     }
 
     dismissUnitPopup();
-    // Custom (editor) regions render on top of the stock regions; query both so a
-    // click resolves against whichever is present. Custom features carry
-    // id/owner/name/country; stock features carry GID_1/GID_0/NAME_1/COUNTRY.
-    const queryLayers = ["custom-regions-fill", "regions-fill"].filter((id) => map.getLayer(id));
+    // Custom (editor) regions render on top of the stock regions. On a map with its
+    // OWN drawn/generated geometry, query only the custom layers — a click on empty
+    // sea must resolve to nothing, not the leftover Earth country underneath. On a
+    // re-ownership map (stock GADM geometry), keep querying regions-fill: it IS the
+    // map, and its high-zoom hit-testing has no custom-layer equivalent.
+    const queryLayers = (hasDrawnGeometry
+      ? ["custom-regions-fill", "custom-regions-fill-far"]
+      : ["custom-regions-fill", "regions-fill"]
+    ).filter((id) => map.getLayer(id));
     const features = map.queryRenderedFeatures(event.point, { layers: queryLayers });
     if (!features.length) return;
 
@@ -481,7 +498,7 @@ const WorldMap = ({ isGlobe = false }) => {
       owner,
       lngLat: event.lngLat,
     });
-  }, [map]);
+  }, [hasDrawnGeometry, map]);
 
   useEffect(() => {
     if (!map) return;

@@ -172,6 +172,15 @@ const OPTIONAL_JSON_ASSET_FILES = {
   colors: "colors.json",
 };
 
+// Roll-back restore points, captured client-side each turn (see the "Roll back
+// turn" cheat). A per-game runtime asset kept deliberately OUT of JSON_ASSET_FILES
+// so it is never copied into new games, embedded in scenario exports, or dragged
+// into the polled details bundle — a snapshot list holds full prior state and can
+// be large. Read/written only through the /api/runtime/json/snapshots endpoint.
+const RUNTIME_ONLY_JSON_ASSET_FILES = {
+  snapshots: "storage/snapshots.json",
+};
+
 const PMTILES_ASSET_FILES = {
   cities: "cities.pmtiles",
   countries: "countries.pmtiles",
@@ -226,6 +235,7 @@ const JSON_ASSET_DEFAULTS = {
   game: {},
   prompts: {},
   world: {},
+  snapshots: [],
 };
 
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
@@ -366,7 +376,7 @@ const getGameMetaPath = (gameId) => path.join(getGameDirectory(gameId), "game-in
 const getGameJsonPath = (gameId, assetKey) =>
 path.join(
   getGameDirectory(gameId),
-          JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey],
+          JSON_ASSET_FILES[assetKey] ?? OPTIONAL_JSON_ASSET_FILES[assetKey] ?? RUNTIME_ONLY_JSON_ASSET_FILES[assetKey],
 );
 const getGameUploadPath = (gameId, assetKey) =>
 path.join(getGameDirectory(gameId), UPLOADABLE_GAME_ASSET_FILES[assetKey]);
@@ -1808,7 +1818,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   // No games yet — runtime data resolves from the scenario below.
   const activeGame = getActiveGameSummary();
   const gamePath =
-  activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES)
+  activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)
   ? getGameJsonPath(activeGame.id, assetKey)
   : null;
 
@@ -1861,7 +1871,7 @@ const readRuntimeJsonAsset = (assetKey) => {
 const writeRuntimeJsonAsset = (assetKey, value) => {
   ensureGameStore();
 
-  if (!(assetKey in JSON_ASSET_FILES) && !(assetKey in OPTIONAL_JSON_ASSET_FILES)) {
+  if (!(assetKey in JSON_ASSET_FILES) && !(assetKey in OPTIONAL_JSON_ASSET_FILES) && !(assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
 

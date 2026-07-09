@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
+    disableEventCamera: "map_disable_event_camera",
 };
 
 export function getMapSetting(key) {
