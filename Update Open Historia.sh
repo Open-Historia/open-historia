@@ -182,6 +182,10 @@ finish() {
     # ZIP extraction can lose the executable bit - restore it.
     chmod +x "Launch Open Historia.sh" "Update Open Historia.sh" \
              "Launch Open Historia.command" "Update Open Historia.command" 2>/dev/null
+    # The update changed the app's source, so the previous build in dist/ is
+    # stale. Remove it so the next launch rebuilds cleanly - players no longer
+    # have to delete dist by hand for an update to take effect.
+    rm -rf dist 2>/dev/null || true
     # Refresh the vendored Fantasy Map Generator from its repo (the map editor's
     # world generator). Best-effort - needs Node + deps, which the launcher keeps
     # installed; a failure here never blocks the update.

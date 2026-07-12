@@ -129,12 +129,17 @@ echo ""
 # Give Node extra heap so the production build doesn't run out of memory
 # on machines that are low on free RAM.
 export NODE_OPTIONS="--max-old-space-size=4096"
+# Rebuild when the build is missing OR stale — i.e. an update changed any source
+# file since the last build. Previously this only built when dist was missing, so
+# after every update players had to delete dist by hand for changes to apply.
 if [ ! -f "dist/index.html" ]; then
     echo "Building the app..."
     npm run build || { echo ""; echo "[ERROR] Setup failed - see the messages above for details."; exit 1; }
+elif [ -n "$(find src public server index.html vite.config.ts package.json -newer "dist/index.html" 2>/dev/null | head -n 1)" ]; then
+    echo "An update changed the app - rebuilding to apply it..."
+    npm run build || { echo ""; echo "[ERROR] Setup failed - see the messages above for details."; exit 1; }
 else
-    echo "[OK] Build already present."
-    echo "     (Delete the \"dist\" folder to force a rebuild.)"
+    echo "[OK] Build already up to date."
 fi
 echo ""
 
