@@ -412,6 +412,11 @@ async function callOpenAIStyleChatCompletions({
 
     let attempt = 1;
     while (attempt <= retries) {
+        const requestCustomParams = { ...customParams };
+        if (structuredMode === "tool") {
+            delete requestCustomParams.reasoning_effort;
+            delete requestCustomParams.reasoning;
+        }
         const requestSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
             : systemPrompt;
@@ -426,7 +431,7 @@ async function callOpenAIStyleChatCompletions({
                 // clear API error so the user knows to pick a reasoning model.
                 ...(getReasoningEnabled() && structuredMode !== "tool" ? { reasoning_effort: "medium" } : {}),
                 [tokenLimitField]: Math.max(8192, Number(maxTokens) || 0),
-                ...customParams,
+                ...requestCustomParams,
                 ...(structuredMode === "tool" ? {
                     tools: [{ type: "function", function: {
                         name: tool.name,
