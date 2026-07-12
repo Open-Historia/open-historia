@@ -3,14 +3,15 @@ import { useEffect } from "react";
 import { useMap } from "react-map-gl/maplibre";
 import { SKYBOX_SIZE } from "./skybox.js";
 import {
+  directionFromLngLat,
   globeTransitionOpacity,
   normalizeLongitude,
   projectGlobeSun,
 } from "./globeSunMath.js";
 import {
-  createGlobeLightingLayer,
-  GLOBE_LIGHTING_LAYER_ID,
-} from "./globeLightingLayer.js";
+  drawGlobeLighting,
+  releaseGlobeLighting,
+} from "./globeCanvasLighting.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
@@ -40,41 +41,8 @@ const GlobeEffects = ({ active }) => {
     let frameId = 0;
     let lastTick = performance.now();
     let lastInteraction = 0;
-    let lightingUnavailable = false;
-    const lightingLayer = createGlobeLightingLayer(() => sunWorldPosition);
-
-    const ensureLightingLayer = () => {
-      if (lightingUnavailable
-        || !mapInstance.isStyleLoaded()
-        || mapInstance.getLayer(GLOBE_LIGHTING_LAYER_ID)) return;
-      try {
-        mapInstance.addLayer(lightingLayer);
-      } catch (error) {
-        lightingUnavailable = true;
-        if (mapInstance.getLayer(GLOBE_LIGHTING_LAYER_ID)) {
-          try {
-            mapInstance.removeLayer(GLOBE_LIGHTING_LAYER_ID);
-          } catch {
-            /* a concurrent style teardown already owns cleanup */
-          }
-        }
-        console.warn("Globe surface lighting is unavailable:", error);
-      }
-    };
-
-    const syncLightingLayer = () => {
-      ensureLightingLayer();
-      const layers = mapInstance.getStyle()?.layers ?? [];
-      const lastLayer = layers[layers.length - 1];
-      if (mapInstance.getLayer(GLOBE_LIGHTING_LAYER_ID)
-        && lastLayer?.id !== GLOBE_LIGHTING_LAYER_ID) {
-        try {
-          mapInstance.moveLayer(GLOBE_LIGHTING_LAYER_ID);
-        } catch {
-          /* a concurrent style update will retry through styledata */
-        }
-      }
-    };
+    let disposed = false;
+    let contextLost = false;
 
     const markInteraction = () => {
       lastInteraction = performance.now();
@@ -83,9 +51,11 @@ const GlobeEffects = ({ active }) => {
     for (const event of interactionEvents) mapInstance.on(event, markInteraction);
 
     const syncVisuals = () => {
+      if (disposed || contextLost || !mapInstance.style) return;
       const space = document.getElementById("oh-globe-space");
       if (!space) return;
       const sunElement = document.getElementById("oh-globe-sun");
+      const lightingCanvas = document.getElementById("oh-globe-lighting");
       const canvas = mapInstance.getCanvas();
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
@@ -115,10 +85,21 @@ const GlobeEffects = ({ active }) => {
         } else {
           sunElement.style.opacity = "0";
         }
+
+        drawGlobeLighting({
+          canvas: lightingCanvas,
+          matrix: mapInstance.transform?.modelViewProjectionMatrix,
+          cameraPosition: mapInstance.transform?.cameraPosition,
+          sunDirection: directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat),
+          width,
+          height,
+          opacity: projectionTransition,
+        });
       }
     };
 
     const tick = (now) => {
+      if (disposed || contextLost || !mapInstance.style) return;
       const dt = now - lastTick;
       lastTick = now;
       const idle = now - lastInteraction > INTERACTION_GRACE_MS;
@@ -129,27 +110,34 @@ const GlobeEffects = ({ active }) => {
       frameId = requestAnimationFrame(tick);
     };
 
-    const slowSync = () => {
-      ensureLightingLayer();
-      syncVisuals();
+    mapInstance.on("render", syncVisuals);
+    const mapCanvas = mapInstance.getCanvas();
+    const handleContextLost = () => {
+      contextLost = true;
+      cancelAnimationFrame(frameId);
+      const sunElement = document.getElementById("oh-globe-sun");
+      if (sunElement) sunElement.style.opacity = "0";
+      releaseGlobeLighting(document.getElementById("oh-globe-lighting"));
     };
-
-    syncLightingLayer();
-    mapInstance.on("styledata", syncLightingLayer);
-    mapInstance.on("move", syncVisuals);
+    const handleContextRestored = () => {
+      contextLost = false;
+      syncVisuals();
+      lastTick = performance.now();
+      frameId = requestAnimationFrame(tick);
+    };
+    mapCanvas.addEventListener("webglcontextlost", handleContextLost);
+    mapCanvas.addEventListener("webglcontextrestored", handleContextRestored);
     syncVisuals();
     frameId = requestAnimationFrame(tick);
-    const intervalId = setInterval(slowSync, 500);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(frameId);
-      clearInterval(intervalId);
-      mapInstance.off("styledata", syncLightingLayer);
-      mapInstance.off("move", syncVisuals);
+      mapInstance.off("render", syncVisuals);
       for (const event of interactionEvents) mapInstance.off(event, markInteraction);
-      if (mapInstance.getLayer(GLOBE_LIGHTING_LAYER_ID)) {
-        mapInstance.removeLayer(GLOBE_LIGHTING_LAYER_ID);
-      }
+      mapCanvas.removeEventListener("webglcontextlost", handleContextLost);
+      mapCanvas.removeEventListener("webglcontextrestored", handleContextRestored);
+      releaseGlobeLighting(document.getElementById("oh-globe-lighting"));
     };
   }, [active, map, autoRotateDisabled]);
 

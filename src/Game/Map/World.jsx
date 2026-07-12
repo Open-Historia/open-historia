@@ -279,6 +279,20 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         <CountryInfoPanel />
         <UnitPopup />
       </Map>
+      {isGlobe && (
+        <canvas
+          id="oh-globe-lighting"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 1,
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </div>
   );
 }
