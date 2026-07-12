@@ -350,6 +350,7 @@ export const normalizeChatEntry = (entry, index = 0) => {
   const countries = normalizeArray(entry.countries || entry.participants)
     .map((country) => normalizeChatCountry(country))
     .filter(Boolean);
+  if (countries.length === 0) return null;
 
   return {
     countries,

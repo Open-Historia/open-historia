@@ -3,6 +3,11 @@ const textSchema = (description) => ({
   description,
 });
 
+const nonEmptyTextSchema = (description) => ({
+  ...textSchema(description),
+  minLength: 1,
+});
+
 const stringArraySchema = (description) => ({
   type: "array",
   description,
@@ -29,7 +34,7 @@ const chatCountrySchema = {
   description: "A polity participating in a generated diplomatic chat.",
   properties: {
     code: textSchema("Polity code, when known."),
-    name: textSchema("Exact polity name."),
+    name: nonEmptyTextSchema("Exact polity name."),
   },
   required: ["name"],
   additionalProperties: false,
@@ -58,6 +63,7 @@ const createdChatSchema = {
     countries: {
       type: "array",
       description: "Participating polities.",
+      minItems: 1,
       items: chatCountrySchema,
     },
     messages: {
@@ -108,53 +114,90 @@ const unitSchema = {
   description: "A military unit to create on the map.",
   properties: {
     id: textSchema("Stable unit identifier."),
-    name: textSchema("Display name for the unit."),
-    type: textSchema("Unit type: infantry, armor, air, naval, artillery, or garrison."),
-    ownerCode: textSchema("Owning polity code."),
+    name: nonEmptyTextSchema("Display name for the unit."),
+    type: {
+      type: "string",
+      description: "Unit type.",
+      enum: ["infantry", "armor", "air", "naval", "artillery", "garrison"],
+    },
+    ownerCode: nonEmptyTextSchema("Owning polity code."),
     strength: {
-      type: "number",
-      description: "Unit strength from 0 to 1000.",
+      type: "integer",
+      description: "Unit strength from 1 to 1000.",
+      minimum: 1,
+      maximum: 1000,
     },
     lng: {
       type: "number",
       description: "Longitude of the unit location.",
+      minimum: -180,
+      maximum: 180,
     },
     lat: {
       type: "number",
       description: "Latitude of the unit location.",
+      minimum: -90,
+      maximum: 90,
     },
     regionId: textSchema("Map region identifier, when known."),
-    status: textSchema("Unit status, such as idle, moving, or engaged."),
+    status: {
+      type: "string",
+      description: "Optional unit status.",
+      enum: ["idle", "moving", "engaged", "pending"],
+    },
     note: textSchema("Brief operational note."),
   },
-  required: ["ownerCode", "lng", "lat"],
+  required: ["name", "type", "ownerCode", "strength", "lng", "lat"],
   additionalProperties: false,
 };
 
 const unitOpSchema = {
-  type: "object",
   description: "A unit mutation. Use op spawn, move, strength, or remove and fill the fields that op needs.",
-  properties: {
-    op: textSchema("Operation: spawn, move, strength, or remove."),
-    unitId: textSchema("Existing unit identifier for move, strength, or remove."),
-    unit: unitSchema,
-    toLng: {
-      type: "number",
-      description: "Destination longitude for a move.",
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["spawn"] },
+        unit: unitSchema,
+      },
+      required: ["op", "unit"],
+      additionalProperties: false,
     },
-    toLat: {
-      type: "number",
-      description: "Destination latitude for a move.",
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["move"] },
+        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        toLng: { type: "number", minimum: -180, maximum: 180 },
+        toLat: { type: "number", minimum: -90, maximum: 90 },
+        regionId: textSchema("Destination region identifier, when known."),
+        note: textSchema("Brief explanation of the operation."),
+      },
+      required: ["op", "unitId", "toLng", "toLat"],
+      additionalProperties: false,
     },
-    regionId: textSchema("Destination region identifier for a move."),
-    strength: {
-      type: "number",
-      description: "Replacement strength for a strength operation.",
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["strength"] },
+        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        strength: { type: "integer", minimum: 0, maximum: 1000 },
+        note: textSchema("Brief explanation of the operation."),
+      },
+      required: ["op", "unitId", "strength"],
+      additionalProperties: false,
     },
-    note: textSchema("Brief explanation of the operation."),
-  },
-  required: ["op"],
-  additionalProperties: false,
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["remove"] },
+        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        note: textSchema("Brief explanation of the operation."),
+      },
+      required: ["op", "unitId"],
+      additionalProperties: false,
+    },
+  ],
 };
 
 const impactsSchema = {
@@ -217,7 +260,13 @@ const catalystSchema = {
     title: textSchema("Short catalyst title."),
     premise: textSchema("Stable premise and stakes of the scene."),
     opening: textSchema("Immersive opening state requiring player input."),
-    choices: stringArraySchema("Distinct choices available to the player."),
+    choices: {
+      type: "array",
+      description: "Two to five distinct choices available to the player.",
+      minItems: 2,
+      maxItems: 5,
+      items: nonEmptyTextSchema("One player choice."),
+    },
   },
   required: ["title", "premise", "opening", "choices"],
   additionalProperties: false,
@@ -325,7 +374,12 @@ export const CATALYST_EXECUTOR_SCHEMA = {
       type: "boolean",
       description: "Whether the catalyst has reached a definite conclusion.",
     },
-    nextChoices: stringArraySchema("Choices for the next stage; use an empty array when resolved."),
+    nextChoices: {
+      type: "array",
+      description: "Two to five choices for an unresolved next stage; empty when resolved.",
+      maxItems: 5,
+      items: nonEmptyTextSchema("One player choice."),
+    },
   },
   required: ["summary", "resolved", "nextChoices"],
   additionalProperties: false,
@@ -354,6 +408,64 @@ export const GAME_MASTER_SCHEMA = {
   additionalProperties: false,
 };
 
+const percentageSchema = (description) => ({
+  type: "integer",
+  description,
+  minimum: 0,
+  maximum: 100,
+});
+
+export const COUNTRY_STAT_SHEET_SCHEMA = {
+  type: "object",
+  description: "A complete national statistics sheet for the selected polity.",
+  properties: {
+    capital: nonEmptyTextSchema("Capital or primary seat of government."),
+    continent: nonEmptyTextSchema("Continent or broad geographic region."),
+    government: nonEmptyTextSchema("Government system and ideology."),
+    leader: nonEmptyTextSchema("Head of state or government."),
+    stability: percentageSchema("National stability from 0 to 100."),
+    indices: {
+      type: "object",
+      properties: {
+        sovereignty: percentageSchema("Practical political sovereignty."),
+        foodAutonomy: percentageSchema("Domestic food autonomy."),
+        energyAutonomy: percentageSchema("Domestic energy autonomy."),
+        economicIndependence: percentageSchema("Economic independence."),
+        internalSecurity: percentageSchema("Internal security."),
+      },
+      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity"],
+      additionalProperties: false,
+    },
+    economy: {
+      type: "object",
+      properties: {
+        gdp: nonEmptyTextSchema("Era-appropriate gross domestic product estimate."),
+        gdpGrowth: nonEmptyTextSchema("Annual GDP growth estimate."),
+        gdpPerCapita: nonEmptyTextSchema("Era-appropriate GDP per capita estimate."),
+        currency: nonEmptyTextSchema("Currency or dominant medium of exchange."),
+        inflation: nonEmptyTextSchema("Inflation estimate."),
+        unemployment: nonEmptyTextSchema("Unemployment estimate."),
+        publicDebt: nonEmptyTextSchema("Public debt estimate."),
+        budgetBalance: nonEmptyTextSchema("Budget surplus or deficit estimate."),
+      },
+      required: ["gdp", "gdpGrowth", "gdpPerCapita", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
+      additionalProperties: false,
+    },
+    gdpBreakdown: {
+      type: "object",
+      properties: {
+        agriculture: percentageSchema("Agriculture share of GDP."),
+        industry: percentageSchema("Industry share of GDP."),
+        services: percentageSchema("Services share of GDP."),
+      },
+      required: ["agriculture", "industry", "services"],
+      additionalProperties: false,
+    },
+  },
+  required: ["capital", "continent", "government", "leader", "stability", "indices", "economy", "gdpBreakdown"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
@@ -365,6 +477,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   catalystExecutor: CATALYST_EXECUTOR_SCHEMA,
   catalystSummary: CATALYST_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
+  countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -429,6 +542,12 @@ export const GAME_MASTER_TOOL = makeTool(
   GAME_MASTER_SCHEMA,
 );
 
+export const COUNTRY_STAT_SHEET_TOOL = makeTool(
+  "submit_country_stat_sheet",
+  "Submit the complete validated national statistics sheet.",
+  COUNTRY_STAT_SHEET_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -440,6 +559,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   catalystExecutor: CATALYST_EXECUTOR_TOOL,
   catalystSummary: CATALYST_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
+  countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
@@ -460,12 +580,28 @@ const validateAgainstSchema = (schema, value, path) => {
     return `${path} did not match any allowed schema: ${errors.join(" ")}`;
   }
 
-  if (schema.type && valueType(value) !== schema.type) {
+  const actualType = valueType(value);
+  const typeMatches = schema.type === "integer"
+    ? actualType === "number" && Number.isInteger(value)
+    : !schema.type || actualType === schema.type;
+  if (!typeMatches) {
     return `${path} must be ${schema.type}; received ${valueType(value)}.`;
   }
 
-  if (schema.type === "number" && !Number.isFinite(value)) {
+  if ((schema.type === "number" || schema.type === "integer") && !Number.isFinite(value)) {
     return `${path} must be a finite number.`;
+  }
+
+  if ((schema.type === "number" || schema.type === "integer") && Number.isFinite(schema.minimum) && value < schema.minimum) {
+    return `${path} must be at least ${schema.minimum}.`;
+  }
+
+  if ((schema.type === "number" || schema.type === "integer") && Number.isFinite(schema.maximum) && value > schema.maximum) {
+    return `${path} must be at most ${schema.maximum}.`;
+  }
+
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    return `${path} must be one of ${schema.enum.map((entry) => JSON.stringify(entry)).join(", ")}.`;
   }
 
   if (schema.type === "string" && Number.isFinite(schema.minLength) && value.length < schema.minLength) {
@@ -475,6 +611,9 @@ const validateAgainstSchema = (schema, value, path) => {
   if (schema.type === "array") {
     if (Number.isFinite(schema.minItems) && value.length < schema.minItems) {
       return `${path} must contain at least ${schema.minItems} item${schema.minItems === 1 ? "" : "s"}.`;
+    }
+    if (Number.isFinite(schema.maxItems) && value.length > schema.maxItems) {
+      return `${path} must contain at most ${schema.maxItems} items.`;
     }
 
     for (let index = 0; index < value.length; index += 1) {
@@ -518,6 +657,30 @@ const hasMeaningfulCatalyst = (value) =>
   ) ||
     (Array.isArray(value.choices) && value.choices.length > 0));
 
+const validateDistinctChoices = (choices, path) => {
+  const normalized = choices.map((choice) => choice.trim().toLocaleLowerCase());
+  const blankIndex = normalized.findIndex((choice) => !choice);
+  if (blankIndex >= 0) return `${path}[${blankIndex}] must not be blank.`;
+  if (new Set(normalized).size !== normalized.length) return `${path} must contain distinct choices.`;
+  return "";
+};
+
+const findBlankString = (value, path = "$") => {
+  if (typeof value === "string") return value.trim() ? "" : `${path} must not be blank.`;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const error = findBlankString(value[index], `${path}[${index}]`);
+      if (error) return error;
+    }
+  } else if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      const error = findBlankString(entry, propertyPath(path, key));
+      if (error) return error;
+    }
+  }
+  return "";
+};
+
 export const validateGameplayPayload = (taskKey, value) => {
   const schema = GAMEPLAY_SCHEMAS[taskKey];
   if (!schema) {
@@ -552,6 +715,10 @@ export const validateGameplayPayload = (taskKey, value) => {
         error: "Jump payload must contain at least one event, a nonempty summary, or a meaningful catalyst.",
       };
     }
+    if (value.catalyst) {
+      const catalystError = validateDistinctChoices(value.catalyst.choices, "$.catalyst.choices");
+      if (catalystError) return { valid: false, error: catalystError };
+    }
   }
 
   const requiredTextByTask = {
@@ -566,6 +733,31 @@ export const validateGameplayPayload = (taskKey, value) => {
   for (const field of requiredTextByTask[taskKey] ?? []) {
     if (!value[field].trim()) {
       return { valid: false, error: `$.${field} must not be empty.` };
+    }
+  }
+
+  if (taskKey === "catalystCreation") {
+    const choiceError = validateDistinctChoices(value.choices, "$.choices");
+    if (choiceError) return { valid: false, error: choiceError };
+  }
+
+  if (taskKey === "catalystExecutor") {
+    if (value.resolved && value.nextChoices.length !== 0) {
+      return { valid: false, error: "$.nextChoices must be empty when $.resolved is true." };
+    }
+    if (!value.resolved && value.nextChoices.length < 2) {
+      return { valid: false, error: "$.nextChoices must contain between 2 and 5 choices while unresolved." };
+    }
+    const choiceError = validateDistinctChoices(value.nextChoices, "$.nextChoices");
+    if (choiceError) return { valid: false, error: choiceError };
+  }
+
+  if (taskKey === "countryStatSheet") {
+    const blankError = findBlankString(value);
+    if (blankError) return { valid: false, error: blankError };
+    const breakdown = value.gdpBreakdown;
+    if (breakdown.agriculture + breakdown.industry + breakdown.services !== 100) {
+      return { valid: false, error: "$.gdpBreakdown percentages must sum to 100." };
     }
   }
 

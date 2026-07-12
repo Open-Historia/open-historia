@@ -1,16 +1,20 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { JSON_URLS } from "../../runtime/assets.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
+import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { generateCountryStatSheet } from "../AI/gameplay.js";
+import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
 const STORAGE_KEY = "oh-stat-sheets";
 const MAX_STORED_SHEETS = 60;
 const memoryCache = new Map();
+const isValidStatSheet = (value) => validateGameplayPayload("countryStatSheet", value).valid;
 
 const readStoredSheets = () => {
     try {
@@ -79,6 +83,7 @@ const EconomyCard = ({ label, value, sub, tone }) => (
 const stabilityColor = (value) => (value < 40 ? "#ef4444" : value < 70 ? "#f59e0b" : "#22c55e");
 
 const StatsPane = ({ active }) => {
+    const { activeGameId } = useLibraryState();
     const [player, setPlayer] = useState({ code: "", date: "", gameKey: "game" });
     const [targetCode, setTargetCode] = useState("");
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
@@ -90,25 +95,39 @@ const StatsPane = ({ active }) => {
     useEffect(() => {
         if (!active) return undefined;
         let cancelled = false;
-        (async () => {
+        const refreshPlayer = async () => {
             try {
                 const game = await readGameData({ force: true });
                 if (cancelled) return;
                 const code = String(game?.country || "").trim();
-                setPlayer({
+                const nextPlayer = {
                     code,
                     date: String(game?.gameDate || game?.startDate || ""),
-                    gameKey: String(game?.id || game?.name || "game"),
-                });
-                setTargetCode((current) => current || code);
+                    gameKey: String(JSON_URLS.game || game?.id || game?.name || "game"),
+                };
+                if (player.gameKey !== nextPlayer.gameKey) {
+                    setTargetCode(code);
+                    setState({ status: "idle", sheet: null, error: "" });
+                } else {
+                    setTargetCode((target) => target || code);
+                }
+                setPlayer((current) =>
+                    current.code === nextPlayer.code &&
+                    current.date === nextPlayer.date &&
+                    current.gameKey === nextPlayer.gameKey
+                        ? current
+                        : nextPlayer);
             } catch {
                 // Without game data the pane just shows its empty state.
             }
-        })();
+        };
+        refreshPlayer();
+        const intervalId = window.setInterval(refreshPlayer, 5000);
         return () => {
             cancelled = true;
+            window.clearInterval(intervalId);
         };
-    }, [active]);
+    }, [active, activeGameId, player.gameKey]);
 
     // While the pane is showing, clicking any country on the map inspects it.
     useEffect(() => {
@@ -126,7 +145,7 @@ const StatsPane = ({ active }) => {
         const cacheKey = `${player.gameKey}:${code}`;
         if (!force) {
             const cached = memoryCache.get(cacheKey) ?? readStoredSheets()[cacheKey];
-            if (cached && cached.date === player.date && cached.sheet) {
+            if (cached && cached.date === player.date && isValidStatSheet(cached.sheet)) {
                 memoryCache.set(cacheKey, cached);
                 setState({ status: "ready", sheet: cached.sheet, error: "" });
                 return;
@@ -135,6 +154,8 @@ const StatsPane = ({ active }) => {
         setState({ status: "loading", sheet: null, error: "" });
         try {
             const sheet = await generateCountryStatSheet({ code, name: displayName || code });
+            const validation = validateGameplayPayload("countryStatSheet", sheet);
+            if (!validation.valid) throw new Error(`The stat sheet failed validation: ${validation.error}`);
             const entry = { date: player.date, sheet };
             memoryCache.set(cacheKey, entry);
             storeSheet(cacheKey, entry);

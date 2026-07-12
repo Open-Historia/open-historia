@@ -50,6 +50,19 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "root",
   },
   {
+    description: "Structured national statistics for the selected polity.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "countryStatSheet",
+    label: "Country Stat Sheet",
+    type: "task",
+  },
+  {
     description: "Action suggestion generation before the player asks for them.",
     helpers: [
       "PLAYER_POLITY",
