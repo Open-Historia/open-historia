@@ -34,6 +34,13 @@ const loadCountryNames = async () => {
     return loadCachedCountryNames();
 };
 
+const countryMatchesIdentity = (country, identity) => {
+    const normalizedIdentity = String(identity ?? "").trim().toLowerCase();
+    if (!normalizedIdentity) return false;
+    return [country?.name, country?.code]
+        .some(value => String(value ?? "").trim().toLowerCase() === normalizedIdentity);
+};
+
 // ── Flags ─────────────────────────────────────────────────────────────────────
 // Flag emoji are derived locally from each nation's GID_0 country code. (The
 // previous source, restcountries.com, deprecated its public API and no longer
@@ -441,7 +448,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, onArchive, onBack, on
             onMessagesUpdate(chat.id, updated);
         };
 
+        const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
+
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
+            if (isPlayerCountry(country)) {
+                setPendingCountry(null);
+                setRemainingQueue([]);
+                setPhase("player");
+                return;
+            }
             setIsLoading(true);
             setSpeakingCountry(country);
             try {
@@ -514,6 +529,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, onArchive, onBack, on
                 return;
             }
             nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % countries.length;
+            if (isPlayerCountry(next)) {
+                setPendingCountry(null);
+                setRemainingQueue([]);
+                setPhase("player");
+                return;
+            }
             setPendingCountry(next);
             setRemainingQueue(rest);
             setPhase("pending");
@@ -732,7 +753,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     }, [isOpen]);
 
     const availableCountries = useMemo(
-        () => countries.filter(c => c.name.toLowerCase() !== playerCountry.toLowerCase()),
+        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
                                        [countries, playerCountry]
     );
 
