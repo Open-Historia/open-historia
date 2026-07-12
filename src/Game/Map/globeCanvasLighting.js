@@ -1,7 +1,7 @@
 /*! Open Historia - fail-safe worker-backed globe lighting (c) 2026 Nicholas Krol, MIT. */
 import { buildGlobeLightingWorkerSource } from "./globeLightingPixels.js";
 
-const MAX_RENDER_PIXELS = 320_000;
+const MAX_RENDER_PIXELS = 180_000;
 const CANVAS_STATES = new WeakMap();
 
 const getRenderSize = (width, height) => {

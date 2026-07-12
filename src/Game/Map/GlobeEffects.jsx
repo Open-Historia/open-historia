@@ -20,8 +20,8 @@ import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
 const SUN_INITIAL_SKY_OFFSET_DEG = 10;
-const CELESTIAL_FRAME_MS = 34;
-const LIGHTING_FRAME_MS = 100;
+const CELESTIAL_FRAME_MS = 1000 / 60;
+const LIGHTING_FRAME_MS = 1000 / 60;
 
 // The sun, stars, and surface lighting share one static world frame. Moving
 // the camera therefore changes their perspective without sliding the light
