@@ -541,9 +541,11 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         id: `${entry.toDate || entry.date || index}-${index}`,
         mapChangeCount,
         mode: entry.mode || "jump",
+        fallbackReason: entry.fallbackReason || "",
         plannedActions,
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
+        source: entry.source || "ai",
         summary: entry.summary || "",
         tags: Array.from(tags).slice(0, 10),
         title:
@@ -662,6 +664,9 @@ const EventCard = ({ event, footer = null, lookups }) => {
             <MetricPill icon={<MapIcon />} tone="accent">
             {mapChangeCount} map change{mapChangeCount === 1 ? "" : "s"}
             </MetricPill>
+        )}
+        {event.source === "fallback" && (
+            <MetricPill tone="accent">Fallback</MetricPill>
         )}
         </div>
         </div>
@@ -852,13 +857,25 @@ const TimelineSkipPanel = ({
     isLoading,
     isOpen,
     onAutoJump,
+    onCancel,
     onClose,
     onJump,
     onUndo,
     topOffset,
     undoCount,
 }) => {
+    const [customValue, setCustomValue] = useState("");
+    const [customUnit, setCustomUnit] = useState("days");
+    const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
+    const runCustomJump = () => {
+        const amount = Number(customValue);
+        if (!Number.isFinite(amount) || amount <= 0 || isLoading) return;
+        onJump(amount * (unitToDays[customUnit] ?? 1));
+    };
     const jumpOptions = [
+        { label: "6 hours", sublabel: dayjs(currentDate).format("M/D/YYYY"), days: 0.25 },
+        { label: "1 day", sublabel: dayjs(currentDate).add(1, "day").format("M/D/YYYY"), days: 1 },
+        { label: "3 days", sublabel: dayjs(currentDate).add(3, "day").format("M/D/YYYY"), days: 3 },
         { label: "1 week", sublabel: dayjs(currentDate).add(7, "day").format("M/D/YYYY"), days: 7 },
         { label: "1 month", sublabel: dayjs(currentDate).add(1, "month").format("M/D/YYYY"), days: 30 },
         { label: "3 months", sublabel: dayjs(currentDate).add(3, "month").format("M/D/YYYY"), days: 90 },
@@ -956,6 +973,84 @@ const TimelineSkipPanel = ({
         >
         <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>Auto-jump</div>
         </button>
+
+        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+        <div
+        style={{
+            alignItems: "center",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: "12px",
+            display: "flex",
+            gap: "0.35rem",
+            padding: "0.45rem 0.5rem",
+            width: "12.5rem",
+        }}
+        >
+        <input
+        type="number"
+        min="1"
+        step="any"
+        value={customValue}
+        onChange={(event) => setCustomValue(event.target.value)}
+        onKeyDown={(event) => { if (event.key === "Enter") runCustomJump(); }}
+        placeholder="Custom"
+        disabled={isLoading}
+        style={{
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid rgba(255,255,255,0.16)",
+            borderRadius: "8px",
+            color: "#fff",
+            fontSize: "0.8rem",
+            minWidth: 0,
+            outline: "none",
+            padding: "0.3rem 0.4rem",
+            width: "3.4rem",
+        }}
+        />
+        <select
+        data-no-translate
+        value={customUnit}
+        onChange={(event) => setCustomUnit(event.target.value)}
+        disabled={isLoading}
+        style={{
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid rgba(255,255,255,0.16)",
+            borderRadius: "8px",
+            color: "#fff",
+            cursor: "pointer",
+            flex: 1,
+            fontSize: "0.8rem",
+            minWidth: 0,
+            outline: "none",
+            padding: "0.3rem 0.2rem",
+        }}
+        >
+        <option value="hours" style={{ color: "black" }}>hours</option>
+        <option value="days" style={{ color: "black" }}>days</option>
+        <option value="weeks" style={{ color: "black" }}>weeks</option>
+        <option value="months" style={{ color: "black" }}>months</option>
+        <option value="years" style={{ color: "black" }}>years</option>
+        </select>
+        <button
+        type="button"
+        onClick={runCustomJump}
+        disabled={isLoading || !customValue}
+        style={{
+            background: "rgba(109,40,217,0.4)",
+            border: "1px solid rgba(139,92,246,0.6)",
+            borderRadius: "8px",
+            color: "#fff",
+            cursor: isLoading || !customValue ? "default" : "pointer",
+            fontSize: "0.8rem",
+            fontWeight: 700,
+            opacity: isLoading || !customValue ? 0.5 : 1,
+            padding: "0.3rem 0.6rem",
+        }}
+        >
+        Go
+        </button>
+        </div>
         </div>
 
         {isLoading && (
@@ -974,6 +1069,26 @@ const TimelineSkipPanel = ({
             }}
             >
             <SpinnerRing size={15} />
+            <span>Simulating…</span>
+            {onCancel && (
+                <button
+                type="button"
+                onClick={onCancel}
+                style={{
+                    background: "rgba(220,38,38,0.18)",
+                    border: "1px solid rgba(248,113,113,0.5)",
+                    borderRadius: "8px",
+                    color: "#fecaca",
+                    cursor: "pointer",
+                    fontSize: "0.74rem",
+                    fontWeight: 600,
+                    marginLeft: "0.2rem",
+                    padding: "0.28rem 0.7rem",
+                }}
+                >
+                Cancel
+                </button>
+            )}
             </div>
         )}
 
@@ -1004,6 +1119,7 @@ const TimelineHistoryPanel = ({
     record,
     topOffset,
     visibleEventCount,
+    warning,
 }) => {
     const totalEvents = record?.events?.length || 0;
     const visibleEvents =
@@ -1033,6 +1149,22 @@ const TimelineHistoryPanel = ({
         title="Events"
         topOffset={topOffset}
         >
+        {warning && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.24)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "12px",
+                color: "#fde68a",
+                fontSize: "0.76rem",
+                lineHeight: "1.5",
+                marginBottom: "0.75rem",
+                padding: "0.75rem 0.85rem",
+            }}
+            >
+            {warning}
+            </div>
+        )}
         {!record ? (
             <EmptyPanelState text="No event chain is available yet." />
         ) : totalEvents === 0 ? (
@@ -1088,6 +1220,9 @@ const DateWidget = ({
     const [localOpenPanel, setLocalOpenPanel] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
+    const [fallbackWarning, setFallbackWarning] = useState("");
+    // Holds the in-flight jump's AbortController so the Cancel button can stop it.
+    const jumpAbortRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
@@ -1196,22 +1331,38 @@ const DateWidget = ({
         setPanel("skip");
         setIsLoading(true);
         setError("");
+        setFallbackWarning("");
 
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
         try {
             const result = mode === "auto"
-            ? await simulateAutoJump({ days })
-            : await simulateTimelineJump({ days });
+            ? await simulateAutoJump({ days, signal: controller.signal })
+            : await simulateTimelineJump({ days, signal: controller.signal });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
             setVisibleEventCount(1);
+            if (result.generation?.source === "fallback") {
+                setFallbackWarning(`Turn generated by fallback: ${result.generation.fallbackReason || "structured AI output was unavailable"}`);
+            }
             setPanel("history");
         } catch (jumpError) {
-            console.error("Failed to simulate jump:", jumpError);
-            setError(jumpError.message || "Failed to simulate timeline jump.");
+            if (controller.signal.aborted || jumpError?.name === "AbortError") {
+                // Player cancelled — nothing was written, so just close out quietly.
+                setError("");
+            } else {
+                console.error("Failed to simulate jump:", jumpError);
+                setError(jumpError.message || "Failed to simulate timeline jump.");
+            }
         } finally {
+            jumpAbortRef.current = null;
             setIsLoading(false);
         }
+    };
+
+    const cancelJump = () => {
+        jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
     };
 
     // How many turns can be undone (a restore point is captured at the start of
@@ -1232,6 +1383,7 @@ const DateWidget = ({
         setPanel("skip");
         setIsLoading(true);
         setError("");
+        setFallbackWarning("");
 
         try {
             const result = await rollBackToSnapshot(0);
@@ -1269,6 +1421,9 @@ const DateWidget = ({
     }, [eventLookup, gameData, lookups, worldState]);
 
     const latestTurnRecord = historyRecords[0] || null;
+    const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
+    ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
+    : "";
     const totalVisibleEvents = latestTurnRecord?.events?.length || 0;
     const activeVisibleEvent =
     openPanel === "history" && totalVisibleEvents > 0
@@ -1335,6 +1490,7 @@ const DateWidget = ({
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
         onAutoJump={() => runJump(365, "auto")}
+        onCancel={cancelJump}
         onClose={() => setPanel(null)}
         onJump={(days) => runJump(days, "jump")}
         onUndo={runUndo}
@@ -1349,6 +1505,7 @@ const DateWidget = ({
         record={latestTurnRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}
+        warning={fallbackWarning || persistedFallbackWarning}
         />
 
         <div

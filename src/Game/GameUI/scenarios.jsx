@@ -109,6 +109,7 @@ const buildEditorState = (details) => {
     catalystCreation: prompts.catalystCreation ?? GAMEPLAY_PROMPT_DEFAULTS.catalystCreation,
     catalystExecutor: prompts.catalystExecutor ?? GAMEPLAY_PROMPT_DEFAULTS.catalystExecutor,
     catalystSummary: prompts.catalystSummary ?? GAMEPLAY_PROMPT_DEFAULTS.catalystSummary,
+    countryStatSheet: prompts.countryStatSheet ?? GAMEPLAY_PROMPT_DEFAULTS.countryStatSheet,
     descriptionToAction: prompts.descriptionToAction ?? GAMEPLAY_PROMPT_DEFAULTS.descriptionToAction,
     eventConsolidator: prompts.eventConsolidator ?? GAMEPLAY_PROMPT_DEFAULTS.eventConsolidator,
     gameMaster: prompts.gameMaster ?? GAMEPLAY_PROMPT_DEFAULTS.gameMaster,

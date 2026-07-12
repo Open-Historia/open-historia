@@ -14,6 +14,7 @@ export const GAME_DEFAULTS = {
 export const WORLD_DEFAULTS = {
   actionSuggestions: [],
   activeCatalyst: null,
+  consolidatedHistory: [],
   language: "English",
   lastJumpMode: "",
   lastJumpSummary: "",
@@ -349,6 +350,7 @@ export const normalizeChatEntry = (entry, index = 0) => {
   const countries = normalizeArray(entry.countries || entry.participants)
     .map((country) => normalizeChatCountry(country))
     .filter(Boolean);
+  if (countries.length === 0) return null;
 
   return {
     countries,
@@ -562,6 +564,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
       kind: "world",
       notable: false,
       playerRelated: false,
+      source: "scenario",
       title,
     };
   }
@@ -588,6 +591,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     kind: normalizeOptionalString(entry.kind) || "world",
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
+    source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };
 };
@@ -650,6 +654,25 @@ const normalizeActionSuggestions = (value) =>
     };
   }).filter(Boolean);
 
+const normalizeConsolidatedHistory = (value) => normalizeArray(value)
+  .map((entry) => {
+    if (!entry || typeof entry !== "object") return null;
+    const summary = normalizeTextLike(entry.summary);
+    if (!summary) return null;
+    return {
+      chatIds: normalizeActionParticipants(entry.chatIds),
+      createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+      source: normalizeOptionalString(entry.source) || "ai",
+      summary,
+      throughDate: normalizeOptionalString(entry.throughDate),
+      throughEventId: normalizeOptionalString(entry.throughEventId),
+      throughRound: Number.isFinite(Number(entry.throughRound))
+        ? Math.max(0, Math.trunc(Number(entry.throughRound)))
+        : 0,
+    };
+  })
+  .filter(Boolean);
+
 export const normalizeWorldState = (world) => {
   const nextWorld = world && typeof world === "object" ? world : {};
   const polityOverrides = Object.fromEntries(
@@ -669,6 +692,7 @@ export const normalizeWorldState = (world) => {
     ...nextWorld,
     actionSuggestions: normalizeActionSuggestions(nextWorld.actionSuggestions),
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
+    consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     language: normalizeOptionalString(nextWorld.language) || WORLD_DEFAULTS.language,
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
@@ -687,6 +711,7 @@ export const normalizeWorldState = (world) => {
           catalyst: normalizeCatalyst(entry.catalyst),
           date: normalizeOptionalString(entry.date),
           eventIds: normalizeActionParticipants(entry.eventIds),
+          fallbackReason: normalizeOptionalString(entry.fallbackReason),
           fromDate: normalizeOptionalString(entry.fromDate || entry.startDate),
           mode: normalizeOptionalString(entry.mode),
           plannedActions: normalizeActions(entry.plannedActions || entry.actions),
@@ -695,6 +720,7 @@ export const normalizeWorldState = (world) => {
               ? Math.trunc(Number(entry.round))
               : 0,
           summary: normalizeTextLike(entry.summary),
+          source: normalizeOptionalString(entry.source) || "ai",
           toDate: normalizeOptionalString(entry.toDate || entry.endDate || entry.date),
         };
       })

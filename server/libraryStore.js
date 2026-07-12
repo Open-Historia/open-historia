@@ -1101,6 +1101,7 @@ const getLibraryCatalog = () => {
     activeGame,
     activeGameId: gameCatalog.activeGameId,
     activeScenarioId: scenarioCatalog.selectedScenarioId,
+    countryNames: { ...COUNTRY_NAME_REGISTRY },
     games: gameCatalog.games,
     runtimeScenario,
     scenarios: scenarioCatalog.scenarios,

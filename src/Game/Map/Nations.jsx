@@ -36,16 +36,21 @@ const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math
 
 const buildCountryTextSize = (multiplier = 1, correctForGlobe = false) => {
   const scale = correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier;
+  const atZoom = (power) => [
+    "min",
+    254,
+    ["*", scale, ["*", ["get", "areaScale"], ["^", 2, power]]],
+  ];
 
   return [
     "interpolate", ["exponential", 2], ["zoom"],
-    0, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -16]]],
-    4, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -12]]],
-    8, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -8]]],
-    12, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, -4]]],
-    16, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 0]]],
-    20, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 4]]],
-    24, ["*", scale, ["*", ["get", "areaScale"], ["^", 2, 8]]],
+    0, atZoom(-16),
+    4, atZoom(-12),
+    8, atZoom(-8),
+    12, atZoom(-4),
+    16, atZoom(0),
+    20, atZoom(4),
+    24, atZoom(8),
   ];
 };
 

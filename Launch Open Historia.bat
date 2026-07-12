@@ -84,13 +84,21 @@ REM ---- 4. Build the client ---------------------------------
 REM Give Node extra heap so the production build doesn't run out of memory
 REM on machines that are low on free RAM.
 set "NODE_OPTIONS=--max-old-space-size=4096"
-if not exist "dist\index.html" (
+REM Rebuild when the build is missing OR stale (an update made any source file
+REM newer than the last build). Previously this only built when dist was missing,
+REM so after every update players had to delete the dist folder by hand.
+set "OH_NEEDS_BUILD="
+if not exist "dist\index.html" set "OH_NEEDS_BUILD=1"
+if not defined OH_NEEDS_BUILD (
+    powershell -NoProfile -Command "$b=(Get-Item 'dist/index.html').LastWriteTimeUtc; if (Get-ChildItem -Recurse -File -Path src,public,server,index.html,vite.config.ts,package.json -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTimeUtc -gt $b } | Select-Object -First 1) { exit 1 }; exit 0"
+    if errorlevel 1 set "OH_NEEDS_BUILD=1"
+)
+if defined OH_NEEDS_BUILD (
     echo Building the app...
     call npm run build
     if errorlevel 1 goto :fail
 ) else (
-    echo [OK] Build already present.
-    echo      ^(Delete the "dist" folder to force a rebuild.^)
+    echo [OK] Build already up to date.
 )
 echo.
 
