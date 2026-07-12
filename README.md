@@ -92,23 +92,24 @@ release APK — run it after changing `mobile/`.
 
 ### Manual
 
-Prerequisites: [Git](https://git-scm.com/) (with [Git LFS](https://git-lfs.com/)) and [Node.js](https://nodejs.org/en).
+Prerequisites: [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/en).
 
 ```bash
 git clone https://github.com/Open-Historia/open-historia.git
 cd open-historia
-git lfs install        # Set up Git LFS
-git lfs pull           # Pull large files (map tiles + editor seeds + world map)
-npm install            # Install dependencies (includes OpenLayers etc. for the editor)
-npm run build          # Build the client
-node server/server.js  # Start the server
+node scripts/fetch-map-assets.mjs  # Download the world map data (see note below)
+npm install                        # Install dependencies (includes OpenLayers etc. for the editor)
+npm run build                      # Build the client
+node server/server.js              # Start the server
 ```
 
 Then open **http://localhost:3000** in your browser.
 
-> **Note:** the large map assets (`*.pmtiles`, `public/assets/*-seed.*`, and
-> `server/data/scenarios/default/regions.geojson`) live in Git LFS. If you downloaded a
-> ZIP instead of cloning, run the launcher script for your platform — it fetches them automatically.
+> **Note:** the large map binaries (`*.pmtiles`, `public/assets/*-seed.*`, and
+> `server/data/scenarios/default/regions.geojson`) are **not** in the repo — they are
+> hosted as [GitHub Release assets](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
+> and downloaded by `scripts/fetch-map-assets.mjs`. The launcher script for your platform
+> runs this for you automatically, so a plain ZIP download works too — no Git LFS needed.
 
 ---
 

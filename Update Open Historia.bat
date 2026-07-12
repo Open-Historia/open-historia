@@ -100,7 +100,10 @@ if exist ".git" (
         echo this folder and reinstall the channel you want.
         pause & exit /b 1
     )
-    git lfs pull 2>nul
+    REM Map binaries live on a GitHub Release now, not Git LFS - refresh any that
+    REM changed (or that this install never had) from there. See scripts\map-assets.json.
+    where node >nul 2>&1
+    if not errorlevel 1 if exist "scripts\fetch-map-assets.mjs" node "scripts\fetch-map-assets.mjs"
     goto :finish
 )
 
@@ -189,15 +192,15 @@ if exist "%SRC%\server\data\scenarios\default" (
     if errorlevel 8 goto :copyfail
 )
 
-REM 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content. A
-REM     codeload zip only carries pointers, so no LFS file would otherwise ever
-REM     update on a ZIP install. This downloads any that changed from GitHub's
-REM     media host and checksum-verifies them. Best-effort - needs Node (which
-REM     running the game already requires); a missing Node just leaves files as-is.
+REM 3c) Download the large map binaries (pmtiles, geojson, city seeds) from the
+REM     GitHub Release that now hosts them. A codeload zip never carried these, so
+REM     a ZIP install relies on this to get them and to refresh any that changed.
+REM     Checksum-verified. Best-effort - needs Node (which running the game already
+REM     requires); a missing Node just leaves files as-is. See scripts\map-assets.json.
 where node >nul 2>&1
 if not errorlevel 1 (
-    if exist "scripts\resolve-lfs.mjs" (
-        node "scripts\resolve-lfs.mjs" "%SRC%" "%REPO_OWNER%" "%REPO_NAME%" "%REPO_BRANCH%"
+    if exist "scripts\fetch-map-assets.mjs" (
+        node "scripts\fetch-map-assets.mjs"
     )
 )
 
