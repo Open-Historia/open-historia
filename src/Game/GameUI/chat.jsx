@@ -34,6 +34,13 @@ const loadCountryNames = async () => {
     return loadCachedCountryNames();
 };
 
+const countryMatchesIdentity = (country, identity) => {
+    const normalizedIdentity = String(identity ?? "").trim().toLowerCase();
+    if (!normalizedIdentity) return false;
+    return [country?.name, country?.code]
+        .some(value => String(value ?? "").trim().toLowerCase() === normalizedIdentity);
+};
+
 // ── Flags ─────────────────────────────────────────────────────────────────────
 // Flag emoji are derived locally from each nation's GID_0 country code. (The
 // previous source, restcountries.com, deprecated its public API and no longer
@@ -435,8 +442,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             onMessagesUpdate(chat.id, updated);
         };
 
-        const isPlayerCountry = (country) =>
-            country?.name?.trim().toLowerCase() === playerCountry.trim().toLowerCase();
+        const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
             if (isPlayerCountry(country)) {
@@ -731,7 +737,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     }, [isOpen]);
 
     const availableCountries = useMemo(
-        () => countries.filter(c => c.name.toLowerCase() !== playerCountry.toLowerCase()),
+        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
                                        [countries, playerCountry]
     );
 
