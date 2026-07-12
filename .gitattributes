@@ -1,8 +1,11 @@
-# Open Historia — repo attributes (LFS geodata, script line endings) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — repo attributes (script line endings) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 # Shell scripts must stay LF - CRLF breaks bash on Linux/macOS
 *.sh text eol=lf
 *.command text eol=lf
-*.pmtiles filter=lfs diff=lfs merge=lfs -text
-public/assets/regions-seed.geojson filter=lfs diff=lfs merge=lfs -text
-public/assets/cities-seed.json filter=lfs diff=lfs merge=lfs -text
-server/data/scenarios/**/regions.geojson filter=lfs diff=lfs merge=lfs -text
+
+# NOTE: the large world-map binaries (*.pmtiles, regions-seed.geojson,
+# cities-seed.json, the default scenario's regions.geojson) used to be tracked in
+# Git LFS. They are no longer in the repo at all - they are hosted as GitHub
+# Release assets and downloaded by scripts/fetch-map-assets.mjs, because LFS's
+# free bandwidth (1 GB/mo, org-wide) could not cover player installs. Do not
+# re-add them to LFS. See scripts/map-assets.json.
