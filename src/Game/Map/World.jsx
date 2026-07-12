@@ -160,11 +160,8 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       },
     },
   ],
-  // MapLibre's own atmosphere is OFF: its halo is uniform all the way around
-  // the globe regardless of where the sun sits. The directional replacement
-  // is the AtmosphereGlow ring below, aimed and faded by GlobeEffects. A
-  // side benefit: without the atmosphere pass, space stays transparent, so
-  // the starfield and sun shine through at full strength.
+  // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
+  // surface light instead. Transparent space lets the stars and sun show.
   sky: {
     "atmosphere-blend": 0,
   },
@@ -214,11 +211,8 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, [onInitialIdle]);
 
   return (
-    // The skybox: one panoramic image (stars + nebula + THE SUN) behind the
-    // transparent space around the globe. GlobeEffects scrolls it so the
-    // baked sun stays aligned with the sunlit side of the earth; the map
-    // canvas paints over it wherever the globe is, so the earth occludes
-    // the sun naturally.
+    // Stars and the single projected sun sit behind the transparent MapLibre
+    // canvas, so the globe itself provides correct sun occlusion.
     <div
       id="oh-globe-space"
       style={{
@@ -232,6 +226,25 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         backgroundSize: `${SKYBOX_SIZE}px ${SKYBOX_SIZE}px`,
       }}
     >
+      {isGlobe && (
+        <div
+          id="oh-globe-sun"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 180,
+            height: 180,
+            borderRadius: "50%",
+            pointerEvents: "none",
+            opacity: 0,
+            background: "radial-gradient(circle, #fffef5 0 5%, #fff4c7 7%, rgba(255,225,159,0.95) 11%, rgba(255,197,105,0.45) 24%, rgba(255,177,85,0.14) 45%, rgba(255,160,70,0) 72%)",
+            filter: "drop-shadow(0 0 18px rgba(255,218,145,0.9))",
+            willChange: "transform",
+          }}
+        />
+      )}
       <Map
         key={projection}
         ref={mapRef}

@@ -1,15 +1,8 @@
 /*! Open Historia — procedural space skybox © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-// One panoramic sky image behind the globe: stars, faint nebula wisps and
-// THE SUN, all baked together. The horizontal axis spans 360° of azimuth and
-// the strip repeats seamlessly, so GlobeEffects can scroll it until the baked
-// sun lines up with the sunlit side of the earth. Because the whole sky sits
-// BEHIND the map canvas, the earth occludes the sun naturally — no z-order
-// tricks, no eclipse masks.
+// One repeatable panoramic sky image behind the globe. The sun is deliberately
+// separate: baking a unique object into a tiled texture creates duplicate suns.
 
 export const SKYBOX_SIZE = 2048;
-// Where the sun is baked into the image (fractions of width/height).
-export const SKYBOX_SUN_U = 0.5;
-export const SKYBOX_SUN_V = 0.35;
 
 let skyboxUrl = "";
 
@@ -89,19 +82,6 @@ const buildSkyboxDataUrl = () => {
       ctx.fill();
     }
   }
-
-  // The sun: hot core, warm bloom, wide halo.
-  const sunX = SKYBOX_SUN_U * size;
-  const sunY = SKYBOX_SUN_V * size;
-  wrappedBlob(sunX, sunY, 560, [
-    [0, "rgba(255,253,244,1)"],
-    [0.045, "rgba(255,248,222,1)"],
-    [0.09, "rgba(255,238,185,0.9)"],
-    [0.18, "rgba(255,216,140,0.5)"],
-    [0.38, "rgba(255,196,112,0.18)"],
-    [0.68, "rgba(255,186,102,0.05)"],
-    [1, "rgba(255,182,98,0)"],
-  ]);
 
   return canvas.toDataURL("image/png");
 };
