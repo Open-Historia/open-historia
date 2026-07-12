@@ -398,7 +398,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
-const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpdate }) => {
+const ConversationView = ({ chat, playerCountry, gameDate, onArchive, onBack, onMessagesUpdate }) => {
     const isGroup = chat.countries.length > 1;
 
     const [messages, setMessages]               = useState(chat.messages ?? []);
@@ -550,7 +550,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             Chat with {chat.countries.map(c => c.name).join(", ")}
             </span>
-            <button style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", display: "flex", padding: "0.25rem", borderRadius: "6px" }}
+            <button title="Archive chat" onClick={onArchive} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", display: "flex", padding: "0.25rem", borderRadius: "6px" }}
             onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>
             <GearIcon />
@@ -672,6 +672,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+    const openChats = chats.filter((chat) => chat.status !== "closed");
 
     useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
@@ -730,7 +731,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [] };
+        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
         setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
@@ -741,16 +742,25 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         if (activeChat?.id === id) setActiveChat(null);
     };
 
+    const handleArchiveChat = (id) => {
+        setChats(prev => {
+            const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
+            saveAllChats(updated);
+            return updated;
+        });
+        setActiveChat(null);
+    };
+
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup.
     const consumePending = (country) => {
         setShowSelector(false);
         setChats(prev => {
             const existing = prev.find(
-                c => Array.isArray(c.countries) && c.countries.length === 1 &&
+                c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
                      (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
             );
             if (existing) { setActiveChat(existing); return prev; }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [] };
+            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [], status: "open" };
             const u = [newChat, ...prev];
             saveAllChats(u);
             setActiveChat(newChat);
@@ -773,7 +783,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
             {activeChat ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
+                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onArchive={() => handleArchiveChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -783,11 +793,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                {chats.length === 0 ? (
+                {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : chats.map(chat => <ChatListItem key={chat.id} chat={chat} onClick={() => setActiveChat(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
+                ) : openChats.map(chat => <ChatListItem key={chat.id} chat={chat} onClick={() => setActiveChat(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}

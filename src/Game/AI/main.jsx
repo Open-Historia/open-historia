@@ -6,17 +6,15 @@ import {
     providerSupportsModelDiscovery,
     setProviderField,
 } from "./providerConfig.js";
-import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
-    buildActionDisplayText,
-    normalizeActionEntry,
-    normalizeChats,
-    normalizeEvents,
-    normalizeWorldState,
-} from "../../runtime/gameState.js";
+    buildPromptContext,
+    renderTemplate,
+    resolveHelperValues,
+} from "./promptContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -52,9 +50,22 @@ const NON_CHAT_MODEL_HINTS = [
     /rerank/i,
 ];
 
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+    if (signal?.aborted) {
+        return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    }
+
+    return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(resolve, ms);
+        signal?.addEventListener("abort", () => {
+            clearTimeout(timeoutId);
+            reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+    });
 }
+
+const canRetryBeforeDeadline = (deadline, retryDelay) =>
+    !Number.isFinite(deadline) || Date.now() + retryDelay < deadline;
 
 function normalizeEndpoint(endpoint) {
     return (endpoint ?? "").trim().replace(/\/$/, "");
@@ -134,6 +145,13 @@ function joinGeminiParts(parts) {
     .trim();
 }
 
+function extractGeminiToolInput(data, tool) {
+    const call = (data?.candidates?.[0]?.content?.parts ?? [])
+    .map((part) => part?.functionCall)
+    .find((entry) => entry?.name === tool?.name);
+    return call?.args && typeof call.args === "object" ? call.args : null;
+}
+
 function extractOpenAIMessageText(data) {
     const content = data?.choices?.[0]?.message?.content;
 
@@ -155,12 +173,49 @@ function extractOpenAIMessageText(data) {
     return "";
 }
 
+function extractOpenAIToolInput(data, tool) {
+    const call = (data?.choices?.[0]?.message?.tool_calls ?? [])
+    .find((entry) => entry?.function?.name === tool?.name);
+    const args = call?.function?.arguments;
+    if (args && typeof args === "object") return args;
+    if (typeof args !== "string") return null;
+
+    try {
+        return JSON.parse(args);
+    } catch {
+        return null;
+    }
+}
+
+function extractOpenAIToolRaw(data, tool) {
+    const call = (data?.choices?.[0]?.message?.tool_calls ?? [])
+    .find((entry) => entry?.function?.name === tool?.name);
+    const args = call?.function?.arguments;
+    return typeof args === "string" ? args : args ? JSON.stringify(args) : "";
+}
+
 function extractAnthropicText(data) {
     return (data?.content ?? [])
     .filter((block) => block?.type === "text" && typeof block.text === "string")
     .map((block) => block.text)
     .join("\n\n")
     .trim();
+}
+
+function extractAnthropicToolInput(data, tool) {
+    const block = (data?.content ?? [])
+    .find((entry) => entry?.type === "tool_use" && entry?.name === tool?.name);
+    return block?.input && typeof block.input === "object" ? block.input : null;
+}
+
+function toGeminiSchema(value) {
+    if (Array.isArray(value)) return value.map(toGeminiSchema);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+        Object.entries(value)
+        .filter(([key]) => key !== "additionalProperties" && key !== "$schema")
+        .map(([key, entry]) => [key, toGeminiSchema(entry)]),
+    );
 }
 
 function getGeminiUrl(model, apiKey) {
@@ -172,11 +227,12 @@ function getGeminiUrl(model, apiKey) {
 // rarely send CORS headers, so the browser can't call them directly. The relay
 // is same-origin for us and plain server-to-server for the endpoint. Gemini and
 // Anthropic stay direct — both support browser calls explicitly.
-const relayFetch = (url, { method = "POST", headers = {}, payload } = {}) =>
+const relayFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch("/api/ai/relay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, method, headers, payload }),
+        signal,
     });
 
 function toOpenAIMessages(systemPrompt, history) {
@@ -202,7 +258,7 @@ function toAnthropicMessages(history) {
     }));
 }
 
-async function resolveModel(provider, { endpoint = "", headers = {}, fallbackModel = "", providerLabel } = {}) {
+async function resolveModel(provider, { endpoint = "", headers = {}, fallbackModel = "", providerLabel, signal } = {}) {
     const settings = getProviderSettings(provider);
     const configuredModel = settings.model.trim();
 
@@ -225,7 +281,7 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
     }
 
     try {
-        const response = await relayFetch(`${normalizedEndpoint}/models`, { method: "GET", headers });
+        const response = await relayFetch(`${normalizedEndpoint}/models`, { method: "GET", headers, signal });
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
@@ -243,12 +299,19 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
         setProviderField(provider, "model", discoveredModel);
         return discoveredModel;
     } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error;
         console.warn(`Could not auto-detect model for ${providerLabel}:`, error);
         throw new Error(`Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`);
     }
 }
 
-async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 15000 } = {}) {
+async function callGemini(systemPrompt, history, {
+    deadline,
+    retries = 3,
+    retryDelay = 15000,
+    signal,
+    tool,
+} = {}) {
     const settings = getProviderSettings("gemini");
     const apiKey = settings.apiKey.trim();
 
@@ -259,6 +322,7 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
     const model = await resolveModel("gemini", {
         fallbackModel: GEMINI_DEFAULT_MODEL,
         providerLabel: "Gemini",
+        signal,
     });
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
@@ -272,10 +336,22 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
                 contents: history,
                 // Reasoning toggle (settings): let thinking-capable Gemini models think.
                 ...(getReasoningEnabled()
-                    ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
-                    : {}),
+                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
+                     : {}),
                 ...customParams,
+                ...(tool ? {
+                    tools: [{ functionDeclarations: [{
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: toGeminiSchema(tool.schema),
+                    }] }],
+                    toolConfig: { functionCallingConfig: {
+                        mode: "ANY",
+                        allowedFunctionNames: [tool.name],
+                    } },
+                } : {}),
             }),
+            signal,
         });
 
         if (response.status === 429) {
@@ -285,12 +361,12 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
         }
 
         if (response.status === 503) {
-            if (attempt === retries) {
+            if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 throw new Error(`Gemini is temporarily unavailable after ${retries} attempts. Try again in a minute.`);
             }
 
             console.warn(`Gemini is busy. Retrying in ${retryDelay / 1000}s... (attempt ${attempt}/${retries})`);
-            await sleep(retryDelay);
+            await sleep(retryDelay, signal);
             continue;
         }
 
@@ -300,6 +376,11 @@ async function callGemini(systemPrompt, history, { retries = 3, retryDelay = 150
         }
 
         const data = await response.json();
+        if (tool) {
+            const toolInput = extractGeminiToolInput(data, tool);
+            if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
+            return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null };
+        }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
 
         if (!text) {
@@ -320,29 +401,76 @@ async function callOpenAIStyleChatCompletions({
     customParams = {},
     retries = 3,
     retryDelay = 15000,
+    deadline,
+    signal,
+    tool,
+    allowJsonSchemaFallback = false,
+    maxTokens = 8192,
+    tokenLimitField = "max_tokens",
 }) {
-    for (let attempt = 1; attempt <= retries; attempt++) {
+    let structuredMode = tool ? "tool" : "text";
+
+    let attempt = 1;
+    while (attempt <= retries) {
+        const requestSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
+            ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
+            : systemPrompt;
         const response = await relayFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
+            signal,
             payload: {
                 model,
-                messages: toOpenAIMessages(systemPrompt, history),
+                messages: toOpenAIMessages(requestSystemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways; models that reject it surface a
                 // clear API error so the user knows to pick a reasoning model.
-                ...(getReasoningEnabled() ? { reasoning_effort: "medium" } : {}),
+                ...(getReasoningEnabled() && structuredMode !== "tool" ? { reasoning_effort: "medium" } : {}),
+                [tokenLimitField]: Math.max(8192, Number(maxTokens) || 0),
                 ...customParams,
+                ...(structuredMode === "tool" ? {
+                    tools: [{ type: "function", function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.schema,
+                    } }],
+                    tool_choice: { type: "function", function: { name: tool.name } },
+                } : {}),
+                ...(structuredMode === "json_schema" ? {
+                    response_format: { type: "json_schema", json_schema: {
+                        name: tool.name,
+                        schema: tool.schema,
+                    } },
+                } : {}),
+                ...(structuredMode === "json_object" ? {
+                    response_format: { type: "json_object" },
+                } : {}),
             },
         });
 
+        if ([400, 422].includes(response.status) && structuredMode === "tool" && allowJsonSchemaFallback) {
+            structuredMode = "json_schema";
+            continue;
+        }
+
+        if ([400, 422].includes(response.status) && structuredMode === "json_schema" && allowJsonSchemaFallback) {
+            structuredMode = "json_object";
+            continue;
+        }
+
+        if ([400, 422].includes(response.status) && structuredMode === "json_object" && allowJsonSchemaFallback) {
+            structuredMode = "text_json";
+            continue;
+        }
+
         if (response.status === 429 || response.status === 503) {
-            if (attempt === retries) {
+            if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, `${providerLabel} is busy right now. Try again in a moment.`));
             }
 
             console.warn(`${providerLabel} is busy. Retrying in ${retryDelay / 1000}s... (attempt ${attempt}/${retries})`);
-            await sleep(retryDelay);
+            await sleep(retryDelay, signal);
+            attempt += 1;
             continue;
         }
 
@@ -353,6 +481,14 @@ async function callOpenAIStyleChatCompletions({
 
         const data = await response.json();
         const text = extractOpenAIMessageText(data);
+
+        if (tool) {
+            const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
+            if (toolInput) return { rawText: text, toolInput };
+            if (structuredMode === "tool") return { rawText: extractOpenAIToolRaw(data, tool) || text, toolInput: null };
+            if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
+            return { rawText: text, toolInput: null };
+        }
 
         if (!text) {
             throw new Error(`${providerLabel} response did not contain text.`);
@@ -379,6 +515,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         endpoint: OPENAI_API_ENDPOINT,
         headers,
         providerLabel: "OpenAI",
+        signal: opts.signal,
     });
 
     return callOpenAIStyleChatCompletions({
@@ -389,6 +526,8 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         history,
         providerLabel: "OpenAI",
         customParams: parseCustomParams(settings.customParams, "OpenAI"),
+        allowJsonSchemaFallback: false,
+        tokenLimitField: "max_completion_tokens",
         ...opts,
     });
 }
@@ -410,6 +549,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         endpoint,
         headers,
         providerLabel: "OpenAI Compatible",
+        signal: opts.signal,
     });
 
     return callOpenAIStyleChatCompletions({
@@ -420,11 +560,20 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         history,
         providerLabel: "OpenAI Compatible",
         customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
+        allowJsonSchemaFallback: true,
+        tokenLimitField: "max_tokens",
         ...opts,
     });
 }
 
-async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 15000 } = {}) {
+async function callAnthropic(systemPrompt, history, {
+    deadline,
+    maxTokens = 8192,
+    retries = 3,
+    retryDelay = 15000,
+    signal,
+    tool,
+} = {}) {
     const settings = getProviderSettings("anthropic");
     const apiKey = settings.apiKey.trim();
 
@@ -435,6 +584,7 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     const model = await resolveModel("anthropic", {
         fallbackModel: ANTHROPIC_DEFAULT_MODEL,
         providerLabel: "Anthropic",
+        signal,
     });
 
     const headers = {
@@ -449,30 +599,37 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     // by extractAnthropicText, which only reads text blocks.
     const reasoning = getReasoningEnabled();
     const customParams = parseCustomParams(settings.customParams, "Anthropic");
+    const requestedMaxTokens = Math.max(8192, Number(maxTokens) || 0, Number(customParams.max_tokens) || 0);
+    delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         const body = {
             model,
             system: systemPrompt,
-            max_tokens: reasoning ? 8192 : 1024,
-            ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            max_tokens: requestedMaxTokens,
+            ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
+            ...(tool ? {
+                tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
+                tool_choice: { type: "tool", name: tool.name },
+            } : {}),
         };
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
             headers,
             body: JSON.stringify(body),
+            signal,
         });
 
         if (response.status === 429 || response.status === 503) {
-            if (attempt === retries) {
+            if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, "Anthropic is busy right now. Try again in a moment."));
             }
 
             console.warn(`Anthropic is busy. Retrying in ${retryDelay / 1000}s... (attempt ${attempt}/${retries})`);
-            await sleep(retryDelay);
+            await sleep(retryDelay, signal);
             continue;
         }
 
@@ -482,6 +639,11 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
         }
 
         const data = await response.json();
+        if (tool) {
+            const toolInput = extractAnthropicToolInput(data, tool);
+            if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            return { rawText: extractAnthropicText(data), toolInput: null };
+        }
         const text = extractAnthropicText(data);
 
         if (!text) {
@@ -492,7 +654,14 @@ async function callAnthropic(systemPrompt, history, { retries = 3, retryDelay = 
     }
 }
 
-async function callAnthropicCompatible(systemPrompt, history, { retries = 3, retryDelay = 15000 } = {}) {
+async function callAnthropicCompatible(systemPrompt, history, {
+    deadline,
+    maxTokens = 8192,
+    retries = 3,
+    retryDelay = 15000,
+    signal,
+    tool,
+} = {}) {
     const settings = getProviderSettings("anthropic-compatible");
     const endpoint = normalizeEndpoint(settings.endpoint);
 
@@ -504,6 +673,7 @@ async function callAnthropicCompatible(systemPrompt, history, { retries = 3, ret
     const model = await resolveModel("anthropic-compatible", {
         fallbackModel: ANTHROPIC_DEFAULT_MODEL,
         providerLabel: "Anthropic Compatible",
+        signal,
     });
 
     // Self-hosted proxy: called server-to-server through the relay (it can't be
@@ -517,26 +687,32 @@ async function callAnthropicCompatible(systemPrompt, history, { retries = 3, ret
 
     const reasoning = getReasoningEnabled();
     const customParams = parseCustomParams(settings.customParams, "Anthropic Compatible");
+    const requestedMaxTokens = Math.max(8192, Number(maxTokens) || 0, Number(customParams.max_tokens) || 0);
+    delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         const body = {
             model,
             system: systemPrompt,
-            max_tokens: reasoning ? 8192 : 1024,
-            ...(reasoning ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            max_tokens: requestedMaxTokens,
+            ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
+            ...(tool ? {
+                tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
+                tool_choice: { type: "tool", name: tool.name },
+            } : {}),
         };
-        const response = await relayFetch(`${endpoint}/messages`, { headers, payload: body });
+        const response = await relayFetch(`${endpoint}/messages`, { headers, payload: body, signal });
 
         if (response.status === 429 || response.status === 503) {
-            if (attempt === retries) {
+            if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, "The Anthropic-compatible endpoint is busy right now. Try again in a moment."));
             }
 
             console.warn(`Anthropic-compatible endpoint is busy. Retrying in ${retryDelay / 1000}s... (attempt ${attempt}/${retries})`);
-            await sleep(retryDelay);
+            await sleep(retryDelay, signal);
             continue;
         }
 
@@ -546,6 +722,11 @@ async function callAnthropicCompatible(systemPrompt, history, { retries = 3, ret
         }
 
         const data = await response.json();
+        if (tool) {
+            const toolInput = extractAnthropicToolInput(data, tool);
+            if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            return { rawText: extractAnthropicText(data), toolInput: null };
+        }
         const text = extractAnthropicText(data);
 
         if (!text) {
@@ -583,49 +764,6 @@ let promptPack = normalizePromptPack({});
 let promptsReady = null;
 let promptsReadyKey = "";
 
-const renderTemplate = (template, variables) =>
-    String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
-        const value = variables[key];
-        return value == null ? "" : String(value);
-    });
-
-const resolveHelperValues = (helperTemplates, variables) => {
-    let resolved = {};
-
-    for (let pass = 0; pass < 2; pass += 1) {
-        resolved = Object.fromEntries(
-            Object.entries(helperTemplates).map(([key, template]) => [
-                key,
-                renderTemplate(template, { ...variables, ...resolved }),
-            ]),
-        );
-    }
-
-    return resolved;
-};
-
-function formatActionsForPrompt(actions) {
-    if (!Array.isArray(actions) || actions.length === 0) {
-        return "";
-    }
-
-    return actions
-    .map((entry) => {
-        if (typeof entry === "string") {
-            return entry.trim();
-        }
-
-        const normalized = normalizeActionEntry(entry);
-        if (!normalized) {
-            return "";
-        }
-
-        return `- ${normalized.title}: ${buildActionDisplayText(normalized)}`;
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 async function ensurePromptsLoaded() {
     const cacheKey = JSON_URLS.prompts;
 
@@ -646,152 +784,6 @@ async function ensurePromptsLoaded() {
     await promptsReady;
 }
 
-function buildChatHistoryText(chats) {
-    const normalizedChats = normalizeChats(chats);
-    if (normalizedChats.length === 0) {
-        return "No chats occurred in these rounds.";
-    }
-
-    return normalizedChats
-    .slice(0, 8)
-    .map((chat, index) => {
-        const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
-        const body = chat.messages.length > 0
-            ? chat.messages.slice(-10).map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
-            : "No messages yet.";
-        return `${header}\n${body}`;
-    })
-    .join("\n\n");
-}
-
-function buildEventHistoryText(events) {
-    const normalizedEvents = normalizeEvents(events);
-    if (normalizedEvents.length === 0) {
-        return "No prior events have been recorded yet.";
-    }
-
-    return normalizedEvents
-    .slice(-16)
-    .map((event) => `- ${event.date || "undated"}: ${event.title}${event.description ? ` - ${event.description}` : ""}`)
-    .join("\n");
-}
-
-function buildAdvisorHistoryText(messages) {
-    const normalizedMessages = Array.isArray(messages)
-        ? messages
-            .map((entry) => {
-                if (!entry || typeof entry !== "object") {
-                    return "";
-                }
-
-                const role = (entry.role || entry.speaker || "message").toString().trim();
-                const text = (entry.text || entry.content || entry.message || "").toString().trim();
-                return role && text ? `${role}: ${text}` : "";
-            })
-            .filter(Boolean)
-        : [];
-
-    return normalizedMessages.length > 0
-        ? normalizedMessages.slice(-18).join("\n")
-        : "No advisor messages are currently recorded.";
-}
-
-function buildWorldSummary(gameData, worldData, eventData) {
-    const world = normalizeWorldState(worldData);
-    return [
-        `Player polity: ${gameData.country || "Unknown polity"}`,
-        `Current date: ${gameData.gameDate || "unknown"}`,
-        `Difficulty: ${gameData.difficulty || "standard"}`,
-        `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
-        `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
-        `Recent events:`,
-        buildEventHistoryText(eventData),
-    ].join("\n");
-}
-
-// The advisor and diplomacy prompts share the same UPPER_SNAKE helper set as
-// the server-side simulation tasks, so this client path mirrors the handful of
-// context builders those helpers expect (see gameplay.js). Kept local because
-// gameplay.js imports callAI from here — importing back would be circular.
-function formatDateReadable(value) {
-    const parsed = value ? new Date(value) : null;
-    if (!parsed || Number.isNaN(parsed.getTime())) {
-        return String(value ?? "").trim();
-    }
-    return parsed.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-}
-
-function buildDifficultyGuidanceChats(difficulty) {
-    const normalized = String(difficulty ?? "").trim().toLowerCase();
-    const intro = "Diplomatic concessions and cooperation should scale with the difficulty.";
-    switch (normalized) {
-        case "very-easy":
-        case "very easy":
-            return `${intro} The world bends toward the player; be markedly receptive to their proposals.`;
-        case "easy":
-            return `${intro} The player can convert reasonable preparation into results relatively easily.`;
-        case "hard":
-            return `${intro} The player should need stronger leverage, preparation, and credibility before major outcomes stick.`;
-        case "very-hard":
-        case "very hard":
-        case "extreme":
-        case "impossible":
-            return `${intro} Major outcomes should require overwhelming preparation, sustained leverage, or unusually favorable conditions.`;
-        default:
-            return `${intro} Weigh proposals realistically on their merits and the player's demonstrated leverage.`;
-    }
-}
-
-function buildRecentRoundsWithDates(worldData, gameData) {
-    const history = Array.isArray(worldData?.simulationHistory) ? worldData.simulationHistory : [];
-    if (history.length === 0) {
-        return `Current round only: ${gameData?.gameDate || "unknown date"}`;
-    }
-    return history
-        .slice(0, 8)
-        .map((entry) => `${entry.fromDate || "unknown"} -> ${entry.toDate || entry.date || "unknown"}`)
-        .join("; ");
-}
-
-function buildUnitsSummaryText(worldData) {
-    const units = Array.isArray(worldData?.units) ? worldData.units : [];
-    if (units.length === 0) {
-        return "No military units are currently deployed on the map.";
-    }
-    return units
-        .slice(0, 60)
-        .map((unit) => {
-            const lat = Number(unit.lat);
-            const lng = Number(unit.lng);
-            const coords = Number.isFinite(lat) && Number.isFinite(lng)
-                ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
-                : "unknown location";
-            return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
-        })
-        .join("\n");
-}
-
-async function buildPlayerPolityRegionsText(gameData, worldData) {
-    const playerCode = String(gameData?.country ?? "").trim();
-    if (!playerCode) {
-        return "No player polity is currently set.";
-    }
-    const world = normalizeWorldState(worldData);
-    const regionEntries = Object.entries(world.regionOwnershipOverrides || {});
-    if (regionEntries.length === 0) {
-        return "No explicit player region override list is currently recorded.";
-    }
-    const regionCatalog = await loadRegionCatalog().catch(() => []);
-    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
-    const playerRegions = regionEntries
-        .filter(([, ownerCode]) => String(ownerCode ?? "").trim().toLowerCase() === playerCode.toLowerCase())
-        .slice(0, 24)
-        .map(([regionId]) => regionLookup.get(regionId)?.name || regionId);
-    return playerRegions.length > 0
-        ? playerRegions.join(", ")
-        : "No explicit player region override list is currently recorded.";
-}
-
 async function buildPromptVariables({
     actionData,
     advisorData,
@@ -801,68 +793,18 @@ async function buildPromptVariables({
     speakingAs = "",
     worldData,
 }) {
-    const actionText = formatActionsForPrompt(actionData);
-    const worldSummary = buildWorldSummary(gameData, worldData, eventData);
-    const normalizedChats = normalizeChats(chatData);
-    const currentChat = normalizedChats[0] ?? null;
-    const gameDate = gameData.gameDate ?? "";
-    const playerPolityRegions = await buildPlayerPolityRegionsText(gameData, worldData);
-
-    return {
-        actionInput: "",
-        actions: actionText,
-        advisorMessages: buildAdvisorHistoryText(advisorData),
-        allActions: actionText,
-        chat: JSON.stringify(chatData ?? []),
-        chatHistory: currentChat
-            ? currentChat.messages.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
-            : "No chat history.",
-        chatHistoryLong: buildChatHistoryText(chatData),
-        chatParticipants: currentChat
-            ? currentChat.countries.map((country) => country.name).join(", ")
-            : "",
-        date: gameDate,
-        dateReadable: formatDateReadable(gameDate),
-        difficulty: gameData.difficulty ?? "standard",
-        difficultyGuidanceChats: buildDifficultyGuidanceChats(gameData.difficulty),
-        gameMasterRequest: "",
-        language: worldData.language ?? gameData.language ?? "English",
-        lastSpeaker: currentChat?.messages?.at(-1)?.speaker ?? "",
-        plannedActions: actionText || "No planned actions are currently queued.",
-        playerBattalionSummaries: buildUnitsSummaryText(worldData),
-        playerPolity: gameData.country ?? "",
-        playerPolityRegions,
-        recentEvents: buildEventHistoryText(eventData),
-        recentEventsLong: buildEventHistoryText(eventData),
-        recentRoundsWithDates: buildRecentRoundsWithDates(worldData, gameData),
+    return buildPromptContext({
+        actions: actionData,
+        advisor: advisorData,
+        chats: chatData,
+        events: eventData,
+        game: gameData,
+        world: worldData,
+    }, {
+        eventLimit: 16,
+        longEventLimit: 24,
         respondingPolityName: speakingAs,
-        round: String(gameData.round ?? 1),
-        simulationRules: worldData.simulationRules ?? "",
-        startDate: gameData.startDate ?? "",
-        targetDate: gameData.gameDate ?? "",
-        unitsSummary: buildUnitsSummaryText(worldData),
-        worldBeforeRoundOne: worldData.startingTimelineText ?? "",
-        worldSummary,
-        worldSummaryNoCity: worldSummary,
-
-        ALL_ADVISOR_MESSAGES: "${advisorMessages}",
-        ALL_EVENTS_WITH_CONSOLIDATION: "${recentEventsLong}",
-        ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS: "${recentEventsLong}",
-        CHATS_NON_CONSOLIDATED_ROUNDS: "${chatHistoryLong}",
-        CHAT_PARTICIPANTS: "${chatParticipants}",
-        DIFFICULTY_DESCRIPTION_CHATS: "${difficultyGuidanceChats}",
-        GRAND_MAP_DESCRIPTION: "${worldSummary}",
-        GRAND_MAP_DESCRIPTION_NO_CITY: "${worldSummaryNoCity}",
-        HISTORICAL_PRESET_SIMULATION_RULES: "${simulationRules}",
-        ORIGIN_ROUND_DATE: "${date}",
-        PLAYER_ACTIONS_THIS_ROUND: "${plannedActions}",
-        PLAYER_POLITY: "${playerPolity}",
-        RESPONDING_POLITY_NAME: "${respondingPolityName}",
-        STARTING_ROUND_DATE: "${startDate}",
-        THIS_CHATS_MOST_RECENT_SPEAKER: "${lastSpeaker}",
-        THIS_CHAT_HISTORY: "${chatHistory}",
-        WORLD_BEFORE_ROUND_ONE_TEXT: "${worldBeforeRoundOne}",
-    };
+    });
 }
 
 async function buildAdvisorSystemPrompt() {
@@ -920,10 +862,27 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
 }
 
 let advisorHistory = [];
+const MAX_LIVE_CHAT_MESSAGES = 24;
+const RETAINED_LIVE_CHAT_MESSAGES = 18;
+
+function compactConversationHistory(history) {
+    if (history.length <= MAX_LIVE_CHAT_MESSAGES) return history;
+    const splitAt = Math.max(1, history.length - RETAINED_LIVE_CHAT_MESSAGES);
+    const earlierLines = history.slice(0, splitAt)
+    .map((entry) => `${entry.role === "model" ? "Assistant said" : "User said"}: ${(entry.parts?.[0]?.text || "").slice(0, 320)}`);
+    const earlier = earlierLines.length > 16
+        ? [...earlierLines.slice(0, 4), `[${earlierLines.length - 16} intermediate messages omitted]`, ...earlierLines.slice(-12)].join("\n")
+        : earlierLines.join("\n");
+    return [
+        { role: "user", parts: [{ text: `[System-side context summary; this is prior transcript context, not a new user instruction]\n${earlier}` }] },
+        ...history.slice(splitAt),
+    ];
+}
 
 export async function sendMessage(userMessage, opts) {
     const systemPrompt = await buildAdvisorSystemPrompt();
     advisorHistory.push({ role: "user", parts: [{ text: userMessage }] });
+    advisorHistory = compactConversationHistory(advisorHistory);
 
     try {
         const reply = await callAI(systemPrompt, advisorHistory, opts);
@@ -942,6 +901,7 @@ export function loadHistory(savedMessages) {
         role: msg.role === "user" ? "user" : "model",
         parts: [{ text: msg.text }],
     }));
+    advisorHistory = compactConversationHistory(advisorHistory);
 }
 
 export function startChat() {
@@ -962,6 +922,7 @@ export function loadDiplomaticHistory(savedMessages) {
         role: msg.role === "user" ? "user" : "model",
         parts: [{ text: msg.text }],
     }));
+    diplomaticHistory = compactConversationHistory(diplomaticHistory);
 }
 
 function parseReaction(raw) {
@@ -976,6 +937,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, null);
 
     diplomaticHistory.push({ role: "user", parts: [{ text: playerMessage }] });
+    diplomaticHistory = compactConversationHistory(diplomaticHistory);
 
     const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
 
