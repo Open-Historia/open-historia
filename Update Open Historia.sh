@@ -30,7 +30,33 @@
 # branch of the organisation repository - updating keeps tracking it.
 REPO_OWNER="Open-Historia"
 REPO_NAME="open-historia"
+# The channel to update from — chosen at runtime by choose_channel below.
+# Stable = the main branch (tested releases); Beta = the beta branch.
 REPO_BRANCH="beta"
+
+# Ask which release channel to update from. Defaults to the channel this install
+# is already on (its current git branch), so pressing Enter keeps you where you
+# are; falls back to the default above when there's no terminal to read from.
+choose_channel() {
+    default_branch="$REPO_BRANCH"
+    if [ -d ".git" ] && command -v git >/dev/null 2>&1; then
+        cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        case "$cur" in main|beta) default_branch="$cur" ;; esac
+    fi
+    if [ "$default_branch" = "main" ]; then default_label="1 (Stable)"; else default_label="2 (Beta)"; fi
+    echo "Which release do you want to update from?"
+    echo "  [1] Stable  - tested releases"
+    echo "  [2] Beta    - newest features, less tested"
+    printf "Enter 1 or 2 [default: %s]: " "$default_label"
+    choice=""
+    read -r choice 2>/dev/null || choice=""
+    case "$choice" in
+        1) REPO_BRANCH="main" ;;
+        2) REPO_BRANCH="beta" ;;
+        *) REPO_BRANCH="$default_branch" ;;
+    esac
+    echo ""
+}
 
 fail_copy() {
     echo ""
@@ -49,8 +75,10 @@ main() {
     echo ""
     echo "==================================================="
     echo "            OPEN HISTORIA  -  UPDATER"
-    echo "   source: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo "==================================================="
+    echo ""
+    choose_channel
+    echo "Updating from: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo ""
 
     # ---- Git installs: a proper pull is the cleanest update ----
@@ -60,8 +88,19 @@ main() {
             echo "Install Git (https://git-scm.com/) and run this again."
             exit 1
         fi
-        echo "This is a git install - updating with git pull..."
-        if ! git pull --ff-only; then
+        echo "This is a git install - updating from the $REPO_BRANCH channel..."
+        git fetch origin "$REPO_BRANCH" 2>/dev/null || git fetch 2>/dev/null || true
+        cur_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [ "$cur_branch" != "$REPO_BRANCH" ]; then
+            echo "Switching to the $REPO_BRANCH channel..."
+            if ! git checkout "$REPO_BRANCH" 2>/dev/null && ! git checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH" 2>/dev/null; then
+                echo ""
+                echo "[WARN] Could not switch to '$REPO_BRANCH' (uncommitted changes?)."
+                echo "Commit/stash your changes, or resolve manually, then retry."
+                exit 1
+            fi
+        fi
+        if ! git pull --ff-only origin "$REPO_BRANCH"; then
             echo ""
             echo "[WARN] git pull could not fast-forward (local changes?)."
             echo "Commit/stash your changes, or resolve manually, then retry."
