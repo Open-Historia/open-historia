@@ -503,6 +503,14 @@ const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
 // configured in Settings — them talking to their own AI through their own
 // game server.
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
+  const controller = new AbortController();
+  let completed = false;
+  const abortUpstream = () => {
+    if (!completed) controller.abort();
+  };
+  req.once("aborted", abortUpstream);
+  res.once("close", abortUpstream);
+
   try {
     const { url: targetUrl, method = "POST", headers = {}, payload } = req.body ?? {};
     const target = new URL(String(targetUrl ?? ""));
@@ -513,13 +521,17 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       method: method === "GET" ? "GET" : "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: method === "GET" ? undefined : JSON.stringify(payload ?? {}),
+      signal: controller.signal,
     });
     const text = await upstream.text();
+    completed = true;
     res.status(upstream.status);
     res.type(upstream.headers.get("content-type") || "application/json");
     res.send(text);
   } catch (error) {
-    sendError(res, 502, error);
+    if (!controller.signal.aborted && !res.headersSent) {
+      sendError(res, 502, error);
+    }
   }
 });
 
