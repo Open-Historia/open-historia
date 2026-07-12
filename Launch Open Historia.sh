@@ -5,7 +5,7 @@
 #  Open Historia - one-click setup and launch (Linux / macOS)
 #  ----------------------------------------------------------
 #   1. Verifies Node.js is installed
-#   2. Downloads the world map data (Git LFS assets) if missing
+#   2. Downloads the world map data (GitHub Release assets) if missing
 #   3. Installs npm dependencies
 #   4. Builds the client
 #   5. Starts the server and opens your browser
@@ -23,18 +23,6 @@ echo "==================================================="
 echo "            OPEN HISTORIA  -  LAUNCHER"
 echo "==================================================="
 echo ""
-
-# Download helper: curl preferred, wget as fallback.
-fetch() { # fetch <url> <outfile>
-    if command -v curl >/dev/null 2>&1; then
-        curl -L -f --retry 3 -o "$2" "$1"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O "$2" "$1"
-    else
-        echo "  [ERROR] Neither curl nor wget was found."
-        return 1
-    fi
-}
 
 # ---- 1. Check Node.js -------------------------------------
 if ! command -v node >/dev/null 2>&1; then
@@ -82,38 +70,16 @@ fi
 echo "[OK] Node.js $(node --version 2>/dev/null) detected."
 echo ""
 
-# ---- 2. Ensure world map data (Git LFS assets) -----------
-#  The big map files ship as tiny Git LFS pointer stubs in a
-#  ZIP download. Pull the real binaries from GitHub's media CDN.
-#  Real files are several MB; LFS pointer stubs are ~150 B.
-ASSET_BASE="https://media.githubusercontent.com/media/Open-Historia/open-historia/main"
-
-ensure_asset() { # ensure_asset <local path == repo path>
-    local target="$1" size=0
-    [ -f "$target" ] && size=$(wc -c < "$target" | tr -d '[:space:]')
-    if [ "${size:-0}" -ge 100000 ]; then
-        echo "  [OK] $(basename "$target") already present."
-        return 0
-    fi
-    echo "  Downloading $(basename "$target") ..."
-    mkdir -p "$(dirname "$target")"
-    if fetch "$ASSET_BASE/$target" "$target.download"; then
-        mv -f "$target.download" "$target"
-        echo "  [OK] $(basename "$target") downloaded."
-    else
-        rm -f "$target.download"
-        echo "  [WARN] Could not download $(basename "$target") - the map may not display."
-    fi
-}
-
+# ---- 2. Ensure world map data ----------------------------
+#  The big map binaries (pmtiles, geojson, city seeds) are hosted as assets on a
+#  GitHub Release - free, unmetered bandwidth - instead of Git LFS, whose small
+#  free bandwidth quota a few installs used to exhaust. A fresh git/ZIP install no
+#  longer ships these files, so this downloads any that are missing on first run.
+#  (Node is guaranteed present by step 1.) See scripts/map-assets.json.
 echo "Checking world map data..."
-ensure_asset "public/assets/cities.pmtiles"
-ensure_asset "public/assets/countries.pmtiles"
-ensure_asset "public/assets/regions.pmtiles"
-# Map-editor seeds + the built-in Modern Day world map (also LFS)
-ensure_asset "public/assets/regions-seed.geojson"
-ensure_asset "public/assets/cities-seed.json"
-ensure_asset "server/data/scenarios/default/regions.geojson"
+if [ -f "scripts/fetch-map-assets.mjs" ]; then
+    node "scripts/fetch-map-assets.mjs" --ensure || true
+fi
 echo ""
 
 # ---- 3. Install dependencies -----------------------------
