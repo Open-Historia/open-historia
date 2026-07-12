@@ -244,6 +244,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // with nothing to show. The UI has spinners; waiting beats silently wrong.
 const runJsonTask = async (taskKey, {
   fallback,
+  signal,
   timeoutMs = 120000,
   userMessage,
   validatePayload,
@@ -265,6 +266,12 @@ const runJsonTask = async (taskKey, {
   }
 
   const controller = new AbortController();
+  // Let an external signal (the player pressing Cancel) abort the in-flight AI
+  // call too — the abort propagates through callAI to the server relay.
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+  }
   const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
   const timeoutError = new Error(`AI task "${taskKey}" timed out.`);
   const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
@@ -312,6 +319,15 @@ const runJsonTask = async (taskKey, {
     failureReason = normalizeString(actualError?.message || actualError) || failureReason;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+  }
+
+  // A deliberate user cancel must NOT silently fall back to canned events —
+  // propagate the abort so the caller can quietly cancel the jump with no state
+  // change. (A timeout still uses the fallback, as before.)
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException("Timeline jump cancelled.", "AbortError");
   }
 
   if (typeof fallback !== "function") {
@@ -1281,6 +1297,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
 // Event density per skip length (player-tuned): longer skips must return
 // proportionally more events, and short ones must stay brief.
 const eventCountRangeForDays = (days) => {
+  if (days < 1) return [1, 1];   // sub-day skip (e.g. 6 hours)
   if (days <= 7) return [1, 2];
   if (days <= 31) return [5, 7];
   if (days <= 92) return [10, 13];
@@ -1288,19 +1305,49 @@ const eventCountRangeForDays = (days) => {
   return [29, 37];
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
+// Human-readable label for the skipped span, used in the AI prompt. Collapses
+// whole-day counts into weeks/months/years where they divide evenly.
+const formatDurationLabel = (days) => {
+  if (days < 1) {
+    const hours = Math.max(1, Math.round(days * 24));
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const whole = Math.round(days);
+  const pluralize = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  if (whole % 365 === 0) return pluralize(whole / 365, "year");
+  if (whole % 30 === 0) return pluralize(whole / 30, "month");
+  if (whole % 7 === 0) return pluralize(whole / 7, "week");
+  return pluralize(whole, "day");
+};
+
+export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-  const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
+  // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
+  // date only advances in whole days, so a sub-day skip keeps the same date.
+  const safeDays = Math.max(0, Number(days) || 0);
+  if (safeDays <= 0) {
+    throw new Error("Choose a time-skip amount greater than zero.");
+  }
+  const dateStep = Math.max(0, Math.round(safeDays));
   const originDate = normalizeString(bundle.game.gameDate);
-  const targetDate = addIsoDays(originDate, safeDays) || originDate;
-  if (parseIsoDate(originDate) && targetDate === originDate) {
+  const targetDate = dateStep >= 1 ? (addIsoDays(originDate, dateStep) || originDate) : originDate;
+  if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
   const variables = await buildTemplateVariables(bundle, { targetDate });
-  const [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
+  const durationLabel = formatDurationLabel(safeDays);
+  let [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
+  // Guarantee at least one event per queued action, so each planned action has a
+  // slot to resolve into (bounded so a huge queue can't demand absurd counts).
+  const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;
+  if (plannedActionCount > minEvents) {
+    minEvents = Math.min(plannedActionCount, 37);
+    maxEvents = Math.max(maxEvents, minEvents + 3);
+  }
   const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
-    fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
+    fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
+    signal,
     // The jump IS the game — let slow (local/reasoning) models finish instead
     // of silently swapping in the canned fallback after a few seconds.
     timeoutMs: 180000,
@@ -1310,7 +1357,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
           "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
           "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
         : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
-          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${safeDays} days), with their dates ` +
+          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
            `spread across the skipped period.`,
     validatePayload: async (candidate) => {
       const eventCount = normalizeArray(candidate?.events).length;
@@ -1344,8 +1391,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   });
 };
 
-export const simulateAutoJump = async ({ days = 365 } = {}) =>
-  simulateTimelineJump({ days, mode: "auto" });
+export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
+  simulateTimelineJump({ days, mode: "auto", signal });
 
 export const applyGameMasterCommand = async (requestText) => {
   const bundle = await readGameStateBundle({ force: true });
