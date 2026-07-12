@@ -106,7 +106,11 @@ main() {
             echo "Commit/stash your changes, or resolve manually, then retry."
             exit 1
         fi
-        git lfs pull 2>/dev/null
+        # Map binaries live on a GitHub Release now, not Git LFS - refresh any that
+        # changed (or that this install never had) from there. See scripts/map-assets.json.
+        if command -v node >/dev/null 2>&1 && [ -f "scripts/fetch-map-assets.mjs" ]; then
+            node "scripts/fetch-map-assets.mjs" || true
+        fi
         finish
     fi
 
@@ -198,15 +202,15 @@ main() {
             "$SRC/server/data/scenarios/default/" "./server/data/scenarios/default/" || fail_copy
     fi
 
-    # 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content.
-    #     A codeload zip only carries pointers, so none of the LFS files skipped
-    #     above (or KEEP-excluded from the copies) would otherwise ever update on
-    #     a ZIP install. This downloads any that actually changed from GitHub's
-    #     media host and checksum-verifies them. Best-effort: it needs Node (which
-    #     running the game already requires) and never fails the update - a missing
-    #     Node or a failed download just leaves the existing files in place.
-    if command -v node >/dev/null 2>&1 && [ -f "scripts/resolve-lfs.mjs" ]; then
-        node "scripts/resolve-lfs.mjs" "$SRC" "$REPO_OWNER" "$REPO_NAME" "$REPO_BRANCH" || true
+    # 3c) Download the large map binaries (pmtiles, geojson, city seeds) from the
+    #     GitHub Release that now hosts them. A codeload zip never carried these
+    #     (they were Git-LFS pointer stubs before, real files never), so a ZIP
+    #     install relies on this to get them and to refresh any that changed.
+    #     Checksum-verified. Best-effort: it needs Node (which running the game
+    #     already requires) and never fails the update - a missing Node or a failed
+    #     download just leaves the existing files in place. See scripts/map-assets.json.
+    if command -v node >/dev/null 2>&1 && [ -f "scripts/fetch-map-assets.mjs" ]; then
+        node "scripts/fetch-map-assets.mjs" || true
     fi
 
     rm -rf "$WORKDIR"
