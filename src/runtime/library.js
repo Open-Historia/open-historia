@@ -14,6 +14,7 @@ const INITIAL_LIBRARY_STATE = {
   activeGame: null,
   activeGameId: null,
   baseSaves: [],
+  countryNames: {},
   error: null,
   games: [],
   loaded: false,
@@ -126,6 +127,10 @@ const applyLibraryCatalog = (catalog) => {
     activeGame,
     activeGameId,
     baseSaves: Array.isArray(catalog?.baseSaves) ? catalog.baseSaves : [],
+    countryNames:
+      catalog?.countryNames && typeof catalog.countryNames === "object"
+        ? catalog.countryNames
+        : {},
     error: null,
     games,
     loaded: true,

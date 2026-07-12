@@ -32,6 +32,7 @@ import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -48,6 +49,19 @@ const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 
 const BAR_HEIGHT = 64;
+const TECHNICAL_OWNER_CODES = new Set([
+  "NA",
+  "XCA",
+  "Z01",
+  "Z02",
+  "Z03",
+  "Z04",
+  "Z05",
+  "Z06",
+  "Z07",
+  "Z08",
+  "Z09",
+]);
 
 // Set by the mounted LibraryTopBar; lets the no-game gate open a tab.
 let _openLibraryTab = null;
@@ -896,6 +910,7 @@ const LibraryTopBar = () => {
   const {
     activeGame,
     activeGameId,
+    countryNames,
     error,
     games,
     loaded,
@@ -1000,16 +1015,39 @@ const LibraryTopBar = () => {
   // Build the start-country list for a scenario: only the factions that actually
   // exist in it (world.ownerCodes), named as era polities where defined. Falls
   // back to every country for scenarios without an owner list.
-  const buildScenarioCountryOptions = (world, allCountries) => {
-    const list = Array.isArray(allCountries) ? allCountries : [];
+  const buildScenarioCountryOptions = (world, allCountries, nameOverrides = {}) => {
+    const entries = Array.isArray(allCountries) ? allCountries : [];
+    const entriesByCode = new Map();
+    for (const entry of entries) {
+      const code = String(entry?.code ?? "").trim();
+      const name = String(entry?.name ?? "").trim();
+      if (!code || !name || TECHNICAL_OWNER_CODES.has(code)) continue;
+      const existing = entriesByCode.get(code);
+      if (!existing || existing.name === code) entriesByCode.set(code, { code, name });
+    }
+    const list = [...entriesByCode.values()];
     const ownerCodes = Array.isArray(world?.ownerCodes) ? world.ownerCodes : null;
-    if (!ownerCodes || !ownerCodes.length) return list;
     const nameByCode = new Map(list.map((entry) => [entry.code, entry.name]));
     const polity = world?.polityOverrides ?? {};
-    return ownerCodes
-      .map((code) => ({ code, name: polity[code]?.name || nameByCode.get(code) || code }))
+    const resolveOption = (code, fallbackName = code) => {
+      const scenarioName = nameOverrides[code] || nameOverrides[fallbackName];
+      const polityName = polity[code]?.name;
+      return {
+        code,
+        name: (polityName && polityName !== code ? polityName : null) || scenarioName || fallbackName,
+      };
+    };
+    const options = !ownerCodes || !ownerCodes.length
+      ? list.map((entry) => resolveOption(entry.code, entry.name))
+      : ownerCodes
+        .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
+        .map((code) => resolveOption(code, nameByCode.get(code) || code));
+    return options
       .sort((left, right) => left.name.localeCompare(right.name));
   };
+
+  const getBaseCountryOptions = () =>
+    Object.entries(countryNames ?? {}).map(([code, name]) => ({ code, name }));
 
   // "New Game" now opens a country picker first (the player chooses who to play).
   const handleScenarioPlay = (scenario) => {
@@ -1019,7 +1057,11 @@ const LibraryTopBar = () => {
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
-        setCountryOptions(buildScenarioCountryOptions(details?.data?.world, allCountries));
+        setCountryOptions(buildScenarioCountryOptions(
+          details?.data?.world,
+          [...getBaseCountryOptions(), ...allCountries],
+          scenario.countryNameOverrides,
+        ));
       })
       .catch(() => setCountryOptions([]));
   };
@@ -1464,9 +1506,13 @@ const LibraryTopBar = () => {
     setCountryQuery("");
     setCountryOptions([]);
     setCountryPicker(scenario);
-    loadCountryNames()
-      .then((allCountries) => setCountryOptions(buildScenarioCountryOptions(seedWorld, allCountries)))
-      .catch(() => setCountryOptions([]));
+    loadCountryNames().catch(() => [])
+      .then((allCountries) => setCountryOptions(buildScenarioCountryOptions(
+        seedWorld,
+        [...getBaseCountryOptions(), ...allCountries],
+        scenario.countryNameOverrides,
+      )))
+      .catch(() => setCountryOptions(getBaseCountryOptions()));
   };
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
@@ -1500,6 +1546,10 @@ const LibraryTopBar = () => {
       startGameForCountry(countryPicker, countryCode, difficultyId);
     }
   };
+
+  const selectedCountryOption = difficultyPick?.countryCode
+    ? countryOptions.find((country) => country.code === difficultyPick.countryCode)
+    : null;
 
   return (
     <>
@@ -1645,6 +1695,14 @@ const LibraryTopBar = () => {
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
                   How hard should the world fight back?
                 </div>
+                {selectedCountryOption && (
+                  <div style={{ alignItems: "center", display: "flex", fontSize: "0.9rem", fontWeight: 700, gap: "0.5rem", marginBottom: "0.7rem" }}>
+                    <span aria-hidden="true" style={{ fontSize: "1.35rem" }}>
+                      {flagEmojiFromGid(selectedCountryOption.code) || "🏳️"}
+                    </span>
+                    <span>{selectedCountryOption.name}</span>
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
                   {DIFFICULTY_LEVELS.map((level) => (
                     <button
@@ -1705,7 +1763,9 @@ const LibraryTopBar = () => {
                         onClick={() => pickCountry(c.code)}
                         style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.04)" }}
                       >
-                        {/* Full names only — codes stay internal. */}
+                        <span aria-hidden="true" style={{ fontSize: "1.2rem", width: "1.5rem" }}>
+                          {flagEmojiFromGid(c.code) || "🏳️"}
+                        </span>
                         <span>{c.name}</span>
                       </button>
                     ))}

@@ -17,6 +17,7 @@ dist-ssr
 server/data/*
 !server/data/scenarios/
 .key
+CLAUDE.md
 
 # Editor directories and files
 .vscode/*

@@ -17,7 +17,6 @@ import {
   ensureBasemapProtocol,
   esriTileTemplate,
 } from "../../runtime/assets.js";
-import { SKYBOX_SIZE, getSkyboxUrl } from "./skybox.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -160,11 +159,8 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       },
     },
   ],
-  // MapLibre's own atmosphere is OFF: its halo is uniform all the way around
-  // the globe regardless of where the sun sits. The directional replacement
-  // is the AtmosphereGlow ring below, aimed and faded by GlobeEffects. A
-  // side benefit: without the atmosphere pass, space stays transparent, so
-  // the starfield and sun shine through at full strength.
+  // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
+  // surface light instead. Transparent space lets the stars and sun show.
   sky: {
     "atmosphere-blend": 0,
   },
@@ -173,28 +169,40 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
+  const viewStateRef = useRef({
+    longitude: 0,
+    latitude: 0,
+    zoom: 3.5,
+    bearing: 0,
+    pitch: 0,
+  });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
   // the world is fixed to the ocean preset (the in-game basemap picker was removed).
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
+  const mapProjection = useMemo(() => ({ type: projection }), [projection]);
+  const styleUsesGlobeCoords = customBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
-    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, isGlobe),
-    [customBg, bgDeclared, isGlobe, worldBasemap],
+    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords),
+    [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap],
   );
-  // Earth's terrain DEM has no meaning over a custom map, and its source is dropped
-  // from the style, so disable 3D terrain whenever a custom background is active.
+  // Globe terrain is unsupported by MapLibre and can leave its shader cache invalid
+  // when projections change. Keep the setting enabled and restore it on flat maps.
   const terrain = useMemo(
     () =>
-      terrainEnabled && !customBg && !bgDeclared
+      terrainEnabled && !isGlobe && !customBg && !bgDeclared
         ? {
             source: "terrain-source",
             exaggeration: 15,
           }
         : null,
-    [terrainEnabled, customBg, bgDeclared],
+    [terrainEnabled, isGlobe, customBg, bgDeclared],
   );
+  const handleMove = useCallback(({ viewState }) => {
+    viewStateRef.current = viewState;
+  }, []);
   const handleIdle = useCallback(() => {
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
@@ -202,11 +210,8 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, [onInitialIdle]);
 
   return (
-    // The skybox: one panoramic image (stars + nebula + THE SUN) behind the
-    // transparent space around the globe. GlobeEffects scrolls it so the
-    // baked sun stays aligned with the sunlit side of the earth; the map
-    // canvas paints over it wherever the globe is, so the earth occludes
-    // the sun naturally.
+    // Stars and the single projected sun sit behind the transparent MapLibre
+    // canvas, so the globe itself provides correct sun occlusion.
     <div
       id="oh-globe-space"
       style={{
@@ -215,18 +220,44 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         backgroundColor: "#000",
         position: "relative",
         overflow: "hidden",
-        backgroundImage: isGlobe ? `url(${getSkyboxUrl()})` : "none",
-        backgroundRepeat: "repeat-x",
-        backgroundSize: `${SKYBOX_SIZE}px ${SKYBOX_SIZE}px`,
       }}
     >
+      {isGlobe && (
+        <canvas
+          id="oh-globe-stars"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      {isGlobe && (
+        <div
+          id="oh-globe-sun"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 88,
+            height: 88,
+            borderRadius: "50%",
+            pointerEvents: "none",
+            opacity: 0,
+            background: "radial-gradient(circle, #fff 0 7%, #fff6cf 8% 12%, rgba(255,219,142,0.8) 15%, rgba(255,185,93,0.26) 31%, rgba(255,154,65,0.07) 52%, transparent 72%)",
+            filter: "drop-shadow(0 0 12px rgba(255,218,145,0.75))",
+            willChange: "transform, opacity, filter",
+          }}
+        />
+      )}
       <Map
+        key={projection}
         ref={mapRef}
-        initialViewState={{
-          longitude: 0,
-          latitude: 0,
-          zoom: 3.5,
-        }}
+        initialViewState={viewStateRef.current}
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
@@ -240,14 +271,14 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         touchPitch={false}
         pitchWithRotate={false}
         dragPan
-        reuseMaps
         fadeDuration={0}
         collectResourceTiming={false}
         renderWorldCopies
-        projection={projection}
+        projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}
         onIdle={handleIdle}
+        onMove={handleMove}
       >
         <Nations isGlobe={isGlobe} />
         <Cities />
@@ -257,6 +288,20 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         <CountryInfoPanel />
         <UnitPopup />
       </Map>
+      {isGlobe && (
+        <canvas
+          id="oh-globe-lighting"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 1,
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </div>
   );
 }

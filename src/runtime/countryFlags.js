@@ -9,10 +9,10 @@
 
 // ISO 3166-1 alpha-3 -> alpha-2.
 const ISO3_TO_ISO2 = {
-    ABW: "AW", AFG: "AF", AGO: "AO", ALA: "AX", ALB: "AL", AND: "AD", ARE: "AE", ARG: "AR",
+    ABW: "AW", AFG: "AF", AGO: "AO", AIA: "AI", ALA: "AX", ALB: "AL", AND: "AD", ARE: "AE", ARG: "AR",
     ARM: "AM", ASM: "AS", ATA: "AQ", ATF: "TF", ATG: "AG", AUS: "AU", AUT: "AT", AZE: "AZ",
     BDI: "BI", BEL: "BE", BEN: "BJ", BES: "BQ", BFA: "BF", BGD: "BD", BGR: "BG", BHR: "BH",
-    BHS: "BS", BIH: "BA", BLR: "BY", BLZ: "BZ", BMU: "BM", BOL: "BO", BRA: "BR", BRB: "BB",
+    BHS: "BS", BIH: "BA", BLM: "BL", BLR: "BY", BLZ: "BZ", BMU: "BM", BOL: "BO", BRA: "BR", BRB: "BB",
     BRN: "BN", BTN: "BT", BVT: "BV", BWA: "BW", CAF: "CF", CAN: "CA", CHE: "CH", CHL: "CL",
     CHN: "CN", CIV: "CI", CMR: "CM", COD: "CD", COG: "CG", COK: "CK", COL: "CO", COM: "KM",
     CPV: "CV", CRI: "CR", CUB: "CU", CUW: "CW", CYM: "KY", CYP: "CY", CZE: "CZ", DEU: "DE",
@@ -26,7 +26,7 @@ const ISO3_TO_ISO2 = {
     KGZ: "KG", KHM: "KH", KIR: "KI", KNA: "KN", KOR: "KR", KWT: "KW", LAO: "LA", LBN: "LB",
     LBR: "LR", LBY: "LY", LCA: "LC", LIE: "LI", LKA: "LK", LSO: "LS", LTU: "LT", LUX: "LU",
     LVA: "LV", MAC: "MO", MAR: "MA", MCO: "MC", MDA: "MD", MDG: "MG", MDV: "MV", MEX: "MX",
-    MHL: "MH", MKD: "MK", MLI: "ML", MLT: "MT", MMR: "MM", MNE: "ME", MNG: "MN", MNP: "MP",
+    MHL: "MH", MKD: "MK", MLI: "ML", MLT: "MT", MMR: "MM", MNE: "ME", MNG: "MN", MNP: "MP", MSR: "MS",
     MOZ: "MZ", MRT: "MR", MTQ: "MQ", MUS: "MU", MWI: "MW", MYS: "MY", MYT: "YT", NAM: "NA",
     NCL: "NC", NER: "NE", NGA: "NG", NIC: "NI", NLD: "NL", NOR: "NO", NPL: "NP", NRU: "NR",
     NZL: "NZ", OMN: "OM", PAK: "PK", PAN: "PA", PER: "PE", PHL: "PH", PLW: "PW", PNG: "PG",
@@ -35,8 +35,8 @@ const ISO3_TO_ISO2 = {
     SGS: "GS", SHN: "SH", SJM: "SJ", SLB: "SB", SLE: "SL", SLV: "SV", SMR: "SM", SOM: "SO",
     SPM: "PM", SRB: "RS", SSD: "SS", STP: "ST", SUR: "SR", SVK: "SK", SVN: "SI", SWE: "SE",
     SWZ: "SZ", SYC: "SC", SYR: "SY", TCA: "TC", TCD: "TD", TGO: "TG", THA: "TH", TJK: "TJ",
-    TKL: "TK", TKM: "TM", TLS: "TL", TON: "TO", TTO: "TT", TUN: "TN", TUR: "TR", TWN: "TW",
-    TZA: "TZ", UGA: "UG", UKR: "UA", URY: "UY", USA: "US", UZB: "UZ", VAT: "VA", VCT: "VC",
+    TKL: "TK", TKM: "TM", TLS: "TL", TON: "TO", TTO: "TT", TUN: "TN", TUR: "TR", TUV: "TV", TWN: "TW",
+    TZA: "TZ", UGA: "UG", UKR: "UA", UMI: "UM", URY: "UY", USA: "US", UZB: "UZ", VAT: "VA", VCT: "VC",
     VEN: "VE", VGB: "VG", VIR: "VI", VNM: "VN", VUT: "VU", WLF: "WF", WSM: "WS", XKO: "XK",
     YEM: "YE", ZAF: "ZA", ZMB: "ZM", ZWE: "ZW",
 };
@@ -48,11 +48,16 @@ const DISPUTED_TERRITORY_PARENT = {
     Z06: "PAK", Z07: "IND", Z08: "CHN", Z09: "IND",
 };
 
+const SPECIAL_TERRITORY_PARENT = {
+    XAD: "GBR",
+    ZNC: "TUR",
+};
+
 // Resolve a GID_0 (ISO3) code to a lowercase ISO 3166-1 alpha-2 code, or null.
 export const gidToAlpha2 = (gid0) => {
     if (!gid0) return null;
     const code = String(gid0).trim().toUpperCase();
-    const iso3 = DISPUTED_TERRITORY_PARENT[code] ?? code;
+    const iso3 = DISPUTED_TERRITORY_PARENT[code] ?? SPECIAL_TERRITORY_PARENT[code] ?? code;
     const alpha2 = ISO3_TO_ISO2[iso3];
     return alpha2 ? alpha2.toLowerCase() : null;
 };
