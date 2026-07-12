@@ -187,6 +187,10 @@ if not errorlevel 1 (
         node "scripts\fetch-fmg.mjs"
     )
 )
+REM The update changed the app's source, so the previous build in dist\ is
+REM stale. Remove it so the next launch rebuilds cleanly - players no longer
+REM have to delete dist by hand for an update to take effect.
+if exist "dist" rmdir /s /q "dist"
 echo.
 echo ===================================================
 echo   Update complete.
