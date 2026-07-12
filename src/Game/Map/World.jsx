@@ -17,7 +17,6 @@ import {
   ensureBasemapProtocol,
   esriTileTemplate,
 } from "../../runtime/assets.js";
-import { SKYBOX_SIZE, getSkyboxUrl } from "./skybox.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -221,11 +220,21 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         backgroundColor: "#000",
         position: "relative",
         overflow: "hidden",
-        backgroundImage: isGlobe ? `url(${getSkyboxUrl()})` : "none",
-        backgroundRepeat: "repeat-x",
-        backgroundSize: `${SKYBOX_SIZE}px ${SKYBOX_SIZE}px`,
       }}
     >
+      {isGlobe && (
+        <canvas
+          id="oh-globe-stars"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+          }}
+        />
+      )}
       {isGlobe && (
         <div
           id="oh-globe-sun"
@@ -234,13 +243,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
             position: "absolute",
             left: 0,
             top: 0,
-            width: 180,
-            height: 180,
+            width: 88,
+            height: 88,
             borderRadius: "50%",
             pointerEvents: "none",
             opacity: 0,
-            background: "radial-gradient(circle, #fffef5 0 5%, #fff4c7 7%, rgba(255,225,159,0.95) 11%, rgba(255,197,105,0.45) 24%, rgba(255,177,85,0.14) 45%, rgba(255,160,70,0) 72%)",
-            filter: "drop-shadow(0 0 18px rgba(255,218,145,0.9))",
+            background: "radial-gradient(circle, #fff 0 7%, #fff6cf 8% 12%, rgba(255,219,142,0.8) 15%, rgba(255,185,93,0.26) 31%, rgba(255,154,65,0.07) 52%, transparent 72%)",
+            filter: "drop-shadow(0 0 12px rgba(255,218,145,0.75))",
             willChange: "transform",
           }}
         />

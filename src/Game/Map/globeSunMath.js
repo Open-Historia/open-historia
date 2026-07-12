@@ -1,7 +1,7 @@
 /*! Open Historia — globe sun projection helpers © 2026 Nicholas Krol, MIT. */
 
 const DEG_TO_RAD = Math.PI / 180;
-const SUN_ORBIT_RADIUS = 1.32;
+export const CELESTIAL_RADIUS = 64;
 
 const clamp = (minimum, maximum, value) => Math.max(minimum, Math.min(maximum, value));
 
@@ -33,21 +33,32 @@ const transformPoint = (matrix, point) => [
   matrix[3] * point[0] + matrix[7] * point[1] + matrix[11] * point[2] + matrix[15],
 ];
 
+export const projectCelestialDirection = ({ direction, matrix, width, height }) => {
+  if (!matrix || !direction || width <= 0 || height <= 0) return null;
+  const clip = transformPoint(matrix, direction.map((value) => value * CELESTIAL_RADIUS));
+  if (!Number.isFinite(clip[3]) || clip[3] <= 0) return null;
+
+  const inverseW = 1 / clip[3];
+  const normalizedX = clip[0] * inverseW;
+  const normalizedY = clip[1] * inverseW;
+  if (Math.abs(normalizedX) > 4 || Math.abs(normalizedY) > 4) return null;
+  const x = (normalizedX * 0.5 + 0.5) * width;
+  const y = (0.5 - normalizedY * 0.5) * height;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+};
+
 // Use MapLibre's own globe matrix so the sun follows zoom, pitch, bearing,
 // latitude correction, and the globe-to-Mercator projection transition.
 export const projectGlobeSun = ({ sunLng, sunLat, matrix, width, height }) => {
   if (!matrix || ![sunLng, sunLat, width, height].every(Number.isFinite)) return null;
   if (width <= 0 || height <= 0) return null;
 
-  const direction = directionFromLngLat(sunLng, sunLat);
-  const clip = transformPoint(matrix, direction.map((value) => value * SUN_ORBIT_RADIUS));
-  if (!Number.isFinite(clip[3]) || clip[3] <= 0) return null;
-
-  const inverseW = 1 / clip[3];
-  const centerDepth = Math.max(0.0001, Math.abs(matrix[15]));
-  return {
-    x: (clip[0] * inverseW * 0.5 + 0.5) * width,
-    y: (0.5 - clip[1] * inverseW * 0.5) * height,
-    scale: clamp(0.68, 1.38, centerDepth / clip[3]),
-  };
+  const projected = projectCelestialDirection({
+    direction: directionFromLngLat(sunLng, sunLat),
+    matrix,
+    width,
+    height,
+  });
+  return projected ? { ...projected, scale: 1 } : null;
 };
