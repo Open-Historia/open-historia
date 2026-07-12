@@ -435,7 +435,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             onMessagesUpdate(chat.id, updated);
         };
 
+        const isPlayerCountry = (country) =>
+            country?.name?.trim().toLowerCase() === playerCountry.trim().toLowerCase();
+
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
+            if (isPlayerCountry(country)) {
+                setPendingCountry(null);
+                setRemainingQueue([]);
+                setPhase("player");
+                return;
+            }
             setIsLoading(true);
             setSpeakingCountry(country);
             try {
@@ -503,6 +512,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
         const offerNextCountry = (queue) => {
             const [next, ...rest] = queue;
             nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % chat.countries.length;
+            if (isPlayerCountry(next)) {
+                setPendingCountry(null);
+                setRemainingQueue([]);
+                setPhase("player");
+                return;
+            }
             setPendingCountry(next);
             setRemainingQueue(rest);
             setPhase("pending");
