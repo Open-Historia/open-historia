@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-labelledby="title desc">
+  <title id="title">Open Historia structured AI turns</title>
+  <desc id="desc">A dark strategy atlas showing validated AI tool calls flowing safely into game state.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071219"/>
+      <stop offset="0.52" stop-color="#0d2028"/>
+      <stop offset="1" stop-color="#09151c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#d7bd7c" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#d7bd7c" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4e8c2"/>
+      <stop offset=".42" stop-color="#d8bd7f"/>
+      <stop offset="1" stop-color="#9b7845"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#cfaa62"/>
+      <stop offset=".7" stop-color="#f2dc9d"/>
+      <stop offset="1" stop-color="#75c7a0"/>
+    </linearGradient>
+    <pattern id="grid" width="54" height="54" patternUnits="userSpaceOnUse">
+      <path d="M54 0H0V54" fill="none" stroke="#b9c3b7" stroke-opacity=".055" stroke-width="1"/>
+      <circle cx="0" cy="0" r="1.4" fill="#d8bd7f" fill-opacity=".14"/>
+    </pattern>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+    <clipPath id="mapClip">
+      <path d="M803 78C1020 4 1372 37 1540 175v444c-203 78-488 87-720 14-89-28-145-106-136-197l17-178c8-82 40-149 102-180Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1600" height="720" rx="32" fill="url(#bg)"/>
+  <rect x="14" y="14" width="1572" height="692" rx="24" fill="none" stroke="#d8bd7f" stroke-opacity=".28"/>
+  <rect x="26" y="26" width="1548" height="668" rx="18" fill="url(#grid)"/>
+  <ellipse cx="1260" cy="285" rx="420" ry="390" fill="url(#glow)"/>
+
+  <g clip-path="url(#mapClip)" opacity=".82">
+    <path d="M786 85c79-48 196-49 266-10l45 67-31 51-111-9-46 63-92-23-58-76Z" fill="#486b63" fill-opacity=".38" stroke="#9fc2ad" stroke-opacity=".38" stroke-width="2"/>
+    <path d="m1103 54 153-7 66 53-14 72-97 34-50-38-75-29Z" fill="#8f7049" fill-opacity=".44" stroke="#d8bd7f" stroke-opacity=".42" stroke-width="2"/>
+    <path d="m1328 79 144 59 72 97-52 62-82-29-31-93-71-10Z" fill="#3d5962" fill-opacity=".55" stroke="#8faeb6" stroke-opacity=".38" stroke-width="2"/>
+    <path d="m747 242 113-5 80 50-14 91-77 33-94-42-40-63Z" fill="#705a42" fill-opacity=".5" stroke="#c6a974" stroke-opacity=".38" stroke-width="2"/>
+    <path d="m951 207 136-13 65 74-34 75-112 24-77-76Z" fill="#355c55" fill-opacity=".58" stroke="#85baa2" stroke-opacity=".42" stroke-width="2"/>
+    <path d="m1160 190 144-10 72 94-50 74-132-4-70-76Z" fill="#896740" fill-opacity=".46" stroke="#ddbd78" stroke-opacity=".4" stroke-width="2"/>
+    <path d="m1388 298 121 19 51 103-70 58-105-42-49-86Z" fill="#41606a" fill-opacity=".5" stroke="#98bac3" stroke-opacity=".4" stroke-width="2"/>
+    <path d="m715 397 116-14 84 62-27 105-108 19-76-72Z" fill="#3f635a" fill-opacity=".53" stroke="#8fc1aa" stroke-opacity=".4" stroke-width="2"/>
+    <path d="m927 376 142-26 98 82-44 105-130 17-84-77Z" fill="#82663f" fill-opacity=".5" stroke="#d2b477" stroke-opacity=".4" stroke-width="2"/>
+    <path d="m1180 363 143 7 76 84-35 101-153 19-73-91Z" fill="#365963" fill-opacity=".55" stroke="#8aafba" stroke-opacity=".42" stroke-width="2"/>
+    <path d="m1410 475 121 22 58 101-86 62-116-52-35-80Z" fill="#5f704d" fill-opacity=".45" stroke="#a9bd82" stroke-opacity=".4" stroke-width="2"/>
+    <path d="M769 571c89-33 187-29 261 13l42 79-91 56-170-27-83-57Z" fill="#705d42" fill-opacity=".44" stroke="#c7ad7c" stroke-opacity=".38" stroke-width="2"/>
+    <path d="m1091 577 145-17 91 81-28 75h-207l-55-70Z" fill="#385d54" fill-opacity=".5" stroke="#89bca4" stroke-opacity=".4" stroke-width="2"/>
+    <path d="m1329 590 152-2 87 92-31 51-215 2-45-72Z" fill="#71573b" fill-opacity=".48" stroke="#cba96b" stroke-opacity=".38" stroke-width="2"/>
+    <g fill="none" stroke="#d8bd7f" stroke-opacity=".11">
+      <path d="M707 119c224 93 390 55 529-36s259-49 348 38"/>
+      <path d="M689 288c206 79 337 32 513-38 149-60 269-20 382 66"/>
+      <path d="M682 467c177-64 307-12 448 64 142 76 294 91 455-22"/>
+    </g>
+  </g>
+
+  <g transform="translate(82 72)">
+    <path d="M0 18h42" stroke="url(#gold)" stroke-width="3"/>
+    <circle cx="51" cy="18" r="4" fill="#d8bd7f"/>
+    <text x="70" y="24" fill="#d8bd7f" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="5">OPEN HISTORIA</text>
+    <text x="0" y="130" fill="#f3ecd9" font-family="Georgia, serif" font-size="79" font-weight="700">History,</text>
+    <text x="0" y="215" fill="url(#gold)" font-family="Georgia, serif" font-size="79" font-style="italic">constrained.</text>
+    <text x="4" y="272" fill="#aebbb6" font-family="Arial, sans-serif" font-size="24" letter-spacing=".7">Native tool calls. Semantic validation. Safe turns.</text>
+  </g>
+
+  <g transform="translate(992 190)" filter="url(#shadow)">
+    <circle cx="194" cy="168" r="155" fill="#091820" stroke="#d8bd7f" stroke-opacity=".25" stroke-width="2"/>
+    <circle cx="194" cy="168" r="123" fill="none" stroke="#d8bd7f" stroke-opacity=".12"/>
+    <circle cx="194" cy="168" r="95" fill="#102a31" stroke="url(#gold)" stroke-width="3"/>
+    <path d="M194 102 247 122v39c0 42-21 69-53 82-32-13-53-40-53-82v-39Z" fill="#0a1b22" stroke="#d8bd7f" stroke-width="3"/>
+    <path d="m165 169 20 20 42-49" fill="none" stroke="#79c8a1" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="#d8bd7f">
+      <circle cx="194" cy="13" r="6"/>
+      <circle cx="337" cy="168" r="6"/>
+      <circle cx="194" cy="323" r="6"/>
+      <circle cx="51" cy="168" r="6"/>
+    </g>
+    <g fill="none" stroke="#d8bd7f" stroke-opacity=".55" stroke-width="2">
+      <path d="M194 19v26"/>
+      <path d="M311 168h20"/>
+      <path d="M194 291v26"/>
+      <path d="M57 168h20"/>
+    </g>
+  </g>
+
+  <path d="M648 498C815 430 893 471 1007 522c116 52 211 21 291-65" fill="none" stroke="#071219" stroke-opacity=".8" stroke-width="14"/>
+  <path d="M648 498C815 430 893 471 1007 522c116 52 211 21 291-65" fill="none" stroke="url(#route)" stroke-width="3" stroke-dasharray="8 11"/>
+  <circle cx="648" cy="498" r="8" fill="#d8bd7f"/>
+  <circle cx="1298" cy="457" r="8" fill="#75c7a0"/>
+
+  <g transform="translate(82 570)" font-family="Arial, sans-serif">
+    <g transform="translate(0)">
+      <rect width="220" height="68" rx="12" fill="#0c1d24" stroke="#d8bd7f" stroke-opacity=".32"/>
+      <circle cx="32" cy="34" r="13" fill="#d8bd7f" fill-opacity=".16" stroke="#d8bd7f"/>
+      <path d="m27 34 4 4 7-9" fill="none" stroke="#d8bd7f" stroke-width="2"/>
+      <text x="58" y="40" fill="#d7ded9" font-size="16" font-weight="700" letter-spacing="2">TOOL CALL</text>
+    </g>
+    <path d="M231 34h34" stroke="#d8bd7f" stroke-opacity=".38"/>
+    <circle cx="248" cy="34" r="3" fill="#d8bd7f"/>
+    <g transform="translate(276)">
+      <rect width="220" height="68" rx="12" fill="#0c1d24" stroke="#d8bd7f" stroke-opacity=".32"/>
+      <circle cx="32" cy="34" r="13" fill="#d8bd7f" fill-opacity=".16" stroke="#d8bd7f"/>
+      <path d="m27 34 4 4 7-9" fill="none" stroke="#d8bd7f" stroke-width="2"/>
+      <text x="58" y="40" fill="#d7ded9" font-size="16" font-weight="700" letter-spacing="2">VALIDATE</text>
+    </g>
+    <path d="M507 34h34" stroke="#d8bd7f" stroke-opacity=".38"/>
+    <circle cx="524" cy="34" r="3" fill="#d8bd7f"/>
+    <g transform="translate(552)">
+      <rect width="180" height="68" rx="12" fill="#0c1d24" stroke="#d8bd7f" stroke-opacity=".32"/>
+      <circle cx="32" cy="34" r="13" fill="#d8bd7f" fill-opacity=".16" stroke="#d8bd7f"/>
+      <path d="M26 31a7 7 0 1 1 0 7m0 0v-5m0 5h5" fill="none" stroke="#d8bd7f" stroke-width="2" stroke-linecap="round"/>
+      <text x="58" y="40" fill="#d7ded9" font-size="16" font-weight="700" letter-spacing="2">RETRY</text>
+    </g>
+    <path d="M743 34h34" stroke="#75c7a0" stroke-opacity=".5"/>
+    <circle cx="760" cy="34" r="3" fill="#75c7a0"/>
+    <g transform="translate(788)">
+      <rect width="190" height="68" rx="12" fill="#10261f" stroke="#75c7a0" stroke-opacity=".55"/>
+      <circle cx="32" cy="34" r="13" fill="#75c7a0" fill-opacity=".16" stroke="#75c7a0"/>
+      <path d="m27 34 4 4 7-9" fill="none" stroke="#75c7a0" stroke-width="2"/>
+      <text x="58" y="40" fill="#a9ddc2" font-size="16" font-weight="700" letter-spacing="2">APPLY</text>
+    </g>
+  </g>
+
+  <text x="1516" y="668" text-anchor="end" fill="#7f918b" font-family="Arial, sans-serif" font-size="14" letter-spacing="3">AI HARNESS / 2026</text>
+</svg>

@@ -10,21 +10,21 @@ import {
     getNationColors,
     loadCountryNames as loadCachedCountryNames,
     readJson,
-    writeJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 const saveAllChats = async (chats) => {
     try {
-        await writeJson(JSON_URLS.chat, chats);
+        await writeChatsState(chats);
     } catch (err) { console.error("Failed to save chats:", err); }
 };
 
 const loadAllChats = async () => {
     try {
-        return await readJson(JSON_URLS.chat, { defaultValue: [] });
+        return await readChatsState();
     } catch { return []; }
 };
 
@@ -405,8 +405,14 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
-const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpdate }) => {
-    const isGroup = chat.countries.length > 1;
+const ConversationView = ({ chat, playerCountry, gameDate, onArchive, onBack, onMessagesUpdate }) => {
+    const countries = useMemo(
+        () => Array.isArray(chat?.countries)
+            ? chat.countries.filter((country) => country && (country.name || country.code))
+            : [],
+        [chat?.countries],
+    );
+    const isGroup = countries.length > 1;
 
     const [messages, setMessages]               = useState(chat.messages ?? []);
     const [phase, setPhase]                     = useState("player");
@@ -422,8 +428,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
     const messagesRef       = useRef(chat.messages ?? []);
 
     useEffect(() => {
-        chat.countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
-    }, [chat.countries]);
+        countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
+    }, [countries]);
 
     useEffect(() => {
         const saved = chat.messages ?? [];
@@ -454,7 +460,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             setIsLoading(true);
             setSpeakingCountry(country);
             try {
-                const { reply, reaction } = await sendDiplomaticMessage(playerMessage, country.name, chat.countries);
+                const { reply, reaction } = await sendDiplomaticMessage(playerMessage, country.name, countries);
 
                 if (reaction) {
                     const msgs = [...messagesRef.current];
@@ -485,9 +491,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
         };
 
         const buildRoundQueue = () => {
-            const n = chat.countries.length;
+            const n = countries.length;
+            if (n === 0) return [];
             const s = nextSpeakerIdx.current % n;
-            return [...chat.countries.slice(s), ...chat.countries.slice(0, s)];
+            return [...countries.slice(s), ...countries.slice(0, s)];
         };
 
         const buildResponsiveQueue = async (updatedMessages) => {
@@ -517,7 +524,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
 
         const offerNextCountry = (queue) => {
             const [next, ...rest] = queue;
-            nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % chat.countries.length;
+            if (!next || countries.length === 0) {
+                setPhase("player");
+                return;
+            }
+            nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % countries.length;
             if (isPlayerCountry(next)) {
                 setPendingCountry(null);
                 setRemainingQueue([]);
@@ -537,6 +548,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             pushMessages(nextMessages);
             setPlayerInput("");
             const queue = await buildResponsiveQueue(nextMessages);
+            if (queue.length === 0) {
+                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
+                return;
+            }
             if (isGroup) {
                 offerNextCountry(queue);
             } else {
@@ -558,7 +573,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             await fetchLeaderResponse(country, lastPlayerMessage.current, rest);
         };
 
-        const typingSpeaker = speakingCountry ?? chat.countries[0];
+        const typingSpeaker = speakingCountry ?? countries[0];
 
         return (
             <>
@@ -569,9 +584,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
             <BackIcon />
             </button>
             <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Chat with {chat.countries.map(c => c.name).join(", ")}
+            Chat with {countries.map(c => c.name).join(", ") || "unknown participant"}
             </span>
-            <button style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", display: "flex", padding: "0.25rem", borderRadius: "6px" }}
+            <button title="Archive chat" onClick={onArchive} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", display: "flex", padding: "0.25rem", borderRadius: "6px" }}
             onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>
             <GearIcon />
@@ -587,8 +602,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onBack, onMessagesUpd
                 Begin the diplomatic conversation.
                 </p>
             )}
-            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} chatCountries={chat.countries} />)}
-            {isLoading && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
+            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} chatCountries={countries} />)}
+            {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             <div ref={messagesEndRef} />
             </div>
 
@@ -693,6 +708,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+    const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
 
     useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
@@ -751,7 +767,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [] };
+        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
         setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
@@ -762,16 +778,25 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         if (activeChat?.id === id) setActiveChat(null);
     };
 
+    const handleArchiveChat = (id) => {
+        setChats(prev => {
+            const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
+            saveAllChats(updated);
+            return updated;
+        });
+        setActiveChat(null);
+    };
+
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup.
     const consumePending = (country) => {
         setShowSelector(false);
         setChats(prev => {
             const existing = prev.find(
-                c => Array.isArray(c.countries) && c.countries.length === 1 &&
+                c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
                      (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
             );
             if (existing) { setActiveChat(existing); return prev; }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [] };
+            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [], status: "open" };
             const u = [newChat, ...prev];
             saveAllChats(u);
             setActiveChat(newChat);
@@ -793,8 +818,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
 
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
-            {activeChat ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
+            {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
+                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onArchive={() => handleArchiveChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -804,11 +829,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                {chats.length === 0 ? (
+                {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : chats.map(chat => <ChatListItem key={chat.id} chat={chat} onClick={() => setActiveChat(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
+                ) : openChats.map(chat => <ChatListItem key={chat.id} chat={chat} onClick={() => setActiveChat(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}

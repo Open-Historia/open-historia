@@ -1,10 +1,17 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import dayjs from "dayjs";
 import { callAI } from "./main.jsx";
+import { normalizePromptPack } from "./gameplayPrompts.js";
+import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import {
-  GAMEPLAY_PROMPT_DEFAULTS,
-  normalizePromptPack,
-} from "./gameplayPrompts.js";
+  buildActionHistoryText,
+  buildChatSummaryText,
+  buildDetailedChatHistoryText,
+  buildEventHistoryText,
+  buildPromptContext,
+  getUnconsolidatedEvents,
+  renderTemplate,
+  resolveHelperValues,
+} from "./promptContext.js";
 import {
   JSON_URLS,
   loadCountryNames,
@@ -14,7 +21,6 @@ import {
 } from "../../runtime/assets.js";
 import {
   applyEventImpactsToWorld,
-  buildActionDisplayText,
   normalizeActionEntry,
   normalizeActions,
   normalizeChatEntry,
@@ -91,6 +97,73 @@ const cloneValue = (value) => {
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
+const parseIsoDate = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizeString(value));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12) return null;
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= daysInMonth[month - 1] ? { day, month, year } : null;
+};
+
+const addIsoDays = (value, days) => {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return "";
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+  date.setUTCDate(date.getUTCDate() + days);
+  const year = date.getUTCFullYear();
+  if (!Number.isFinite(date.getTime()) || year < 1 || year > 9999) return "";
+  return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+};
+
+const validateTimelineDates = ({ candidate, mode, originDate, targetDate }) => {
+  const stopDate = normalizeString(candidate?.stopDate);
+  if (!parseIsoDate(originDate)) {
+    const eventDates = normalizeArray(candidate?.events).map((event) => normalizeString(event?.date));
+    const outputDates = [stopDate, ...eventDates];
+    const malformedIsoIndex = outputDates.findIndex((date) => /^\d{4}-/.test(date) && !parseIsoDate(date));
+    if (malformedIsoIndex >= 0) {
+      const path = malformedIsoIndex === 0 ? "$.stopDate" : `$.events[${malformedIsoIndex - 1}].date`;
+      return `${path} must be a real Gregorian date when using YYYY-MM-DD format.`;
+    }
+    if (parseIsoDate(stopDate)) {
+      let previousDate = "";
+      for (let index = 0; index < eventDates.length; index += 1) {
+        if (!parseIsoDate(eventDates[index])) return `$.events[${index}].date must use the same YYYY-MM-DD format as $.stopDate.`;
+        if (eventDates[index] > stopDate) return `$.events[${index}].date must not be later than ${stopDate}.`;
+        if (previousDate && eventDates[index] < previousDate) return `$.events[${index}].date must not precede the previous event date.`;
+        previousDate = eventDates[index];
+      }
+    }
+    return "";
+  }
+  if (!parseIsoDate(stopDate)) return `$.stopDate must be a real date in YYYY-MM-DD format; received ${stopDate || "an empty value"}.`;
+  if (mode === "auto") {
+    if (stopDate <= originDate || stopDate > targetDate) {
+      return `$.stopDate must be after ${originDate} and no later than ${targetDate}.`;
+    }
+  } else if (stopDate !== targetDate) {
+    return `$.stopDate must equal the requested target date ${targetDate}.`;
+  }
+
+  let previousDate = originDate;
+  for (let index = 0; index < normalizeArray(candidate?.events).length; index += 1) {
+    const eventDate = normalizeString(candidate.events[index]?.date);
+    if (!parseIsoDate(eventDate)) return `$.events[${index}].date must be a real date in YYYY-MM-DD format.`;
+    if (eventDate <= originDate || eventDate > stopDate) {
+      return `$.events[${index}].date must be after ${originDate} and no later than ${stopDate}.`;
+    }
+    if (eventDate < previousDate) return `$.events[${index}].date must not precede the previous event date.`;
+    previousDate = eventDate;
+  }
+  return "";
+};
+
 const sentenceCase = (value) => {
   const text = normalizeString(value);
   if (!text) return "";
@@ -130,309 +203,8 @@ const extractJsonPayload = (rawText) => {
   return null;
 };
 
-const renderTemplate = (template, variables) =>
-  String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
-    const value = variables[key];
-    return value == null ? "" : String(value);
-  });
-
 const loadPromptCatalog = async ({ force = false } = {}) =>
   normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
-
-const buildEventHistoryText = (events, { limit = 10 } = {}) => {
-  const normalizedEvents = normalizeEvents(events);
-  if (normalizedEvents.length === 0) {
-    return "No prior events have been recorded yet.";
-  }
-
-  return normalizedEvents
-    .slice(-limit)
-    .map((event) => {
-      const date = normalizeString(event.date) || "undated";
-      const description = normalizeString(event.description);
-      const impactNotes = [];
-
-      if (event.impacts.regionTransfers.length > 0) {
-        impactNotes.push(
-          `Territorial shifts: ${event.impacts.regionTransfers
-            .map((entry) => `${entry.regionName || entry.regionId} -> ${entry.toCode}`)
-            .join(", ")}`,
-        );
-      }
-
-      if (event.impacts.polityChanges.length > 0) {
-        impactNotes.push(
-          `Polity changes: ${event.impacts.polityChanges
-            .map((entry) => `${entry.code}${entry.name ? ` renamed to ${entry.name}` : ""}${entry.color ? ` color ${entry.color}` : ""}`)
-            .join(", ")}`,
-        );
-      }
-
-      return [
-        `- ${date}: ${event.title}`,
-        description ? `  ${description}` : "",
-        impactNotes.length > 0 ? `  ${impactNotes.join(" | ")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    })
-    .join("\n");
-};
-
-const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
-  if (normalizedChats.length === 0) {
-    return "No diplomatic chats are currently recorded.";
-  }
-
-  return normalizedChats
-    .slice(0, limit)
-    .map((chat) => {
-      const participants = chat.countries.map((country) => country.name).join(", ");
-      const lastMessage = chat.messages.at(-1);
-      return `- ${participants}: ${
-        lastMessage ? `${lastMessage.speaker || lastMessage.role}: ${lastMessage.text}` : "no messages yet"
-      }`;
-    })
-    .join("\n");
-};
-
-const buildActionHistoryText = (actions, { includeResolved = false } = {}) => {
-  const normalizedActions = normalizeActions(actions);
-  const filteredActions = includeResolved
-    ? normalizedActions
-    : normalizedActions.filter((action) => action.status === "planned");
-
-  if (filteredActions.length === 0) {
-    return includeResolved
-      ? "No actions have been recorded yet."
-      : "No planned actions are currently queued.";
-  }
-
-  return filteredActions
-    .map((action) => {
-      const kindLabel = action.kind === "chat" ? "chat" : "action";
-      const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
-      return `- (${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
-    })
-    .join("\n");
-};
-
-const buildTerritorySummary = async (world) => {
-  const normalizedWorld = normalizeWorldState(world);
-  const regionOverrides = Object.entries(normalizedWorld.regionOwnershipOverrides);
-
-  if (regionOverrides.length === 0) {
-    return "No territorial overrides from the base scenario are currently recorded.";
-  }
-
-  const regionCatalog = await loadRegionCatalog();
-  const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
-
-  return regionOverrides
-    .slice(0, 24)
-    .map(([regionId, ownerCode]) => {
-      const region = regionLookup.get(regionId);
-      const regionName = region?.name || regionId;
-      const countryName = region?.country ? ` (${region.country})` : "";
-      return `- ${regionName}${countryName} -> ${ownerCode}`;
-    })
-    .join("\n");
-};
-
-const buildWorldSummary = async (bundle) => {
-  const territorySummary = await buildTerritorySummary(bundle.world);
-  const polityOverrides = Object.values(normalizeWorldState(bundle.world).polityOverrides);
-  const politySummary =
-    polityOverrides.length === 0
-      ? "No dynamic polity overrides are currently recorded."
-      : polityOverrides
-          .slice(0, 16)
-          .map((entry) =>
-            `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${
-              entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""
-            }`,
-          )
-          .join("\n");
-
-  const activeCatalyst = normalizeWorldState(bundle.world).activeCatalyst;
-  const catalystSummary = activeCatalyst
-    ? `Active catalyst: ${activeCatalyst.title || "untitled"} - ${activeCatalyst.premise || activeCatalyst.opening || ""}`
-    : "No active catalyst scene.";
-
-  return [
-    `Player polity: ${bundle.game.country || "Unknown polity"}`,
-    `Current round: ${bundle.game.round}`,
-    `Current date: ${bundle.game.gameDate || "unknown"}`,
-    `Language: ${bundle.world.language || bundle.game.language || "English"}`,
-    `Difficulty: ${bundle.game.difficulty || "standard"}`,
-    "",
-    "Territorial changes from the base scenario:",
-    territorySummary,
-    "",
-    "Dynamic polity overrides:",
-    politySummary,
-    "",
-    catalystSummary,
-  ].join("\n");
-};
-
-const formatDateReadable = (value) => {
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format("D MMMM YYYY") : normalizeString(value);
-};
-
-const buildDifficultyGuidance = (difficulty, mode = "general") => {
-  // Difficulty ids are stored hyphenated (very-easy / easy / medium / hard /
-  // very-hard / impossible — see difficulty.js). Collapse spaces/underscores to
-  // hyphens so both the id form and any spaced label match; without this,
-  // very-easy, very-hard and impossible all fell through to the neutral default
-  // and silently had no effect on the AI.
-  const normalizedDifficulty = normalizeString(difficulty).toLowerCase().replace(/[\s_]+/g, "-");
-  const intro =
-    mode === "chats"
-      ? "Diplomatic concessions and cooperation should scale with the difficulty."
-      : "Long-term success and geopolitical leverage should scale with the difficulty.";
-
-  switch (normalizedDifficulty) {
-    case "very-easy":
-      return `${intro} The player can turn even modest preparation into results, and setbacks should stay forgiving.`;
-    case "easy":
-      return `${intro} The player can convert reasonable preparation into results relatively easily.`;
-    case "hard":
-      return `${intro} The player should need stronger leverage, preparation, and credibility before major outcomes stick.`;
-    case "very-hard":
-    case "extreme":
-      return `${intro} Major outcomes should require overwhelming preparation, sustained leverage, or unusually favorable conditions.`;
-    case "impossible":
-      return `${intro} Outcomes should almost never break the player's way without extraordinary, sustained, multi-front effort.`;
-    case "medium":
-    default:
-      return `${intro} Outcomes should feel plausible and earned without becoming static.`;
-  }
-};
-
-const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
-  const normalizedMessages = normalizeArray(messages)
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-
-      const role = normalizeString(entry.role || entry.speaker || "message");
-      const text = normalizeString(entry.text || entry.content || entry.message);
-      if (!text) {
-        return null;
-      }
-
-      return `${role}: ${text}`;
-    })
-    .filter(Boolean);
-
-  if (normalizedMessages.length === 0) {
-    return "No advisor messages are currently recorded.";
-  }
-
-  return normalizedMessages.slice(-limit).join("\n");
-};
-
-const buildDetailedChatHistoryText = (chats, { limit = 8 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
-  if (normalizedChats.length === 0) {
-    return "No chats occurred in these rounds.";
-  }
-
-  return normalizedChats
-    .slice(0, limit)
-    .map((chat, index) => {
-      const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
-      const body =
-        chat.messages.length > 0
-          ? chat.messages
-              .slice(-10)
-              .map((message) => `${message.speaker || message.role}: ${message.text}`)
-              .join("\n")
-          : "No messages yet.";
-      return `${header}\n${body}`;
-    })
-    .join("\n\n");
-};
-
-const buildRecentRoundsWithDates = (bundle) => {
-  const history = normalizeArray(bundle.world?.simulationHistory);
-
-  if (history.length === 0) {
-    return `Current round only: ${bundle.game.gameDate || "unknown date"}`;
-  }
-
-  return history
-    .slice(0, 8)
-    .map((entry) => `${entry.fromDate || "unknown"} -> ${entry.toDate || entry.date || "unknown"}`)
-    .join("; ");
-};
-
-const buildPlayerPolityRegionsText = async (bundle) => {
-  const playerCode = normalizeString(bundle.game.country);
-  if (!playerCode) {
-    return "No player polity is currently set.";
-  }
-
-  const world = normalizeWorldState(bundle.world);
-  const regionEntries = Object.entries(world.regionOwnershipOverrides);
-  if (regionEntries.length === 0) {
-    return "No explicit player region override list is currently recorded.";
-  }
-
-  const regionCatalog = await loadRegionCatalog();
-  const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
-  const playerRegions = regionEntries
-    .filter(([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === playerCode.toLowerCase())
-    .slice(0, 24)
-    .map(([regionId]) => {
-      const region = regionLookup.get(regionId);
-      return region?.name || regionId;
-    });
-
-  if (playerRegions.length === 0) {
-    return "No explicit player region override list is currently recorded.";
-  }
-
-  return playerRegions.join(", ");
-};
-
-const resolveHelperValues = (helperTemplates, variables) => {
-  let resolved = {};
-
-  for (let pass = 0; pass < 2; pass += 1) {
-    resolved = Object.fromEntries(
-      Object.entries(helperTemplates).map(([key, template]) => [
-        key,
-        renderTemplate(template, { ...variables, ...resolved }),
-      ]),
-    );
-  }
-
-  return resolved;
-};
-
-const buildUnitsSummaryText = (world) => {
-  const units = normalizeArray(world?.units);
-  if (units.length === 0) {
-    return "No military units are currently deployed on the map.";
-  }
-
-  return units
-    .slice(0, 60)
-    .map((unit) => {
-      const lat = Number(unit.lat);
-      const lng = Number(unit.lng);
-      const coords = Number.isFinite(lat) && Number.isFinite(lng)
-        ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
-        : "unknown location";
-      return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
-    })
-    .join("\n");
-};
 
 const MILITARY_ACTION_PATTERN =
   /\b(troop|army|armies|attack|invade|invasion|deploy|fleet|navy|naval|air force|airforce|bomb|siege|offensive|battalion|regiment|garrison|blockade|mobiliz)/i;
@@ -456,115 +228,27 @@ const buildMilitaryFeasibilityText = (world, actionsText) => {
   ].join("\n");
 };
 
-const buildTemplateVariables = async (
-  bundle,
-  {
-    actionInput = "",
-    catalystChoice = "",
-    catalystHistory = "",
-    catalystOpening = "",
-    catalystPremise = "",
-    chat = null,
-    eventsToConsolidate = "",
-    gameMasterRequest = "",
-    targetDate = "",
-  } = {},
-) => {
-  const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
-  const regionCatalog = await loadRegionCatalog();
-  const chatHistory =
-    normalizedChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") ||
-    "No chat history.";
-  const chatParticipants = normalizedChat?.countries?.map((country) => country.name).join(", ") || "";
-  const lastSpeaker = normalizedChat?.messages?.at(-1)?.speaker || "";
-  const date = bundle.game.gameDate || "";
-  const target = targetDate || bundle.game.gameDate || "";
-  const worldSummary = await buildWorldSummary(bundle);
-  const recentEvents = buildEventHistoryText(bundle.events);
-  const allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
-
+const buildTemplateVariables = async (bundle, options = {}) => {
+  const variables = await buildPromptContext(bundle, options);
   return {
-    actionInput,
-    advisorMessages: buildAdvisorHistoryText(bundle.advisor || []),
-    allActions,
-    catalystChoice,
-    catalystDate: date,
-    catalystHistory,
-    catalystPercent:
-      normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
-        ? `${Math.min(100, normalizeArray(bundle.world?.activeCatalyst?.history).length * 50)}%`
-        : "0%",
-    catalystOpening,
-    catalystPremise,
-    chatHistory,
-    chatHistoryLong: buildDetailedChatHistoryText(bundle.chats),
-    chatParticipants,
-    chatSummary: buildChatSummaryText(bundle.chats),
-    chatsToConsolidate: buildChatSummaryText(bundle.chats, { limit: 12 }),
-    date,
-    dateReadable: formatDateReadable(date),
-    difficulty: bundle.game.difficulty || "standard",
-    difficultyGuidanceChats: buildDifficultyGuidance(bundle.game.difficulty, "chats"),
-    difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
-    eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),
-    gameMasterRequest,
-    language: bundle.world.language || bundle.game.language || "English",
-    lastSpeaker,
-    numberOfRegions: String(regionCatalog.length),
-    plannedActions: buildActionHistoryText(bundle.actions),
-    playerPolity: bundle.game.country || "Unknown polity",
-    playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
-    // Simulation tasks additionally get the reach/logistics doctrine — but
-    // only when forces are actually in play this turn (see the builder).
+    ...variables,
     unitsSummary:
-      buildUnitsSummaryText(bundle.world) +
+      variables.unitsSummary +
       buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
-    playerPolityRegions: await buildPlayerPolityRegionsText(bundle),
-    recentEvents,
-    recentEventsLong: buildEventHistoryText(bundle.events, { limit: 24 }),
-    recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
-    round: String(bundle.game.round || 1),
-    respondingPolityName:
-      normalizedChat?.countries.find((country) => country.name !== bundle.game.country)?.name || "",
-    simulationRules: normalizeString(bundle.world.simulationRules) || "No extra simulation rules were provided.",
-    startDate: bundle.game.startDate || "",
-    targetDate: target,
-    targetDateReadable: formatDateReadable(target),
-    worldBeforeRoundOne:
-      normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
-    worldSummary,
-    worldSummaryNoCity: worldSummary,
   };
-};
-
-const withTimeout = async (promise, timeoutMs, timeoutMessage) => {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return promise;
-  }
-
-  let timeoutId = null;
-
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(timeoutMessage));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
 };
 
 // Give the AI real time: local/self-hosted models (and reasoning modes) often
 // need well over a minute per turn. The old 12s default silently discarded
 // their answers and served the canned fallback instead — turns "completed"
 // with nothing to show. The UI has spinners; waiting beats silently wrong.
-const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage, variables }) => {
+const runJsonTask = async (taskKey, {
+  fallback,
+  timeoutMs = 120000,
+  userMessage,
+  validatePayload,
+  variables,
+}) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
   let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
@@ -580,22 +264,126 @@ const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage,
     // Without game data the task still runs at its default temperament.
   }
 
+  const controller = new AbortController();
+  const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
+  const timeoutError = new Error(`AI task "${taskKey}" timed out.`);
+  const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
+  const tool = getGameplayTool(taskKey);
+  const history = [{ role: "user", parts: [{ text: userMessage }] }];
+  let failureReason = "The model did not return valid structured output.";
+
   try {
-    const raw = await withTimeout(
-      callAI(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }]),
-      timeoutMs,
-      `AI task "${taskKey}" timed out.`,
-    );
-    const parsed = extractJsonPayload(raw);
-    if (parsed) {
-      return parsed;
+    for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      const response = await callAI(systemPrompt, history, {
+        deadline,
+        maxTokens: taskKey === "jumpForward" || taskKey === "autoJumpForward" ? 16384 : 8192,
+        signal: controller.signal,
+        tool,
+      });
+      const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+      const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+      let validation = parsed
+        ? validateGameplayPayload(taskKey, parsed)
+        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      if (validation.valid && validatePayload) {
+        const taskError = normalizeString(await validatePayload(parsed));
+        if (taskError) validation = { valid: false, error: taskError };
+      }
+
+      if (validation.valid) {
+        return { generation: { source: "ai", fallbackReason: "" }, payload: parsed };
+      }
+
+      failureReason = validation.error;
+      if (outputAttempt === 1 && !controller.signal.aborted) {
+        history.push({
+          role: "model",
+          parts: [{ text: rawText || JSON.stringify(parsed ?? null) }],
+        });
+        history.push({
+          role: "user",
+          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} Call ${tool?.name || "the required tool"} again with corrected input.` }],
+        });
+        continue;
+      }
     }
-    console.warn(`[ai] task "${taskKey}": response was not parseable JSON — using the deterministic fallback.`);
   } catch (error) {
-    console.warn(`[ai] task "${taskKey}" failed (${error?.message || error}) — using the deterministic fallback.`);
+    const actualError = controller.signal.aborted ? controller.signal.reason : error;
+    failureReason = normalizeString(actualError?.message || actualError) || failureReason;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
-  return fallback();
+  if (typeof fallback !== "function") {
+    throw new Error(`AI task "${taskKey}" failed: ${failureReason}`);
+  }
+
+  console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
+  return {
+    generation: { source: "fallback", fallbackReason: failureReason },
+    payload: await fallback(),
+  };
+};
+
+const CONSOLIDATION_INTERVAL_ROUNDS = 5;
+const CONSOLIDATION_RETAIN_EVENTS = 24;
+const CONSOLIDATION_SIZE_THRESHOLD = 48;
+const CONSOLIDATION_BATCH_SIZE = 60;
+
+const consolidateHistoryBatch = async (bundle, events, chats) => {
+  const variables = await buildTemplateVariables(bundle, {
+    chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
+    eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
+  });
+  const { generation, payload } = await runJsonTask("eventConsolidator", {
+    fallback: () => ({
+      summary: [
+        events.map((event) => `${event.date || "undated"} ${event.title}: ${event.description}`).join("; "),
+        buildChatSummaryText(chats, { limit: chats.length || 1 }),
+      ].filter(Boolean).join("\n"),
+    }),
+    timeoutMs: 60000,
+    userMessage: "Consolidate the supplied campaign history with the required tool.",
+    variables,
+  });
+  return { generation, summary: normalizeString(payload?.summary) };
+};
+
+const compactHistoryIfNeeded = async (bundle) => {
+  const world = normalizeWorldState(bundle.world);
+  const unconsolidatedEvents = getUnconsolidatedEvents(bundle.events, world);
+  const shouldCompactEvents =
+    unconsolidatedEvents.length > CONSOLIDATION_SIZE_THRESHOLD ||
+    (bundle.game.round % CONSOLIDATION_INTERVAL_ROUNDS === 0 &&
+      unconsolidatedEvents.length > CONSOLIDATION_RETAIN_EVENTS);
+  const priorChatIds = new Set(world.consolidatedHistory.flatMap((entry) => entry.chatIds));
+  const closedChats = normalizeChats(bundle.chats)
+    .filter((chat) => chat.status === "closed" && !priorChatIds.has(chat.id));
+  const eventsToConsolidate = shouldCompactEvents
+    ? unconsolidatedEvents.slice(0, -CONSOLIDATION_RETAIN_EVENTS).slice(0, CONSOLIDATION_BATCH_SIZE)
+    : [];
+
+  if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
+
+  const { generation, summary } = await consolidateHistoryBatch(bundle, eventsToConsolidate, closedChats);
+  if (!summary) return world;
+  const throughEvent = eventsToConsolidate.at(-1);
+
+  return normalizeWorldState({
+    ...world,
+    consolidatedHistory: [
+      ...world.consolidatedHistory,
+      {
+        chatIds: closedChats.map((chat) => chat.id),
+        createdAt: new Date().toISOString(),
+        source: generation.source,
+        summary,
+        throughDate: throughEvent?.date || bundle.game.gameDate,
+        throughEventId: throughEvent?.id || world.consolidatedHistory.at(-1)?.throughEventId || "",
+        throughRound: bundle.game.round,
+      },
+    ],
+  });
 };
 
 const mergePolityCatalog = (countryCatalog, world) => {
@@ -627,8 +415,14 @@ const mergePolityCatalog = (countryCatalog, world) => {
   return Array.from(merged.values());
 };
 
-const resolveInvitees = async (names, world) => {
-  const countryCatalog = mergePolityCatalog(await loadCountryNames(), world);
+const resolveInvitees = async (names, world, additionalCountries = []) => {
+  const countryCatalog = [
+    ...mergePolityCatalog(await loadCountryNames(), world),
+    ...normalizeArray(additionalCountries).map((entry) => ({
+      code: normalizeString(entry?.code),
+      name: normalizeString(entry?.name || entry?.code),
+    })),
+  ];
   const lookup = new Map();
 
   for (const country of countryCatalog) {
@@ -638,10 +432,18 @@ const resolveInvitees = async (names, world) => {
     }
   }
 
-  return names
-    .map((name) => lookup.get(normalizeString(name).toUpperCase()) || null)
-    .filter(Boolean)
-    .map((entry) => ({
+  const resolved = normalizeArray(names)
+    .map((reference) => {
+      const candidates = typeof reference === "string"
+        ? [reference]
+        : [reference?.name, reference?.code];
+      return candidates
+        .map((candidate) => lookup.get(normalizeString(candidate).toUpperCase()) || null)
+        .find(Boolean) || null;
+    })
+    .filter(Boolean);
+  const unique = new Map(resolved.map((entry) => [entry.code || entry.name, entry]));
+  return Array.from(unique.values()).map((entry) => ({
       code: entry.code || "",
       name: entry.name || entry.code || "",
     }));
@@ -744,10 +546,8 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
 
 const buildGeneratedChat = async (chatLike, linkEventId, world) => {
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
-  const countryNames = countriesInput
-    .map((entry) => (typeof entry === "string" ? entry : entry?.name || entry?.code || ""))
-    .filter(Boolean);
-  const countries = await resolveInvitees(countryNames, world);
+  const countries = await resolveInvitees(countriesInput, world);
+  if (countries.length === 0) return null;
 
   return normalizeChatEntry({
     countries,
@@ -773,18 +573,54 @@ const buildGeneratedChat = async (chatLike, linkEventId, world) => {
   });
 };
 
+const validateGeneratedWorldChanges = async (candidate, world) => {
+  const containers = Array.isArray(candidate?.events)
+    ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
+    : [{ impacts: candidate?.impacts, path: "$.impacts" }];
+  const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
+  const generatedPolities = [];
+
+  for (const { impacts, path } of containers) {
+    generatedPolities.push(...normalizeArray(impacts?.polityChanges));
+    for (let index = 0; index < normalizeArray(impacts?.createdChats).length; index += 1) {
+      const countries = await resolveInvitees(impacts.createdChats[index]?.countries, world, generatedPolities);
+      if (countries.length === 0) {
+        return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
+      }
+    }
+
+    for (let index = 0; index < normalizeArray(impacts?.unitOps).length; index += 1) {
+      const operation = impacts.unitOps[index];
+      const operationPath = `${path}.unitOps[${index}]`;
+      if (operation.op === "spawn") {
+        if (!normalizeString(operation.unit?.name) || !normalizeString(operation.unit?.ownerCode)) {
+          return `${operationPath}.unit must have nonblank name and ownerCode values.`;
+        }
+        const spawnedId = normalizeString(operation.unit?.id);
+        if (spawnedId && unitIds.has(spawnedId)) return `${operationPath}.unit.id duplicates an existing unit.`;
+        if (spawnedId) unitIds.add(spawnedId);
+        continue;
+      }
+
+      const unitId = normalizeString(operation.unitId);
+      if (!unitId) return `${operationPath}.unitId must not be blank.`;
+      if (!unitIds.has(unitId)) return `${operationPath}.unitId does not identify an existing unit.`;
+      if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
+    }
+  }
+
+  return "";
+};
+
 const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
   const plannedActions = normalizeActions(bundle.actions).filter((action) => action.status === "planned");
   const firstThreeActions = plannedActions.slice(0, 3);
   const events = [];
 
-  // Ancient/FMG scenarios use plain-text or BCE dates dayjs can't parse; fall
-  // back to the current date string instead of the literal "Invalid Date".
-  const baseGameDate = dayjs(bundle.game.gameDate);
+  // Ancient/FMG scenarios may use textual or BCE dates. Only perform calendar
+  // arithmetic on strict Gregorian dates; otherwise preserve the scenario text.
   const advanceGameDate = (dayCount) =>
-    baseGameDate.isValid()
-      ? baseGameDate.add(dayCount, "day").format("YYYY-MM-DD")
-      : normalizeString(bundle.game.gameDate);
+    addIsoDays(bundle.game.gameDate, dayCount) || normalizeString(bundle.game.gameDate);
 
   if (firstThreeActions.length > 0) {
     firstThreeActions.forEach((action, index) => {
@@ -949,7 +785,10 @@ const applySimulationResult = async ({
   result,
 }) => {
   const generatedEvents = normalizeArray(result.events)
-    .map((entry, index) => normalizeGeneratedEvent(entry, index))
+    .map((entry, index) => normalizeGeneratedEvent({
+      ...entry,
+      source: entry?.source || result.generation?.source || "ai",
+    }, index))
     .filter(Boolean);
   const nextEvents = [...normalizeEvents(baseEvents), ...generatedEvents];
   const nextGame = normalizeGameData({
@@ -963,15 +802,6 @@ const applySimulationResult = async ({
     status: action.status === "planned" && result.clearActions ? "resolved" : action.status,
   }));
   const nextChats = [...normalizeChats(baseChats)];
-
-  for (const event of generatedEvents) {
-    for (const createdChat of event.impacts.createdChats) {
-      const nextChat = await buildGeneratedChat(createdChat, event.id, baseWorld);
-      if (nextChat) {
-        nextChats.unshift(nextChat);
-      }
-    }
-  }
 
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
@@ -988,17 +818,41 @@ const applySimulationResult = async ({
           catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
           eventIds: generatedEvents.map((event) => event.id),
+          fallbackReason: normalizeString(result.generation?.fallbackReason),
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
           plannedActions: plannedActionSnapshot,
           round: nextGame.round,
           summary: normalizeString(result.summary),
+          source: result.generation?.source || "ai",
           toDate: nextGame.gameDate,
         },
         ...normalizeWorldState(baseWorld).simulationHistory,
       ].slice(0, 12),
     },
   });
+  let nextWorld = worldWithImpacts;
+
+  for (const event of generatedEvents) {
+    for (const createdChat of event.impacts.createdChats) {
+      const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts);
+      if (nextChat) nextChats.unshift(nextChat);
+    }
+  }
+
+  if (result.mode === "jump" || result.mode === "auto") {
+    try {
+      nextWorld = await compactHistoryIfNeeded({
+        actions: nextActions,
+        chats: nextChats,
+        events: nextEvents,
+        game: nextGame,
+        world: worldWithImpacts,
+      });
+    } catch (error) {
+      console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
+    }
+  }
 
   await Promise.all([
     writeActionsState(nextActions),
@@ -1006,7 +860,7 @@ const applySimulationResult = async ({
     writeEventsState(nextEvents),
     writeGameData(nextGame),
     writeJson(JSON_URLS.colors, nextColors, { pretty: true }),
-    writeWorldState(worldWithImpacts),
+    writeWorldState(nextWorld),
   ]);
 
   // Snapshot the state we just replaced so it can be rolled back to (best-effort).
@@ -1028,14 +882,15 @@ const applySimulationResult = async ({
     colors: nextColors,
     events: nextEvents,
     game: nextGame,
-    world: worldWithImpacts,
+    generation: result.generation ?? { source: "ai", fallbackReason: "" },
+    world: nextWorld,
   };
 };
 
 export const generateActionSuggestions = async ({ force = true } = {}) => {
   const bundle = await readGameStateBundle({ force });
   const variables = await buildTemplateVariables(bundle);
-  const payload = await runJsonTask("actions", {
+  const { payload } = await runJsonTask("actions", {
     fallback: () => fallbackActionSuggestions(bundle),
     userMessage: "Generate current strategic action suggestions as JSON only.",
     variables,
@@ -1180,48 +1035,29 @@ export const generateCountryStats = async ({ code, name } = {}) => {
   return String(raw || "").trim();
 };
 
-// Structured national stat sheet for the Stats tab: same grounding as the
-// intelligence briefing, but strict JSON so the UI can render bars and cards.
+// Structured national stat sheet for the Stats tab, grounded in the same
+// campaign context as the intelligence briefing.
 export const generateCountryStatSheet = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
   const target = name || code || "the polity";
   const dossier = await buildTargetDossier(bundle, normalizeString(code));
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
-  const system =
-    `You are the statistics bureau of an alternate-history strategy game. ` +
-    `The current date is ${variables.date || "unknown"}. ` +
-    `Compile a national stat sheet for ${target}${code ? ` (code ${code})` : ""}. ` +
-    `Treat the TARGET DOSSIER and WORLD STATE below as ground truth; where specifics are not recorded, ` +
-    `give your best historical estimate for this era, people and region — never refuse, never say unknown. ` +
-    `Money units must fit the era (barter/tribute-era polities still get best-effort figures).\n\n` +
-    (era ? `ERA & WORLD RULES:\n${era}\n\n` : "") +
-    `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}\n\n` +
-    `WORLD STATE:\n${variables.worldSummary || "(no summary)"}\n\n` +
-    `RECENT EVENTS:\n${variables.recentEvents || "(none)"}\n\n` +
-    `Respond with ONLY a JSON object — no prose, no markdown fences — exactly this shape:\n` +
-    `{"capital":"city","continent":"continent","government":"system · ideology","leader":"head of state/government",` +
-    `"stability":0-100 integer,` +
-    `"indices":{"sovereignty":0-100,"foodAutonomy":0-100,"energyAutonomy":0-100,"economicIndependence":0-100,"internalSecurity":0-100},` +
-    `"economy":{"gdp":"9 B$","gdpGrowth":"+5.2% / yr","gdpPerCapita":"796 $","currency":"XOF",` +
-    `"inflation":"0.3%","unemployment":"1%","publicDebt":"47.5% GDP","budgetBalance":"-3.7% GDP"},` +
-    `"gdpBreakdown":{"agriculture":24,"industry":24,"services":52}}\n` +
-    `gdpBreakdown percentages must sum to 100. ` +
-    `Write text values in ${variables.language || "English"}; keep numbers plain.`;
-  const raw = await callAI(system, [
-    { role: "user", parts: [{ text: `Compile the national stat sheet for ${target}.` }] },
-  ]);
-  const parsed = extractJsonPayload(raw);
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("The stat sheet did not come back as valid JSON.");
-  }
-  return parsed;
+  const { payload } = await runJsonTask("countryStatSheet", {
+    userMessage: [
+      `Compile the national stat sheet for ${target}${code ? ` (code ${code})` : ""}.`,
+      era ? `ERA & WORLD RULES:\n${era}` : "",
+      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+    ].filter(Boolean).join("\n\n"),
+    variables,
+  });
+  return payload;
 };
 
 export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput });
-  const payload = await runJsonTask("descriptionToAction", {
+  const { payload } = await runJsonTask("descriptionToAction", {
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
     userMessage: "Convert the player's raw intent into one structured in-game command as JSON only.",
     variables,
@@ -1262,7 +1098,7 @@ export const chooseNextDiplomaticSpeaker = async ({
   }
 
   const variables = await buildTemplateVariables(bundle, { chat: normalizedChat });
-  const payload = await runJsonTask("nextSpeaker", {
+  const { payload } = await runJsonTask("nextSpeaker", {
     fallback: () => fallbackNextSpeaker({ chat: normalizedChat, excludedSpeaker: excludeSpeaker }),
     userMessage: "Choose the next speaker as JSON only.",
     variables: {
@@ -1285,28 +1121,16 @@ export const chooseNextDiplomaticSpeaker = async ({
 
 export const consolidateRecentHistory = async ({ limit = 12 } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
-  const variables = await buildTemplateVariables(bundle, {
-    chatsToConsolidate: buildChatSummaryText(bundle.chats, { limit }),
-    eventsToConsolidate: buildEventHistoryText(bundle.events, { limit }),
-  });
-  const payload = await runJsonTask("eventConsolidator", {
-    fallback: () => ({
-      summary: `Recent history: ${normalizeEvents(bundle.events)
-        .slice(-limit)
-        .map((event) => `${event.date || "undated"} ${event.title}`)
-        .join("; ")}`,
-    }),
-    userMessage: "Summarize the recent campaign history as JSON only.",
-    variables,
-  });
-
-  return normalizeString(payload?.summary);
+  const events = getUnconsolidatedEvents(bundle.events, bundle.world).slice(0, limit);
+  const chats = normalizeChats(bundle.chats).filter((chat) => chat.status === "closed").slice(0, limit);
+  const { summary } = await consolidateHistoryBatch(bundle, events, chats);
+  return summary;
 };
 
 export const createCatalyst = async ({ force = true } = {}) => {
   const bundle = await readGameStateBundle({ force });
   const variables = await buildTemplateVariables(bundle);
-  const payload = await runJsonTask("catalystCreation", {
+  const { payload } = await runJsonTask("catalystCreation", {
     fallback: () => ({
       choices: [
         "Intervene decisively",
@@ -1354,12 +1178,24 @@ export const advanceActiveCatalyst = async (choiceText) => {
     catalystPremise: catalyst.premise || catalyst.title || "",
   });
 
-  const payload = await runJsonTask("catalystExecutor", {
-    fallback: () => ({
-      nextChoices: normalizeArray(catalyst.choices).slice(0, 3),
-      resolved: normalizeArray(catalyst.history).length >= 1,
-      summary: `${choiceText} becomes the line of action inside "${catalyst.title || "the scene"}", pushing the situation toward a definite outcome.`,
-    }),
+  const { payload } = await runJsonTask("catalystExecutor", {
+    fallback: () => {
+      const resolved = normalizeArray(catalyst.history).length >= 1;
+      const existingChoices = normalizeArray(catalyst.choices)
+        .map((entry) => normalizeString(entry))
+        .filter(Boolean);
+      const distinctChoices = Array.from(
+        new Map(existingChoices.map((choice) => [choice.toLocaleLowerCase(), choice])).values(),
+      );
+      const nextChoices = distinctChoices.length >= 2
+        ? distinctChoices.slice(0, 5)
+        : ["Press the advantage", "Reassess the situation"];
+      return {
+        nextChoices: resolved ? [] : nextChoices,
+        resolved,
+        summary: `${choiceText} becomes the line of action inside "${catalyst.title || "the scene"}", pushing the situation toward a definite outcome.`,
+      };
+    },
     userMessage: "Continue the catalyst scene as JSON only.",
     variables,
   });
@@ -1394,7 +1230,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
       .join("\n"),
     catalystPremise: catalyst.premise || catalyst.title || "",
   });
-  const summaryPayload = await runJsonTask("catalystSummary", {
+  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("catalystSummary", {
     fallback: () => ({
       description: historyEntry.summary,
       importance: "major",
@@ -1417,6 +1253,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
     notable: true,
     playerRelated: true,
     title: normalizeString(summaryPayload?.title) || catalyst.title || "Catalyst resolved",
+    source: summaryGeneration.source,
   });
 
   return applySimulationResult({
@@ -1436,6 +1273,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
       mode: "catalyst",
       stopDate: bundle.game.gameDate,
       summary: normalizeString(summaryPayload?.description) || historyEntry.summary,
+      generation: summaryGeneration,
     },
   });
 };
@@ -1454,18 +1292,14 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
-  // Ancient/FMG scenarios use plain-text or BCE dates dayjs can't parse. Guard
-  // the day-math so it doesn't format to the literal string "Invalid Date" and
-  // then get persisted into game.gameDate (which corrupted the save and every
-  // subsequent date). When unparseable, keep the current date and let the AI's
-  // own stopDate drive the narrative forward.
-  const parsedGameDate = dayjs(bundle.game.gameDate);
-  const targetDate = parsedGameDate.isValid()
-    ? parsedGameDate.add(safeDays, "day").format("YYYY-MM-DD")
-    : normalizeString(bundle.game.gameDate);
+  const originDate = normalizeString(bundle.game.gameDate);
+  const targetDate = addIsoDays(originDate, safeDays) || originDate;
+  if (parseIsoDate(originDate) && targetDate === originDate) {
+    throw new Error("The requested jump exceeds the supported date range.");
+  }
   const variables = await buildTemplateVariables(bundle, { targetDate });
   const [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
-  let payload = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+  const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate }),
     // The jump IS the game — let slow (local/reasoning) models finish instead
     // of silently swapping in the canned fallback after a few seconds.
@@ -1477,23 +1311,17 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
           "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
         : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
           `contain between ${minEvents} and ${maxEvents} events (this jump covers ${safeDays} days), with their dates ` +
-          `spread across the skipped period.`,
+           `spread across the skipped period.`,
+    validatePayload: async (candidate) => {
+      const eventCount = normalizeArray(candidate?.events).length;
+      if (mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+        return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
+      }
+      return validateTimelineDates({ candidate, mode, originDate, targetDate }) ||
+        await validateGeneratedWorldChanges(candidate, bundle.world);
+    },
     variables,
   });
-
-  // A model can answer with VALID but EMPTY JSON (reasoning models told
-  // "JSON only" often emit a bare object). That used to be accepted as a
-  // successful turn of nothing: no events, no summary, an invisible history
-  // entry — the game looked like it "did nothing" with no fallback either.
-  // An empty turn now counts as a failure and takes the fallback path.
-  const emptyTurn =
-    normalizeArray(payload?.events).length === 0 &&
-    !normalizeString(payload?.summary) &&
-    !payload?.catalyst;
-  if (emptyTurn) {
-    console.warn("[ai] jump returned an empty turn — using the deterministic fallback.");
-    payload = await fallbackJumpSimulation({ bundle, days: safeDays, mode, targetDate });
-  }
 
   const result = {
     catalyst: payload?.catalyst ?? null,
@@ -1502,6 +1330,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump" } = {}) => {
     mode,
     stopDate: normalizeString(payload?.stopDate) || targetDate,
     summary: normalizeString(payload?.summary),
+    generation,
   };
 
   return applySimulationResult({
@@ -1522,7 +1351,7 @@ export const applyGameMasterCommand = async (requestText) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
-  const payload = await runJsonTask("gameMaster", {
+  const { generation, payload } = await runJsonTask("gameMaster", {
     fallback: () => ({
       impacts: {
         polityChanges: [],
@@ -1531,6 +1360,7 @@ export const applyGameMasterCommand = async (requestText) => {
       summary: "No deterministic GM fallback changes were inferred from the request.",
     }),
     userMessage: "Apply the GM request as JSON only.",
+    validatePayload: (candidate) => validateGeneratedWorldChanges(candidate, bundle.world),
     variables,
   });
 
@@ -1543,6 +1373,7 @@ export const applyGameMasterCommand = async (requestText) => {
     notable: true,
     playerRelated: true,
     title: "Game master intervention",
+    source: generation.source,
   });
 
   if (!gmEvent) {
@@ -1563,6 +1394,7 @@ export const applyGameMasterCommand = async (requestText) => {
       mode: "game-master",
       stopDate: bundle.game.gameDate,
       summary: gmEvent.description,
+      generation,
     },
   });
 };

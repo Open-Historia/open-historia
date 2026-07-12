@@ -71,14 +71,13 @@ call :ensure_asset "server\data\scenarios\default\regions.geojson" "server/data/
 echo.
 
 REM ---- 3. Install dependencies -----------------------------
-if not exist "node_modules" (
-    echo Installing dependencies ^(first run - this can take a few minutes^)...
-    call npm install
-    if errorlevel 1 goto :fail
-) else (
-    echo [OK] Dependencies already installed.
-    echo      ^(Delete the "node_modules" folder to force a clean reinstall.^)
-)
+REM Always run npm install: it's a fast no-op when nothing changed, but it also
+REM installs any NEW dependency a code update added. Gating this on "node_modules
+REM missing" skipped those, so a newly-required package (e.g. jszip) never got
+REM installed and the production build failed to resolve it.
+echo Installing / updating dependencies ^(fast if already up to date^)...
+call npm install
+if errorlevel 1 goto :fail
 echo.
 
 REM ---- 4. Build the client ---------------------------------
