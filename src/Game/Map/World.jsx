@@ -173,28 +173,40 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
+  const viewStateRef = useRef({
+    longitude: 0,
+    latitude: 0,
+    zoom: 3.5,
+    bearing: 0,
+    pitch: 0,
+  });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
   // the world is fixed to the ocean preset (the in-game basemap picker was removed).
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
+  const mapProjection = useMemo(() => ({ type: projection }), [projection]);
+  const styleUsesGlobeCoords = customBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
-    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, isGlobe),
-    [customBg, bgDeclared, isGlobe, worldBasemap],
+    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords),
+    [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap],
   );
-  // Earth's terrain DEM has no meaning over a custom map, and its source is dropped
-  // from the style, so disable 3D terrain whenever a custom background is active.
+  // Globe terrain is unsupported by MapLibre and can leave its shader cache invalid
+  // when projections change. Keep the setting enabled and restore it on flat maps.
   const terrain = useMemo(
     () =>
-      terrainEnabled && !customBg && !bgDeclared
+      terrainEnabled && !isGlobe && !customBg && !bgDeclared
         ? {
             source: "terrain-source",
             exaggeration: 15,
           }
         : null,
-    [terrainEnabled, customBg, bgDeclared],
+    [terrainEnabled, isGlobe, customBg, bgDeclared],
   );
+  const handleMove = useCallback(({ viewState }) => {
+    viewStateRef.current = viewState;
+  }, []);
   const handleIdle = useCallback(() => {
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
@@ -221,12 +233,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       }}
     >
       <Map
+        key={projection}
         ref={mapRef}
-        initialViewState={{
-          longitude: 0,
-          latitude: 0,
-          zoom: 3.5,
-        }}
+        initialViewState={viewStateRef.current}
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
@@ -240,14 +249,14 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         touchPitch={false}
         pitchWithRotate={false}
         dragPan
-        reuseMaps
         fadeDuration={0}
         collectResourceTiming={false}
         renderWorldCopies
-        projection={projection}
+        projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}
         onIdle={handleIdle}
+        onMove={handleMove}
       >
         <Nations isGlobe={isGlobe} />
         <Cities />
