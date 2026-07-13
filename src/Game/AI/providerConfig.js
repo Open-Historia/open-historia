@@ -55,8 +55,10 @@ const PROVIDER_SETTINGS = {
         model: { storageKey: "anthropic_model", defaultValue: "claude-haiku-4-5" },
         customParams: { storageKey: "anthropic_custom_params", defaultValue: "" },
     },
-    // Self-hosted proxy speaking the Anthropic Messages API — routed through the
-    // game server's relay (see main.jsx callAnthropicCompatible), separate from
+    // Self-hosted proxy speaking the Anthropic Messages API — called directly
+    // from the browser first, falling back to the local relay only when the page
+    // is served locally (see main.jsx providerFetch/callAnthropicCompatible). On
+    // a hosted website the proxy must send its own CORS headers. Separate from
     // the native Anthropic API above.
     "anthropic-compatible": {
         apiKey: { storageKey: "anthropic_compatible_api_key", defaultValue: "" },
