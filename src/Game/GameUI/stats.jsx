@@ -46,6 +46,7 @@ const INDEX_ROWS = [
     { key: "energyAutonomy", label: "Energy autonomy", icon: "⚡", color: "#eab308" },
     { key: "economicIndependence", label: "Economic independence", icon: "🏦", color: "#06b6d4" },
     { key: "internalSecurity", label: "Internal security", icon: "🛡", color: "#f43f5e" },
+    { key: "internationalReputation", label: "International reputation", icon: "🤝", color: "#3b82f6" },
 ];
 
 const sectionTitleStyle = {

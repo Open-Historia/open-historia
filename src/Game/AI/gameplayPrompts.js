@@ -66,6 +66,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "Action suggestion generation before the player asks for them.",
     helpers: [
       "PLAYER_POLITY",
+      "PLAYER_POLITY_REPUTATION_CONTEXT",
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
       "ALL_EVENTS_WITH_CONSOLIDATION",
@@ -81,6 +82,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "Manual time skip simulation.",
     helpers: [
       "PLAYER_POLITY",
+      "PLAYER_POLITY_REPUTATION_CONTEXT",
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
       "TARGET_ROUND_DATE",
@@ -99,6 +101,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "Automatic time skip that stops on the next notable event.",
     helpers: [
       "PLAYER_POLITY",
+      "PLAYER_POLITY_REPUTATION_CONTEXT",
       "TARGET_ROUND_DATE",
       "CURRENT_UNITS",
       "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
@@ -153,6 +156,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "Create branching catalyst scenes.",
     helpers: [
       "PLAYER_POLITY",
+      "PLAYER_POLITY_REPUTATION_CONTEXT",
       "RUNNING_CATALYST_DATE",
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
@@ -167,6 +171,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "Advance an active catalyst scene.",
     helpers: [
       "PLAYER_POLITY",
+      "PLAYER_POLITY_REPUTATION_CONTEXT",
       "RUNNING_CATALYST_DATE",
       "CATALYST_PREMISE_DESCRIPTION",
       "CATALYST_SIMULATION_HISTORY",

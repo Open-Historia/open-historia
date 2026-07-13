@@ -432,8 +432,9 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         energyAutonomy: percentageSchema("Domestic energy autonomy."),
         economicIndependence: percentageSchema("Economic independence."),
         internalSecurity: percentageSchema("Internal security."),
+        internationalReputation: percentageSchema("International reputation / standing (0-100)."),
       },
-      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity"],
+      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
       additionalProperties: false,
     },
     economy: {

@@ -228,10 +228,43 @@ const buildMilitaryFeasibilityText = (world, actionsText) => {
   ].join("\n");
 };
 
+const STAT_SHEETS_STORAGE_KEY = "oh-stat-sheets";
+
+const readStoredStatSheets = () => {
+  try {
+    return JSON.parse(localStorage.getItem(STAT_SHEETS_STORAGE_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+// International reputation the AI evolves each turn (world.internationalReputation),
+// surfaced to prompts. Falls back to the last stat sheet the player viewed, then a
+// neutral 50 — so it is never "unknown".
+const buildPlayerPolityReputationText = async (bundle) => {
+  const playerCode = normalizeString(bundle.game.country);
+  if (!playerCode) {
+    return "No player polity is currently set.";
+  }
+  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
+  let reputation = Number(world.internationalReputation?.[playerCode]);
+  if (!Number.isFinite(reputation)) {
+    const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
+    reputation = Number(readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet?.indices?.internationalReputation);
+  }
+  if (!Number.isFinite(reputation)) {
+    reputation = 50;
+  }
+  const clamped = Math.max(0, Math.min(100, Math.round(reputation)));
+  const band = clamped >= 70 ? "well-regarded" : clamped >= 40 ? "mixed" : "poor";
+  return `International reputation: ${clamped}/100 (${band}).`;
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const variables = await buildPromptContext(bundle, options);
   return {
     ...variables,
+    playerPolityReputationContext: await buildPlayerPolityReputationText(bundle),
     unitsSummary:
       variables.unitsSummary +
       buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
@@ -263,6 +296,15 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
   } catch {
     // Without game data the task still runs at its default temperament.
+  }
+
+  // Reputation context: how the world currently regards the player, and how the
+  // model should let it bias behaviour and evolve it via polityChanges.
+  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+    const reputationContext = normalizeString(variables.playerPolityReputationContext);
+    if (reputationContext) {
+      systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
+    }
   }
 
   const controller = new AbortController();

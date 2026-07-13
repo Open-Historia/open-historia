@@ -14,7 +14,7 @@ createRoot(document.getElementById("root")).render(
 // Live-translates the UI when a non-English language is set in Settings.
 startTranslator();
 
-if ("serviceWorker" in navigator) {
+if (!import.meta.env.DEV && "serviceWorker" in navigator) {
     window.addEventListener("load", () => {
         navigator.serviceWorker.register("/sw.js").catch((error) => {
             console.warn("Service worker registration failed:", error);
