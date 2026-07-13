@@ -28,6 +28,15 @@ const ensureSpinnerStyles = () => {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
     }
+
+    .actions-composer {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+
+    .actions-composer::-webkit-scrollbar {
+        display: none;
+    }
     `;
     document.head.appendChild(style);
 };
@@ -233,6 +242,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         let cancelled = false;
+        ensureSpinnerStyles();
         setSuggestions([]);
         setHasRequestedSuggestions(false);
 
@@ -365,7 +375,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     };
 
     const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
             handleSubmit();
         }
@@ -579,10 +589,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             padding: "0.75rem 1rem",
         }}
         >
-        <div style={{ alignItems: "center", display: "flex", flex: 1, position: "relative" }}>
-        <input
+        <div style={{ alignItems: "stretch", display: "flex", flex: 1, position: "relative" }}>
+        <textarea
         ref={inputRef}
-        type="text"
+        className="actions-composer"
         placeholder="Enter your action..."
         value={inputValue}
         onChange={(event) => setInputValue(event.target.value)}
@@ -596,8 +606,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             fontFamily: "sans-serif",
             fontSize: "0.82rem",
             outline: "none",
-            padding: "0.55rem 2.8rem 0.55rem 0.85rem",
+            padding: "0.7rem 2.8rem 0.7rem 0.85rem",
+            resize: "vertical",
             transition: "border-color 0.2s",
+            minHeight: "3rem",
+            lineHeight: "1.45",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            overflowY: "auto",
             width: "100%",
         }}
         onFocus={(event) => {
