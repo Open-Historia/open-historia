@@ -708,8 +708,24 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
   }
 
   const request = (async () => {
-    const { response } = await fetchWithPersistence(url, { signal });
-    const buffer = await response.arrayBuffer();
+    let buffer = null;
+    // Web build only: try the vetted node swarm first, verifying every byte
+    // against the signed content manifest. On any miss/failure we fall through to
+    // the canonical origin below, so a node outage is invisible. This whole block
+    // (and the content-trust module) is stripped from the local download.
+    if (import.meta.env.VITE_OH_WEB) {
+      try {
+        const { fetchVerifiedBuffer } = await import("./web/contentTrust.js");
+        buffer = await fetchVerifiedBuffer(url, { signal });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        buffer = null; // fall back to the origin
+      }
+    }
+    if (buffer == null) {
+      const { response } = await fetchWithPersistence(url, { signal });
+      buffer = await response.arrayBuffer();
+    }
     primePmtilesArchive(url, buffer);
     return buffer;
   })().finally(() => {
