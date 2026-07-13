@@ -50,8 +50,31 @@ cd /d "%~2"
 echo.
 echo ===================================================
 echo             OPEN HISTORIA  -  UPDATER
-echo    source: %REPO_OWNER%/%REPO_NAME% (%REPO_BRANCH%)
 echo ===================================================
+echo.
+
+REM ---- Choose the release channel --------------------------
+REM Default to the channel this install is on (its current git branch), else beta.
+set "DEFAULT_BRANCH=beta"
+set "GITBRANCH="
+if exist ".git" for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "GITBRANCH=%%B"
+if /I "!GITBRANCH!"=="main" set "DEFAULT_BRANCH=main"
+set "DEFLABEL=2 (Beta)"
+if /I "!DEFAULT_BRANCH!"=="main" set "DEFLABEL=1 (Stable)"
+echo Which release do you want to update from?
+echo   [1] Stable  - tested releases
+echo   [2] Beta    - newest features, less tested
+set "CHANNELCHOICE="
+set /p "CHANNELCHOICE=Enter 1 or 2 [default: !DEFLABEL!]: "
+if "!CHANNELCHOICE!"=="1" (
+    set "REPO_BRANCH=main"
+) else if "!CHANNELCHOICE!"=="2" (
+    set "REPO_BRANCH=beta"
+) else (
+    set "REPO_BRANCH=!DEFAULT_BRANCH!"
+)
+echo.
+echo Updating from: %REPO_OWNER%/%REPO_NAME% (!REPO_BRANCH!)
 echo.
 
 REM ---- Git installs: a proper pull is the cleanest update ----
@@ -62,15 +85,25 @@ if exist ".git" (
         echo Install Git from https://git-scm.com/ and run this again.
         pause & exit /b 1
     )
-    echo This is a git install - updating with git pull...
-    git pull --ff-only
+    echo This is a git install - updating from the !REPO_BRANCH! channel...
+    git fetch origin !REPO_BRANCH! >nul 2>&1
+    set "CURBRANCH="
+    for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CURBRANCH=%%B"
+    if /I not "!CURBRANCH!"=="!REPO_BRANCH!" echo Switching to the !REPO_BRANCH! channel...
+    if /I not "!CURBRANCH!"=="!REPO_BRANCH!" git checkout !REPO_BRANCH! >nul 2>&1
+    if /I not "!CURBRANCH!"=="!REPO_BRANCH!" if errorlevel 1 git checkout -B !REPO_BRANCH! origin/!REPO_BRANCH! >nul 2>&1
+    git pull --ff-only origin !REPO_BRANCH!
     if errorlevel 1 (
         echo.
-        echo [WARN] git pull could not fast-forward ^(local changes?^).
-        echo Commit/stash your changes, or resolve manually, then retry.
+        echo [WARN] Update could not fast-forward ^(local changes, or a channel
+        echo switch with uncommitted files^). Commit/stash and retry, or delete
+        echo this folder and reinstall the channel you want.
         pause & exit /b 1
     )
-    git lfs pull 2>nul
+    REM Map binaries live on a GitHub Release now, not Git LFS - refresh any that
+    REM changed (or that this install never had) from there. See scripts\map-assets.json.
+    where node >nul 2>&1
+    if not errorlevel 1 if exist "scripts\fetch-map-assets.mjs" node "scripts\fetch-map-assets.mjs"
     goto :finish
 )
 
@@ -159,15 +192,15 @@ if exist "%SRC%\server\data\scenarios\default" (
     if errorlevel 8 goto :copyfail
 )
 
-REM 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content. A
-REM     codeload zip only carries pointers, so no LFS file would otherwise ever
-REM     update on a ZIP install. This downloads any that changed from GitHub's
-REM     media host and checksum-verifies them. Best-effort - needs Node (which
-REM     running the game already requires); a missing Node just leaves files as-is.
+REM 3c) Download the large map binaries (pmtiles, geojson, city seeds) from the
+REM     GitHub Release that now hosts them. A codeload zip never carried these, so
+REM     a ZIP install relies on this to get them and to refresh any that changed.
+REM     Checksum-verified. Best-effort - needs Node (which running the game already
+REM     requires); a missing Node just leaves files as-is. See scripts\map-assets.json.
 where node >nul 2>&1
 if not errorlevel 1 (
-    if exist "scripts\resolve-lfs.mjs" (
-        node "scripts\resolve-lfs.mjs" "%SRC%" "%REPO_OWNER%" "%REPO_NAME%" "%REPO_BRANCH%"
+    if exist "scripts\fetch-map-assets.mjs" (
+        node "scripts\fetch-map-assets.mjs"
     )
 )
 
