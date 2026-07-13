@@ -8,7 +8,7 @@ REM ============================================================
 REM  Open Historia - one-click setup and launch
 REM  ----------------------------------------------------------
 REM   1. Verifies Node.js is installed
-REM   2. Downloads the world map data (Git LFS assets) if missing
+REM   2. Downloads the world map data (GitHub Release assets) if missing
 REM   3. Installs npm dependencies
 REM   4. Builds the client
 REM   5. Starts the server and opens your browser
@@ -57,17 +57,14 @@ for /f "delims=" %%V in ('node --version 2^>nul') do set "NODEVER=%%V"
 echo [OK] Node.js !NODEVER! detected.
 echo.
 
-REM ---- 2. Ensure world map data (Git LFS assets) -----------
-REM  The big map files ship as tiny Git LFS pointer stubs in a
-REM  ZIP download. Pull the real binaries from GitHub's media CDN.
+REM ---- 2. Ensure world map data ----------------------------
+REM  The big map binaries (pmtiles, geojson, city seeds) are hosted as assets on
+REM  a GitHub Release - free, unmetered bandwidth - instead of Git LFS, whose
+REM  small free bandwidth quota a few installs used to exhaust. A fresh git/ZIP
+REM  install no longer ships them, so this downloads any that are missing on
+REM  first run. (Node is guaranteed present by step 1.) See scripts\map-assets.json.
 echo Checking world map data...
-call :ensure_asset "public\assets\cities.pmtiles"    "public/assets/cities.pmtiles"
-call :ensure_asset "public\assets\countries.pmtiles" "public/assets/countries.pmtiles"
-call :ensure_asset "public\assets\regions.pmtiles"   "public/assets/regions.pmtiles"
-REM  Map-editor seeds + the built-in Modern Day world map (also LFS)
-call :ensure_asset "public\assets\regions-seed.geojson" "public/assets/regions-seed.geojson"
-call :ensure_asset "public\assets\cities-seed.json"     "public/assets/cities-seed.json"
-call :ensure_asset "server\data\scenarios\default\regions.geojson" "server/data/scenarios/default/regions.geojson"
+if exist "scripts\fetch-map-assets.mjs" node "scripts\fetch-map-assets.mjs" --ensure
 echo.
 
 REM ---- 3. Install dependencies -----------------------------
@@ -120,34 +117,6 @@ echo.
 echo Server stopped.
 pause
 exit /b 0
-
-
-REM ============================================================
-REM  Subroutine: make sure one Git LFS asset is the real file.
-REM  Real files are several MB; LFS pointer stubs are ~150 B.
-REM  Usage:  call :ensure_asset "local\path" "repo/path"
-REM ============================================================
-:ensure_asset
-set "TARGET=%~1"
-set "URL=https://media.githubusercontent.com/media/Open-Historia/open-historia/main/%~2"
-set "FSIZE=0"
-if exist "%TARGET%" for %%A in ("%TARGET%") do set "FSIZE=%%~zA"
-
-if !FSIZE! GEQ 100000 (
-    echo   [OK] %~nx1 already present.
-    goto :eof
-)
-
-echo   Downloading %~nx1 ...
-curl -L -f --retry 3 --create-dirs -o "%TARGET%.download" "%URL%"
-if errorlevel 1 (
-    echo   [WARN] Could not download %~nx1 - the map may not display.
-    if exist "%TARGET%.download" del /q "%TARGET%.download"
-    goto :eof
-)
-move /y "%TARGET%.download" "%TARGET%" >nul
-echo   [OK] %~nx1 downloaded.
-goto :eof
 
 
 :fail

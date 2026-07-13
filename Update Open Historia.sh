@@ -30,7 +30,33 @@
 # branch of the organisation repository - updating keeps tracking it.
 REPO_OWNER="Open-Historia"
 REPO_NAME="open-historia"
+# The channel to update from — chosen at runtime by choose_channel below.
+# Stable = the main branch (tested releases); Beta = the beta branch.
 REPO_BRANCH="beta"
+
+# Ask which release channel to update from. Defaults to the channel this install
+# is already on (its current git branch), so pressing Enter keeps you where you
+# are; falls back to the default above when there's no terminal to read from.
+choose_channel() {
+    default_branch="$REPO_BRANCH"
+    if [ -d ".git" ] && command -v git >/dev/null 2>&1; then
+        cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        case "$cur" in main|beta) default_branch="$cur" ;; esac
+    fi
+    if [ "$default_branch" = "main" ]; then default_label="1 (Stable)"; else default_label="2 (Beta)"; fi
+    echo "Which release do you want to update from?"
+    echo "  [1] Stable  - tested releases"
+    echo "  [2] Beta    - newest features, less tested"
+    printf "Enter 1 or 2 [default: %s]: " "$default_label"
+    choice=""
+    read -r choice 2>/dev/null || choice=""
+    case "$choice" in
+        1) REPO_BRANCH="main" ;;
+        2) REPO_BRANCH="beta" ;;
+        *) REPO_BRANCH="$default_branch" ;;
+    esac
+    echo ""
+}
 
 fail_copy() {
     echo ""
@@ -49,8 +75,10 @@ main() {
     echo ""
     echo "==================================================="
     echo "            OPEN HISTORIA  -  UPDATER"
-    echo "   source: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo "==================================================="
+    echo ""
+    choose_channel
+    echo "Updating from: $REPO_OWNER/$REPO_NAME ($REPO_BRANCH)"
     echo ""
 
     # ---- Git installs: a proper pull is the cleanest update ----
@@ -60,14 +88,29 @@ main() {
             echo "Install Git (https://git-scm.com/) and run this again."
             exit 1
         fi
-        echo "This is a git install - updating with git pull..."
-        if ! git pull --ff-only; then
+        echo "This is a git install - updating from the $REPO_BRANCH channel..."
+        git fetch origin "$REPO_BRANCH" 2>/dev/null || git fetch 2>/dev/null || true
+        cur_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [ "$cur_branch" != "$REPO_BRANCH" ]; then
+            echo "Switching to the $REPO_BRANCH channel..."
+            if ! git checkout "$REPO_BRANCH" 2>/dev/null && ! git checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH" 2>/dev/null; then
+                echo ""
+                echo "[WARN] Could not switch to '$REPO_BRANCH' (uncommitted changes?)."
+                echo "Commit/stash your changes, or resolve manually, then retry."
+                exit 1
+            fi
+        fi
+        if ! git pull --ff-only origin "$REPO_BRANCH"; then
             echo ""
             echo "[WARN] git pull could not fast-forward (local changes?)."
             echo "Commit/stash your changes, or resolve manually, then retry."
             exit 1
         fi
-        git lfs pull 2>/dev/null
+        # Map binaries live on a GitHub Release now, not Git LFS - refresh any that
+        # changed (or that this install never had) from there. See scripts/map-assets.json.
+        if command -v node >/dev/null 2>&1 && [ -f "scripts/fetch-map-assets.mjs" ]; then
+            node "scripts/fetch-map-assets.mjs" || true
+        fi
         finish
     fi
 
@@ -159,15 +202,15 @@ main() {
             "$SRC/server/data/scenarios/default/" "./server/data/scenarios/default/" || fail_copy
     fi
 
-    # 3c) Resolve Git-LFS pointer stubs (map geodata, pmtiles) to real content.
-    #     A codeload zip only carries pointers, so none of the LFS files skipped
-    #     above (or KEEP-excluded from the copies) would otherwise ever update on
-    #     a ZIP install. This downloads any that actually changed from GitHub's
-    #     media host and checksum-verifies them. Best-effort: it needs Node (which
-    #     running the game already requires) and never fails the update - a missing
-    #     Node or a failed download just leaves the existing files in place.
-    if command -v node >/dev/null 2>&1 && [ -f "scripts/resolve-lfs.mjs" ]; then
-        node "scripts/resolve-lfs.mjs" "$SRC" "$REPO_OWNER" "$REPO_NAME" "$REPO_BRANCH" || true
+    # 3c) Download the large map binaries (pmtiles, geojson, city seeds) from the
+    #     GitHub Release that now hosts them. A codeload zip never carried these
+    #     (they were Git-LFS pointer stubs before, real files never), so a ZIP
+    #     install relies on this to get them and to refresh any that changed.
+    #     Checksum-verified. Best-effort: it needs Node (which running the game
+    #     already requires) and never fails the update - a missing Node or a failed
+    #     download just leaves the existing files in place. See scripts/map-assets.json.
+    if command -v node >/dev/null 2>&1 && [ -f "scripts/fetch-map-assets.mjs" ]; then
+        node "scripts/fetch-map-assets.mjs" || true
     fi
 
     rm -rf "$WORKDIR"

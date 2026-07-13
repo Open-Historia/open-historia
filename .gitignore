@@ -16,6 +16,14 @@ dist-ssr
 /fmg/
 server/data/*
 !server/data/scenarios/
+
+# Large world-map binaries — hosted as GitHub Release assets and downloaded by
+# scripts/fetch-map-assets.mjs, not committed (they used to be in Git LFS, whose
+# free bandwidth a few installs exhausted). See scripts/map-assets.json.
+/public/assets/*.pmtiles
+/public/assets/regions-seed.geojson
+/public/assets/cities-seed.json
+/server/data/scenarios/default/regions.geojson
 .key
 CLAUDE.md
 
