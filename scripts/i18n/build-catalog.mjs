@@ -52,6 +52,15 @@ const UI_STRINGS = [
   "Save changes", "Create country", "Save region", "Save event", "Save feature",
   "Place on map", "Search features…", "Search events…", "Title", "Date", "Description",
   "Start clicking the map", "Pick a region on the map",
+  // National statistics pane (indices + economy)
+  "Stats", "Sovereignty", "Food autonomy", "Energy autonomy", "Economic independence",
+  "Internal security", "International reputation", "Stability", "GDP breakdown",
+  "Budget balance", "Public debt", "Unemployment", "Inflation", "Agriculture",
+  "Industry", "Services", "Surplus", "Deficit",
+  // Military units / forces
+  "Infantry", "Armor", "Air", "Naval", "Artillery", "Garrison", "Strength",
+  // Assorted controls
+  "Custom", "Reduce motion", "Unclaimed",
 ];
 
 const collectSpecStrings = () => {
