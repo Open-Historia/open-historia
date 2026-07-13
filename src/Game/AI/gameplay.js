@@ -416,16 +416,22 @@ const buildPlayerPolityReputationText = async (bundle) => {
     return "No player polity is currently set.";
   }
 
-  const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
-  const cachedSheet = readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet;
-  const reputation = Number(cachedSheet?.indices?.internationalReputation);
-
+  // Authoritative source is world state, evolved by the AI each turn. Fall back
+  // to the last stat sheet the player viewed (to seed a sensible starting value),
+  // then to a neutral 50 — so this is never "unknown".
+  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
+  let reputation = Number(world.internationalReputation?.[playerCode]);
   if (!Number.isFinite(reputation)) {
-    return "International reputation: unknown.";
+    const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
+    reputation = Number(readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet?.indices?.internationalReputation);
+  }
+  if (!Number.isFinite(reputation)) {
+    reputation = 50;
   }
 
   const clamped = Math.max(0, Math.min(100, Math.round(reputation)));
-  return `International reputation: ${clamped}/100.`;
+  const band = clamped >= 70 ? "well-regarded" : clamped >= 40 ? "mixed" : "poor";
+  return `International reputation: ${clamped}/100 (${band}).`;
 };
 
 const resolveHelperValues = (helperTemplates, variables) => {
@@ -612,7 +618,7 @@ const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage,
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
-      systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building.`;
+      systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
     }
   }
 
@@ -1247,26 +1253,9 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
   const raw = await callAI(system, [
     { role: "user", parts: [{ text: `Compile the national stat sheet for ${target}.` }] },
   ]);
-  if (import.meta.env?.DEV) {
-    console.warn("[stat-sheet] raw AI response", {
-      code,
-      target,
-      length: String(raw ?? "").length,
-      preview: String(raw ?? "").slice(0, 300),
-    });
-  }
   const parsed = extractJsonPayload(raw);
   if (!parsed || typeof parsed !== "object") {
     throw new Error("The stat sheet did not come back as valid JSON.");
-  }
-  if (import.meta.env?.DEV) {
-    console.warn("[stat-sheet] parsed AI payload", {
-      code,
-      target,
-      indexKeys: Object.keys(parsed.indices ?? {}),
-      hasInternationalReputation: Object.prototype.hasOwnProperty.call(parsed.indices ?? {}, "internationalReputation"),
-      parsed,
-    });
   }
   return parsed;
 };

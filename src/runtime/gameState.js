@@ -14,6 +14,10 @@ export const GAME_DEFAULTS = {
 export const WORLD_DEFAULTS = {
   actionSuggestions: [],
   activeCatalyst: null,
+  // Per-polity international reputation (0-100), evolved by the AI each turn via
+  // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
+  // stat sheet it was first read from.
+  internationalReputation: {},
   language: "English",
   lastJumpMode: "",
   lastJumpSummary: "",
@@ -400,12 +404,18 @@ const normalizePolityChange = (entry) => {
     return null;
   }
 
+  const rawReputation = Number(entry.reputation ?? entry.internationalReputation);
+  const reputation = Number.isFinite(rawReputation)
+    ? Math.max(0, Math.min(100, Math.round(rawReputation)))
+    : null;
+
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
     color: normalizeOptionalString(entry.color),
     name: normalizeOptionalString(entry.name || entry.newName),
     note: normalizeOptionalString(entry.note || entry.reason),
+    reputation,
   };
 };
 
@@ -664,11 +674,19 @@ export const normalizeWorldState = (world) => {
       .filter(([regionId, ownerCode]) => regionId && ownerCode),
   );
 
+  const internationalReputation = Object.fromEntries(
+    Object.entries(nextWorld.internationalReputation ?? {})
+      .map(([code, value]) => [normalizeOptionalString(code), Number(value)])
+      .filter(([code, value]) => code && Number.isFinite(value))
+      .map(([code, value]) => [code, Math.max(0, Math.min(100, Math.round(value)))]),
+  );
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
     actionSuggestions: normalizeActionSuggestions(nextWorld.actionSuggestions),
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
+    internationalReputation,
     language: normalizeOptionalString(nextWorld.language) || WORLD_DEFAULTS.language,
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
@@ -827,6 +845,11 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
             Number.parseInt(hex.slice(4, 6), 16),
           ];
         }
+      }
+
+      // Reputation the AI set this turn becomes the polity's authoritative value.
+      if (Number.isFinite(change.reputation)) {
+        nextWorld.internationalReputation[change.code] = change.reputation;
       }
     }
 

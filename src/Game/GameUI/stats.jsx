@@ -129,14 +129,6 @@ const StatsPane = ({ active }) => {
             const cached = memoryCache.get(cacheKey) ?? readStoredSheets()[cacheKey];
             if (cached && cached.date === player.date && cached.sheet) {
                 memoryCache.set(cacheKey, cached);
-                if (import.meta.env?.DEV) {
-                    console.warn("[stat-sheet] using cached sheet", {
-                        cacheKey,
-                        date: cached.date,
-                        indexKeys: Object.keys(cached.sheet?.indices ?? {}),
-                        hasInternationalReputation: Object.prototype.hasOwnProperty.call(cached.sheet?.indices ?? {}, "internationalReputation"),
-                    });
-                }
                 setState({ status: "ready", sheet: cached.sheet, error: "" });
                 return;
             }
@@ -147,14 +139,6 @@ const StatsPane = ({ active }) => {
             const entry = { date: player.date, sheet };
             memoryCache.set(cacheKey, entry);
             storeSheet(cacheKey, entry);
-            if (import.meta.env?.DEV) {
-                console.warn("[stat-sheet] stored fresh sheet", {
-                    cacheKey,
-                    date: player.date,
-                    indexKeys: Object.keys(sheet?.indices ?? {}),
-                    hasInternationalReputation: Object.prototype.hasOwnProperty.call(sheet?.indices ?? {}, "internationalReputation"),
-                });
-            }
             setState((current) =>
                 targetCode === code ? { status: "ready", sheet, error: "" } : current);
         } catch (error) {
@@ -193,16 +177,6 @@ const StatsPane = ({ active }) => {
     }, [sheet]);
 
     const budgetNegative = String(sheet?.economy?.budgetBalance ?? "").trim().startsWith("-");
-
-    useEffect(() => {
-        if (!import.meta.env?.DEV || !sheet) return;
-        console.warn("[stat-sheet] render snapshot", {
-            targetCode,
-            status: state.status,
-            indexKeys: Object.keys(sheet.indices ?? {}),
-            rows: INDEX_ROWS.map((row) => ({ key: row.key, value: clamp01(sheet.indices?.[row.key]) })),
-        });
-    }, [sheet, state.status, targetCode]);
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
