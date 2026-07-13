@@ -14,19 +14,28 @@ import {
 
 dayjs.extend(advancedFormat);
 
-const ACTIONS_SPINNER_STYLE_ID = "actions-spinner-style";
+const ACTIONS_STYLE_ID = "actions-style";
 
-const ensureSpinnerStyles = () => {
-    if (typeof document === "undefined" || document.getElementById(ACTIONS_SPINNER_STYLE_ID)) {
+const ensureActionsStyles = () => {
+    if (typeof document === "undefined" || document.getElementById(ACTIONS_STYLE_ID)) {
         return;
     }
 
     const style = document.createElement("style");
-    style.id = ACTIONS_SPINNER_STYLE_ID;
+    style.id = ACTIONS_STYLE_ID;
     style.textContent = `
     @keyframes actions-spin {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
+    }
+
+    .actions-composer {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+
+    .actions-composer::-webkit-scrollbar {
+        display: none;
     }
     `;
     document.head.appendChild(style);
@@ -46,7 +55,7 @@ const SendIcon = () => (
 
 const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     React.useEffect(() => {
-        ensureSpinnerStyles();
+        ensureActionsStyles();
     }, []);
 
     return (
@@ -233,6 +242,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         let cancelled = false;
+        ensureActionsStyles();
         setSuggestions([]);
         setHasRequestedSuggestions(false);
 
@@ -440,7 +450,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, overflow: "hidden" }}>
         <p
         style={{
             color: "rgba(255,255,255,0.75)",
@@ -579,11 +589,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             padding: "0.75rem 1rem",
         }}
         >
-        <div style={{ alignItems: "center", display: "flex", flex: 1, position: "relative" }}>
-        <input
+        <div style={{ alignItems: "stretch", display: "flex", flex: 1, position: "relative" }}>
+        <textarea
         ref={inputRef}
-        type="text"
-        placeholder="Enter your action..."
+        className="actions-composer"
+        placeholder="Enter your action…  (Shift+Enter for a new line)"
         value={inputValue}
         onChange={(event) => setInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
@@ -596,8 +606,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             fontFamily: "sans-serif",
             fontSize: "0.82rem",
             outline: "none",
-            padding: "0.55rem 2.8rem 0.55rem 0.85rem",
+            padding: "0.7rem 2.8rem 0.7rem 0.85rem",
+            resize: "vertical",
             transition: "border-color 0.2s",
+            minHeight: "3rem",
+            lineHeight: "1.45",
+            overflowY: "auto",
             width: "100%",
         }}
         onFocus={(event) => {
@@ -625,6 +639,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             padding: 0,
             position: "absolute",
             right: "0.45rem",
+            top: "0.55rem",
             width: "1.8rem",
         }}
         >
