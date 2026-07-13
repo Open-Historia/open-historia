@@ -27,6 +27,7 @@
     "PLAYER_EVERY_ACTION_NOT_PREVIOUS": "${allActions}",
     "PLAYER_POLITY": "${playerPolity}",
     "PLAYER_POLITY_BATTALION_SUMMARIES": "${playerBattalionSummaries}",
+    "PLAYER_POLITY_REPUTATION_CONTEXT": "${playerPolityReputationContext}",
     "PLAYER_POLITY_REGIONS": "${playerPolityRegions}",
     "PREVIOUS_ROUND_EVENTS": "${recentEvents}",
     "RESPONDING_POLITY_NAME": "${respondingPolityName}",

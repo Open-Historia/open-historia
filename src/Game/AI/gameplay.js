@@ -400,6 +400,34 @@ const buildPlayerPolityRegionsText = async (bundle) => {
   return playerRegions.join(", ");
 };
 
+const STAT_SHEETS_STORAGE_KEY = "oh-stat-sheets";
+
+const readStoredStatSheets = () => {
+  try {
+    return JSON.parse(localStorage.getItem(STAT_SHEETS_STORAGE_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+const buildPlayerPolityReputationText = async (bundle) => {
+  const playerCode = normalizeString(bundle.game.country);
+  if (!playerCode) {
+    return "No player polity is currently set.";
+  }
+
+  const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
+  const cachedSheet = readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet;
+  const reputation = Number(cachedSheet?.indices?.internationalReputation);
+
+  if (!Number.isFinite(reputation)) {
+    return "International reputation: unknown.";
+  }
+
+  const clamped = Math.max(0, Math.min(100, Math.round(reputation)));
+  return `International reputation: ${clamped}/100.`;
+};
+
 const resolveHelperValues = (helperTemplates, variables) => {
   let resolved = {};
 
@@ -514,6 +542,7 @@ const buildTemplateVariables = async (
     plannedActions: buildActionHistoryText(bundle.actions),
     playerPolity: bundle.game.country || "Unknown polity",
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
+    playerPolityReputationContext: await buildPlayerPolityReputationText(bundle),
     // Simulation tasks additionally get the reach/logistics doctrine — but
     // only when forces are actually in play this turn (see the builder).
     unitsSummary:
@@ -578,6 +607,13 @@ const runJsonTask = async (taskKey, { fallback, timeoutMs = 120000, userMessage,
     systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
   } catch {
     // Without game data the task still runs at its default temperament.
+  }
+
+  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+    const reputationContext = normalizeString(variables.playerPolityReputationContext);
+    if (reputationContext) {
+      systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building.`;
+    }
   }
 
   try {
@@ -1202,7 +1238,7 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
     `Respond with ONLY a JSON object — no prose, no markdown fences — exactly this shape:\n` +
     `{"capital":"city","continent":"continent","government":"system · ideology","leader":"head of state/government",` +
     `"stability":0-100 integer,` +
-    `"indices":{"sovereignty":0-100,"foodAutonomy":0-100,"energyAutonomy":0-100,"economicIndependence":0-100,"internalSecurity":0-100},` +
+    `"indices":{"sovereignty":0-100,"foodAutonomy":0-100,"energyAutonomy":0-100,"economicIndependence":0-100,"internalSecurity":0-100,"internationalReputation":0-100},` +
     `"economy":{"gdp":"9 B$","gdpGrowth":"+5.2% / yr","gdpPerCapita":"796 $","currency":"XOF",` +
     `"inflation":"0.3%","unemployment":"1%","publicDebt":"47.5% GDP","budgetBalance":"-3.7% GDP"},` +
     `"gdpBreakdown":{"agriculture":24,"industry":24,"services":52}}\n` +
@@ -1211,9 +1247,26 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
   const raw = await callAI(system, [
     { role: "user", parts: [{ text: `Compile the national stat sheet for ${target}.` }] },
   ]);
+  if (import.meta.env?.DEV) {
+    console.warn("[stat-sheet] raw AI response", {
+      code,
+      target,
+      length: String(raw ?? "").length,
+      preview: String(raw ?? "").slice(0, 300),
+    });
+  }
   const parsed = extractJsonPayload(raw);
   if (!parsed || typeof parsed !== "object") {
     throw new Error("The stat sheet did not come back as valid JSON.");
+  }
+  if (import.meta.env?.DEV) {
+    console.warn("[stat-sheet] parsed AI payload", {
+      code,
+      target,
+      indexKeys: Object.keys(parsed.indices ?? {}),
+      hasInternationalReputation: Object.prototype.hasOwnProperty.call(parsed.indices ?? {}, "internationalReputation"),
+      parsed,
+    });
   }
   return parsed;
 };
