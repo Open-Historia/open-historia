@@ -37,7 +37,15 @@ export const selectBestNode = async () => {
 
 const startHeartbeat = (url) => {
   clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(() => { fetch(`${url}/oh/v1/ping`, { cache: "no-store" }).catch(() => {}); }, 120000);
+  heartbeatTimer = setInterval(async () => {
+    // If our node goes draining/full/unreachable (e.g. its operator pressed the
+    // dashboard's graceful shutdown), move to another node so play continues.
+    try {
+      const r = await fetch(`${url}/oh/v1/ping`, { cache: "no-store" });
+      const s = r.ok ? await r.json().catch(() => null) : null;
+      if (!s || s.status !== "active" || s.full) await connectBestNode();
+    } catch { await connectBestNode(); }
+  }, 60000);
   if (heartbeatTimer && typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
 };
 
