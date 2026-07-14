@@ -298,6 +298,21 @@ const getActiveRuntimeScenarioRecord = async () => {
   return (await getScenario(scenarioId)) ?? (await getScenario(DEFAULT_SCENARIO_ID));
 };
 
+// The default scenario's political geometry (regions.geojson, ~12 MB) is too big
+// to bundle in the web seed, so fetch it once from the content origin (the Worker
+// proxy → GitHub Release) and cache it for the session. Without it the default
+// scenario (customRegions: true) renders no colored countries and no labels.
+const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+let defaultRegionsGeojsonPromise = null;
+const fetchDefaultRegionsGeojson = () => {
+  if (!defaultRegionsGeojsonPromise) {
+    defaultRegionsGeojsonPromise = fetch(`${CONTENT_BASE}/default-regions.geojson`)
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+  return defaultRegionsGeojsonPromise;
+};
+
 // --- Runtime JSON read/write (mirror readRuntimeJsonAsset/writeRuntimeJsonAsset) ---
 const readRuntimeJsonAsset = async (assetKey) => {
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) {
@@ -305,6 +320,11 @@ const readRuntimeJsonAsset = async (assetKey) => {
     let value = scenario?.geojson?.[assetKey];
     if (value === undefined && assetKey === "regionsGeojson" && scenario && scenario.id !== DEFAULT_SCENARIO_ID) {
       value = (await getScenario(DEFAULT_SCENARIO_ID))?.geojson?.[assetKey];
+    }
+    // Web build: the default scenario's regions.geojson isn't in the seed (too
+    // big), so pull it from the content origin — otherwise its political map is blank.
+    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario && scenario.id === DEFAULT_SCENARIO_ID) {
+      value = await fetchDefaultRegionsGeojson();
     }
     // geojson may be a raw uploaded string; parse-with-fallback like readJsonFile.
     return parseJsonValue(value, cloneJson(EMPTY_FEATURE_COLLECTION));
