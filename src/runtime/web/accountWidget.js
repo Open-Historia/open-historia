@@ -23,7 +23,7 @@ const css = `
 .oh-acct-msg a{color:#9ab0ff;word-break:break-all}
 `;
 
-let root, btn, dot, label, panel, syncState = "idle";
+let root, btn, dot, label, panel, syncState = "idle", syncError = null;
 
 const el = (tag, props = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -35,6 +35,8 @@ const el = (tag, props = {}, ...kids) => {
 const setStatus = async () => {
   const signedIn = await isSignedIn();
   dot.className = "oh-acct-dot" + (syncState === "ok" ? " ok" : syncState === "syncing" ? " syncing" : syncState === "error" ? " error" : "");
+  dot.title = syncState === "error" ? ("Sync error: " + (syncError || "unknown") + " — click for details")
+    : syncState === "syncing" ? "Syncing…" : syncState === "ok" ? "Synced" : "";
   if (!signedIn) { label.textContent = "Sign in to sync"; }
   else {
     const email = (await getEmail()) || "account";
@@ -79,8 +81,9 @@ const openPanel = async () => {
     panel.append(
       el("h4", { textContent: (await getEmail()) || "Signed in" }),
       el("p", { textContent: "Your games and scenarios sync automatically, encrypted end-to-end." }),
-      now, out,
     );
+    if (syncError) panel.append(el("p", { className: "oh-acct-msg", style: "color:#f0506e", textContent: "Last sync issue: " + syncError }));
+    panel.append(now, out);
   }
   root.append(panel);
 };
@@ -95,7 +98,12 @@ export const initAccountWidget = () => {
   root = el("div", { className: "oh-acct", id: "oh-acct-root" }, btn);
   document.body.append(root);
 
-  window.addEventListener("oh:sync", (e) => { syncState = e.detail?.state || syncState; setStatus(); });
+  window.addEventListener("oh:sync", (e) => {
+    syncState = e.detail?.state || syncState;
+    if (e.detail?.state === "error") syncError = e.detail.error || "sync failed";
+    else if (e.detail?.state === "ok") syncError = null;
+    setStatus();
+  });
   document.addEventListener("click", (e) => { if (root && !root.contains(e.target)) closePanel(); });
   setStatus();
   // Kick off background sync if already signed in.
