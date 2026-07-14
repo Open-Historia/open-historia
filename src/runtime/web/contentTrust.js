@@ -16,9 +16,12 @@ import { fetchSignedJson } from "./trust.js";
 // same-origin. Both are signature-verified regardless of where they're served.
 const DIRECTORY_URL = import.meta.env.VITE_OH_DIRECTORY_URL || "/node-directory.json";
 const MANIFEST_URL = import.meta.env.VITE_OH_MANIFEST_URL || "/content-manifest.json";
+// Live node addresses (unsigned) — same origin as the signed directory.
+const LIVE_NODES_URL = DIRECTORY_URL.replace(/[^/]*$/, "nodes-live.json");
 
 let directoryPromise = null;
 let manifestPromise = null;
+let liveNodesPromise = null;
 
 // Both the content manifest (asset→hash) and the node directory MUST be validly
 // signed by the pinned root key, or we don't use nodes at all. This is what makes
@@ -45,6 +48,18 @@ const loadManifest = () => {
   return manifestPromise;
 };
 
+// Live node addresses (unsigned): [{ id, url, status }]. Mapped onto the signed
+// directory's vetted ids so a node URL changing on restart needs no admin re-sign.
+const loadLiveUrls = () => {
+  if (!liveNodesPromise) {
+    liveNodesPromise = fetch(LIVE_NODES_URL, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { nodes: [] }))
+      .then((j) => j.nodes || [])
+      .catch(() => []);
+  }
+  return liveNodesPromise;
+};
+
 const sha256Hex = async (buffer) => {
   const digest = await crypto.subtle.digest("SHA-256", buffer);
   return Array.from(new Uint8Array(digest))
@@ -67,13 +82,16 @@ const assetIdFromUrl = (url) => {
 let preferredNodeUrl = null;
 export const setPreferredNode = (url) => { preferredNodeUrl = url ? url.replace(/\/$/, "") : null; };
 
-// Active content nodes from the signed directory — what the home page probes to
-// pick the best one.
+// Active content nodes: vetted by the SIGNED directory, addressed by the LIVE
+// registry (so a restart's new URL is used without re-signing). What the home
+// page probes to pick the best one, and what content fetches route through.
 export const loadDirectoryNodes = async () => {
-  const directory = await loadDirectory();
-  return (directory?.nodes || []).filter(
-    (n) => n && n.url && (n.status === undefined || n.status === "active") && (!n.caps || n.caps.includes("content")),
-  );
+  const [directory, live] = await Promise.all([loadDirectory(), loadLiveUrls()]);
+  const liveUrl = new Map(live.filter((n) => n && n.id && n.url && n.status === "active").map((n) => [n.id, n.url]));
+  return (directory?.nodes || [])
+    .filter((n) => n && n.id && (n.status === undefined || n.status === "active") && (!n.caps || n.caps.includes("content")))
+    .map((n) => ({ ...n, url: liveUrl.get(n.id) || n.url }))
+    .filter((n) => n.url);
 };
 
 // Order candidate nodes for an asset: the connected node first, then a per-asset
@@ -99,11 +117,11 @@ export const fetchVerifiedBuffer = async (url, { signal } = {}) => {
   const assetId = assetIdFromUrl(url);
   if (!assetId) return null;
 
-  const [manifest, directory] = await Promise.all([loadManifest(), loadDirectory()]);
+  const [manifest, dirNodes] = await Promise.all([loadManifest(), loadDirectoryNodes()]);
   const expected = manifest?.assets?.[assetId];
   if (!expected?.sha256) return null;
 
-  const nodes = orderedContentNodes(directory?.nodes, assetId);
+  const nodes = orderedContentNodes(dirNodes, assetId);
   for (const node of nodes) {
     try {
       const response = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/content/${expected.sha256}`, {
