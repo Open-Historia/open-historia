@@ -992,6 +992,7 @@ const LibraryTopBar = () => {
   // the player chose in the two-step picker, then open its editor.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
+    setCustomRegionData(null);
     setEditorError(null);
     setIsBusy(true);
     try {
@@ -1055,6 +1056,7 @@ const LibraryTopBar = () => {
   const handleScenarioPlay = (scenario) => {
     setCountryQuery("");
     setCountryOptions([]);
+    setCustomRegionData(null);
     setPlayGameId(null);
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
@@ -1064,6 +1066,13 @@ const LibraryTopBar = () => {
           [...getBaseCountryOptions(), ...allCountries],
           scenario.countryNameOverrides,
         ));
+        // Load custom region geometry so the map renders the scenario's actual
+        // boundaries instead of the stock world seed.
+        if (details?.data?.world?.customRegions) {
+          downloadScenarioJsonAsset(scenario.id, "regionsGeojson")
+            .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+            .catch(() => {});
+        }
       })
       .catch(() => setCountryOptions([]));
   };
@@ -1392,6 +1401,7 @@ const LibraryTopBar = () => {
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
+  const [customRegionData, setCustomRegionData] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
@@ -1507,13 +1517,21 @@ const LibraryTopBar = () => {
     setPlayGameId(newGameId);
     setCountryQuery("");
     setCountryOptions([]);
+    setCustomRegionData(null);
     setCountryPicker(scenario);
     loadCountryNames().catch(() => [])
-      .then((allCountries) => setCountryOptions(buildScenarioCountryOptions(
-        seedWorld,
-        [...getBaseCountryOptions(), ...allCountries],
-        scenario.countryNameOverrides,
-      )))
+      .then((allCountries) => {
+        setCountryOptions(buildScenarioCountryOptions(
+          seedWorld,
+          [...getBaseCountryOptions(), ...allCountries],
+          scenario.countryNameOverrides,
+        ));
+        // The map editor just saved custom region geometry — load it so the
+        // country picker renders the scenario's actual map, not the stock seed.
+        downloadScenarioJsonAsset(scenario.id, "regionsGeojson")
+          .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+          .catch(() => {});
+      })
       .catch(() => setCountryOptions(getBaseCountryOptions()));
   };
 
@@ -1522,6 +1540,7 @@ const LibraryTopBar = () => {
   const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
+    setCustomRegionData(null);
     setPlayGameId(null);
     if (!gid) return;
     try {
@@ -1684,7 +1703,7 @@ const LibraryTopBar = () => {
 
       {countryPicker && (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
@@ -1753,10 +1772,11 @@ const LibraryTopBar = () => {
                 >
                   <CountryPickerMap
                     countryOptions={countryOptions}
+                    regionsGeojson={customRegionData}
                     onPickCountry={(code) => pickCountry(code)}
                   />
                 </Suspense>
-                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
                   {playGameId ? "Done" : "Cancel"}
                 </button>
               </>

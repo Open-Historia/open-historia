@@ -1,0 +1,1045 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.48047,
+          41.8941
+        ]
+      },
+      "properties": {
+        "city": "Roma",
+        "population": 1000000,
+        "capital": "primary",
+        "tier": 4
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.88281,
+          31.2034
+        ]
+      },
+      "properties": {
+        "city": "Alexandria",
+        "population": 500000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.16,
+          36.2
+        ]
+      },
+      "properties": {
+        "city": "Antiochia",
+        "population": 250000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          10.32,
+          36.85
+        ]
+      },
+      "properties": {
+        "city": "Carthago",
+        "population": 150000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          27.34,
+          37.94
+        ]
+      },
+      "properties": {
+        "city": "Ephesus",
+        "population": 150000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          27.18,
+          39.13
+        ]
+      },
+      "properties": {
+        "city": "Pergamum",
+        "population": 120000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          27.14,
+          38.43
+        ]
+      },
+      "properties": {
+        "city": "Smyrna",
+        "population": 90000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          22.93,
+          37.94
+        ]
+      },
+      "properties": {
+        "city": "Corinthus",
+        "population": 80000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          23.73047,
+          37.9875
+        ]
+      },
+      "properties": {
+        "city": "Athenae",
+        "population": 75000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          22.94,
+          40.64
+        ]
+      },
+      "properties": {
+        "city": "Thessalonica",
+        "population": 65000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.95996,
+          41.01307
+        ]
+      },
+      "properties": {
+        "city": "Byzantium",
+        "population": 40000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.92,
+          40.77
+        ]
+      },
+      "properties": {
+        "city": "Nicomedia",
+        "population": 60000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.84912,
+          39.92659
+        ]
+      },
+      "properties": {
+        "city": "Ancyra",
+        "population": 25000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -0.08789,
+          51.50874
+        ]
+      },
+      "properties": {
+        "city": "Londinium",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -1.08,
+          53.96
+        ]
+      },
+      "properties": {
+        "city": "Eboracum",
+        "population": 5000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.35107,
+          48.85749
+        ]
+      },
+      "properties": {
+        "city": "Lutetia",
+        "population": 8000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          4.84497,
+          45.75986
+        ]
+      },
+      "properties": {
+        "city": "Lugdunum",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          5.36133,
+          43.2932
+        ]
+      },
+      "properties": {
+        "city": "Massilia",
+        "population": 40000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -0.57129,
+          44.84029
+        ]
+      },
+      "properties": {
+        "city": "Burdigala",
+        "population": 20000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          6.95435,
+          50.93766
+        ]
+      },
+      "properties": {
+        "city": "Colonia Agrippina",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          9.22852,
+          45.46013
+        ]
+      },
+      "properties": {
+        "city": "Mediolanum",
+        "population": 40000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.2168,
+          44.40239
+        ]
+      },
+      "properties": {
+        "city": "Ravenna",
+        "population": 20000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.37,
+          45.77
+        ]
+      },
+      "properties": {
+        "city": "Aquileia",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          15.29,
+          37.07
+        ]
+      },
+      "properties": {
+        "city": "Syracusae",
+        "population": 60000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          1.25244,
+          41.11247
+        ]
+      },
+      "properties": {
+        "city": "Tarraco",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -4.78,
+          37.89
+        ]
+      },
+      "properties": {
+        "city": "Corduba",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -6.29,
+          36.53
+        ]
+      },
+      "properties": {
+        "city": "Gades",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -6.34,
+          38.92
+        ]
+      },
+      "properties": {
+        "city": "Emerita Augusta",
+        "population": 25000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -5.80078,
+          35.77326
+        ]
+      },
+      "properties": {
+        "city": "Tingis",
+        "population": 15000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -5.55,
+          34.07
+        ]
+      },
+      "properties": {
+        "city": "Volubilis",
+        "population": 12000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          14.29,
+          32.64
+        ]
+      },
+      "properties": {
+        "city": "Leptis Magna",
+        "population": 80000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          21.86,
+          32.82
+        ]
+      },
+      "properties": {
+        "city": "Cyrene",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          31.25,
+          29.85
+        ]
+      },
+      "properties": {
+        "city": "Memphis",
+        "population": 60000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.22217,
+          31.77488
+        ]
+      },
+      "properties": {
+        "city": "Hierosolyma",
+        "population": 10000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.89,
+          32.5
+        ]
+      },
+      "properties": {
+        "city": "Caesarea",
+        "population": 45000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.29883,
+          33.50476
+        ]
+      },
+      "properties": {
+        "city": "Damascus",
+        "population": 45000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          38.28,
+          34.55
+        ]
+      },
+      "properties": {
+        "city": "Palmyra",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.44,
+          30.32
+        ]
+      },
+      "properties": {
+        "city": "Petra",
+        "population": 20000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          22.79,
+          45.52
+        ]
+      },
+      "properties": {
+        "city": "Sarmizegetusa",
+        "population": 15000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.55,
+          39.88
+        ]
+      },
+      "properties": {
+        "city": "Artaxata",
+        "population": 30000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.58,
+          33.09
+        ]
+      },
+      "properties": {
+        "city": "Ctesiphon",
+        "population": 250000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          48.52,
+          34.8
+        ]
+      },
+      "properties": {
+        "city": "Ecbatana",
+        "population": 60000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          48.26,
+          32.19
+        ]
+      },
+      "properties": {
+        "city": "Susa",
+        "population": 25000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          62.19,
+          37.66
+        ]
+      },
+      "properties": {
+        "city": "Merv",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          71.56494,
+          34.01624
+        ]
+      },
+      "properties": {
+        "city": "Purushapura",
+        "population": 100000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          72.79,
+          33.74
+        ]
+      },
+      "properties": {
+        "city": "Taxila",
+        "population": 40000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.67334,
+          27.48878
+        ]
+      },
+      "properties": {
+        "city": "Mathura",
+        "population": 60000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          85.13306,
+          25.59199
+        ]
+      },
+      "properties": {
+        "city": "Pataliputra",
+        "population": 150000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          75.79468,
+          23.17066
+        ]
+      },
+      "properties": {
+        "city": "Ujjain",
+        "population": 80000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          78.12378,
+          9.92557
+        ]
+      },
+      "properties": {
+        "city": "Madurai",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          80.40894,
+          8.33108
+        ]
+      },
+      "properties": {
+        "city": "Anuradhapura",
+        "population": 60000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          112.45605,
+          34.62417
+        ]
+      },
+      "properties": {
+        "city": "Luoyang",
+        "population": 500000,
+        "capital": "primary",
+        "tier": 4
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          108.94,
+          34.34
+        ]
+      },
+      "properties": {
+        "city": "Chang'an",
+        "population": 250000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          104.0625,
+          30.65682
+        ]
+      },
+      "properties": {
+        "city": "Chengdu",
+        "population": 100000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          113.25806,
+          23.13026
+        ]
+      },
+      "properties": {
+        "city": "Panyu",
+        "population": 50000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          105.85327,
+          21.00247
+        ]
+      },
+      "properties": {
+        "city": "Longbian",
+        "population": 20000,
+        "capital": "",
+        "tier": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.19,
+          41.16
+        ]
+      },
+      "properties": {
+        "city": "Gungnae",
+        "population": 20000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          33.75,
+          16.94
+        ]
+      },
+      "properties": {
+        "city": "Meroe",
+        "population": 25000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          38.72,
+          14.13
+        ]
+      },
+      "properties": {
+        "city": "Aksum",
+        "population": 20000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.4,
+          14.21
+        ]
+      },
+      "properties": {
+        "city": "Zafar",
+        "population": 15000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.72,
+          41.84
+        ]
+      },
+      "properties": {
+        "city": "Mtskheta",
+        "population": 15000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          105.15,
+          10.25
+        ]
+      },
+      "properties": {
+        "city": "Vyadhapura",
+        "population": 20000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.84,
+          19.69
+        ]
+      },
+      "properties": {
+        "city": "Teotihuacan",
+        "population": 125000,
+        "capital": "",
+        "tier": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -89.62,
+          17.22
+        ]
+      },
+      "properties": {
+        "city": "Tikal",
+        "population": 40000,
+        "capital": "",
+        "tier": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.77,
+          17.04
+        ]
+      },
+      "properties": {
+        "city": "Monte Alban",
+        "population": 17000,
+        "capital": "",
+        "tier": 1
+      }
+    }
+  ]
+}

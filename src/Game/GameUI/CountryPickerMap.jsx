@@ -8,6 +8,7 @@ import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
 import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
+import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat } from "ol/proj";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { loadSeedFeatures } from "../../Editor/regionImport.js";
@@ -20,9 +21,25 @@ const codeToColor = (code) => {
   return `hsl(${hue}, 52%, 42%)`;
 };
 
-const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
+const parseGeoJSONFeatures = (geojson) => {
+  const fmt = new GeoJSON();
+  const features = fmt.readFeatures(geojson, {
+    dataProjection: "EPSG:4326",
+    featureProjection: "EPSG:3857",
+  });
+  for (const feature of features) {
+    const props = feature.getProperties();
+    if (props.id != null) feature.setId(String(props.id));
+    if (feature.get("owner") == null) feature.set("owner", props.gid0 || props.owner || null);
+    if (feature.get("typeId") == null) feature.set("typeId", "land");
+  }
+  return features;
+};
+
+const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => {
   const containerRef = useRef(null);
   const layerRef = useRef(null);
+  const sourceRef = useRef(null);
   const hoveredCodeRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
@@ -39,10 +56,12 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
       : countryOptions;
   }, [countryOptions, query]);
 
+  // One-time map + layer creation
   useEffect(() => {
     const source = new VectorSource();
     const layer = new VectorLayer({ source });
     layerRef.current = layer;
+    sourceRef.current = source;
 
     const olMap = new Map({
       target: containerRef.current,
@@ -64,10 +83,6 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
       }),
     });
 
-    loadSeedFeatures()
-      .then((features) => source.addFeatures(features))
-      .catch(() => {});
-
     const styleFn = (feature) => {
       const code = feature.get("owner") || feature.get("gid0");
       const isPlayable = code && playableCodesRef.current.has(code);
@@ -75,10 +90,10 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
 
       if (!isPlayable) {
         return new Style({
-          fill: new Fill({ color: "rgba(40,42,50,0.2)" }),
+          fill: new Fill({ color: "rgba(60,65,80,0.35)" }),
           stroke: new Stroke({
-            color: "rgba(80,82,95,0.15)",
-            width: 0.4,
+            color: "rgba(120,125,140,0.25)",
+            width: 0.6,
           }),
         });
       }
@@ -90,7 +105,7 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
         stroke: new Stroke({
           color: isHovered
             ? "rgba(124,58,237,0.9)"
-            : "rgba(255,255,255,0.28)",
+            : "rgba(255,255,255,0.3)",
           width: isHovered ? 2.5 : 1,
         }),
       });
@@ -130,9 +145,36 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
     return () => olMap.setTarget(null);
   }, []);
 
-  // Re-style when countryOptions change (e.g., async load completes)
+  // Load or reload region features when GeoJSON source changes
   useEffect(() => {
-    layerRef.current?.changed();
+    const source = sourceRef.current;
+    if (!source) return;
+    source.clear();
+
+    if (regionsGeojson) {
+      try {
+        const features = parseGeoJSONFeatures(regionsGeojson);
+        source.addFeatures(features);
+      } catch {
+        // parsed GeoJSON is invalid — fall through to seed
+      }
+    }
+  }, [regionsGeojson]);
+
+  // Load seed features on mount (after regionsGeojson is checked above)
+  useEffect(() => {
+    const source = sourceRef.current;
+    if (!source) return;
+    if (regionsGeojson) return; // custom data already loaded above
+    loadSeedFeatures()
+      .then((features) => source.addFeatures(features))
+      .catch(() => {});
+  }, [!!regionsGeojson]);
+
+  // Re-style when countryOptions change
+  useEffect(() => {
+    const source = sourceRef.current;
+    if (source) source.changed();
   }, [countryOptions]);
 
   return (
@@ -164,46 +206,49 @@ const CountryPickerMap = ({ countryOptions, onPickCountry }) => {
           background: "#0a0c15",
         }}
       />
-      {query.trim() && (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            maxHeight: 130,
-            overflowY: "auto",
-          }}
-        >
-          {filteredOptions.slice(0, 8).map((c) => (
-            <button
-              key={c.code}
-              type="button"
-              onClick={() => onPickCountry(c.code)}
-              style={{
-                alignItems: "center",
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: "999px",
-                color: "rgba(244,246,255,0.92)",
-                cursor: "pointer",
-                display: "inline-flex",
-                fontSize: "0.82rem",
-                fontWeight: 600,
-                gap: "0.4rem",
-                justifyContent: "flex-start",
-                minHeight: "2.1rem",
-                padding: "0 0.95rem",
-                transition: "background 0.18s ease, border-color 0.18s ease",
-              }}
-            >
-              <span aria-hidden="true" style={{ fontSize: "1.2rem", width: "1.5rem" }}>
-                {flagEmojiFromGid(c.code) || "🏳️"}
-              </span>
-              <span>{c.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          maxHeight: query.trim() ? 180 : 120,
+          overflowY: "auto",
+        }}
+      >
+        {filteredOptions.slice(0, query.trim() ? 30 : 12).map((c) => (
+          <button
+            key={c.code}
+            type="button"
+            onClick={() => onPickCountry(c.code)}
+            style={{
+              alignItems: "center",
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: "999px",
+              color: "rgba(244,246,255,0.92)",
+              cursor: "pointer",
+              display: "inline-flex",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              gap: "0.4rem",
+              justifyContent: "flex-start",
+              minHeight: "1.9rem",
+              padding: "0 0.85rem",
+              transition: "background 0.18s ease, border-color 0.18s ease",
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: "1.2rem", width: "1.5rem" }}>
+              {flagEmojiFromGid(c.code) || "🏳️"}
+            </span>
+            <span>{c.name}</span>
+          </button>
+        ))}
+        {filteredOptions.length > (query.trim() ? 30 : 12) && (
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", padding: "0.3rem", textAlign: "center" }}>
+            {filteredOptions.length - (query.trim() ? 30 : 12)} more… type to search
+          </div>
+        )}
+      </div>
     </div>
   );
 };
