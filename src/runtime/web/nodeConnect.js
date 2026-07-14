@@ -45,7 +45,7 @@ const startHeartbeat = (url) => {
       const s = r.ok ? await r.json().catch(() => null) : null;
       if (!s || s.status !== "active" || s.full) await connectBestNode();
     } catch { await connectBestNode(); }
-  }, 60000);
+  }, 20000);
   if (heartbeatTimer && typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
 };
 
