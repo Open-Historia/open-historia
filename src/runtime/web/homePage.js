@@ -69,8 +69,9 @@ const accountSection = async () => {
       send.disabled = true; send.textContent = "Sending…";
       try {
         const res = await requestMagicLink(email);
-        msg.textContent = "Check your email for a sign-in link.";
-        if (res.devLink) { msg.textContent = "Dev mode — sign-in link: "; msg.append(el("a", { href: res.devLink, textContent: "click to sign in" })); }
+        msg.textContent = res.sent === false
+          ? "Email isn't set up on this server yet — the site owner needs to finish email configuration."
+          : "Check your email for the sign-in link — and check your spam folder if you don't see it.";
       } catch (e) { msg.textContent = e.message; }
       send.disabled = false; send.textContent = "Email me a sign-in link";
     };
