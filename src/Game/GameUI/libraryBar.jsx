@@ -47,6 +47,8 @@ const UNIT_TYPE_LABELS = {
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 // Lazy so the GitHub-backed Community tab costs nothing until opened.
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
+// Lazy so OpenLayers only loads when the country picker map is opened.
+const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 
 const BAR_HEIGHT = 64;
 const TECHNICAL_OWNER_CODES = new Set([
@@ -1687,7 +1689,7 @@ const LibraryTopBar = () => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ ...surfaceStyle, borderRadius: 16, width: "min(440px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif" }}
+            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
           >
             {difficultyPick ? (
               <>
@@ -1735,41 +1737,25 @@ const LibraryTopBar = () => {
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
                   Starting “{countryPicker.name}”
                 </div>
-                <input
-                  autoFocus
-                  value={countryQuery}
-                  onChange={(e) => setCountryQuery(e.target.value)}
-                  placeholder="Search countries…"
-                  style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
-                />
-                <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-                  <button
-                    type="button"
-                    onClick={() => pickCountry("")}
-                    style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
-                  >
-                    {playGameId ? "Keep scenario default" : "Scenario default"}
-                  </button>
-                  {countryOptions
-                    .filter((c) => {
-                      const q = countryQuery.trim().toLowerCase();
-                      return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
-                    })
-                    .slice(0, 400)
-                    .map((c) => (
-                      <button
-                        key={c.code || c.name}
-                        type="button"
-                        onClick={() => pickCountry(c.code)}
-                        style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.04)" }}
-                      >
-                        <span aria-hidden="true" style={{ fontSize: "1.2rem", width: "1.5rem" }}>
-                          {flagEmojiFromGid(c.code) || "🏳️"}
-                        </span>
-                        <span>{c.name}</span>
-                      </button>
-                    ))}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => pickCountry("")}
+                  style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)", marginBottom: "0.4rem" }}
+                >
+                  {playGameId ? "Keep scenario default" : "Scenario default"}
+                </button>
+                <Suspense
+                  fallback={
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "3rem 0", textAlign: "center" }}>
+                      Loading map…
+                    </div>
+                  }
+                >
+                  <CountryPickerMap
+                    countryOptions={countryOptions}
+                    onPickCountry={(code) => pickCountry(code)}
+                  />
+                </Suspense>
                 <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
                   {playGameId ? "Done" : "Cancel"}
                 </button>
