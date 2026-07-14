@@ -62,14 +62,34 @@ const assetIdFromUrl = (url) => {
   return null;
 };
 
-// Order candidate nodes for an asset. A per-asset rotation (hash of the id) spreads
-// load across the swarm without any per-request randomness.
+// The home page connects the player to one chosen node (best latency + free
+// capacity); content fetches prefer it, falling back to the rest of the swarm.
+let preferredNodeUrl = null;
+export const setPreferredNode = (url) => { preferredNodeUrl = url ? url.replace(/\/$/, "") : null; };
+
+// Active content nodes from the signed directory — what the home page probes to
+// pick the best one.
+export const loadDirectoryNodes = async () => {
+  const directory = await loadDirectory();
+  return (directory?.nodes || []).filter(
+    (n) => n && n.url && (n.status === undefined || n.status === "active") && (!n.caps || n.caps.includes("content")),
+  );
+};
+
+// Order candidate nodes for an asset: the connected node first, then a per-asset
+// rotation (hash of the id) that spreads load across the rest of the swarm.
 const orderedContentNodes = (nodes, assetId) => {
   const usable = (nodes ?? []).filter((n) => n && n.url && (!n.caps || n.caps.includes("content")));
   if (usable.length <= 1) return usable;
+  let ordered;
   let seed = 0;
   for (const ch of assetId) seed = (seed + ch.charCodeAt(0)) % usable.length;
-  return [...usable.slice(seed), ...usable.slice(0, seed)];
+  ordered = [...usable.slice(seed), ...usable.slice(0, seed)];
+  if (preferredNodeUrl) {
+    const i = ordered.findIndex((n) => n.url.replace(/\/$/, "") === preferredNodeUrl);
+    if (i > 0) ordered.unshift(ordered.splice(i, 1)[0]);
+  }
+  return ordered;
 };
 
 // Try to fetch `url`'s asset from the node swarm, verifying the SHA-256. Returns a

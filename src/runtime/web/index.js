@@ -9,6 +9,8 @@ import { ensureSeeded } from "./libraryStore.js";
 import { redeemMagicToken } from "./account.js";
 import { syncNow } from "./sync.js";
 import { initAccountWidget } from "./accountWidget.js";
+import { showHomePage, shouldShowHome } from "./homePage.js";
+import { connectBestNode } from "./nodeConnect.js";
 
 export const installWebBackend = async () => {
   // Seed the default scenario before any /api call, then intercept.
@@ -39,5 +41,14 @@ export const installWebBackend = async () => {
     initAccountWidget();
   } catch (error) {
     console.warn("Account init failed:", error.message);
+  }
+
+  // Home page: connect to the best content node (and offer login) on entry.
+  // Once the player has entered this tab session, just connect in the background.
+  try {
+    if (shouldShowHome()) showHomePage();
+    else connectBestNode().catch(() => {});
+  } catch (error) {
+    console.warn("Home page failed:", error.message);
   }
 };
