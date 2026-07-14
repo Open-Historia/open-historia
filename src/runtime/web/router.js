@@ -40,12 +40,16 @@ const route = async (request, url) => {
   const rangeHeader = request.headers.get("Range");
 
   // Runtime map tiles: a scenario may override the shared archive; otherwise
-  // serve the static archive from the origin (Phase 0 pulls pmtiles from there).
+  // serve the static archive from the canonical content origin. Defaults to
+  // same-origin /assets (local dev), but the hosted site sets VITE_OH_PMTILES_URL
+  // to the registry Worker's CORS+range proxy (Cloudflare Pages can't host the
+  // 60-100 MB pmtiles itself, so same-origin would 404 to the SPA fallback).
   if (domain === "runtime" && segments[0] === "pmtiles") {
     const key = segments[1];
     const override = await getScenarioPmtilesOverride(key, rangeHeader);
     if (override) return method === "HEAD" ? new Response(null, { status: 200, headers: override.headers }) : override;
-    return fetch(new Request(`/assets/${encodeURIComponent(key)}.pmtiles`, {
+    const base = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+    return fetch(new Request(`${base}/${encodeURIComponent(key)}.pmtiles`, {
       method: method === "HEAD" ? "HEAD" : "GET",
       headers: request.headers,
     }));
