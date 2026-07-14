@@ -51,6 +51,22 @@ export const redeemMagicToken = async (token) => {
   return data; // { email, session, hasKey }
 };
 
+// The OAuth client id for "Sign in with Google" (public — safe to ship). Empty
+// string disables the Google button (e.g. a build without it configured).
+export const googleClientId = () => (import.meta.env.VITE_OH_GOOGLE_CLIENT_ID || "").trim();
+
+// Sign in with Google: hand the registry the Identity Services ID token, which it
+// verifies server-side, and take back a session — then ensure the account's DEK,
+// exactly as redeeming a magic link would. No email is ever sent.
+export const signInWithGoogle = async (credential) => {
+  const { status, data } = await api("/account/google", { method: "POST", body: { credential } });
+  if (status !== 200) throw new Error(data?.error || "Google sign-in failed.");
+  await kvPut(SESSION_KEY, data.session);
+  await kvPut(EMAIL_KEY, data.email);
+  await ensureDek(data.session, data.hasKey);
+  return data; // { email, session, hasKey }
+};
+
 // Ensure the account's DEK is available on this device: pull it (existing
 // account) or generate + register it (first sign-in ever).
 const ensureDek = async (session, hasKey) => {

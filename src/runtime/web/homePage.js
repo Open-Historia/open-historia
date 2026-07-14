@@ -5,7 +5,7 @@
 // (already-mounted) game — web build only, never in the local download.
 
 import { connectBestNode } from "./nodeConnect.js";
-import { isSignedIn, getEmail, requestMagicLink, signOut } from "./account.js";
+import { isSignedIn, getEmail, signOut, signInWithGoogle, googleClientId } from "./account.js";
 import { accountConfigured } from "./account.js";
 
 const ENTERED_KEY = "oh:entered";
@@ -52,9 +52,23 @@ const renderConnection = (c) => {
 
 const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } overlay?.remove(); overlay = null; };
 
+// Load Google Identity Services once; resolves with window.google.
+let gisPromise = null;
+const loadGis = () => {
+  if (gisPromise) return gisPromise;
+  gisPromise = new Promise((resolve, reject) => {
+    if (window.google?.accounts?.id) return resolve(window.google);
+    const s = el("script", { src: "https://accounts.google.com/gsi/client", async: true, defer: true });
+    s.onload = () => resolve(window.google);
+    s.onerror = () => reject(new Error("Couldn't load Google sign-in — check your connection."));
+    document.head.append(s);
+  });
+  return gisPromise;
+};
+
 const accountSection = async () => {
   const box = el("div");
-  if (!accountConfigured()) return box; // accounts not wired for this build
+  if (!accountConfigured() || !googleClientId()) return box; // sign-in not wired for this build
   box.append(el("h4", { textContent: "Save your games across devices" }));
   if (await isSignedIn()) {
     box.append(
@@ -62,22 +76,22 @@ const accountSection = async () => {
       el("button", { className: "btn", textContent: "Sign out", style: "margin-top:8px", onclick: async () => { await signOut(); refreshAccount(box); } }),
     );
   } else {
-    const input = el("input", { type: "email", placeholder: "you@example.com", autocomplete: "email" });
+    // Google renders its own branded button into `mount`; on success we get an ID
+    // token, hand it to the registry, and swap the section to the signed-in view.
+    const mount = el("div", { style: "display:flex;justify-content:center;min-height:44px" });
     const msg = el("div", { className: "msg" });
-    const send = el("button", { className: "btn", textContent: "Email me a sign-in link" });
-    send.onclick = async () => {
-      const email = input.value.trim(); if (!email) return;
-      send.disabled = true; send.textContent = "Sending…";
-      try {
-        const res = await requestMagicLink(email);
-        msg.textContent = res.sent === false
-          ? "Email isn't set up on this server yet — the site owner needs to finish email configuration."
-          : "Check your email for the sign-in link — and check your spam folder if you don't see it.";
-      } catch (e) { msg.textContent = e.message; }
-      send.disabled = false; send.textContent = "Email me a sign-in link";
-    };
-    input.onkeydown = (e) => { if (e.key === "Enter") send.click(); };
-    box.append(input, send, msg);
+    box.append(mount, msg);
+    loadGis().then((google) => {
+      google.accounts.id.initialize({
+        client_id: googleClientId(),
+        callback: async (resp) => {
+          msg.textContent = "Signing you in…";
+          try { await signInWithGoogle(resp.credential); refreshAccount(box); }
+          catch (e) { msg.textContent = e.message; }
+        },
+      });
+      google.accounts.id.renderButton(mount, { theme: "filled_blue", size: "large", text: "continue_with", shape: "pill" });
+    }).catch((e) => { msg.textContent = e.message; });
   }
   return box;
 };
