@@ -783,6 +783,7 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
   try {
     if (!id) {
       if (method === "POST") return jsonResponse(await createScenario(body ?? {}), 201);
+      if (method === "GET") return jsonResponse(await getScenarioCatalog());
       return null;
     }
     // /api/scenarios/selected|active
@@ -813,7 +814,11 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
 export const handleGames = async ({ method, segments, body, rawBody, contentType, rangeHeader }) => {
   const id = segments[0] ? decodeURIComponent(segments[0]) : null;
   try {
-    if (!id) { if (method === "POST") return jsonResponse(await createGame(body ?? {}), 201); return null; }
+    if (!id) {
+      if (method === "POST") return jsonResponse(await createGame(body ?? {}), 201);
+      if (method === "GET") return jsonResponse(await getGameCatalog());
+      return null;
+    }
     if (id === "active" && method === "PUT") return jsonResponse(await setActiveGame(body?.gameId));
 
     const sub = segments[1];

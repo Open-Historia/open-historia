@@ -10,6 +10,7 @@ import { errorResponse } from "./util.js";
 import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, getScenarioPmtilesOverride } from "./libraryStore.js";
+import { handleLang, handleUiSettings } from "./settingsStore.js";
 
 let installed = false;
 
@@ -82,13 +83,29 @@ const route = async (request, url) => {
     if (response) return response;
   }
 
-  // UI settings + language packs are cosmetic; degrade to empty locally.
-  if (domain === "ui-settings") return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-  if (domain === "lang") return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  // UI settings + language packs: persisted in IndexedDB; shipped packs merged
+  // from the static /lang/*.json Vite copies to the site.
+  if (domain === "ui-settings") {
+    const response = await handleUiSettings(ctx);
+    if (response) return response;
+  }
+  if (domain === "lang") {
+    const response = await handleLang(ctx);
+    if (response) return response;
+  }
 
-  // The GitHub CORS proxy has no server in web mode; a signed Worker proxy
-  // replaces it in a later phase. Fail clearly rather than silently.
-  if (domain === "hub") return errorResponse("Community hub proxy is unavailable in web mode.", 502);
+  // Community hub: forward /api/hub/* to the registry Worker's SSRF-guarded
+  // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
+  // browser can't download bundles directly). Listing still hits api.github.com
+  // directly (it sends CORS) and passes through the interceptor untouched.
+  if (domain === "hub") {
+    const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
+    if (!base) return errorResponse("Community hub proxy is not configured.", 502);
+    const target = `${base}/hub/${segments.join("/")}${url.search}`;
+    return method === "POST"
+      ? fetch(target, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx.body ?? {}) })
+      : fetch(target, { method });
+  }
 
   return errorResponse(`Unknown web-mode endpoint: ${url.pathname}`, 404);
 };
