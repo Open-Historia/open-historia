@@ -46,7 +46,8 @@ const renderConnection = (c) => {
   }
   dotEl.className = "oh-home-dot ok";
   const label = (c.region ? c.region + " · " : "") + `${c.latency} ms · ${c.users}/${c.max} players`;
-  connEl.replaceChildren(el("span", {}, el("b", { textContent: "Connected to " + (c.operator || c.id || "a node") }), " ", el("span", { className: "mut", textContent: "— " + label })));
+  // Show the anonymous node ID, never the operator's name — keeps hosters private.
+  connEl.replaceChildren(el("span", {}, el("b", { textContent: "Connected to " + (c.id || "a node") }), " ", el("span", { className: "mut", textContent: "— " + label })));
 };
 
 const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } overlay?.remove(); overlay = null; };

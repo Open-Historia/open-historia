@@ -6,7 +6,7 @@
 
 import { loadDirectoryNodes, setPreferredNode } from "./contentTrust.js";
 
-let connected = null; // { url, id, region, operator, latency, users, max } | { origin: true } | null
+let connected = null; // { url, id, region, latency, users, max } | { origin: true } | null
 let heartbeatTimer = null;
 const clean = (u) => String(u || "").replace(/\/$/, "");
 
@@ -53,8 +53,10 @@ export const connectBestNode = async () => {
   try { await fetch(`${best.url}/oh/v1/ping`, { cache: "no-store" }); } catch { /* count is best-effort */ }
   setPreferredNode(best.url);
   startHeartbeat(best.url);
+  // Deliberately no operator name — nodes don't broadcast it and the UI shows
+  // only the anonymous node id, so hosters stay private.
   connected = {
-    url: best.url, id: best.status.id, region: best.status.region, operator: best.status.operator,
+    url: best.url, id: best.status.id, region: best.status.region,
     latency: best.latency, users: best.status.currentUsers, max: best.status.maxUsers,
   };
   return connected;
