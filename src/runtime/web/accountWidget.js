@@ -3,7 +3,7 @@
 // (web build only — never touches the game's React tree or the local download).
 // Email → magic link → signed in → games/scenarios sync (account.js + sync.js).
 
-import { accountConfigured, isSignedIn, getEmail, requestMagicLink, signOut } from "./account.js";
+import { accountConfigured, isSignedIn, getEmail, signOut, signInWithGoogle, googleClientId } from "./account.js";
 import { syncNow, startSync, stopSync } from "./sync.js";
 
 const css = `
@@ -32,6 +32,21 @@ const el = (tag, props = {}, ...kids) => {
   return node;
 };
 
+// Load Google Identity Services once (shared with the home page's loader — the
+// window.google guard makes a second call resolve instantly).
+let gisPromise = null;
+const loadGis = () => {
+  if (gisPromise) return gisPromise;
+  gisPromise = new Promise((resolve, reject) => {
+    if (window.google?.accounts?.id) return resolve(window.google);
+    const s = el("script", { src: "https://accounts.google.com/gsi/client", async: true, defer: true });
+    s.onload = () => resolve(window.google);
+    s.onerror = () => reject(new Error("Couldn't load Google sign-in."));
+    document.head.append(s);
+  });
+  return gisPromise;
+};
+
 const setStatus = async () => {
   const signedIn = await isSignedIn();
   dot.className = "oh-acct-dot" + (syncState === "ok" ? " ok" : syncState === "syncing" ? " syncing" : syncState === "error" ? " error" : "");
@@ -52,27 +67,29 @@ const openPanel = async () => {
   panel = el("div", { className: "oh-acct-panel" });
 
   if (!signedIn) {
-    const input = el("input", { type: "email", placeholder: "you@example.com", autocomplete: "email" });
-    const send = el("button", { textContent: "Email me a sign-in link" });
-    const msg = el("div", { className: "oh-acct-msg" });
-    send.onclick = async () => {
-      const email = input.value.trim();
-      if (!email) return;
-      send.disabled = true; send.textContent = "Sending…";
-      try {
-        const res = await requestMagicLink(email);
-        msg.textContent = res.sent === false
-          ? "Email isn't set up on this server yet — the site owner needs to finish email configuration."
-          : "Check your email for the sign-in link — and check your spam folder if you don't see it.";
-      } catch (e) { msg.textContent = e.message; }
-      send.disabled = false; send.textContent = "Email me a sign-in link";
-    };
-    input.onkeydown = (e) => { if (e.key === "Enter") send.click(); };
     panel.append(
       el("h4", { textContent: "Sync your games" }),
-      el("p", { textContent: "Sign in with your email to save your games and get them on any device. Your saves are encrypted before they leave this browser." }),
-      input, send, msg,
+      el("p", { textContent: "Sign in to save your games and get them on any device. Your saves are encrypted before they leave this browser." }),
     );
+    if (!googleClientId()) {
+      panel.append(el("div", { className: "oh-acct-msg", textContent: "Sign-in isn't configured for this site yet." }));
+    } else {
+      const mount = el("div", { style: "display:flex;justify-content:center;min-height:44px" });
+      const msg = el("div", { className: "oh-acct-msg" });
+      panel.append(mount, msg);
+      loadGis().then((google) => {
+        google.accounts.id.initialize({
+          client_id: googleClientId(),
+          // On success account.js emits "oh:auth", which refreshes this widget.
+          callback: async (resp) => {
+            msg.textContent = "Signing you in…";
+            try { await signInWithGoogle(resp.credential); closePanel(); }
+            catch (e) { msg.textContent = e.message; }
+          },
+        });
+        google.accounts.id.renderButton(mount, { theme: "filled_blue", size: "large", text: "continue_with", shape: "pill" });
+      }).catch((e) => { msg.textContent = e.message; });
+    }
   } else {
     const now = el("button", { textContent: "Sync now" });
     now.onclick = async () => { closePanel(); await syncNow(); };
@@ -103,6 +120,14 @@ export const initAccountWidget = () => {
     if (e.detail?.state === "error") syncError = e.detail.error || "sync failed";
     else if (e.detail?.state === "ok") syncError = null;
     setStatus();
+  });
+  // Sign-in state changed elsewhere (e.g. the home page's Google sign-in) — refresh
+  // this widget immediately instead of showing a stale "signed out" state.
+  window.addEventListener("oh:auth", (e) => {
+    syncState = "idle"; syncError = null;
+    closePanel();
+    setStatus();
+    if (e.detail?.signedIn) startSync(); else stopSync();
   });
   document.addEventListener("click", (e) => { if (root && !root.contains(e.target)) closePanel(); });
   setStatus();

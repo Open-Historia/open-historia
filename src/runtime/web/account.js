@@ -18,6 +18,13 @@ const DEK_KEY = "account:dek"; // base64 of the raw 32-byte AES key
 
 let dekBytesCache = null;
 
+// Announce a sign-in/out so other parts of the UI (e.g. the corner account
+// widget) refresh immediately instead of showing a stale "signed out" state.
+const emitAuth = (signedIn) => {
+  try { if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oh:auth", { detail: { signedIn } })); }
+  catch { /* non-browser context */ }
+};
+
 export const accountConfigured = () => Boolean(ACCOUNT_URL);
 
 export const getSession = () => kvGet(SESSION_KEY, null);
@@ -48,6 +55,7 @@ export const redeemMagicToken = async (token) => {
   await kvPut(SESSION_KEY, data.session);
   await kvPut(EMAIL_KEY, data.email);
   await ensureDek(data.session, data.hasKey);
+  emitAuth(true);
   return data; // { email, session, hasKey }
 };
 
@@ -64,6 +72,7 @@ export const signInWithGoogle = async (credential) => {
   await kvPut(SESSION_KEY, data.session);
   await kvPut(EMAIL_KEY, data.email);
   await ensureDek(data.session, data.hasKey);
+  emitAuth(true);
   return data; // { email, session, hasKey }
 };
 
@@ -94,6 +103,7 @@ export const signOut = async () => {
   await idbDelete(STORES.kv, SESSION_KEY);
   await idbDelete(STORES.kv, EMAIL_KEY);
   await idbDelete(STORES.kv, DEK_KEY);
+  emitAuth(false);
 };
 
 // --- Record (de)serialization: preserve binary fields (covers/pmtiles bytes)
