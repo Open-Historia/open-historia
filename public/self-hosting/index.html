@@ -24,7 +24,7 @@
   <meta name="twitter:description" content="Self-host Open Historia on your own machine. Run a private server for friends, or play entirely offline. Complete guide for Windows, macOS, and Linux." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
 
-  <link rel="stylesheet" href="/seo.css" />
+  <link rel="stylesheet" href="/guides.css" />
 
   <script type="application/ld+json">
   {
@@ -107,12 +107,13 @@
 
     <div class="step">
       <strong>Step 2 — Start the server</strong>
-      <p>In the project directory, run:</p>
-      <pre><code>node server/server.js</code></pre>
-      <p>The server starts on port <code>3000</code> by default. To change the port, set the <code>PORT</code> environment variable:</p>
-      <pre><code>PORT=8080 node server/server.js</code></pre>
-      <p>On Windows (PowerShell):</p>
-      <pre><code>$env:PORT=8080; node server/server.js</code></pre>
+      <p>In the project directory, run the launcher script for your platform:</p>
+      <ul>
+        <li><strong>Windows:</strong> <code>Launch Open Historia.bat</code></li>
+        <li><strong>macOS:</strong> <code>Launch Open Historia.command</code></li>
+        <li><strong>Linux:</strong> <code>./launch-open-historia.sh</code></li>
+      </ul>
+      <p>The server will start on port 3000.</p>
     </div>
 
     <div class="step">
