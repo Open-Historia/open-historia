@@ -40,6 +40,19 @@ const api = async (path, { method = "GET", body, session } = {}) => {
   return { status: r.status, data };
 };
 
+// Tell the registry which node we're playing on, so the admin can see who's
+// connected where. This has to come from us: a node only ever sees IPs and never
+// learns a player's identity. Signed-in only (a no-op when signed out, so anonymous
+// players are never reported), and best-effort — presence is cosmetic. Pass null on
+// disconnect to clear the row.
+export const reportPresence = async (nodeId) => {
+  if (!ACCOUNT_URL) return;
+  const session = await getSession();
+  if (!session) return;
+  try { await api("/account/presence", { method: "POST", session, body: { nodeId: nodeId || null } }); }
+  catch { /* never let presence break play */ }
+};
+
 // --- Sign-in flow (magic link) ---
 export const requestMagicLink = async (email) => {
   const { status, data } = await api("/account/request", { method: "POST", body: { email } });

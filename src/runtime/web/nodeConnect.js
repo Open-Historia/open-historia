@@ -5,6 +5,7 @@
 // Falls back to the origin proxy when no node is available. Web build only.
 
 import { loadDirectoryNodes, setPreferredNode } from "./contentTrust.js";
+import { reportPresence } from "./account.js";
 
 let connected = null; // { url, id, region, latency, users, max } | { origin: true } | null
 let heartbeatTimer = null;
@@ -65,8 +66,24 @@ const sendLeave = () => {
 const installLeaveBeacon = () => {
   if (leaveBeaconInstalled || typeof window === "undefined") return;
   leaveBeaconInstalled = true;
-  window.addEventListener("pagehide", sendLeave);
+  // Clear presence too, so the admin panel doesn't show us on a node we've left.
+  // Best-effort during unload — the registry's staleness window is the backstop.
+  window.addEventListener("pagehide", () => { sendLeave(); stopPresence(); });
 };
+
+// Report which node we're on to the registry, so the admin panel can show who is
+// connected where — a node itself never learns a player's identity. Signed-out
+// players report nothing (reportPresence no-ops), so they stay anonymous. Refreshed
+// slowly: it's cosmetic, and each report is a write on the registry's side.
+const PRESENCE_REFRESH_MS = 5 * 60 * 1000;
+let presenceTimer = null;
+const startPresence = (nodeId) => {
+  clearInterval(presenceTimer);
+  reportPresence(nodeId);
+  presenceTimer = setInterval(() => reportPresence(nodeId), PRESENCE_REFRESH_MS);
+  if (presenceTimer && typeof presenceTimer.unref === "function") presenceTimer.unref();
+};
+const stopPresence = () => { clearInterval(presenceTimer); presenceTimer = null; reportPresence(null); };
 
 // Connect to the best node (or the origin fallback). Idempotent; safe to re-run.
 export const connectBestNode = async () => {
@@ -74,6 +91,7 @@ export const connectBestNode = async () => {
   if (!best) {
     clearInterval(heartbeatTimer);
     setPreferredNode(null);
+    stopPresence(); // no node — we're on the origin, so we're not "connected" anywhere
     connected = { origin: true };
     return connected;
   }
@@ -89,12 +107,14 @@ export const connectBestNode = async () => {
     url: best.url, id: best.status.id, region: best.status.region,
     latency: best.latency, users: best.status.currentUsers, max: best.status.maxUsers,
   };
+  startPresence(connected.id); // tell the registry which node we're on (signed-in only)
   return connected;
 };
 
 export const getConnected = () => connected;
 export const disconnect = () => {
-  sendLeave(); // drop out of the node's player count now, not when the window lapses
+  sendLeave();    // drop out of the node's player count now, not when the window lapses
+  stopPresence(); // and out of the admin panel's "connected players" list
   clearInterval(heartbeatTimer);
   setPreferredNode(null);
   connected = null;
