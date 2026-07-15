@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Connect an AI Backend to Open Historia — LLM Setup for AI Diplomacy &amp; Events</title>
+  <link rel="canonical" href="https://openhistoria.com/ai-setup/" />
+  <meta name="description" content="Connect a local LLM to Open Historia for AI-powered diplomacy negotiations, AI-generated historical events, and an AI strategic advisor. Guide for llama.cpp, Ollama, LM Studio, and OpenAI-compatible APIs." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/ai-setup/" />
+  <meta property="og:title" content="Connect an AI Backend to Open Historia — LLM Setup for AI Diplomacy &amp; Events" />
+  <meta property="og:description" content="Connect a local LLM to Open Historia for AI-powered diplomacy negotiations, AI-generated historical events, and an AI strategic advisor. llama.cpp, Ollama, LM Studio, and OpenAI-compatible APIs." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Connect an AI Backend to Open Historia — LLM Setup for AI Diplomacy" />
+  <meta name="twitter:description" content="Connect a local LLM to Open Historia for AI-powered diplomacy, generated events, and an AI advisor. Compatible with llama.cpp, Ollama, LM Studio, and OpenAI APIs." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="stylesheet" href="/seo.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "How to Connect an AI Backend to Open Historia",
+    "description": "Step-by-step guide to connect a local large language model (LLM) to Open Historia, enabling AI-powered diplomacy, AI-generated historical events, and an AI strategic advisor. Covers llama.cpp, Ollama, LM Studio, and OpenAI-compatible APIs.",
+    "step": [
+      {
+        "@type": "HowToStep",
+        "position": "1",
+        "name": "Install an LLM backend",
+        "text": "Choose and install a local LLM backend: llama.cpp, Ollama, LM Studio, or use an OpenAI-compatible API."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "2",
+        "name": "Configure the API endpoint",
+        "text": "Set the AI provider URL in Open Historia's settings to point to your LLM backend's API endpoint."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "3",
+        "name": "Start playing with AI",
+        "text": "AI diplomacy, events, and advisor features become active immediately once the backend is connected."
+      }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Open Historia",
+        "item": "https://openhistoria.com/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 2,
+        "name": "AI Setup Guide",
+        "item": "https://openhistoria.com/ai-setup/"
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> AI Setup Guide
+    </nav>
+
+    <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
+
+    <h1>Connect an AI Backend to Open Historia</h1>
+    <p class="tagline">Unlock AI-powered diplomacy, dynamically generated historical events, and a strategic advisor by connecting a local large language model (LLM) to your game.</p>
+
+    <h2>What AI Powers in Open Historia</h2>
+    <div class="feature-grid">
+      <div class="feature-tag">Ai Diplomacy — negotiate with any nation via natural language chat</div>
+      <div class="feature-tag">Ai Intelligence Briefings — get summaries of any country's status</div>
+      <div class="feature-tag">Ai-Generated Events — dynamic events shaped by your decisions and the world state</div>
+      <div class="feature-tag">Ai Advisor — consult for strategic guidance, economic analysis, and war planning</div>
+      <div class="feature-tag">Ai Combat Resolution — battles resolved by the AI based on troop strength, terrain, and strategy</div>
+    </div>
+
+    <h2>How It Works</h2>
+    <div class="card">
+      <p>Open Historia communicates with any <span class="highlight">OpenAI-compatible chat completions API</span>. This means any LLM backend that speaks the standard <code>/v1/chat/completions</code> protocol will work — including popular local LLM inference engines like llama.cpp, Ollama, and LM Studio.</p>
+      <p>The game's Express server includes a <code>/api/ai/relay</code> endpoint that proxies AI requests to your chosen backend. This keeps API keys on your server and lets the client remain key-free.</p>
+    </div>
+
+    <h2>Option 1: Ollama (Recommended for Easiest Setup)</h2>
+    <div class="card">
+      <p><a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> is the simplest way to run LLMs locally. It works on Windows, macOS, and Linux.</p>
+      <div class="step">
+        <strong>Install Ollama</strong>
+        <p>Download from <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> and install.</p>
+      </div>
+      <div class="step">
+        <strong>Pull a model</strong>
+        <p><code>ollama pull llama3.2</code> — or any model you prefer. Recommended models: <code>llama3.2</code> (lightweight), <code>mistral</code> (balanced), <code>qwen2.5</code> (strong reasoning).</p>
+      </div>
+      <div class="step">
+        <strong>Verify the API</strong>
+        <p>Ollama serves at <code>http://localhost:11434/v1</code> by default. The OpenAI-compatible endpoint is built-in.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>In the game's settings, set the AI provider URL to <code>http://localhost:11434/v1</code>. No API key needed for local use.</p>
+      </div>
+    </div>
+
+    <h2>Option 2: LM Studio</h2>
+    <div class="card">
+      <p><a href="https://lmstudio.ai" target="_blank" rel="noopener">LM Studio</a> provides a graphical interface for downloading and running models. Great for Windows and macOS users who prefer a GUI.</p>
+      <div class="step">
+        <strong>Install LM Studio</strong>
+        <p>Download from <a href="https://lmstudio.ai" target="_blank" rel="noopener">lmstudio.ai</a>.</p>
+      </div>
+      <div class="step">
+        <strong>Download a model</strong>
+        <p>Use the built-in model browser to search and download a model (e.g., Llama 3.2, Mistral 7B, Phi-3).</p>
+      </div>
+      <div class="step">
+        <strong>Start the local server</strong>
+        <p>Go to the "Local Server" tab, load your model, and click "Start Server." The default URL is <code>http://localhost:1234/v1</code>.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Set the AI provider URL to <code>http://localhost:1234/v1</code>. No API key needed.</p>
+      </div>
+    </div>
+
+    <h2>Option 3: llama.cpp</h2>
+    <div class="card">
+      <p><a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noopener">llama.cpp</a> is the most performant option for technical users. It runs GGUF-format models with minimal overhead.</p>
+      <div class="step">
+        <strong>Build llama.cpp server</strong>
+        <p>Follow the <a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noopener">build instructions</a> for your platform.</p>
+      </div>
+      <div class="step">
+        <strong>Download a GGUF model</strong>
+        <p>Get a GGUF model from Hugging Face (e.g., <code>Llama-3.2-3B-Instruct-Q4_K_M.gguf</code>).</p>
+      </div>
+      <div class="step">
+        <strong>Start the server</strong>
+        <p><code>./llama-server -m model.gguf --port 8080</code></p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Set the AI provider URL to <code>http://localhost:8080/v1</code>.</p>
+      </div>
+    </div>
+
+    <h2>Option 4: Cloud / OpenAI-Compatible APIs</h2>
+    <div class="card">
+      <p>You can also use any cloud-based OpenAI-compatible API, including:</p>
+      <ul>
+        <li><strong>OpenAI API:</strong> <code>https://api.openai.com/v1</code> — requires an API key</li>
+        <li><strong>Groq:</strong> <code>https://api.groq.com/openai/v1</code> — fast inference with free tier</li>
+        <li><strong>Together.ai:</strong> <code>https://api.together.xyz/v1</code> — open-source models as a service</li>
+        <li><strong>Any OpenAI-compatible proxy:</strong> OpenRouter, DeepInfra, Fireworks, etc.</li>
+      </ul>
+      <p>Set the provider URL in the game settings and add your API key if required. The server's relay endpoint forwards the key securely.</p>
+    </div>
+
+    <h2>Model Recommendations</h2>
+    <div class="card">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Size</th>
+            <th>Best For</th>
+            <th>Min RAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Llama 3.2 3B</td>
+            <td>~3B params</td>
+            <td>Diplomacy chat, advisor</td>
+            <td>4 GB</td>
+          </tr>
+          <tr>
+            <td>Mistral 7B</td>
+            <td>~7B params</td>
+            <td>Events, diplomacy, advisor</td>
+            <td>8 GB</td>
+          </tr>
+          <tr>
+            <td>Qwen 2.5 7B</td>
+            <td>~7B params</td>
+            <td>Strong reasoning, all features</td>
+            <td>8 GB</td>
+          </tr>
+          <tr>
+            <td>Phi-3 Mini</td>
+            <td>~3.8B params</td>
+            <td>Lightweight, fast</td>
+            <td>4 GB</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Smaller models respond faster and use less RAM — ideal for diplomacy chat. Larger models generate richer events and better strategic advice.</p>
+    </div>
+
+    <h2>Troubleshooting</h2>
+    <div class="card">
+      <h3>AI features are greyed out or unresponsive</h3>
+      <p>Make sure your LLM backend is running and accessible. Check that the provider URL in settings matches the backend's actual URL. The game checks for connectivity on load — if the backend isn't reachable, AI features won't activate.</p>
+      <h3>AI responses are slow</h3>
+      <p>Try a smaller model (3B parameters) or enable GPU acceleration in your LLM backend. Ollama and LM Studio both support GPU offloading.</p>
+      <h3>CORS errors when using a remote backend</h3>
+      <p>If connecting to a remote API (not localhost), use the game's relay endpoint at <code>/api/ai/relay</code> — it handles CORS transparently.</p>
+    </div>
+
+    <h2>Related Guides</h2>
+    <ul>
+      <li><a href="/get-started/">Get Started — installation and setup for all platforms</a></li>
+      <li><a href="/self-hosting/">Self-Hosting Guide — run your own server</a></li>
+      <li><a href="/how-to-play/">How to Play — gameplay mechanics and controls</a></li>
+    </ul>
+
+    <a href="/" class="cta">Play Open Historia</a>
+
+    <footer>
+      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/C3AVwHacZ4" target="_blank" rel="noopener">Discord</a> · <a href="/sitemap.xml">Sitemap</a></p>
+    </footer>
+  </div>
+</body>
+</html>
