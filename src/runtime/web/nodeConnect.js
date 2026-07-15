@@ -49,6 +49,25 @@ const startHeartbeat = (url) => {
   if (heartbeatTimer && typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
 };
 
+// Tell the node we're leaving the moment the tab closes, so its player count drops
+// right away instead of waiting for our heartbeat to lapse. Registered once, on
+// pagehide (not visibilitychange) so merely backgrounding a tab doesn't drop an
+// active player. keepalive is what lets the request survive the unload; we use a
+// GET (not sendBeacon, which can only POST) because a node accepts GET/HEAD only.
+let leaveBeaconInstalled = false;
+const sendLeave = () => {
+  const url = connected && connected.url;
+  if (!url) return;
+  try {
+    fetch(`${url}/oh/v1/leave`, { method: "GET", keepalive: true, mode: "no-cors", cache: "no-store" }).catch(() => {});
+  } catch { /* best-effort — the node's window ages us out anyway */ }
+};
+const installLeaveBeacon = () => {
+  if (leaveBeaconInstalled || typeof window === "undefined") return;
+  leaveBeaconInstalled = true;
+  window.addEventListener("pagehide", sendLeave);
+};
+
 // Connect to the best node (or the origin fallback). Idempotent; safe to re-run.
 export const connectBestNode = async () => {
   const best = await selectBestNode();
@@ -58,9 +77,12 @@ export const connectBestNode = async () => {
     connected = { origin: true };
     return connected;
   }
+  // Moving to a different node? Let the old one drop us now rather than later.
+  if (connected && connected.url && connected.url !== best.url) sendLeave();
   try { await fetch(`${best.url}/oh/v1/ping`, { cache: "no-store" }); } catch { /* count is best-effort */ }
   setPreferredNode(best.url);
   startHeartbeat(best.url);
+  installLeaveBeacon();
   // Deliberately no operator name — nodes don't broadcast it and the UI shows
   // only the anonymous node id, so hosters stay private.
   connected = {
@@ -71,4 +93,9 @@ export const connectBestNode = async () => {
 };
 
 export const getConnected = () => connected;
-export const disconnect = () => { clearInterval(heartbeatTimer); setPreferredNode(null); connected = null; };
+export const disconnect = () => {
+  sendLeave(); // drop out of the node's player count now, not when the window lapses
+  clearInterval(heartbeatTimer);
+  setPreferredNode(null);
+  connected = null;
+};
