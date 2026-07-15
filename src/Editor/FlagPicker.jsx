@@ -24,7 +24,13 @@ import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 const overlay = {
   position: "fixed",
   inset: 0,
-  zIndex: 130, // above the basemap picker (120) — this can open from a panel over it
+  // Same shell as BasemapPicker (120); 130 only so the two can't fight if both are
+  // ever open. Mounted at MapEditor's root, NOT inside the selection panel: that
+  // panel has backdrop-filter, which makes a containing block for position:fixed —
+  // inside it this overlay resolved to the panel's 300x400 box at top:64 instead of
+  // the viewport, so its top was cut off and the Apply & Play / close buttons sat
+  // over it however high its z-index went.
+  zIndex: 130,
   background: "rgba(4,6,14,0.74)",
   backdropFilter: "blur(4px)",
   display: "flex",

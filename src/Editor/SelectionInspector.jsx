@@ -13,7 +13,6 @@ import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
 import { Row, TextField, SelectField, ColorField } from "./fields.jsx";
 import { rgbToHex } from "./fields.jsx";
-import FlagPicker from "./FlagPicker.jsx";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -21,8 +20,7 @@ const commonOr = (arr, blank = "") => {
   return arr.every((v) => v === first) ? first ?? blank : blank;
 };
 
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, setSelection }) => {
-  const [flagPickerOpen, setFlagPickerOpen] = useState(false);
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, setSelection }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection],
@@ -131,20 +129,12 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
                 style={{ width: 26, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
               />
             )}
-            <button onClick={() => setFlagPickerOpen(true)} style={pillButton(false)}>
+            <button onClick={() => onOpenFlagPicker(form.owner)} style={pillButton(false)}>
               {ownerFlag ? "Change" : "Choose flag"}
             </button>
           </span>
         </Row>
       )}
-      <FlagPicker
-        open={flagPickerOpen}
-        onClose={() => setFlagPickerOpen(false)}
-        ownerCode={form.owner}
-        currentFlag={ownerFlag}
-        mapFlags={flags}
-        onPick={(value) => setFlag(form.owner, value)}
-      />
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
         <button
