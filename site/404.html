@@ -1,0 +1,117 @@
+<!-- Open Historia — 404 page © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Page not found — Open Historia</title>
+    <!-- Same inline favicon as the landing page: a 404 must not depend on a file
+         that might itself be missing. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%9B%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+    <meta name="theme-color" content="#e9dcc0" />
+
+    <!-- This file is why unknown URLs return a real 404. Cloudflare Pages serves
+         /404.html with a 404 status when a path matches no asset; with no such file
+         it falls back to /index.html with a 200, so every typo, dead link and stale
+         search result answered as the landing page. Search engines read that as a
+         "soft 404" and it made a broken sitemap URL indistinguishable from a working
+         one. Deleting this file silently restores that behaviour. -->
+    <meta name="robots" content="noindex" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap"
+    />
+
+    <style>
+      :root {
+        --parch: #e9dcc0;
+        --ink: #2c2216;
+        --sepia: #6c5a3c;
+        --line: rgba(74, 54, 24, 0.18);
+        --line2: rgba(74, 54, 24, 0.3);
+        --bronze: #9a6b2f;
+        --gold: #b8860b;
+        --serif: "EB Garamond", Georgia, "Times New Roman", serif;
+        --display: "Cinzel", Georgia, "Times New Roman", serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: var(--ink);
+        font-family: var(--serif);
+        font-size: 18px;
+        line-height: 1.62;
+        text-align: center;
+        background:
+          radial-gradient(1200px 540px at 50% -12%, rgba(184, 134, 11, 0.12), transparent 60%),
+          repeating-linear-gradient(112deg, rgba(120, 90, 40, 0.028) 0 2px, transparent 2px 7px),
+          var(--parch);
+      }
+      .wrap { max-width: 560px; }
+      .mark { font-size: 3rem; line-height: 1; margin-bottom: 12px; }
+      h1 {
+        font-family: var(--display);
+        font-size: clamp(2.2rem, 8vw, 3.4rem);
+        margin: 0 0 6px;
+        letter-spacing: 0.02em;
+      }
+      .eyebrow {
+        font-family: var(--display);
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        font-size: 0.78rem;
+        color: var(--sepia);
+        margin-bottom: 18px;
+      }
+      p { color: var(--sepia); margin: 0 auto 26px; }
+      .rule {
+        width: 90px;
+        height: 1px;
+        margin: 22px auto;
+        background: linear-gradient(90deg, transparent, var(--line2), transparent);
+      }
+      .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+      .btn {
+        font-family: var(--display);
+        font-size: 0.95rem;
+        text-decoration: none;
+        padding: 0.7rem 1.2rem;
+        border-radius: 12px;
+        border: 1px solid var(--line2);
+        color: var(--ink);
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+      .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -14px rgba(60, 40, 14, 0.7); }
+      .btn-primary {
+        background: linear-gradient(100deg, #7c4f18 0%, var(--gold) 52%, #8f6a22 100%);
+        color: #fff8e6;
+        border-color: var(--bronze);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="mark">🏛️</div>
+      <div class="eyebrow">Error 404</div>
+      <h1>Lost to history</h1>
+      <div class="rule"></div>
+      <p>
+        This page doesn't exist — or it did once, and the borders have moved since.
+        Check the address, or start again from somewhere solid.
+      </p>
+      <div class="btns">
+        <a class="btn btn-primary" href="/">Return home</a>
+        <a class="btn" href="/play/">Play</a>
+        <a class="btn" href="/guides/">Guides</a>
+      </div>
+    </main>
+  </body>
+</html>
