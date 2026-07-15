@@ -878,7 +878,7 @@ const SettingsMenu = ({
         )}
 
         <a
-        href="/how-to-play/"
+        href="/guides/"
         style={{
             alignItems: "center",
             background: "rgba(59,130,246,0.18)",
