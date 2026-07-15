@@ -56,6 +56,11 @@ const createDocument = async (body = {}) => {
     types: Array.isArray(body.types) ? cloneJson(body.types) : [],
     regions: body.regions && typeof body.regions === "object" ? cloneJson(body.regions) : { type: "FeatureCollection", features: [] },
     features: Array.isArray(body.features) ? cloneJson(body.features) : [],
+    // Mirrors server/mapEditorStore.js:105-118 — the map-maker's palette and flags.
+    // Both stores build the record field by field, so a field added to one and not
+    // the other silently survives on desktop and vanishes on the website.
+    colorOverrides: body.colorOverrides && typeof body.colorOverrides === "object" ? cloneJson(body.colorOverrides) : {},
+    flags: body.flags && typeof body.flags === "object" ? cloneJson(body.flags) : {},
     createdAt: timestamp,
     updatedAt: timestamp,
   };

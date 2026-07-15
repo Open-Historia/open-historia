@@ -11,8 +11,9 @@ import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
-import { Row, TextField, SelectField } from "./fields.jsx";
+import { Row, TextField, SelectField, ColorField } from "./fields.jsx";
 import { rgbToHex } from "./fields.jsx";
+import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -20,7 +21,8 @@ const commonOr = (arr, blank = "") => {
   return arr.every((v) => v === first) ? first ?? blank : blank;
 };
 
-const SelectionInspector = ({ api, selection, types, colors, setSelection }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, setSelection }) => {
+  const [flagError, setFlagError] = useState("");
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection],
@@ -40,6 +42,10 @@ const SelectionInspector = ({ api, selection, types, colors, setSelection }) => 
   const single = selection.length === 1;
   const apply = (patch) => api?.setRegionAttrs(selection, patch);
   const ownerRgb = form.owner && colors[form.owner];
+  // Only offer Reset when there is something to reset to — i.e. the map-maker set
+  // this colour, rather than it being the country's stock one.
+  const isCustomColor = Boolean(form.owner && colorOverrides?.[form.owner]);
+  const ownerFlag = form.owner ? flags?.[form.owner] : null;
 
   return (
     <Panel
@@ -96,6 +102,65 @@ const SelectionInspector = ({ api, selection, types, colors, setSelection }) => 
           />
         </span>
       </Row>
+      {form.owner && setColorOverride && (
+        <Row label="Colour" title="The colour this country is painted, here and in the game">
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ColorField
+              value={ownerRgb || [128, 128, 128]}
+              onChange={(rgb) => setColorOverride(form.owner, rgb)}
+            />
+            {isCustomColor && (
+              <button
+                onClick={() => setColorOverride(form.owner, null)}
+                style={pillButton(false)}
+                title="Go back to this country's standard colour"
+              >
+                Reset
+              </button>
+            )}
+          </span>
+        </Row>
+      )}
+      {form.owner && setFlag && (
+        <Row label="Flag" title="Shown in the country panel and profile circles in-game">
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {ownerFlag && (
+              <img
+                src={ownerFlag}
+                alt=""
+                style={{ width: 26, height: 18, objectFit: "cover", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
+              />
+            )}
+            <label style={{ ...pillButton(false), cursor: "pointer" }}>
+              {ownerFlag ? "Replace" : "Upload"}
+              <input
+                type="file"
+                accept={FLAG_ACCEPT}
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = ""; // let the same file be picked again after a Remove
+                  if (!file) return;
+                  setFlagError("");
+                  try {
+                    setFlag(form.owner, await fileToFlagDataUrl(file));
+                  } catch (err) {
+                    setFlagError(err.message || "Could not read that image.");
+                  }
+                }}
+              />
+            </label>
+            {ownerFlag && (
+              <button onClick={() => setFlag(form.owner, null)} style={pillButton(false)} title="Use the standard flag again">
+                Remove
+              </button>
+            )}
+          </span>
+        </Row>
+      )}
+      {flagError && (
+        <div style={{ color: "#ff9a9a", fontSize: 11, marginTop: 2 }}>{flagError}</div>
+      )}
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
         <button
