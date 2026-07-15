@@ -877,6 +877,29 @@ const SettingsMenu = ({
             </button>
         )}
 
+        <a
+        href="/guides/"
+        style={{
+            alignItems: "center",
+            background: "rgba(59,130,246,0.18)",
+            border: "1px solid rgba(96,165,250,0.4)",
+            borderRadius: "8px",
+            color: "white",
+            cursor: "pointer",
+            display: "flex",
+            fontSize: "0.9rem",
+            fontWeight: 600,
+            gap: "0.5rem",
+            justifyContent: "center",
+            marginBottom: "1rem",
+            padding: "0.6rem 0.7rem",
+            textDecoration: "none",
+            width: "100%",
+        }}
+        >
+        📖 Guides
+        </a>
+
         <SocialLinks discordUrl={discordUrl} githubUrl={githubUrl} />
         </div>
     );

@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /fmg/
+
+Sitemap: https://openhistoria.com/sitemap.xml

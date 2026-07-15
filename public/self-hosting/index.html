@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Self-Hosting Open Historia — Run Your Own Grand Strategy Game Server Offline</title>
+  <link rel="canonical" href="https://openhistoria.com/self-hosting/" />
+  <meta name="description" content="Self-host Open Historia on your own machine. Run a private grand strategy game server for LAN play with friends, or play entirely offline. Complete guide for Windows, macOS, and Linux." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/self-hosting/" />
+  <meta property="og:title" content="Self-Hosting Open Historia — Run Your Own Grand Strategy Game Server" />
+  <meta property="og:description" content="Self-host Open Historia on your own machine. Run a private grand strategy game server for LAN play with friends, or play entirely offline. Complete guide." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Self-Hosting Open Historia — Run Your Own Grand Strategy Game Server" />
+  <meta name="twitter:description" content="Self-host Open Historia on your own machine. Run a private server for friends, or play entirely offline. Complete guide for Windows, macOS, and Linux." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="stylesheet" href="/guides.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "How to Self-Host Open Historia",
+    "description": "Step-by-step guide to self-host Open Historia, the free open-source grand strategy game, on your own server for LAN parties, remote play with friends, or offline single-player.",
+    "step": [
+      {
+        "@type": "HowToStep",
+        "position": "1",
+        "name": "Install Open Historia",
+        "text": "Clone the repository from GitHub, install dependencies, and download the map data using the automated launcher or manual setup."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "2",
+        "name": "Start the server",
+        "text": "Run 'node server/server.js' to start the Express server on port 3000 (configurable via PORT environment variable)."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "3",
+        "name": "Connect players",
+        "text": "Share your local IP address or set up a domain. Players connect from browsers or the Android APK client."
+      }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Open Historia",
+        "item": "https://openhistoria.com/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 2,
+        "name": "Self-Hosting Guide",
+        "item": "https://openhistoria.com/self-hosting/"
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> Self-Hosting Guide
+    </nav>
+
+    <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
+
+    <h1>Self-Hosting Open Historia</h1>
+    <p class="tagline">Run your own grand strategy game server — completely offline, on your LAN, or accessible to friends over the internet.</p>
+
+    <h2>Why Self-Host?</h2>
+    <div class="card">
+      <p>Open Historia is a <span class="highlight">self-hosted grand strategy game</span> built on Node.js. There are no central game servers, no accounts, and no cloud dependencies — everything runs on your own machine.</p>
+      <ul>
+        <li><strong>Offline play:</strong> No internet required after setup — play single-player anywhere.</li>
+        <li><strong>LAN parties:</strong> Host a server on your local network and friends connect from their browsers.</li>
+        <li><strong>Remote multiplayer:</strong> Forward a port or use a domain to play with friends across the internet.</li>
+        <li><strong>Full control:</strong> You control saves, scenarios, AI configuration, and who can connect.</li>
+        <li><strong>Privacy:</strong> No telemetry, no analytics, no accounts. Your game data stays on your machine.</li>
+      </ul>
+    </div>
+
+    <h2>Quick Setup: Self-Hosting in 3 Steps</h2>
+
+    <div class="step">
+      <strong>Step 1 — Install Open Historia</strong>
+      <p>First, <a href="/get-started/">get the game installed</a> on the machine that will act as your server. Use the launcher script for your platform, or follow the manual setup. The server machine needs Node.js — client players only need a browser or the Android APK.</p>
+    </div>
+
+    <div class="step">
+      <strong>Step 2 — Start the server</strong>
+      <p>In the project directory, run the launcher script for your platform:</p>
+      <ul>
+        <li><strong>Windows:</strong> <code>Launch Open Historia.bat</code></li>
+        <li><strong>macOS:</strong> <code>Launch Open Historia.command</code></li>
+        <li><strong>Linux:</strong> <code>./launch-open-historia.sh</code></li>
+      </ul>
+      <p>The server will start on port 3000.</p>
+    </div>
+
+    <div class="step">
+      <strong>Step 3 — Connect players</strong>
+      <p>Players connect by opening a browser and navigating to the server's address:</p>
+      <ul>
+        <li><strong>On the same machine:</strong> <code>http://localhost:3000</code></li>
+        <li><strong>On the same LAN:</strong> <code>http://192.168.x.x:3000</code> (use the server's local IP)</li>
+        <li><strong>From Android:</strong> Open the APK and enter the server address — it's remembered between sessions</li>
+      </ul>
+      <p>For remote play over the internet, you'll need to either:</p>
+      <ul>
+        <li>Forward port 3000 on your router, or</li>
+        <li>Use a service like Tailscale, ZeroTier, or ngrok to create a secure tunnel</li>
+      </ul>
+    </div>
+
+    <h2>Going Offline</h2>
+    <div class="card">
+      <p>Once installed and built, Open Historia runs <span class="highlight">entirely offline</span> — no internet connection needed. The game logic, map rendering, scenario data, and the entire UI are all local.</p>
+      <p>Connecting an AI backend for diplomacy and events requires a local LLM (see the <a href="/ai-setup/">AI setup guide</a>), but the game is fully playable without AI as a pure strategy sandbox with the map editor and scenario system.</p>
+    </div>
+
+    <h2>CORS Configuration</h2>
+    <div class="card">
+      <p>By default, the server only accepts write operations (save, create, delete) from the same origin. If you're connecting from a different device on the network, set the environment variable to allow cross-origin requests:</p>
+      <pre><code>OH_ALLOW_CROSS_ORIGIN=1 node server/server.js</code></pre>
+      <p>This is safe for LAN and private networks. For public internet hosting, consider putting the server behind a reverse proxy like nginx or Caddy.</p>
+    </div>
+
+    <h2>Running as a Service</h2>
+    <div class="card">
+      <h3>Linux (systemd)</h3>
+      <p>Create a systemd service file at <code>/etc/systemd/system/open-historia.service</code>:</p>
+      <pre><code>[Unit]
+Description=Open Historia Game Server
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/open-historia
+ExecStart=/usr/bin/node server/server.js
+Restart=on-failure
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+      <p>Then enable and start: <code>sudo systemctl enable --now open-historia</code></p>
+
+      <h3>Windows (Task Scheduler)</h3>
+      <p>Use Task Scheduler to run <code>node server/server.js</code> at system startup with the "Run whether user is logged on or not" option.</p>
+
+      <h3>macOS (launchd)</h3>
+      <p>Create a plist file in <code>~/Library/LaunchAgents/</code> to run the server as a background daemon.</p>
+    </div>
+
+    <h2>Related Guides</h2>
+    <ul>
+      <li><a href="/get-started/">Get Started — installation and setup for all platforms</a></li>
+      <li><a href="/ai-setup/">Connect an AI Backend — enable AI-powered diplomacy and events</a></li>
+      <li><a href="/how-to-play/">How to Play — gameplay mechanics and controls</a></li>
+    </ul>
+
+    <a href="/" class="cta">Play Open Historia</a>
+
+    <footer>
+      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/C3AVwHacZ4" target="_blank" rel="noopener">Discord</a> · <a href="/sitemap.xml">Sitemap</a></p>
+    </footer>
+  </div>
+</body>
+</html>
