@@ -157,11 +157,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     }
   };
 
+  // Every field the document owns has to be listed here — this is a whitelist, and
+  // anything missing is dropped on save without a word. That is what makes a new
+  // doc field look like it works until the first reload.
   const buildPayload = () => ({
     name: d.name,
     metadata: d.metadata,
     types: d.types,
     features: d.features,
+    colorOverrides: d.colorOverrides,
+    flags: d.flags,
     regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
@@ -215,6 +220,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
         types: doc.types?.length ? doc.types : base.types,
         features: doc.features || [],
+        // Default to {} rather than leaving them undefined: a map saved before these
+        // existed has neither key, and setColorOverride/setFlag spread the current
+        // value.
+        colorOverrides: doc.colorOverrides || {},
+        flags: doc.flags || {},
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -469,6 +479,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         selection={d.selection}
         types={d.types}
         colors={d.colors}
+        colorOverrides={d.colorOverrides}
+        setColorOverride={d.setColorOverride}
+        flags={d.flags}
+        setFlag={d.setFlag}
         setSelection={d.setSelection}
       />
 
