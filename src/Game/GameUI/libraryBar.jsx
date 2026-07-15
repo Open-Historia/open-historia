@@ -1447,6 +1447,19 @@ const LibraryTopBar = () => {
       "colors",
       new Blob([JSON.stringify(seed.colors ?? {})], { type: "application/json" }),
     );
+    // Author-set country flags. Only written when the map actually has some: a map
+    // with no flags must leave the scenario's flags.json alone rather than stamping
+    // an empty one over it, and clearScenarioAsset is how a map that removed its
+    // last flag gets back to the game's code-derived flags.
+    if (seed.flags) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "flags",
+        new Blob([JSON.stringify(seed.flags)], { type: "application/json" }),
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "flags").catch(() => {});
+    }
     await uploadScenarioAsset(
       scenarioId,
       "regionsGeojson",
