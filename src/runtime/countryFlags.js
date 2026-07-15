@@ -68,6 +68,18 @@ export const flagImageUrlFromGid = (gid0) => {
     return alpha2 ? `https://flagcdn.com/${alpha2}.svg` : null;
 };
 
+// Every country the game can already draw a flag for — the browsable set behind the
+// editor's flag picker. Derived from the table above rather than a second list, so
+// the two can't drift. Sorted by code for a stable grid.
+export const listBuiltInFlags = () =>
+    Object.entries(ISO3_TO_ISO2)
+        .map(([iso3, alpha2]) => ({
+            code: iso3,
+            alpha2: alpha2.toLowerCase(),
+            imageUrl: `https://flagcdn.com/${alpha2.toLowerCase()}.svg`,
+        }))
+        .sort((a, b) => a.code.localeCompare(b.code));
+
 // Regional-indicator flag emoji (e.g. "us" -> 🇺🇸) for a GID_0 code, or null.
 export const flagEmojiFromGid = (gid0) => {
     const alpha2 = gidToAlpha2(gid0);
