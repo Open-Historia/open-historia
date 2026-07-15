@@ -13,7 +13,7 @@ import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
 import { Row, TextField, SelectField, ColorField } from "./fields.jsx";
 import { rgbToHex } from "./fields.jsx";
-import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
+import FlagPicker from "./FlagPicker.jsx";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -22,7 +22,7 @@ const commonOr = (arr, blank = "") => {
 };
 
 const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, setSelection }) => {
-  const [flagError, setFlagError] = useState("");
+  const [flagPickerOpen, setFlagPickerOpen] = useState(false);
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection],
@@ -128,39 +128,23 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
               <img
                 src={ownerFlag}
                 alt=""
-                style={{ width: 26, height: 18, objectFit: "cover", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
+                style={{ width: 26, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
               />
             )}
-            <label style={{ ...pillButton(false), cursor: "pointer" }}>
-              {ownerFlag ? "Replace" : "Upload"}
-              <input
-                type="file"
-                accept={FLAG_ACCEPT}
-                style={{ display: "none" }}
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = ""; // let the same file be picked again after a Remove
-                  if (!file) return;
-                  setFlagError("");
-                  try {
-                    setFlag(form.owner, await fileToFlagDataUrl(file));
-                  } catch (err) {
-                    setFlagError(err.message || "Could not read that image.");
-                  }
-                }}
-              />
-            </label>
-            {ownerFlag && (
-              <button onClick={() => setFlag(form.owner, null)} style={pillButton(false)} title="Use the standard flag again">
-                Remove
-              </button>
-            )}
+            <button onClick={() => setFlagPickerOpen(true)} style={pillButton(false)}>
+              {ownerFlag ? "Change" : "Choose flag"}
+            </button>
           </span>
         </Row>
       )}
-      {flagError && (
-        <div style={{ color: "#ff9a9a", fontSize: 11, marginTop: 2 }}>{flagError}</div>
-      )}
+      <FlagPicker
+        open={flagPickerOpen}
+        onClose={() => setFlagPickerOpen(false)}
+        ownerCode={form.owner}
+        currentFlag={ownerFlag}
+        mapFlags={flags}
+        onPick={(value) => setFlag(form.owner, value)}
+      />
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
         <button
