@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
-import { resolveCountryDisplayName } from "../../runtime/assets.js";
+import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { flagImageUrlFromGid, flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { readWorldState } from "../../runtime/gameState.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
@@ -73,7 +73,12 @@ const resolveFlagInfo = (gid0) => {
 // Era-aware flag: a scenario polity's own flag URL wins; otherwise the owner code
 // resolves as an ISO country flag (correct for modern owners). Custom era polities
 // with neither simply have no flag — the popup then says "No flag available".
-const resolveEraFlagInfo = (ownerCode, polity) => {
+const resolveEraFlagInfo = (ownerCode, polity, customFlags) => {
+    // A flag the map-maker uploaded wins: it is the only one anyone chose on purpose.
+    // It lives in the scenario's flags.json rather than on the polity, because
+    // world.json is re-read every 5s and a few hundred flags would ride every poll.
+    const own = ownerCode && customFlags?.[ownerCode];
+    if (own) return { imageUrl: own, emoji: null };
     if (polity?.flag) return { imageUrl: polity.flag, emoji: null };
     return resolveFlagInfo(ownerCode);
 };
@@ -136,6 +141,9 @@ const RegionPopup = () => {
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
+    // Author-set flags from the scenario's flags.json (owner code -> data URL).
+    // Memoized in assets.js, so this is one fetch per scenario, not per selection.
+    const [customFlags, setCustomFlags] = useState({});
     const { current: map } = useMap();
 
     // Refresh the polity registry whenever a selection opens (cheap; keeps the
@@ -146,6 +154,11 @@ const RegionPopup = () => {
         readWorldState({ force: true })
             .then((world) => {
                 if (!cancelled) setPolities(world?.polityOverrides ?? {});
+            })
+            .catch(() => {});
+        getNationFlags()
+            .then((flags) => {
+                if (!cancelled) setCustomFlags(flags || {});
             })
             .catch(() => {});
         return () => {
@@ -182,7 +195,7 @@ const RegionPopup = () => {
     const handleToggleStats = () => {
         const sel = _currentSelection;
         if (!sel) return;
-        const flagInfo = resolveEraFlagInfo(sel.GID_0, polities[sel.GID_0]);
+        const flagInfo = resolveEraFlagInfo(sel.GID_0, polities[sel.GID_0], customFlags);
         openCountryPanel({
             code: sel.GID_0,
             name: resolveSelectionName(sel),
@@ -216,7 +229,7 @@ const RegionPopup = () => {
         // Era-correct flag only: the polity's own flag, else the owner's ISO flag.
         // Deliberately NO modern-country fallback — an era polity without a flag
         // shows "No flag available" rather than an anachronistic modern flag.
-        const flagInfo = resolveEraFlagInfo(selection.GID_0, polities[selection.GID_0]);
+        const flagInfo = resolveEraFlagInfo(selection.GID_0, polities[selection.GID_0], customFlags);
         setFlagState(
             flagInfo
                 ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
