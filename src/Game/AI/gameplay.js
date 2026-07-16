@@ -631,10 +631,86 @@ const buildGeneratedChat = async (chatLike, linkEventId, world) => {
   });
 };
 
+// Region ownership is keyed by the map's own region id (GID_1, e.g. "DEU.2_1"),
+// but the prompts ask the model for a region's original NAME in regionId, and the
+// model is never shown an id to copy. An unresolved name is not inert: it becomes
+// regionOwnershipOverrides["Bayern"], which matches no geometry feature and so
+// paints nothing while still counting as a map change in the timeline. Turn names
+// into real ids here, and drop what cannot be resolved so a phantom key never
+// reaches the world state.
+const regionKey = (value) => normalizeString(value)
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .replace(/\s+/g, " ");
+
+const resolveRegionTransfers = async (containers, world) => {
+  const catalog = await loadRegionCatalog().catch(() => []);
+  // Without a catalog we cannot tell a good id from a bad one, and dropping real
+  // transfers would be worse than the phantom keys — leave the payload alone.
+  if (catalog.length === 0) return;
+
+  const byId = new Map();
+  const byName = new Map();
+  for (const region of catalog) {
+    byId.set(region.id, region);
+    const key = regionKey(region.name);
+    if (!key) continue;
+    const bucket = byName.get(key);
+    if (bucket) bucket.push(region);
+    else byName.set(key, [region]);
+  }
+  const owners = normalizeWorldState(world).regionOwnershipOverrides;
+
+  const resolve = (transfer) => {
+    // A model that did emit a real id keeps working.
+    if (byId.has(normalizeString(transfer?.regionId))) return normalizeString(transfer.regionId);
+    // Otherwise the name may be in either field: the prompt puts it in regionId,
+    // the schema also offers regionName.
+    for (const candidate of [transfer?.regionId, transfer?.regionName]) {
+      const matches = byName.get(regionKey(candidate)) ?? [];
+      if (matches.length === 1) return matches[0].id;
+      // Region names repeat across countries ("Santa Cruz", "Georgia"). Prefer the
+      // one the transfer says it is taking territory from; a guess would flip a
+      // border on the wrong continent, which is worse than changing nothing.
+      const fromCode = normalizeString(transfer?.fromCode);
+      if (matches.length > 1 && fromCode) {
+        const owned = matches.filter((region) => normalizeString(owners[region.id]) === fromCode);
+        if (owned.length === 1) return owned[0].id;
+      }
+    }
+    return "";
+  };
+
+  for (const { impacts, path } of containers) {
+    const transfers = normalizeArray(impacts?.regionTransfers);
+    if (transfers.length === 0) continue;
+    const resolved = [];
+    for (const transfer of transfers) {
+      const regionId = resolve(transfer);
+      if (regionId) {
+        transfer.regionId = regionId;
+        resolved.push(transfer);
+        continue;
+      }
+      console.warn(
+        `[ai] ${path}.regionTransfers dropped "${normalizeString(transfer?.regionId)}"` +
+          `${transfer?.regionName ? ` (${normalizeString(transfer.regionName)})` : ""} -> ` +
+          `${normalizeString(transfer?.toCode)}: no map region matches that id or name.`,
+      );
+    }
+    impacts.regionTransfers = resolved;
+  }
+};
+
+// Also canonicalizes region ids in place (see resolveRegionTransfers): runJsonTask
+// hands the accepted payload straight to the caller, and a payload is only accepted
+// once this returns clean, so every applied transfer has passed through here.
 const validateGeneratedWorldChanges = async (candidate, world) => {
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{ impacts: candidate?.impacts, path: "$.impacts" }];
+  await resolveRegionTransfers(containers, world);
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
 

@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Historia — Play AI-driven alternate history</title>
+<meta name="description" content="Open Historia is a free, open-source AI turn-based history strategy game. Download once, run it, and reshape history. A community-built alternative to Pax Historia." />
+<meta name="theme-color" content="#e9dcc0" />
+<link rel="icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Open Historia — Play AI-driven alternate history" />
+<meta property="og:description" content="A free, open-source AI turn-based history strategy game. Download, run, reshape history." />
+<meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/screenshot.png" />
+<meta property="og:url" content="https://openhistoria.com/" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Open Historia — Play AI-driven alternate history" />
+<meta name="twitter:description" content="A free, open-source AI turn-based history strategy game. Download, run, reshape history." />
+<meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/screenshot.png" />
+<link rel="canonical" href="https://openhistoria.com/" />
+<!-- Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Open Historia",
+  "applicationCategory": "GameApplication",
+  "operatingSystem": "Windows, macOS, Linux, Android",
+  "description": "Open Historia is a free, open-source grand strategy game — a community-driven alternative to Pax Historia — featuring an interactive world map, AI-generated events, AI diplomacy via natural language chat, troop combat, a full vector map editor, and a scenario hub for sharing custom scenarios.",
+  "url": "https://openhistoria.com/",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "author": {
+    "@type": "Organization",
+    "name": "Open Historia",
+    "url": "https://github.com/Open-Historia"
+  },
+  "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Open Historia",
+  "url": "https://openhistoria.com/",
+  "sameAs": [
+    "https://github.com/Open-Historia/open-historia",
+    "https://discord.gg/C3AVwHacZ4",
+    "https://openhistoria.itch.io/open-historia",
+    "https://gamejolt.com/games/open-historia"
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "Open Historia",
+  "url": "https://openhistoria.com/",
+  "potentialAction": {
+    "@type": "SearchAction",
+    "target": "https://openhistoria.com/?q={search_term_string}",
+    "query-input": "required name=search_term_string"
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" /></noscript>
+<style>
+  :root{
+    --parch:#e9dcc0; --parch2:#e2d2b1; --marble:#f6efdc; --marble2:#fbf6e9;
+    --ink:#2c2216; --sepia:#6c5a3c; --sepia2:#87754f;
+    --line:rgba(74,54,24,.18); --line2:rgba(74,54,24,.30);
+    --bronze:#9a6b2f; --bronze-d:#7c531d; --gold:#b8860b; --gold-l:#caa53f;
+    --red:#8a2331; --red-d:#6d1a25; --green:#4c7a3d;
+    --grad-gold:linear-gradient(100deg,#7c4f18 0%,#b8860b 52%,#8f6a22 100%);
+    --shadow:0 18px 42px -22px rgba(60,40,14,.55);
+    --radius:14px;
+    --serif:'EB Garamond',Georgia,'Times New Roman',serif;
+    --display:'Cinzel',Georgia,'Times New Roman',serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; color:var(--ink); font-family:var(--serif); font-size:18px; line-height:1.62;
+    -webkit-font-smoothing:antialiased; position:relative;
+    background:
+      radial-gradient(1200px 540px at 50% -12%, rgba(184,134,11,.12), transparent 60%),
+      radial-gradient(1000px 560px at 100% 2%, rgba(138,35,49,.06), transparent 55%),
+      repeating-linear-gradient(112deg, rgba(120,90,40,.028) 0 2px, transparent 2px 7px),
+      var(--parch);
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  h1,h2,h3,.brand,.eyebrow,.tab,.btn,.step .n,.tag{font-family:var(--display)}
+  .muted{color:var(--sepia)}
+
+  /* ---------- Roman colonnade down both sides ---------- */
+  .colonnade{display:none}
+  @media(min-width:1180px){.colonnade{display:block}}
+  .col{position:absolute;top:0;bottom:0;width:80px;z-index:1;pointer-events:none;display:flex;flex-direction:column;
+    box-shadow:0 0 30px rgba(52,36,12,.14)}
+  .col.l{left:0}.col.r{right:0}
+  .col .cap{position:relative;height:60px;flex:none}
+  .col .abacus{position:absolute;top:0;left:-8px;right:-8px;height:15px;border-radius:2px;border:1px solid var(--line2);
+    background:linear-gradient(90deg,#b3a37e,#f7f0d8 50%,#b3a37e);box-shadow:0 3px 7px rgba(52,36,12,.28)}
+  .col .echinus{position:absolute;left:2px;right:2px;top:15px;bottom:0;border-bottom:1px solid var(--line2);
+    background:linear-gradient(90deg,#a2926c,#f2ead0 50%,#a2926c);clip-path:polygon(0 0,100% 0,83% 100%,17% 100%)}
+  .col .shaft{flex:1;margin:0 9px;position:relative;border-left:1px solid var(--line);border-right:1px solid var(--line);
+    background:
+      linear-gradient(90deg, rgba(58,40,16,.34) 0%, rgba(255,250,235,.14) 24%, rgba(255,253,244,.60) 50%, rgba(255,250,235,.12) 76%, rgba(58,40,16,.38) 100%),
+      repeating-linear-gradient(90deg, #c8bb96 0 2px, #efe7cd 2px 9px, #c8bb96 9px 11px);
+    background-blend-mode:normal;}
+  .col .necking{position:absolute;top:0;left:-2px;right:-2px;height:8px;border-radius:2px;
+    background:linear-gradient(90deg,#a2926c,#efe6cc 50%,#a2926c);border:1px solid var(--line)}
+  .col .base{position:relative;height:56px;flex:none}
+  .col .torus{position:absolute;left:2px;right:2px;top:0;bottom:15px;border-top:1px solid rgba(255,255,255,.35);
+    background:linear-gradient(90deg,#a2926c,#f2ead0 50%,#a2926c);clip-path:polygon(17% 0,83% 0,100% 100%,0 100%)}
+  .col .plinth{position:absolute;bottom:0;left:-8px;right:-8px;height:15px;border-radius:2px;border:1px solid var(--line2);
+    background:linear-gradient(90deg,#b3a37e,#f7f0d8 50%,#b3a37e);box-shadow:0 -2px 6px rgba(52,36,12,.22)}
+
+  /* ---------- header ---------- */
+  header{position:sticky;top:0;z-index:50;backdrop-filter:blur(8px);
+    background:color-mix(in srgb,var(--parch) 82%,transparent);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.12rem;letter-spacing:.04em;color:var(--ink)}
+  .brand .globe{font-size:1.3rem}
+  .nav-links{display:flex;align-items:center;gap:28px;font-size:1.02rem}
+  .nav-links a{color:var(--sepia);transition:color .15s}
+  .nav-links a:hover{color:var(--ink)}
+  .nav-cta{font-family:var(--display);font-size:.86rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
+    padding:9px 18px;border-radius:8px;background:var(--grad-gold);color:#fbf3dc;border:1px solid rgba(255,225,160,.35)}
+  @media(max-width:720px){.nav-links a:not(.nav-cta){display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{padding:74px 0 30px;text-align:center}
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:7px 16px;border:1px solid var(--line2);
+    border-radius:999px;font-size:.92rem;color:var(--sepia);background:var(--marble)}
+  .badge b{color:var(--red);font-weight:600}
+  h1{font-size:clamp(2.6rem,6.4vw,4.6rem);line-height:1.04;letter-spacing:.01em;margin:24px 0 0;font-weight:800;color:var(--ink)}
+  .grad{background:var(--grad-gold);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:clamp(1.15rem,2.3vw,1.4rem);color:var(--sepia);max-width:640px;margin:22px auto 0}
+  .cta-row{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin:34px 0 10px}
+  .btn{display:inline-flex;align-items:center;gap:10px;padding:15px 28px;border-radius:11px;font-weight:700;
+    font-size:.94rem;letter-spacing:.05em;text-transform:uppercase;border:1px solid transparent;
+    transition:transform .12s ease,box-shadow .2s,background .2s;cursor:pointer}
+  .btn:hover{transform:translateY(-2px)}
+  .btn-primary{background:linear-gradient(180deg,#98283a,var(--red-d));color:#f7eccf;
+    border-color:rgba(255,222,160,.4);box-shadow:0 12px 30px -12px rgba(110,26,37,.7)}
+  .btn-primary:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
+  .btn-ghost{background:var(--marble);border-color:var(--line2);color:var(--ink)}
+  .btn-ghost:hover{background:var(--marble2)}
+  .hero-note{font-size:.96rem;color:var(--sepia2);margin-top:8px;font-style:italic}
+  .hero-note a{color:var(--bronze);border-bottom:1px solid rgba(154,107,47,.4)}
+
+  .shot{margin:50px auto 0;max-width:940px;position:relative}
+  .shot::before{content:"";position:absolute;inset:-10px;border-radius:calc(var(--radius) + 8px);
+    background:var(--grad-gold);opacity:.5;filter:blur(2px);z-index:-1}
+  .shot img{width:100%;display:block;border-radius:var(--radius);border:3px solid #cdb87e;box-shadow:var(--shadow)}
+
+  /* ---------- sections ---------- */
+  section{padding:62px 0}
+  .eyebrow{color:var(--bronze);font-weight:600;font-size:.82rem;letter-spacing:.22em;text-transform:uppercase;text-align:center}
+  h2{font-size:clamp(1.9rem,3.8vw,2.7rem);letter-spacing:.02em;text-align:center;margin:12px 0 0;font-weight:700;color:var(--ink)}
+  .lead{color:var(--sepia);text-align:center;max-width:620px;margin:16px auto 0;font-size:1.12rem}
+
+  .rule{width:120px;height:2px;margin:20px auto 0;background:linear-gradient(90deg,transparent,var(--bronze),transparent)}
+
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:42px}
+  .step{background:var(--marble);border:1px solid var(--line);border-radius:var(--radius);padding:26px 24px;box-shadow:var(--shadow)}
+  .step .n{width:46px;height:46px;border-radius:9px;background:var(--marble2);border:1px solid var(--line2);
+    display:grid;place-items:center;font-weight:700;color:var(--bronze);font-size:1.25rem;letter-spacing:.02em}
+  .step h3{margin:16px 0 6px;font-size:1.22rem;letter-spacing:.02em;color:var(--ink);font-weight:600}
+  .step p{margin:0;color:var(--sepia);font-size:1.02rem}
+  .step code{background:var(--parch);border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:.86em;font-family:ui-monospace,Consolas,monospace}
+  @media(max-width:760px){.steps{grid-template-columns:1fr}}
+
+  /* os tabs */
+  .runbox{margin-top:24px;background:var(--marble);border:1px solid var(--line2);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+  .tabs{display:flex;border-bottom:1px solid var(--line)}
+  .tab{flex:1;padding:15px;background:none;border:0;color:var(--sepia);font-weight:600;font-size:.92rem;letter-spacing:.04em;
+    cursor:pointer;border-bottom:3px solid transparent;transition:.15s}
+  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--red);background:var(--marble2)}
+  .tab-body{padding:22px 26px;display:none;font-size:1.05rem;color:var(--sepia)}
+  .tab-body.on{display:block}
+  .tab-body b{color:var(--ink);font-weight:600}
+  .kbd{background:var(--parch);border:1px solid var(--line2);border-bottom-width:2px;border-radius:6px;padding:2px 9px;
+    font-family:ui-monospace,Consolas,monospace;font-size:.82em;color:var(--ink);white-space:nowrap}
+
+  /* download cards */
+  .dl{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:18px;margin-top:42px}
+  .card{position:relative;background:var(--marble);border:1px solid var(--line);border-radius:var(--radius);padding:26px 24px;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+  .card.feature{border-color:var(--bronze);box-shadow:0 0 0 1px rgba(154,107,47,.25) inset,var(--shadow)}
+  .card .ic{font-size:1.8rem}
+  .card h3{margin:14px 0 2px;font-size:1.3rem;letter-spacing:.02em;color:var(--ink);font-weight:600}
+  .card .meta{color:var(--sepia2);font-size:.92rem;font-style:italic}
+  .card p{color:var(--sepia);font-size:1.02rem;margin:12px 0 20px;flex:1}
+  .card .btn{width:100%;justify-content:center;padding:13px}
+  .tag{position:absolute;top:16px;right:16px;font-size:.66rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    color:#5b3d0c;background:linear-gradient(180deg,#e6c469,#c99a2e);padding:5px 11px;border-radius:999px;border:1px solid rgba(120,80,15,.4)}
+  @media(max-width:820px){.dl{grid-template-columns:1fr}}
+
+  /* features */
+  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:42px}
+  .feat{background:var(--marble);border:1px solid var(--line);border-radius:12px;padding:22px}
+  .feat .fi{font-size:1.55rem}
+  .feat h4{margin:10px 0 5px;font-size:1.12rem;letter-spacing:.02em;color:var(--ink);font-family:var(--display);font-weight:600}
+  .feat p{margin:0;color:var(--sepia);font-size:.98rem}
+  @media(max-width:820px){.feats{grid-template-columns:1fr 1fr}}
+  @media(max-width:520px){.feats{grid-template-columns:1fr}}
+
+  /* faq */
+  .faq{max-width:760px;margin:38px auto 0}
+  details{background:var(--marble);border:1px solid var(--line);border-radius:11px;padding:2px 22px;margin-bottom:12px}
+  details[open]{border-color:var(--line2)}
+  summary{cursor:pointer;padding:17px 0;font-weight:600;font-size:1.1rem;list-style:none;display:flex;justify-content:space-between;align-items:center;color:var(--ink)}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";color:var(--bronze);font-size:1.4rem;transition:transform .2s}
+  details[open] summary::after{transform:rotate(45deg)}
+  details p{margin:0 0 18px;color:var(--sepia);font-size:1.04rem}
+  details a{color:var(--bronze);border-bottom:1px solid rgba(154,107,47,.4)}
+
+  /* cta band + footer */
+  .band{background:var(--marble);border:1px solid var(--line2);border-radius:20px;padding:52px 30px;text-align:center;margin-top:20px;
+    background-image:radial-gradient(720px 300px at 50% -40%,rgba(184,134,11,.16),transparent),linear-gradient(var(--marble),var(--marble));box-shadow:var(--shadow)}
+  footer{border-top:1px solid var(--line);margin-top:70px;padding:34px 0 60px;color:var(--sepia);font-size:.98rem}
+  .foot{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center}
+  .foot a{color:var(--sepia)}.foot a:hover{color:var(--ink)}
+  .fnav{display:flex;gap:24px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+
+<div class="colonnade" aria-hidden="true">
+  <div class="col l"><div class="cap"><span class="abacus"></span><span class="echinus"></span></div><div class="shaft"><span class="necking"></span></div><div class="base"><span class="torus"></span><span class="plinth"></span></div></div>
+  <div class="col r"><div class="cap"><span class="abacus"></span><span class="echinus"></span></div><div class="shaft"><span class="necking"></span></div><div class="base"><span class="torus"></span><span class="plinth"></span></div></div>
+</div>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#top"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="#play">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#host">Host a node</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<a id="top"></a>
+<main class="wrap">
+
+  <section class="hero">
+    <span class="badge">🏛️ Free &amp; open source · a community alternative to <b>Pax Historia</b></span>
+    <h1>Rewrite history,<br><span class="grad">one decision at a time.</span></h1>
+    <p class="sub">Open Historia is an AI-driven turn-based strategy game. Lead any nation on a living world map, act in plain language, and watch an AI simulate the consequences — wars, diplomacy, and borders that actually shift.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="/play/"><span>▶</span> Play in your browser</a>
+      <a id="primaryDownload" class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/app-stable/Open-Historia.zip">
+        <span>⬇</span> <span id="primaryLabel">Download for Desktop</span>
+      </a>
+    </div>
+    <p class="hero-note" id="heroNote">Play instantly in your browser — no install, nothing to download. Or <a href="#download">get the desktop app</a> for offline play.</p>
+    <div class="shot">
+      <img src="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/screenshot.png" alt="Open Historia gameplay — a strategic world map with events and nations" loading="lazy" />
+    </div>
+  </section>
+
+  <section id="play">
+    <p class="eyebrow">Up and running in minutes</p>
+    <h2>Three steps to play</h2>
+    <div class="rule"></div>
+    <p class="lead">No accounts, no store, no build tools to wrangle. Download the bundle, run the launcher, play in your browser.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">I</div>
+        <h3>Download &amp; unzip</h3>
+        <p>Grab <code>Open-Historia.zip</code> for your computer and extract it anywhere. Everything — the game and all its map data — is inside.</p>
+      </div>
+      <div class="step">
+        <div class="n">II</div>
+        <h3>Run the launcher</h3>
+        <p>Open the <b>Launch Open Historia</b> file for your OS. It checks Node.js (and offers to install it), sets everything up, and starts the game.</p>
+      </div>
+      <div class="step">
+        <div class="n">III</div>
+        <h3>Play in your browser</h3>
+        <p>Your browser opens to <code>localhost:3000</code>. Pick a scenario or build your own world, and start reshaping history.</p>
+      </div>
+    </div>
+
+    <div class="runbox" aria-label="Launcher instructions by operating system">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-os="windows" aria-selected="true">🪟 Windows</button>
+        <button class="tab" role="tab" data-os="mac" aria-selected="false">🍎 macOS</button>
+        <button class="tab" role="tab" data-os="linux" aria-selected="false">🐧 Linux</button>
+      </div>
+      <div class="tab-body on" data-os="windows">Double-click <b>Launch Open Historia.bat</b>. If Windows SmartScreen warns, choose <span class="kbd">More info → Run anyway</span> — it's just an unsigned script. The window installs everything the first time (a couple of minutes), then launches the game.</div>
+      <div class="tab-body" data-os="mac">Double-click <b>Launch Open Historia.command</b>. The first time, right-click it and choose <span class="kbd">Open</span> so macOS lets it run. It sets up and launches the game for you.</div>
+      <div class="tab-body" data-os="linux">Run <span class="kbd">./"Launch Open Historia.sh"</span> in a terminal (or make it executable and double-click). It installs dependencies, builds, and starts the server.</div>
+    </div>
+  </section>
+
+  <section id="download">
+    <p class="eyebrow">Downloads</p>
+    <h2>Pick your platform</h2>
+    <div class="rule"></div>
+    <p class="lead">Desktop is the full experience. On Android, install the app and point it at a desktop or Termux server.</p>
+    <div class="dl">
+      <div class="card feature">
+        <span class="tag">Recommended</span>
+        <div class="ic">💻</div>
+        <h3>Desktop — Stable</h3>
+        <div class="meta">Windows · macOS · Linux · ~186 MB</div>
+        <p>The complete, tested game in one self-contained download. Code and all world-map data included — no Git, no extra steps.</p>
+        <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia/releases/download/app-stable/Open-Historia.zip">⬇ Download Stable</a>
+      </div>
+      <div class="card">
+        <div class="ic">🧪</div>
+        <h3>Desktop — Beta</h3>
+        <div class="meta">Newest features · ~186 MB</div>
+        <p>The same one-download install, built from the beta channel — latest features, a little less tested.</p>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/app-beta/Open-Historia.zip">⬇ Download Beta</a>
+      </div>
+      <div class="card">
+        <div class="ic">📱</div>
+        <h3>Android app</h3>
+        <div class="meta">Thin client · ~6 MB</div>
+        <p>A lightweight client that connects to a game server (a desktop on your network, or Termux on the same phone).</p>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/android/pax-historia.apk">⬇ Download APK</a>
+      </div>
+    </div>
+    <p class="hero-note" style="text-align:center;margin-top:22px">Already installed? Run the <b>Update Open Historia</b> script to grab the latest — your saves and scenarios are kept. · <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">All releases</a></p>
+  </section>
+
+  <section id="features">
+    <p class="eyebrow">What you can do</p>
+    <h2>A whole world to run</h2>
+    <div class="rule"></div>
+    <div class="feats">
+      <div class="feat"><div class="fi">🗺️</div><h4>Living world map</h4><p>Watch territory, borders, and nations shift turn by turn as history unfolds.</p></div>
+      <div class="feat"><div class="fi">📜</div><h4>AI-generated events</h4><p>Dynamic events shaped by your decisions and the real state of the world.</p></div>
+      <div class="feat"><div class="fi">🤝</div><h4>Natural-language diplomacy</h4><p>Click any country to negotiate, threaten, or ally through open-ended chat.</p></div>
+      <div class="feat"><div class="fi">🎖️</div><h4>Troops &amp; warfare</h4><p>Deploy and maneuver armies; the AI resolves fronts and moves the borders.</p></div>
+      <div class="feat"><div class="fi">🖌️</div><h4>Built-in map editor</h4><p>Draw regions, paint owners, place cities — build a world and hit Apply &amp; Play.</p></div>
+      <div class="feat"><div class="fi">🌐</div><h4>Scenario hub</h4><p>Browse and import community scenarios in-game, or publish your own.</p></div>
+      <div class="feat"><div class="fi">🦉</div><h4>Strategy advisor</h4><p>Consult an AI advisor for guidance, economic analysis, and situation briefings.</p></div>
+      <div class="feat"><div class="fi">🔒</div><h4>Runs on your machine</h4><p>Self-hostable and local-first — it runs at localhost, with your own AI backend.</p></div>
+      <div class="feat"><div class="fi">⚖️</div><h4>Free &amp; open source</h4><p>MIT-licensed and community-built. Fork it, mod it, make it yours.</p></div>
+    </div>
+  </section>
+
+  <section id="host">
+    <p class="eyebrow">Grow the network</p>
+    <h2>Host a server node</h2>
+    <div class="rule"></div>
+    <p class="lead">Run a small node on your own device to help players load the world map faster. It's deliberately safe: a node only ever serves read-only map data, verified byte-for-byte by checksum. It never touches anyone's games, accounts, or AI keys, and never runs their code — so it can't be turned against players.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">I</div>
+        <h3>Install in one click</h3>
+        <p>Download the node and run <code>install.bat</code> (Windows) or <code>install.sh</code> (macOS/Linux). It sets everything up and downloads the verified map content for you.</p>
+      </div>
+      <div class="step">
+        <div class="n">II</div>
+        <h3>Put it online</h3>
+        <p>Expose it over HTTPS — a free <b>Cloudflare Tunnel</b> is easiest (no open ports, hides your IP). The README walks you through it step by step.</p>
+      </div>
+      <div class="step">
+        <div class="n">III</div>
+        <h3>You're live</h3>
+        <p>Your node registers itself and starts serving straight away — no waiting, no extra steps on your side. Players only ever use nodes listed in the project's signed directory, and an admin can pause or remove any node from it at any time.</p>
+      </div>
+    </div>
+    <div class="cta-row" style="margin-top:36px">
+      <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener"><span>🖥️</span> Host a server</a>
+      <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia-node#readme" target="_blank" rel="noopener">Read the setup guide</a>
+    </div>
+    <p class="hero-note" style="text-align:center;margin-top:8px">Trust is in the checksum and the project's signature — never in the node itself.</p>
+  </section>
+
+  <section id="faq">
+    <p class="eyebrow">Good to know</p>
+    <h2>Questions &amp; requirements</h2>
+    <div class="rule"></div>
+    <div class="faq">
+      <details><summary>Do I need to install anything else?</summary><p>Just <b>Node.js</b>, and the launcher offers to install it for you if it's missing (via winget on Windows, Homebrew on macOS, or your package manager on Linux). Everything else — including all map data — ships inside the download.</p></details>
+      <details><summary>Is it really free?</summary><p>Yes. Open Historia is free and open source under the MIT license. The AI features connect to an AI backend you configure — see the <a href="https://github.com/Open-Historia/open-historia#readme" target="_blank" rel="noopener">README</a> or ask in <a href="https://discord.gg/C3AVwHacZ4" target="_blank" rel="noopener">Discord</a> for setup help.</p></details>
+      <details><summary>Where does it run — is my data uploaded?</summary><p>The game runs locally on your own machine and opens in your browser at <code>localhost:3000</code>. Your saves and scenarios stay on your computer.</p></details>
+      <details><summary>How do I update later?</summary><p>Run the <b>Update Open Historia</b> script that comes with your install — it fetches the latest version while preserving your saves, scenarios, and map data. You can choose the Stable or Beta channel when updating.</p></details>
+      <details><summary>What about mobile?</summary><p>Download the Android APK — it's a thin client that connects to a game server. Run the desktop app on your PC (or a Termux server on the phone itself) and point the app at it.</p></details>
+      <details><summary>Can I help by hosting a server?</summary><p>Yes! Running a <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">content node</a> caches the game's map data and serves it to nearby players, so everyone loads faster. It's a one-click install and completely safe — a node only serves read-only, checksum-verified map files and never touches games, accounts, or API keys. See <a href="#host">Host a server node</a>.</p></details>
+    </div>
+  </section>
+
+  <section>
+    <div class="band">
+      <h2 style="margin:0">Ready to change history?</h2>
+      <p class="lead" style="margin-top:12px">Download once, run the launcher, and you're playing.</p>
+      <div class="cta-row" style="margin-bottom:0">
+        <a class="btn btn-primary" href="/play/"><span>▶</span> Play now</a>
+        <a id="bandDownload" class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/app-stable/Open-Historia.zip"><span>⬇</span> <span id="bandLabel">Download Open Historia</span></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div><span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed · built by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors" target="_blank" rel="noopener">contributors</a></div>
+    <div class="fnav">
+      <a href="#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">Host a node</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://discord.gg/C3AVwHacZ4" target="_blank" rel="noopener">Discord</a>
+      <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var ua = navigator.userAgent || "";
+  var os = "desktop";
+  if (/Android/i.test(ua)) os = "android";
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = "ios";
+  else if (/Windows/i.test(ua)) os = "windows";
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = "mac";
+  else if (/Linux/i.test(ua)) os = "linux";
+
+  var STABLE = "https://github.com/Open-Historia/open-historia/releases/download/app-stable/Open-Historia.zip";
+  var APK = "https://github.com/Open-Historia/open-historia/releases/download/android/pax-historia.apk";
+
+  var label = { windows:"Download for Windows", mac:"Download for macOS", linux:"Download for Linux",
+                android:"Download the Android app", ios:"Download the Desktop app", desktop:"Download for Desktop" }[os];
+  var href = (os === "android") ? APK : STABLE;
+
+  var pl = document.getElementById("primaryLabel"); if (pl) pl.textContent = label;
+  var pd = document.getElementById("primaryDownload"); if (pd) pd.href = href;
+  var bl = document.getElementById("bandLabel"); if (bl) bl.textContent = label;
+  var bd = document.getElementById("bandDownload"); if (bd) bd.href = href;
+  if (os === "ios"){
+    var n = document.getElementById("heroNote");
+    if (n) n.innerHTML = "On iPhone &amp; iPad, tap <b>Play</b> to run it in Safari — add it to your Home Screen for fullscreen.";
+  }
+
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  var bodies = Array.prototype.slice.call(document.querySelectorAll(".tab-body"));
+  function select(name){
+    tabs.forEach(function(t){ t.setAttribute("aria-selected", t.dataset.os === name); });
+    bodies.forEach(function(b){ b.classList.toggle("on", b.dataset.os === name); });
+  }
+  tabs.forEach(function(t){ t.addEventListener("click", function(){ select(t.dataset.os); }); });
+  if (["windows","mac","linux"].indexOf(os) >= 0) select(os);
+})();
+</script>
+</body>
+</html>
