@@ -226,21 +226,39 @@ const Main = ({
   };
 
   const toggleFullscreen = (shouldBeFull) => {
-    if (shouldBeFull) {
-      if (!document.fullscreenElement) {
-        document.documentElement
-          .requestFullscreen()
-          .catch((error) => console.error("Error with fullscreen", error));
+    // Mobile Safari (iOS/iPad) exposes the Fullscreen API webkit-prefixed, and
+    // iPhone Safari doesn't support element fullscreen at all — so probe for the
+    // right methods and never call an undefined one (which threw before, so the
+    // button silently failed on mobile).
+    const el = document.documentElement;
+    const fsElement = document.fullscreenElement || document.webkitFullscreenElement;
+    const request = el.requestFullscreen || el.webkitRequestFullscreen;
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    try {
+      if (shouldBeFull) {
+        if (!fsElement && request) {
+          const result = request.call(el);
+          if (result && typeof result.catch === "function") {
+            result.catch((error) => console.error("Error with fullscreen", error));
+          }
+        }
+      } else if (fsElement && exit) {
+        exit.call(document);
       }
-    } else if (document.fullscreenElement && document.exitFullscreen) {
-      document.exitFullscreen();
+    } catch (error) {
+      console.error("Error with fullscreen", error);
     }
   };
 
   useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreenEnabled(!!document.fullscreenElement);
+    const handleFullscreenChange = () =>
+      setIsFullscreenEnabled(!!(document.fullscreenElement || document.webkitFullscreenElement));
     document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+    };
   }, []);
 
   const openAdvisor = useCallback(() => {

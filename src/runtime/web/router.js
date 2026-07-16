@@ -11,6 +11,9 @@ import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
 import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, getScenarioPmtilesOverride } from "./libraryStore.js";
+import { handleLang, handleUiSettings } from "./settingsStore.js";
+import { getConnected } from "./nodeConnect.js";
+import { getSession } from "./account.js";
 
 let installed = false;
 
@@ -41,12 +44,16 @@ const route = async (request, url) => {
   const rangeHeader = request.headers.get("Range");
 
   // Runtime map tiles: a scenario may override the shared archive; otherwise
-  // serve the static archive from the origin (Phase 0 pulls pmtiles from there).
+  // serve the static archive from the canonical content origin. Defaults to
+  // same-origin /assets (local dev), but the hosted site sets VITE_OH_PMTILES_URL
+  // to the registry Worker's CORS+range proxy (Cloudflare Pages can't host the
+  // 60-100 MB pmtiles itself, so same-origin would 404 to the SPA fallback).
   if (domain === "runtime" && segments[0] === "pmtiles") {
     const key = segments[1];
     const override = await getScenarioPmtilesOverride(key, rangeHeader);
     if (override) return method === "HEAD" ? new Response(null, { status: 200, headers: override.headers }) : override;
-    return fetch(new Request(`/assets/${encodeURIComponent(key)}.pmtiles`, {
+    const base = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+    return fetch(new Request(`${base}/${encodeURIComponent(key)}.pmtiles`, {
       method: method === "HEAD" ? "HEAD" : "GET",
       headers: request.headers,
     }));
@@ -83,13 +90,47 @@ const route = async (request, url) => {
     if (response) return response;
   }
 
-  // UI settings + language packs are cosmetic; degrade to empty locally.
-  if (domain === "ui-settings") return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-  if (domain === "lang") return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  // UI settings + language packs: persisted in IndexedDB; shipped packs merged
+  // from the static /lang/*.json Vite copies to the site.
+  if (domain === "ui-settings") {
+    const response = await handleUiSettings(ctx);
+    if (response) return response;
+  }
+  if (domain === "lang") {
+    const response = await handleLang(ctx);
+    if (response) return response;
+  }
 
-  // The GitHub CORS proxy has no server in web mode; a signed Worker proxy
-  // replaces it in a later phase. Fail clearly rather than silently.
-  if (domain === "hub") return errorResponse("Community hub proxy is unavailable in web mode.", 502);
+  // Community hub: forward /api/hub/* to the registry Worker's SSRF-guarded
+  // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
+  // browser can't download bundles directly). Listing still hits api.github.com
+  // directly (it sends CORS) and passes through the interceptor untouched.
+  if (domain === "hub") {
+    const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
+    // Community bundle downloads (/api/hub/file?url=…): prefer the connected
+    // content node — it fetches the GitHub-hosted bundle server-side and returns
+    // it with CORS, offloading the central hub proxy — and fall back to the Worker
+    // if there's no node or it can't serve it. Other hub calls (import-counts,
+    // import-log) stay on the Worker.
+    if (segments[0] === "file" && method === "GET") {
+      const node = getConnected();
+      if (node && node.url && !node.origin) {
+        try {
+          const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
+          if (r.ok) return r;
+        } catch { /* node down/unsupported → fall through to the Worker */ }
+      }
+    }
+    if (!base) return errorResponse("Community hub proxy is not configured.", 502);
+    const target = `${base}/hub/${segments.join("/")}${url.search}`;
+    if (method !== "POST") return fetch(target, { method });
+    // Attach the account session (when signed in) so the import counter can dedup a
+    // signed-in user's import by their account — stable across devices/IPs — instead
+    // of by IP. Anonymous users still fall back to IP dedup on the Worker.
+    const headers = { "Content-Type": "application/json" };
+    try { const s = await getSession(); if (s) headers.Authorization = `Bearer ${s}`; } catch { /* not signed in */ }
+    return fetch(target, { method, headers, body: JSON.stringify(ctx.body ?? {}) });
+  }
 
   return errorResponse(`Unknown web-mode endpoint: ${url.pathname}`, 404);
 };

@@ -5,7 +5,8 @@ static app (served from a trusted origin) that keeps games client-side, sends AI
 straight to the player's provider, and loads map data from the content-node network.
 
 **Chosen setup:** app on **Cloudflare Pages**; map data from **content nodes only**
-(no origin fallback — the map loads once at least one accepted node is serving it).
+(no origin fallback — the map loads once at least one node in the signed directory is
+serving it).
 
 Prerequisites: a free Cloudflare account, Node 18+, and the offline root signing key
 (`trust/oh-root.key.pem`, from `scripts/gen-signing-key.mjs`).
@@ -18,11 +19,17 @@ From the **open-historia-admin** repo:
 
 ```bash
 cd registry
-npx wrangler kv namespace create NODES     # paste the returned id into wrangler.toml
+npx wrangler d1 create oh-accounts         # paste the returned id into wrangler.toml
+npx wrangler d1 execute oh-accounts --remote --file schema.sql   # nodes, accounts, presence
+npx wrangler kv namespace create NODES     # still used for small hot keys; paste the id in
 npx wrangler secret put ADMIN_TOKEN        # a long random token
 npx wrangler deploy                        # note the URL, e.g.
                                            #   https://open-historia-registry.<you>.workers.dev
 ```
+
+> The node registry lives in **D1** (`nodes` table), not KV — KV's 1,000 writes/day free
+> tier could not absorb node heartbeats. `schema.sql` also creates the accounts and
+> presence tables.
 
 ## 2. Build the game for the web, pointed at the live directory
 
@@ -47,7 +54,7 @@ npx wrangler pages deploy dist-web --project-name open-historia
 First run creates the project; it prints your URL (e.g. `https://open-historia.pages.dev`).
 Add a custom domain in the Cloudflare Pages dashboard if you want.
 
-## 4. Run + accept at least one content node (so maps load)
+## 4. Run at least one content node (so maps load)
 
 On an always-on machine, follow the **open-historia-node** README:
 
@@ -60,9 +67,11 @@ npm run populate    # download + verify the map data
 # start it, expose it over HTTPS
 ```
 
-Then run the **admin panel** (open-historia-admin/panel, with `oh-root.key.pem` present)
-and click **Accept** on the node. The signed directory now lists it, and the game starts
-loading map data from it — no rebuild needed (the directory is served live by the Worker).
+A node registers itself and is listed as **active** straight away. To publish it to
+players, run the **admin panel** (open-historia-admin/panel, with `oh-root.key.pem`
+present) and re-sign the directory — the game starts loading map data from it with no
+rebuild, since the Worker serves the directory live. The panel is also where you pause or
+ban a node, and where **Update all nodes** rolls out a new node release.
 
 ## 5. Play
 
@@ -75,7 +84,8 @@ in the browser (Export/Import for backups).
 ## Notes
 
 - **No node yet = blank map.** With "content nodes only" there is no origin fallback for
-  the pmtiles, so the world map is empty until at least one accepted node serves it. The
+  the pmtiles, so the world map is empty until at least one node in the signed directory
+  serves it. The
   rest of the site (menus, scenarios) loads fine. (To add an always-on fallback later, host
   the 3 pmtiles on a CORS-enabled bucket like Cloudflare R2 and wire it as the origin.)
 - **The signing key stays offline** — only the machine running the admin panel touches it.
