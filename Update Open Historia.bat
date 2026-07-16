@@ -10,24 +10,17 @@ REM  ----------------------------------------------------------
 REM  Replaces this install's files with the latest ones from
 REM  GitHub, without touching your saved games or settings.
 REM
-REM   - Git installs (folder has .git):  git pull
+REM   - Git installs (folder has .git):  git pull + LFS
 REM   - ZIP installs:                    downloads the latest
 REM     code and copies it over this folder
-REM
-REM  Either way the big map binaries come from the map-data
-REM  GitHub Release (scripts\fetch-map-assets.mjs), never from
-REM  Git LFS - its free bandwidth is 1 GB/mo org-wide and a
-REM  handful of installs exhausted it. They are not in the repo
-REM  at all, so neither a git pull nor a codeload ZIP carries
-REM  them. See scripts\map-assets.json.
 REM
 REM  What is protected:
 REM   * server\data\games        (your save games)
 REM   * server\data\*.json       (your library state)
 REM   * existing scenario files  (new ones are added, yours
 REM                               are never overwritten)
-REM   * public\assets\*.pmtiles  (your real map data is never
-REM                               overwritten by an update)
+REM   * public\assets\*.pmtiles  (real map data is never
+REM                               replaced by LFS pointer stubs)
 REM
 REM  After updating, run "Launch Open Historia.bat" as usual -
 REM  it reinstalls dependencies and rebuilds automatically.
@@ -154,11 +147,9 @@ if not exist "%SRC%\package.json" (
 
 echo Updating files ^(saves and map data are preserved^)...
 
-REM The big map files are not in the repo at all, so a codeload ZIP carries no
-REM copy of them - not even an LFS pointer stub, as it used to. That makes the
-REM exclusion MORE important, not less: without it /MIR would see them missing
-REM from the source and purge the real local data that fetch-map-assets.mjs
-REM downloaded from the Release. Robocopy never purges excluded files/dirs.
+REM Big map files ship as tiny LFS pointer stubs inside GitHub ZIPs. They must
+REM never overwrite (or trigger deletion of) the real local data. Robocopy
+REM never purges excluded files/dirs, so these are safe under /MIR too.
 set "KEEP_FILES=*.pmtiles regions-seed.geojson cities-seed.json"
 
 REM 1) Repo-owned code directories are MIRRORED: new files added, changed files
@@ -193,9 +184,9 @@ if exist "%SRC%\server\data\scenarios" (
 REM 3b) ...except the built-in "default" scenario, which is shipped app content
 REM     (prompts, world, colors, cover image, template state), not player data -
 REM     so its files are always refreshed, otherwise shipped updates to it never
-REM     reach an existing install. Its large map geometry (regions.geojson) is
-REM     not in a codeload zip at all, so it is excluded here and downloaded from
-REM     the Release in 3c. Saved games (server\data\games) are untouched.
+REM     reach an existing install. Its large LFS map geometry (regions.geojson)
+REM     is only a pointer in a codeload zip, so it is excluded here and handled
+REM     by the LFS resolver in 3c. Saved games (server\data\games) are untouched.
 if exist "%SRC%\server\data\scenarios\default" (
     robocopy "%SRC%\server\data\scenarios\default" "%CD%\server\data\scenarios\default" /E /XF *.geojson *.pmtiles /NFL /NDL /NJH /NJS /NP >nul
     if errorlevel 8 goto :copyfail
