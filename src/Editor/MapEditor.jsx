@@ -266,6 +266,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
     // clearing the scenario's background when the user re-opens and re-applies.
     if (initialMap.background) base.metadata.customBackground = initialMap.background;
+    // Same reasoning as the background above, and it is data loss if missed:
+    // buildGameSeed emits flags: null when the document has none, and
+    // applyMapToScenario reads that null as "clear the scenario's flags.json".
+    // So opening a scenario's map without its flags and pressing Apply & Play
+    // deleted every author-set flag. Restore them so a round-trip is a no-op.
+    if (initialMap.flags) base.flags = { ...initialMap.flags };
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),

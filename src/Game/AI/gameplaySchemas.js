@@ -103,6 +103,15 @@ const polityChangeSchema = {
     name: textSchema("New polity name, only when it changes."),
     color: textSchema("New six-digit hexadecimal color, only when it changes."),
     aliases: stringArraySchema("Alternative polity names."),
+    // The prompt asks for this and gameState normalizes/clamps/writes it, but it
+    // was missing here — and additionalProperties:false means a json_schema
+    // provider could never emit it, so international reputation silently never
+    // moved. Declaring it is what actually connects that feature.
+    reputation: {
+      type: "number",
+      description:
+        "International reputation 0-100, only when it changes. 0 is a pariah state, 100 is universally trusted.",
+    },
     note: textSchema("Brief reason for the change."),
   },
   required: ["code"],
