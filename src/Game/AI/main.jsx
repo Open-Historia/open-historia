@@ -260,6 +260,27 @@ function endpointOrigin(url) {
     }
 }
 
+// True when the endpoint lives on the player's own machine or LAN (Ollama, LM
+// Studio, a home gateway). Such a backend IS reachable from a hosted https page —
+// the fetch starts in the player's own browser, and neither mixed content nor
+// Private Network Access blocks it — but the browser discards the reply unless the
+// backend echoes an Access-Control-Allow-Origin for this site. Stock Ollama does
+// not, which is the whole reason a local model appears "broken" on the website.
+function isLocalEndpoint(url) {
+    try {
+        const host = new URL(url, typeof window !== "undefined" ? window.location.href : undefined).hostname;
+        if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
+        if (host.endsWith(".local")) return true;
+        if (/^127\./.test(host)) return true;
+        if (/^10\./.test(host)) return true;
+        if (/^192\.168\./.test(host)) return true;
+        if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+        return false;
+    } catch {
+        return false;
+    }
+}
+
 const relayFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch("/api/ai/relay", {
         method: "POST",
@@ -293,6 +314,18 @@ async function providerFetch(url, options = {}) {
         if (PAGE_IS_LOCAL && !aborted && error instanceof TypeError) {
             relayOnlyOrigins.add(origin);
             return relayFetch(url, options);
+        }
+        // Hosted page, local backend, and the browser rejected the reply: this is
+        // almost always the backend not allowing this origin, and "Failed to fetch"
+        // is indistinguishable from the network being down. Say what to actually do.
+        if (!PAGE_IS_LOCAL && !aborted && error instanceof TypeError && isLocalEndpoint(url)) {
+            const site = typeof window !== "undefined" ? window.location.origin : "this site";
+            throw new Error(
+                `${origin} refused the browser's request. A local AI server has to allow this site's ` +
+                `origin before ${site} can use it: restart Ollama with OLLAMA_ORIGINS=${site} ` +
+                `(LM Studio: turn on CORS in its server settings), then try again. ` +
+                `The desktop app needs no such setup.`,
+            );
         }
         throw error;
     }

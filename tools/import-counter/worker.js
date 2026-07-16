@@ -1,33 +1,63 @@
 /**
  * Open Historia — scenario import counter (Cloudflare Worker + KV).
  *
- * Records how many times each community scenario is imported, so the hub owner
- * can see real import numbers even for scenarios GitHub can't count (issue
- * attachments). The game server pings POST /hit on the FIRST successful import
- * of a bundle per install (it dedupes locally), so repeats don't inflate it.
+ * Counts how many people imported each community scenario. Deduped SERVER-SIDE by
+ * (scenario id, client IP): a person can't inflate a scenario's count by
+ * re-importing / button-mashing / clearing localStorage. Genuine, distinct
+ * installs still add up.
+ *
+ * Web imports are forwarded by the registry Worker, so the real browser IP is
+ * passed in X-OH-Client-IP and trusted ONLY when X-OH-Forward-Secret matches
+ * FORWARD_SECRET — otherwise a Worker->Worker hop would collapse every web user
+ * to the registry's single egress IP. Direct callers can only spend their own IP.
  *
  * Routes:
- *   POST /hit          body {id, title?}  -> increment the counter for `id`
+ *   POST /hit          body {id, title?}  -> increment for `id` (once per IP)
  *   GET  /counts                          -> { "<id>": {count, title}, ... }
  *   GET  /count/<id>                       -> { id, count }
  *
- * The count lives in each key's KV metadata, so GET /counts is a single list()
- * call (no per-key reads) and stays within the free-tier subrequest limit.
- *
- * Note: this is an anonymous, unauthenticated counter — like any client-side
- * metric it can be inflated by someone hitting /hit directly. The per-install
- * dedupe on the game server covers ordinary repeat-imports; treat the numbers
- * as "roughly how many people imported", not audited figures.
+ * Bindings: KV 'IMPORTS'; secrets FORWARD_SECRET (shared with the registry Worker)
+ * and HASH_SALT (so raw IPs are never stored). Counts live in each c:<id> key's
+ * metadata; the h:<id>:<ipHash> dedup markers self-expire so GET /counts is
+ * unaffected and KV stays bounded.
  */
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type,X-OH-Client-IP,X-OH-Forward-Secret,X-OH-Account",
 };
+
+const DEDUP_TTL = 60 * 60 * 24 * 365; // 1 year; bounded so KV self-cleans + recycled IPs eventually recount
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", ...CORS } });
+
+async function ipHash(ip, env) {
+  const salt = env.HASH_SALT || "oh-import-counter";
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${ip}`));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
+}
+
+// The forwarder proves it's the registry Worker with the shared secret; only then
+// do we trust the real end-user IP it passes. Everyone else spends their own IP.
+function clientIp(request, env) {
+  const fwd = request.headers.get("x-oh-client-ip");
+  const secretOk = env.FORWARD_SECRET && request.headers.get("x-oh-forward-secret") === env.FORWARD_SECRET;
+  if (secretOk && fwd) return fwd.trim();
+  return request.headers.get("cf-connecting-ip") || "unknown";
+}
+
+// What a hit dedups on. A signed-in web account (an opaque token the trusted
+// registry Worker forwards with the shared secret) dedups per-ACCOUNT — so the
+// same person counts once for a scenario across devices/IPs. Everyone else dedups
+// per IP, exactly as before. Spoofing an account needs the FORWARD_SECRET.
+async function dedupKeyFor(request, env, id) {
+  const secretOk = env.FORWARD_SECRET && request.headers.get("x-oh-forward-secret") === env.FORWARD_SECRET;
+  const acct = secretOk ? (request.headers.get("x-oh-account") || "").trim() : "";
+  if (acct) return `h:${id}:a:${acct.slice(0, 48)}`;
+  return `h:${id}:${await ipHash(clientIp(request, env), env)}`;
+}
 
 export default {
   async fetch(request, env) {
@@ -40,12 +70,18 @@ export default {
         const body = await request.json().catch(() => ({}));
         const id = String(body.id ?? "").trim().slice(0, 120);
         if (!id) return json({ error: "missing id" }, 400);
-        const key = `c:${id}`;
-        const existing = await env.IMPORTS.getWithMetadata(key, "text");
+        const countKey = `c:${id}`;
+        const existing = await env.IMPORTS.getWithMetadata(countKey, "text");
         const meta = existing.metadata || {};
-        const count = (Number(meta.count) || 0) + 1;
+        let count = Number(meta.count) || 0;
         const title = String(body.title ?? meta.title ?? "").slice(0, 200);
-        await env.IMPORTS.put(key, "", { metadata: { count, title } });
+        const dedupKey = await dedupKeyFor(request, env, id);
+        if (await env.IMPORTS.get(dedupKey)) {
+          return json({ id, count, deduped: true }); // already counted this account/IP
+        }
+        await env.IMPORTS.put(dedupKey, "1", { expirationTtl: DEDUP_TTL });
+        count += 1;
+        await env.IMPORTS.put(countKey, "", { metadata: { count, title } });
         return json({ id, count });
       }
 

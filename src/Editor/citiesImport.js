@@ -9,7 +9,11 @@
 
 import { newId } from "./useMapDocument.js";
 
-const SEED_URL = "/assets/cities-seed.json";
+// Web build: seed hosted on the Worker /content proxy (VITE_OH_PMTILES_URL);
+// local/desktop leaves it unset → same-origin /assets. On Pages /assets/*.json
+// would 200-with-SPA-HTML (the seed isn't hosted there).
+const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+const SEED_URL = `${CONTENT_BASE}/cities-seed.json`;
 let _cache = null;
 
 const loadSeed = async () => {

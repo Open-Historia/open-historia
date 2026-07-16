@@ -542,7 +542,12 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             value={settings.openaiCompatibleEndpoint ?? ""}
             onChange={(value) => onSettingChange("openaiCompatibleEndpoint", value)}
             placeholder="http://localhost:11434/v1"
-            helperText="Base URL that exposes /chat/completions and /models."
+            // A server on the player's own machine works from the website too, but only
+            // if it allows this origin — otherwise the browser silently drops the reply.
+            // Say so up front here rather than letting it surface as "Failed to fetch".
+            helperText={import.meta.env.VITE_OH_WEB
+                ? "Base URL that exposes /chat/completions and /models. A server on your own machine (Ollama, LM Studio) also has to allow this site: start Ollama with OLLAMA_ORIGINS set to this site's address, or use the desktop app."
+                : "Base URL that exposes /chat/completions and /models."}
             />
             <SettingsInput
             label="API Key (optional)"
@@ -876,6 +881,29 @@ const SettingsMenu = ({
             🧪 Cheats
             </button>
         )}
+
+        <a
+        href="/guides/"
+        style={{
+            alignItems: "center",
+            background: "rgba(59,130,246,0.18)",
+            border: "1px solid rgba(96,165,250,0.4)",
+            borderRadius: "8px",
+            color: "white",
+            cursor: "pointer",
+            display: "flex",
+            fontSize: "0.9rem",
+            fontWeight: 600,
+            gap: "0.5rem",
+            justifyContent: "center",
+            marginBottom: "1rem",
+            padding: "0.6rem 0.7rem",
+            textDecoration: "none",
+            width: "100%",
+        }}
+        >
+        📖 Guides
+        </a>
 
         <SocialLinks discordUrl={discordUrl} githubUrl={githubUrl} />
         </div>
