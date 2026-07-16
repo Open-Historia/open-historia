@@ -4,18 +4,25 @@
 // bundled into the web build (dynamically imported behind import.meta.env.VITE_OH_WEB).
 
 const DB_NAME = "open-historia-web";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 // Object stores mirror the server's on-disk stores (see server/libraryStore.js,
-// mapEditorStore.js, basemapStore.js). "kv" holds the small singletons:
-// scenario-manifest, game-manifest, mapeditor-manifest, basemaps-manifest,
-// ui-settings, and the one-time seed flag.
+// mapEditorStore.js, basemapStore.js, flagStore.js). "kv" holds the small
+// singletons: scenario-manifest, game-manifest, mapeditor-manifest,
+// basemaps-manifest, ui-settings, and the one-time seed flag. A growing
+// collection gets its own store instead — one record per item, so a write touches
+// that item rather than rewriting the whole set.
+//
+// Adding a store means bumping DB_VERSION. onupgradeneeded below creates whatever
+// is missing and leaves existing stores alone, so a bump is additive: nobody's
+// scenarios, games or basemaps are touched.
 export const STORES = {
   scenarios: "scenarios",
   games: "games",
   mapeditorDocs: "mapeditorDocs",
   basemapMeta: "basemapMeta",
   basemapPayload: "basemapPayload",
+  flags: "flags",
   kv: "kv",
 };
 
@@ -34,7 +41,18 @@ const openDB = () => {
         }
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Another tab opening a NEWER version fires this on our (older) connection.
+      // Close it so that tab's upgrade can proceed — otherwise its open() sits in
+      // onblocked below and rejects, and the player sees a dead second tab until
+      // they close this one. Drop the memoized promise so our next call reopens.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
     request.onblocked = () => reject(new Error("IndexedDB upgrade blocked by another tab"));
   });

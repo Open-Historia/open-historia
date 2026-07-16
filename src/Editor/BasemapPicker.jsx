@@ -225,7 +225,7 @@ const BasemapPicker = ({
   const handlePublish = async (bm) => {
     try {
       const payload = await getBasemapPayload(bm.id);
-      const { fileName } = publishBasemap(bm, payload);
+      const { fileName } = await publishBasemap(bm, payload);
       window.alert(
         `"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the "Basemap image" box, then submit.`,
       );

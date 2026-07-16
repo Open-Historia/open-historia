@@ -71,6 +71,15 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     },
     types: structuredClone(DEFAULT_TYPES),
     features: [],
+    // The map-maker's own choices, and the only colour/flag state that belongs to
+    // the document. The base palette (293 countries) and any scenario palette are
+    // fetched at mount and merged for display only — saving those into every doc
+    // would bloat it and freeze a copy of a file that is meant to be shared.
+    // owner code -> [r,g,b]
+    colorOverrides: {},
+    // owner code -> data URL (PNG, downscaled on upload). Author-set; the AI never
+    // writes these.
+    flags: {},
   };
 };
 
@@ -104,6 +113,34 @@ export const useMapDocument = (initial) => {
     setColors((current) => ({ ...current, ...extra }));
   }, []);
 
+  // Set (or clear, with null) one country's colour. This is the map-maker's own
+  // choice, so it goes in the document — the fetched palette is display-only and
+  // would be thrown away on reload. buildGameSeed layers these over the base
+  // palette, which is what makes an edited colour actually reach the game.
+  const setColorOverride = useCallback((code, rgb) => {
+    const owner = String(code || "").toUpperCase();
+    if (!owner) return;
+    setDoc((d) => {
+      const next = { ...(d.colorOverrides || {}) };
+      if (rgb) next[owner] = rgb; else delete next[owner];
+      return { ...d, colorOverrides: next };
+    });
+    setSaveStatus("dirty");
+  }, []);
+
+  // Set (or clear, with null) one country's flag. The value is an already
+  // downscaled PNG data URL — see flagImage.js; we never store the raw upload.
+  const setFlag = useCallback((code, dataUrl) => {
+    const owner = String(code || "").toUpperCase();
+    if (!owner) return;
+    setDoc((d) => {
+      const next = { ...(d.flags || {}) };
+      if (dataUrl) next[owner] = dataUrl; else delete next[owner];
+      return { ...d, flags: next };
+    });
+    setSaveStatus("dirty");
+  }, []);
+
   const patchMetadata = useCallback((patch) => {
     setDoc((d) => ({ ...d, metadata: { ...d.metadata, ...patch } }));
     setSaveStatus("dirty");
@@ -123,7 +160,17 @@ export const useMapDocument = (initial) => {
   return {
     doc,
     setDoc,
-    colors,
+    // What the editor should PAINT with: the map-maker's choices layered over the
+    // fetched palette. Everything that renders an owner colour uses this, so an
+    // edit shows up immediately, exactly as it will in the game.
+    colors: { ...colors, ...(doc.colorOverrides || {}) },
+    // The fetched palette alone — for telling "you changed this" from "this is the
+    // stock colour", so the UI can offer a Reset.
+    basePalette: colors,
+    colorOverrides: doc.colorOverrides || {},
+    setColorOverride,
+    flags: doc.flags || {},
+    setFlag,
     mergeColors,
     types: doc.types,
     setTypes,
