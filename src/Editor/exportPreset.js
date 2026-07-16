@@ -151,11 +151,18 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
 
-  // colors.json: owner code -> [r,g,b]. Use the base palette where known.
+  // colors.json: owner code -> [r,g,b]. A colour the map-maker picked wins over
+  // everything: it is the only one a human actually chose. Then the base palette,
+  // then a stable hash. Without the override check first, every real country's
+  // edit was silently discarded here — the palette has ~293 of them, so "change
+  // France to green" could never survive the export.
+  const overrides = doc.colorOverrides || {};
   const colors = {};
   const polityOverrides = {};
   for (const owner of owners) {
-    if (palette[owner]) {
+    if (overrides[owner]) {
+      colors[owner] = overrides[owner];
+    } else if (palette[owner]) {
       colors[owner] = palette[owner];
     } else {
       // owner not in the base palette — give it a stable color; add a polity entry
@@ -221,8 +228,15 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     world,
     // Merge onto the full base palette so re-ownership (tier-1) maps keep colors
     // for every country the stock pmtiles still renders, not just the edited ones.
-    colors: { ...palette, ...colors },
+    // Overrides go on last so a colour the map-maker picked survives even for a
+    // country that owns no regions on this map — the stock tiles still paint it.
+    colors: { ...palette, ...colors, ...overrides },
     game,
+    // flags.json: owner code -> PNG data URL. Deliberately NOT part of world, which
+    // the game re-polls every 5s — these are re-fetched only when the scenario
+    // changes, exactly like colors. Empty object when the map sets no flags, so the
+    // upload is skipped and the game keeps its code-derived flags.
+    flags: doc.flags && Object.keys(doc.flags).length > 0 ? { ...doc.flags } : null,
     // regions is the normalized, game-ready FeatureCollection. Only uploaded to the
     // scenario when hasCustomGeometry (tier 2); harmless in the downloaded JSON.
     regions: gameRegions,

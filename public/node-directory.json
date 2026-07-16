@@ -1,0 +1,9 @@
+{
+  "schema": "oh-nodes/1",
+  "version": 1,
+  "note": "Vetted content nodes that expand the network. Each serves hash-verified, read-only bytes (never games, keys, or code). The client picks a node, verifies every byte against the signed content manifest, and falls back to the next node or the canonical origin. Empty by default — the app works with zero nodes.",
+  "nodes": [],
+  "keyid": "oh-root-1",
+  "issued": "2026-07-13T20:39:33.534Z",
+  "expires": "2026-07-14T20:39:33.534Z"
+}

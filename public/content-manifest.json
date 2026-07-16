@@ -1,0 +1,39 @@
+{
+  "schema": "oh-content/1",
+  "version": 1,
+  "origin": {
+    "kind": "github-release",
+    "owner": "Open-Historia",
+    "repo": "open-historia",
+    "release": "map-data"
+  },
+  "assets": {
+    "regions.pmtiles": {
+      "sha256": "510b6808be0439d4ae140532487806cddea47d4eb4eaf9b0b2c77e22c901e0d4",
+      "bytes": 105827424
+    },
+    "countries.pmtiles": {
+      "sha256": "596e3dffb0aba5bf6f2dd103c441020730161c55b67a6993dc3e0fb924fe1727",
+      "bytes": 62739546
+    },
+    "cities.pmtiles": {
+      "sha256": "41edf847114a0c1b04c9a11e9501fc97e680a105b2ec618f5caffca3df61e87a",
+      "bytes": 1547924
+    },
+    "cities-seed.json": {
+      "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101",
+      "bytes": 7857627
+    },
+    "regions-seed.geojson": {
+      "sha256": "5c468ae1fc0607f90d1a30f22ea12a97acbc464f733b307fc2a1ad32ec660aca",
+      "bytes": 12708948
+    },
+    "default-regions.geojson": {
+      "sha256": "4e92b2f8210306b85c51a8affdb1a92bc0e3aa8ffb5dce137a66c08c71ccaa8a",
+      "bytes": 12818777
+    }
+  },
+  "keyid": "oh-root-1",
+  "issued": "2026-07-13T20:39:33.397Z",
+  "expires": "2026-08-12T20:39:33.397Z"
+}

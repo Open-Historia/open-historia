@@ -49,9 +49,22 @@
 
 ---
 
-## 🚀 Installation
+## 🚀 Play
 
-### Easiest
+### In your browser
+
+**[openhistoria.com](https://openhistoria.com)** — nothing to install. Games are saved in
+your browser, and you bring your own AI key (it goes straight to your provider, never to
+us). The world map is served by the community [content-node network](https://github.com/Open-Historia/open-historia-node).
+
+Local AI (Ollama, LM Studio) needs one extra step in the browser: the server has to allow
+the site's origin, e.g. start Ollama with `OLLAMA_ORIGINS=https://openhistoria.com`. The
+desktop app below needs no such setup.
+
+### Desktop (offline, single-player)
+
+Download **[`Open-Historia.zip`](https://github.com/Open-Historia/open-historia/releases/tag/app-stable)**
+(~186 MB — code *and* all map data), unzip it anywhere, then:
 
 - **Windows:** double-click **`Launch Open Historia.bat`**
 - **macOS:** double-click **`Launch Open Historia.command`** (first run: right-click → *Open*)
@@ -67,11 +80,13 @@ while preserving your saves, scenarios, and map data.
 Easiest: download **`pax-historia.apk`** from the
 [**Android release**](https://github.com/Open-Historia/open-historia/releases/tag/android)
 and open it to install (allow installs from your browser when Android asks).
-On first launch the app finds the Termux server on the same phone by itself;
-to play against another machine, type its address once — it's remembered.
-It's a thin client: the game itself runs on the server it connects to.
+It's a thin client: the game itself runs on whatever server it connects to, so you need
+one of the two:
 
-for it to work, you should have termux on your device setup
+- **A desktop on the same network** running the launcher — type its address
+  (e.g. `http://192.168.1.20:3000`) into the app once; it's remembered.
+- **[Termux](https://termux.dev/) on the phone itself** running the server — the app
+  finds it on first launch by itself, no address needed.
 
 <details>
 <summary>Build the APK yourself (needs the Android SDK)</summary>
@@ -115,8 +130,9 @@ Then open **http://localhost:3000** in your browser.
 
 ## 🌍 Scenarios
 
-**Modern Day** is the only built-in scenario. All other official presets — *WWII 1939*,
-*Medieval 1200*, *Rome 117 AD*, *Mongol World 1300*, *New World 1650* — live on the
+**Modern Day** is the only built-in scenario. All other official presets — *World War II — 1939*,
+*Medieval — 1200 AD*, *Rome — 117 AD*, *Mongol World — 1300 AD*, *New World — 1650*, and
+*Bronze Age — 1200 BC* — live on the
 [**Scenario Hub**](https://github.com/Open-Historia/Open-historia-scenarios), pinned at the top of
 the in-game **Community** tab. Import any of them with one click, or publish your own.
 
@@ -134,3 +150,16 @@ Open any scenario's editor and click **🗺️ Open Map Editor** (or visit
 `http://localhost:3000/?editor=1` for the standalone editor). Draw regions, split and
 merge borders freehand, paint owners, import 70k cities, sign your map, then
 **Apply & Play**.
+
+## 🖥️ Host a server node
+
+Want to help the network? Run a **content node** on your own device to cache and serve
+the game's map data to nearby players so everyone loads faster. It's a one-click install
+and deliberately safe — a node only ever serves **read-only, checksum-verified** map
+files, and never touches anyone's games, accounts, AI keys, or code.
+
+➡️ **[Set up a node → Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node)**
+
+Your node registers itself and starts serving players once an admin accepts it. See the
+[node README](https://github.com/Open-Historia/open-historia-node#readme) for the full
+walkthrough (including a free Cloudflare Tunnel to put it online).
