@@ -1,6 +1,7 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
+import { normalizeTagList } from "./countryTags.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -19,6 +20,10 @@ export const WORLD_DEFAULTS = {
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
   internationalReputation: {},
+  // Per-country tags the AI has changed: owner code -> string[]. The scenario's
+  // tags.json holds the map-maker's STARTING tags; this holds every change since,
+  // and wins where present (see resolveCountryTags).
+  countryTags: {},
   language: "English",
   lastJumpMode: "",
   lastJumpSummary: "",
@@ -411,6 +416,13 @@ const normalizePolityChange = (entry) => {
     ? Math.max(0, Math.min(100, Math.round(rawReputation)))
     : null;
 
+  // The AI sends the complete new list, so an empty array is meaningful ("this
+  // country no longer has defining tags") while undefined means "unchanged" —
+  // null keeps those distinguishable for the apply step below.
+  const tags = Array.isArray(entry.tags || entry.countryTags)
+    ? normalizeTagList(entry.tags || entry.countryTags)
+    : null;
+
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -418,6 +430,7 @@ const normalizePolityChange = (entry) => {
     name: normalizeOptionalString(entry.name || entry.newName),
     note: normalizeOptionalString(entry.note || entry.reason),
     reputation,
+    tags,
   };
 };
 
@@ -704,9 +717,16 @@ export const normalizeWorldState = (world) => {
       .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
   );
 
+  const countryTags = Object.fromEntries(
+    Object.entries(nextWorld.countryTags ?? {})
+      .map(([code, list]) => [normalizeOptionalString(code).toUpperCase(), normalizeTagList(list)])
+      .filter(([code, list]) => code && list.length),
+  );
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
+    countryTags,
     actionSuggestions: normalizeActionSuggestions(nextWorld.actionSuggestions),
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
@@ -876,6 +896,18 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // Reputation the AI set this turn becomes the polity's authoritative value.
       if (Number.isFinite(change.reputation)) {
         nextWorld.internationalReputation[change.code] = change.reputation;
+      }
+
+      // Tags the AI set this turn replace the scenario's starting tags for this
+      // country, wholesale — the model sends the complete list, so a revolution
+      // that drops "socialist" must actually drop it. null means "unchanged",
+      // which is why normalizePolityChange distinguishes null from [].
+      if (Array.isArray(change.tags)) {
+        if (!nextWorld.countryTags || typeof nextWorld.countryTags !== "object") {
+          nextWorld.countryTags = {};
+        }
+        if (change.tags.length) nextWorld.countryTags[change.code] = change.tags;
+        else delete nextWorld.countryTags[change.code];
       }
     }
 

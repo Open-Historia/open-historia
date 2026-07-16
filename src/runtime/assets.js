@@ -66,6 +66,7 @@ export const JSON_URLS = {
   chat: "",
   colors: "",
   flags: "",
+  tags: "",
   events: "",
   game: "",
   prompts: "",
@@ -164,6 +165,10 @@ const invalidateDerivedCachesForWrite = (url) => {
     nationFlagsPromise = null;
     nationFlagsPromiseKey = "";
   }
+  if (url && url === JSON_URLS.tags) {
+    nationTagsPromise = null;
+    nationTagsPromiseKey = "";
+  }
   if (url && url === JSON_URLS.world) {
     countryNamesPromise = null;
     countryNamesPromiseKey = "";
@@ -180,6 +185,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.chat = withRuntimeToken("/api/runtime/json/chat");
   JSON_URLS.colors = withRuntimeToken("/api/runtime/json/colors");
   JSON_URLS.flags = withRuntimeToken("/api/runtime/json/flags");
+  JSON_URLS.tags = withRuntimeToken("/api/runtime/json/tags");
   JSON_URLS.events = withRuntimeToken("/api/runtime/json/events");
   JSON_URLS.game = withRuntimeToken("/api/runtime/json/game");
   JSON_URLS.prompts = withRuntimeToken("/api/runtime/json/prompts");
@@ -792,6 +798,32 @@ export const getNationColors = async () => {
 // invalidation in invalidateDerivedCachesForWrite. Most scenarios have no
 // flags.json at all, in which case this resolves to {} and every caller falls
 // back to the code-derived flag as before.
+let nationTagsPromise = null;
+let nationTagsPromiseKey = "";
+
+// The scenario's STARTING country tags: owner code -> string[], from tags.json.
+// Memoized like getNationColors/getNationFlags. Most scenarios have no tags.json,
+// which resolves to {} — untagged is the normal case, not an error.
+//
+// These are only the author's starting position. The AI rewrites tags as the world
+// changes and those land in world.countryTags, so anything DISPLAYING or PROMPTING
+// tags must merge the two (see resolveCountryTags) rather than read this alone.
+export const getNationTags = async () => {
+  const cacheKey = JSON_URLS.tags;
+
+  if (!nationTagsPromise || nationTagsPromiseKey !== cacheKey) {
+    nationTagsPromiseKey = cacheKey;
+    const promise = readJson(JSON_URLS.tags, { defaultValue: {} }).catch((error) => {
+      console.warn("Failed to load nation tags (will retry):", error);
+      if (nationTagsPromise === promise) nationTagsPromise = null;
+      return {};
+    });
+    nationTagsPromise = promise;
+  }
+
+  return nationTagsPromise;
+};
+
 export const getNationFlags = async () => {
   const cacheKey = JSON_URLS.flags;
 

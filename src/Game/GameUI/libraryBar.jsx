@@ -1472,6 +1472,16 @@ const LibraryTopBar = () => {
     } else {
       await clearScenarioAsset(scenarioId, "flags").catch(() => {});
     }
+    // Author-set country tags, same contract as flags.
+    if (seed.tags) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "tags",
+        new Blob([JSON.stringify(seed.tags)], { type: "application/json" }),
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "tags").catch(() => {});
+    }
     await uploadScenarioAsset(
       scenarioId,
       "regionsGeojson",
@@ -1905,9 +1915,15 @@ const LibraryTopBar = () => {
               downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
               downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
               downloadScenarioJsonAsset(scenario.id, "colors"),
+              // The author-set flags, for the same reason as the background below:
+              // without them the editor opens with none, and Apply & Play cannot
+              // tell "this map has no flags" from "this map never loaded them" —
+              // so it clears the scenario's flags.json and the author's work is gone.
+              downloadScenarioJsonAsset(scenario.id, "flags"),
+              downloadScenarioJsonAsset(scenario.id, "tags"),
               // The custom map background so re-opening the editor restores it.
               world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
-            ]).then(([regions, cities, colors, bgData]) => {
+            ]).then(([regions, cities, colors, flags, tags, bgData]) => {
               const bgDesc = world.background;
               const background =
                 bgDesc?.kind === "image" && bgData?.dataUrl
@@ -1922,6 +1938,8 @@ const LibraryTopBar = () => {
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+                flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
+                tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
                 background,
                 basemap: world.basemap || null,
               });

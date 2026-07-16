@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
-import { loadRegionCatalog } from "../../runtime/assets.js";
+import { getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import {
   buildActionDisplayText,
   normalizeActionEntry,
@@ -237,8 +238,23 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
       `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}`,
     ).join("\n");
 
+  // What each country IS: the map-maker's tags with the AI's own changes layered
+  // over them. This is the whole reason tags exist — the model reads it for every
+  // task, so "socialist, anti-nato" steers what the Soviet Union plausibly does
+  // without any rule saying so. Capped at 40 countries for prompt budget; drop
+  // whole countries rather than truncate one list, since "- SOV: socialist," reads
+  // as corrupt data to the model.
+  const baseTags = await getNationTags().catch(() => ({}));
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const taggedCodes = Object.keys(tagged);
+  const tagSummary = taggedCodes.length === 0
+    ? "No countries have defining tags."
+    : taggedCodes.slice(0, 40).map((code) => `- ${code}: ${tagged[code].join(", ")}`).join("\n")
+      + (taggedCodes.length > 40 ? `\n(+${taggedCodes.length - 40} more tagged countries not listed)` : "");
+  const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
+
   return [
-    `Player polity: ${bundle.game.country || "Unknown polity"}`,
+    `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
     `Current round: ${bundle.game.round || 1}`,
     `Current date: ${bundle.game.gameDate || "unknown"}`,
     `Language: ${world.language || bundle.game.language || "English"}`,
@@ -251,6 +267,11 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
     "",
     "Dynamic polity overrides:",
     politySummary,
+    "",
+    "What each country is (ideology, alignment, posture). Treat these as binding "
+      + "characterisation: act, speak and react in keeping with them, and only change "
+      + "them via polityChanges when events genuinely reshape a country.",
+    tagSummary,
     "",
     world.activeCatalyst
       ? `Active catalyst: ${world.activeCatalyst.title || "untitled"} - ${world.activeCatalyst.premise || world.activeCatalyst.opening || ""}`

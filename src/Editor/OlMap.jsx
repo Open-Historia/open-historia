@@ -40,7 +40,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
-import { unionGeoms, splitByLine, translatedClone } from "./geometry.js";
+import { unionGeoms, translatedClone } from "./geometry.js";
 
 const BASEMAP_BG = {
   dark: "#0b1020",
@@ -387,7 +387,7 @@ const OlMap = ({
         layerFilter: (l) => l === regionLayerRef.current,
       });
       const tool = activeToolRef.current;
-      if (tool === "lasso" || tool === "split" || tool === "draw") {
+      if (tool === "lasso" || tool === "draw") {
         map.getTargetElement().style.cursor = "crosshair";
       } else if (tool === "feature" || tool === "delete") {
         // City-aware tools: pointer over an existing city (edit/remove target).
@@ -726,99 +726,6 @@ const OlMap = ({
     // cursor path. A region is only cut where the path enters through one border
     // and exits through another; the path's dangling start/end inside a region is
     // ignored, so no half-border is ever left partway through a region.
-    const splitAlongPath = (rawPath) => {
-      if (!rawPath || rawPath.length < 2) return;
-      const res = map.getView().getResolution() || 1;
-
-      // Decimate dense freehand points (keep ~every 3px, always keep the last).
-      const minGap = res * 3;
-      const path = [rawPath[0]];
-      for (let k = 1; k < rawPath.length; k += 1) {
-        const a = path[path.length - 1];
-        const b = rawPath[k];
-        if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= minGap || k === rawPath.length - 1) path.push(b);
-      }
-      if (path.length < 2) return;
-
-      // Only consider regions the path actually passes over. (Note: `Map` is the
-      // OpenLayers Map class in this file, so we use a Set + array here.)
-      const seenIds = new Set();
-      const touched = [];
-      for (const pt of path) {
-        source.forEachFeatureInExtent([pt[0] - 1, pt[1] - 1, pt[0] + 1, pt[1] + 1], (f) => {
-          const id = f.getId();
-          if (!seenIds.has(id)) {
-            seenIds.add(id);
-            touched.push(f);
-          }
-        });
-      }
-
-      const changes = [];
-      const extend = res * 60;
-      for (const target of touched) {
-        const geom = target.getGeometry();
-        const inside = path.map((pt) => geom.intersectsCoordinate(pt));
-        // Find the first inside-span bracketed by outside vertices = a full crossing.
-        let i = 0;
-        while (i < path.length) {
-          if (!inside[i]) {
-            i += 1;
-            continue;
-          }
-          let j = i;
-          while (j + 1 < path.length && inside[j + 1]) j += 1;
-          const fullCrossing = i > 0 && !inside[i - 1] && j < path.length - 1 && !inside[j + 1];
-          if (fullCrossing) {
-            const cutSub = path.slice(i - 1, j + 2); // include the bracketing outside points
-            const pieces = splitByLine(geom, cutSub, { hw: 4, extend });
-            if (pieces && pieces.length >= 2) {
-              const oldGeom = geom.clone();
-              const [big, ...rest] = pieces;
-              target.setGeometry(big.geom);
-              const bigGeom = big.geom.clone();
-              const newFeats = [];
-              for (const p of rest) {
-                const nf = new Feature({ geometry: p.geom });
-                nf.setId(newId());
-                nf.setProperties({
-                  typeId: target.get("typeId") || "land",
-                  owner: target.get("owner") || null,
-                  name: (target.get("name") || "Region") + " (split)",
-                  gid0: target.get("gid0") || "",
-                  country: target.get("country") || "",
-                });
-                source.addFeature(nf);
-                newFeats.push(nf);
-              }
-              changes.push({ target, oldGeom, bigGeom, newFeats });
-            }
-            break; // one cut per region
-          }
-          i = j + 1;
-        }
-      }
-
-      if (!changes.length) {
-        console.warn("[editor] split: drag all the way across the region(s) you want to cut");
-        return;
-      }
-      layer.changed();
-      labelLayerRef.current?.changed();
-      notifyRegions();
-      pushCmd({
-        undo: () =>
-          changes.forEach((c) => {
-            c.target.setGeometry(c.oldGeom.clone());
-            c.newFeats.forEach((f) => source.removeFeature(f));
-          }),
-        redo: () =>
-          changes.forEach((c) => {
-            c.target.setGeometry(c.bigGeom.clone());
-            c.newFeats.forEach((f) => source.addFeature(f));
-          }),
-      });
-    };
 
     // Lasso: select every region whose interior falls inside the drawn shape.
     const selectWithinPolygon = (poly) => {
@@ -832,7 +739,16 @@ const OlMap = ({
 
     const added = [];
     if (activeTool === "draw") {
-      const draw = new Draw({ source, type: "Polygon" });
+      // trace: click a point on an existing border and the sketch FOLLOWS that
+      // border as the cursor moves, instead of making the map-maker click every
+      // vertex along a coastline. Click again to leave the border. Moving back
+      // along the traced path un-traces it, so overshooting is just backing up.
+      //
+      // traceSource is the region source, so a new region snaps to its neighbours
+      // and shares their exact vertices — which is what keeps borders gap-free.
+      // Snap is still added below: trace follows a border once you are ON it,
+      // Snap is what gets you onto it.
+      const draw = new Draw({ source, type: "Polygon", trace: true, traceSource: source });
       draw.on("drawend", (e) => {
         const f = e.feature;
         f.setId(newId());
@@ -854,12 +770,6 @@ const OlMap = ({
       const translate = new Translate({ layers: [layer], hitTolerance: 2 });
       translate.on("translateend", notifyRegions);
       added.push(translate);
-    } else if (activeTool === "split") {
-      // freehand: hold and drag to draw the cut path; it follows the cursor and
-      // splits the region along exactly that path on release.
-      const draw = new Draw({ type: "LineString", features: new Collection(), freehand: true });
-      draw.on("drawend", (e) => splitAlongPath(e.feature.getGeometry().getCoordinates()));
-      added.push(draw);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the
       // land regions inside it.
