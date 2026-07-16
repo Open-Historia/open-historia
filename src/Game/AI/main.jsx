@@ -222,11 +222,65 @@ function getGeminiUrl(model, apiKey) {
     return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${apiKey}`;
 }
 
-// OpenAI-style calls go through the game server's relay instead of straight to
-// the endpoint: self-hosted endpoints (llama.cpp, LM Studio, NVIDIA NIM...)
-// rarely send CORS headers, so the browser can't call them directly. The relay
-// is same-origin for us and plain server-to-server for the endpoint. Gemini and
-// Anthropic stay direct — both support browser calls explicitly.
+// AI calls go straight from the browser to the provider so the player's API key
+// only ever reaches the provider — never a server or a community node. Direct is
+// always tried first. Only when the page is served from a machine the player
+// controls (localhost / the LAN box the Android client loads from) do we fall
+// back to that trusted server's same-origin /api/ai/relay, and only for an
+// endpoint that refused the direct call (self-hosted OpenAI-/Anthropic-style
+// backends like Ollama or LM Studio rarely send browser CORS headers). On a
+// hosted website there is no relay, so every call is direct-only and the key is
+// never handed to anything but the provider. Gemini and native Anthropic were
+// already direct — both allow browser calls explicitly.
+
+// True when this page is served from a machine the player controls, i.e. a
+// trusted same-origin relay is reachable. The LAN private ranges cover the
+// Android client, which loads the UI from a local server on the home network.
+function isLocallyServed() {
+    if (typeof window === "undefined") return false;
+    const host = window.location.hostname;
+    if (!host) return false;
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local")) return true;
+    if (/^10\./.test(host)) return true;
+    if (/^192\.168\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+    return false;
+}
+
+const PAGE_IS_LOCAL = isLocallyServed();
+// Endpoints that have already proven they need the relay (no browser CORS) —
+// remembered so we skip the doomed direct attempt on every later call.
+const relayOnlyOrigins = new Set();
+
+function endpointOrigin(url) {
+    try {
+        return new URL(url, typeof window !== "undefined" ? window.location.href : undefined).origin;
+    } catch {
+        return url;
+    }
+}
+
+// True when the endpoint lives on the player's own machine or LAN (Ollama, LM
+// Studio, a home gateway). Such a backend IS reachable from a hosted https page —
+// the fetch starts in the player's own browser, and neither mixed content nor
+// Private Network Access blocks it — but the browser discards the reply unless the
+// backend echoes an Access-Control-Allow-Origin for this site. Stock Ollama does
+// not, which is the whole reason a local model appears "broken" on the website.
+function isLocalEndpoint(url) {
+    try {
+        const host = new URL(url, typeof window !== "undefined" ? window.location.href : undefined).hostname;
+        if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
+        if (host.endsWith(".local")) return true;
+        if (/^127\./.test(host)) return true;
+        if (/^10\./.test(host)) return true;
+        if (/^192\.168\./.test(host)) return true;
+        if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+        return false;
+    } catch {
+        return false;
+    }
+}
+
 const relayFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch("/api/ai/relay", {
         method: "POST",
@@ -234,6 +288,48 @@ const relayFetch = (url, { method = "POST", headers = {}, payload, signal } = {}
         body: JSON.stringify({ url, method, headers, payload }),
         signal,
     });
+
+const directFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
+    fetch(url, {
+        method,
+        headers,
+        ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
+        signal,
+    });
+
+// fetch() rejects with a TypeError on a CORS or network failure (an HTTP error
+// status still resolves). An abort rejects with an AbortError, which must not
+// trigger the relay fallback.
+async function providerFetch(url, options = {}) {
+    const origin = endpointOrigin(url);
+
+    if (PAGE_IS_LOCAL && relayOnlyOrigins.has(origin)) {
+        return relayFetch(url, options);
+    }
+
+    try {
+        return await directFetch(url, options);
+    } catch (error) {
+        const aborted = options.signal?.aborted || error?.name === "AbortError";
+        if (PAGE_IS_LOCAL && !aborted && error instanceof TypeError) {
+            relayOnlyOrigins.add(origin);
+            return relayFetch(url, options);
+        }
+        // Hosted page, local backend, and the browser rejected the reply: this is
+        // almost always the backend not allowing this origin, and "Failed to fetch"
+        // is indistinguishable from the network being down. Say what to actually do.
+        if (!PAGE_IS_LOCAL && !aborted && error instanceof TypeError && isLocalEndpoint(url)) {
+            const site = typeof window !== "undefined" ? window.location.origin : "this site";
+            throw new Error(
+                `${origin} refused the browser's request. A local AI server has to allow this site's ` +
+                `origin before ${site} can use it: restart Ollama with OLLAMA_ORIGINS=${site} ` +
+                `(LM Studio: turn on CORS in its server settings), then try again. ` +
+                `The desktop app needs no such setup.`,
+            );
+        }
+        throw error;
+    }
+}
 
 function toOpenAIMessages(systemPrompt, history) {
     const messages = [{ role: "system", content: systemPrompt }];
@@ -281,7 +377,7 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
     }
 
     try {
-        const response = await relayFetch(`${normalizedEndpoint}/models`, { method: "GET", headers, signal });
+        const response = await providerFetch(`${normalizedEndpoint}/models`, { method: "GET", headers, signal });
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
@@ -420,7 +516,7 @@ async function callOpenAIStyleChatCompletions({
         const requestSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
             : systemPrompt;
-        const response = await relayFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
+        const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
             payload: {
@@ -695,9 +791,10 @@ async function callAnthropicCompatible(systemPrompt, history, {
         signal,
     });
 
-    // Self-hosted proxy: called server-to-server through the relay (it can't be
-    // assumed to send browser CORS headers), so the browser-access opt-in the
-    // real API needs is dropped and the key rides as x-api-key only if provided.
+    // Self-hosted proxy: tried directly first, falling back to the local relay
+    // if it refuses the browser call (providerFetch). The browser-access opt-in
+    // the real API needs is dropped — a proxy served over a website must send its
+    // own CORS headers — and the key rides as x-api-key only if provided.
     const headers = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -722,7 +819,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 tool_choice: { type: "tool", name: tool.name },
             } : {}),
         };
-        const response = await relayFetch(`${endpoint}/messages`, { headers, payload: body, signal });
+        const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
 
         if (response.status === 429 || response.status === 503) {
             if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {

@@ -13,7 +13,13 @@
 
 import GeoJSON from "ol/format/GeoJSON";
 
-export const SEED_URL = "/assets/regions-seed.geojson";
+// Web build hosts the big seeds on the registry Worker /content proxy
+// (VITE_OH_PMTILES_URL); local/desktop leaves it unset → same-origin /assets
+// (public/assets/, fetched by scripts/fetch-map-assets.mjs). Mirrors
+// runtime/web/libraryStore.js. On Cloudflare Pages /assets/*.geojson would return
+// the SPA-fallback HTML (the seed isn't hosted there), which parses to zero regions.
+const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+export const SEED_URL = `${CONTENT_BASE}/regions-seed.geojson`;
 
 // Fetch + parse the seed FeatureCollection into OL features (EPSG:3857).
 // Returns [] and warns if the seed asset is missing (run the extract script).

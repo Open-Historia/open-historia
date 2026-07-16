@@ -170,6 +170,11 @@ const JSON_ASSET_FILES = {
 
 const OPTIONAL_JSON_ASSET_FILES = {
   colors: "colors.json",
+  // Author-set country flags: owner code -> PNG data URL, written by the map editor.
+  // A JSON asset rather than a field on world.json, deliberately: world is re-read
+  // every 5s by the running game, and a few hundred flags is megabytes that would
+  // ride every poll. Like colors, this is fetched only when the scenario changes.
+  flags: "flags.json",
 };
 
 // Roll-back restore points, captured client-side each turn (see the "Roll back
@@ -1846,7 +1851,12 @@ const readRuntimeJsonAsset = (assetKey) => {
   }
 
   if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-    const fallbackPath = resolveColorsAssetFile();
+    // Only colors has a built-in fallback (the app palette every stock country is
+    // painted from). This branch predates there being a second optional asset and
+    // used to call resolveColorsAssetFile() for whatever key arrived — so adding
+    // one made a scenario with no flags.json serve the 293-country COLOUR palette
+    // as its flags. Anything without its own fallback is simply absent: {}.
+    const fallbackPath = assetKey === "colors" ? resolveColorsAssetFile() : null;
     if (!fallbackPath) {
       return {
         contentType: "application/json; charset=utf-8",
@@ -2024,6 +2034,10 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       cover: buildScenarioBundleAsset(scenarioId, "cover", mode),
       cities: buildScenarioBundleAsset(scenarioId, "cities", mode),
       colors: buildScenarioBundleAsset(scenarioId, "colors", mode),
+      // Author-set flags travel with the scenario for the same reason the colours
+      // and the background do: a shared map that loses them looks broken, and the
+      // whole point of setting one is that other people see it.
+      flags: buildScenarioBundleAsset(scenarioId, "flags", mode),
       countries: buildScenarioBundleAsset(scenarioId, "countries", mode),
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),

@@ -9,8 +9,14 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-web
 dist-ssr
 *.local
+
+# Web-mode seed (generated from server/data/scenarios/default by
+# scripts/seed-web-defaults.mjs at `npm run build:web`; never committed, never
+# in the local build).
+/src/runtime/web/generated/
 
 # Vendored Fantasy Map Generator (fetched at runtime by scripts/fetch-fmg.mjs)
 /fmg/
@@ -37,3 +43,9 @@ CLAUDE.md
 *.njsproj
 *.sln
 *.sw?
+
+# Content-node runtime store (hash-named blobs, populated by scripts/populate-node.mjs)
+/node-content/
+
+# Offline root signing PRIVATE key — never commit
+/trust/*.key.pem

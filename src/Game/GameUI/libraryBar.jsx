@@ -47,6 +47,8 @@ const UNIT_TYPE_LABELS = {
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 // Lazy so the GitHub-backed Community tab costs nothing until opened.
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
+// Lazy so OpenLayers only loads when the country picker map is opened.
+const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 
 const BAR_HEIGHT = 64;
 const TECHNICAL_OWNER_CODES = new Set([
@@ -990,6 +992,7 @@ const LibraryTopBar = () => {
   // the player chose in the two-step picker, then open its editor.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
+    setCustomRegionData(null);
     setEditorError(null);
     setIsBusy(true);
     try {
@@ -1053,6 +1056,7 @@ const LibraryTopBar = () => {
   const handleScenarioPlay = (scenario) => {
     setCountryQuery("");
     setCountryOptions([]);
+    setCustomRegionData(null);
     setPlayGameId(null);
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
@@ -1062,6 +1066,13 @@ const LibraryTopBar = () => {
           [...getBaseCountryOptions(), ...allCountries],
           scenario.countryNameOverrides,
         ));
+        // Load custom region geometry so the map renders the scenario's actual
+        // boundaries instead of the stock world seed.
+        if (details?.data?.world?.customRegions) {
+          downloadScenarioJsonAsset(scenario.id, "regionsGeojson")
+            .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+            .catch(() => {});
+        }
       })
       .catch(() => setCountryOptions([]));
   };
@@ -1390,6 +1401,7 @@ const LibraryTopBar = () => {
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
+  const [customRegionData, setCustomRegionData] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
@@ -1447,6 +1459,19 @@ const LibraryTopBar = () => {
       "colors",
       new Blob([JSON.stringify(seed.colors ?? {})], { type: "application/json" }),
     );
+    // Author-set country flags. Only written when the map actually has some: a map
+    // with no flags must leave the scenario's flags.json alone rather than stamping
+    // an empty one over it, and clearScenarioAsset is how a map that removed its
+    // last flag gets back to the game's code-derived flags.
+    if (seed.flags) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "flags",
+        new Blob([JSON.stringify(seed.flags)], { type: "application/json" }),
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "flags").catch(() => {});
+    }
     await uploadScenarioAsset(
       scenarioId,
       "regionsGeojson",
@@ -1505,13 +1530,21 @@ const LibraryTopBar = () => {
     setPlayGameId(newGameId);
     setCountryQuery("");
     setCountryOptions([]);
+    setCustomRegionData(null);
     setCountryPicker(scenario);
     loadCountryNames().catch(() => [])
-      .then((allCountries) => setCountryOptions(buildScenarioCountryOptions(
-        seedWorld,
-        [...getBaseCountryOptions(), ...allCountries],
-        scenario.countryNameOverrides,
-      )))
+      .then((allCountries) => {
+        setCountryOptions(buildScenarioCountryOptions(
+          seedWorld,
+          [...getBaseCountryOptions(), ...allCountries],
+          scenario.countryNameOverrides,
+        ));
+        // The map editor just saved custom region geometry — load it so the
+        // country picker renders the scenario's actual map, not the stock seed.
+        downloadScenarioJsonAsset(scenario.id, "regionsGeojson")
+          .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+          .catch(() => {});
+      })
       .catch(() => setCountryOptions(getBaseCountryOptions()));
   };
 
@@ -1520,6 +1553,7 @@ const LibraryTopBar = () => {
   const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
+    setCustomRegionData(null);
     setPlayGameId(null);
     if (!gid) return;
     try {
@@ -1609,24 +1643,28 @@ const LibraryTopBar = () => {
           ))}
         </div>
 
-        {/* Top-right: shut the server down (phones/Termux have no terminal handy). */}
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={handleShutdownServer}
-            title="Exit: shut down the Open Historia server"
-            type="button"
-            style={{
-              ...actionButtonStyle,
-              background: "rgba(220,70,70,0.14)",
-              borderColor: "rgba(248,113,113,0.35)",
-              color: "#fca5a5",
-              minWidth: "2.35rem",
-              padding: isMobile ? "0.55rem 0.7rem" : undefined,
-            }}
-          >
-            ⏻
-          </button>
-        </div>
+        {/* Top-right: shut the server down (phones/Termux have no terminal handy).
+            Hidden on the hosted website (web build) — there's no local server to
+            stop there, and the compile-time flag strips this from that bundle. */}
+        {!import.meta.env.VITE_OH_WEB && (
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
+            <button
+              onClick={handleShutdownServer}
+              title="Exit: shut down the Open Historia server"
+              type="button"
+              style={{
+                ...actionButtonStyle,
+                background: "rgba(220,70,70,0.14)",
+                borderColor: "rgba(248,113,113,0.35)",
+                color: "#fca5a5",
+                minWidth: "2.35rem",
+                padding: isMobile ? "0.55rem 0.7rem" : undefined,
+              }}
+            >
+              ⏻
+            </button>
+          </div>
+        )}
       </div>
 
       {serverDown && (
@@ -1682,12 +1720,12 @@ const LibraryTopBar = () => {
 
       {countryPicker && (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ ...surfaceStyle, borderRadius: 16, width: "min(440px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif" }}
+            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
           >
             {difficultyPick ? (
               <>
@@ -1735,42 +1773,27 @@ const LibraryTopBar = () => {
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
                   Starting “{countryPicker.name}”
                 </div>
-                <input
-                  autoFocus
-                  value={countryQuery}
-                  onChange={(e) => setCountryQuery(e.target.value)}
-                  placeholder="Search countries…"
-                  style={{ padding: "0.55rem 0.7rem", borderRadius: 8, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", outline: "none" }}
-                />
-                <div style={{ overflowY: "auto", marginTop: "0.6rem", flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-                  <button
-                    type="button"
-                    onClick={() => pickCountry("")}
-                    style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)" }}
-                  >
-                    {playGameId ? "Keep scenario default" : "Scenario default"}
-                  </button>
-                  {countryOptions
-                    .filter((c) => {
-                      const q = countryQuery.trim().toLowerCase();
-                      return !q || `${c.name} ${c.code}`.toLowerCase().includes(q);
-                    })
-                    .slice(0, 400)
-                    .map((c) => (
-                      <button
-                        key={c.code || c.name}
-                        type="button"
-                        onClick={() => pickCountry(c.code)}
-                        style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.04)" }}
-                      >
-                        <span aria-hidden="true" style={{ fontSize: "1.2rem", width: "1.5rem" }}>
-                          {flagEmojiFromGid(c.code) || "🏳️"}
-                        </span>
-                        <span>{c.name}</span>
-                      </button>
-                    ))}
-                </div>
-                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                <button
+                  type="button"
+                  onClick={() => pickCountry("")}
+                  style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)", marginBottom: "0.4rem" }}
+                >
+                  {playGameId ? "Keep scenario default" : "Scenario default"}
+                </button>
+                <Suspense
+                  fallback={
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "3rem 0", textAlign: "center" }}>
+                      Loading map…
+                    </div>
+                  }
+                >
+                  <CountryPickerMap
+                    countryOptions={countryOptions}
+                    regionsGeojson={customRegionData}
+                    onPickCountry={(code) => pickCountry(code)}
+                  />
+                </Suspense>
+                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
                   {playGameId ? "Done" : "Cancel"}
                 </button>
               </>
