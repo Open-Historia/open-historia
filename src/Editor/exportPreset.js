@@ -237,6 +237,10 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     // changes, exactly like colors. Empty object when the map sets no flags, so the
     // upload is skipped and the game keeps its code-derived flags.
     flags: doc.flags && Object.keys(doc.flags).length > 0 ? { ...doc.flags } : null,
+    // tags.json: owner code -> string[]. Same reasoning as flags — static author
+    // data, not part of the 5s world poll. These are the STARTING tags; the AI's
+    // later changes live in world.countryTags and are merged over these on read.
+    tags: doc.tags && Object.keys(doc.tags).length > 0 ? { ...doc.tags } : null,
     // regions is the normalized, game-ready FeatureCollection. Only uploaded to the
     // scenario when hasCustomGeometry (tier 2); harmless in the downloaded JSON.
     regions: gameRegions,

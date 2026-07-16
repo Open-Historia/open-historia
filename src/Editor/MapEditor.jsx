@@ -173,6 +173,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     features: d.features,
     colorOverrides: d.colorOverrides,
     flags: d.flags,
+    tags: d.tags,
     regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
@@ -231,6 +232,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         // value.
         colorOverrides: doc.colorOverrides || {},
         flags: doc.flags || {},
+        tags: doc.tags || {},
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -272,6 +274,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // So opening a scenario's map without its flags and pressing Apply & Play
     // deleted every author-set flag. Restore them so a round-trip is a no-op.
     if (initialMap.flags) base.flags = { ...initialMap.flags };
+    // Same reasoning as flags: without this a round-trip clears the scenario's tags.
+    if (initialMap.tags) base.tags = { ...initialMap.tags };
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),
@@ -496,6 +500,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         flags={d.flags}
         setFlag={d.setFlag}
         onOpenFlagPicker={setFlagPickerFor}
+        tags={d.tags}
+        setTags={d.setTags}
         setSelection={d.setSelection}
       />
 

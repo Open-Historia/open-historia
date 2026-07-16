@@ -2,7 +2,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
-import { loadRegionCatalog } from "../../runtime/assets.js";
+import { getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { readEventsState, readWorldState } from "../../runtime/gameState.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { generateCountryStats } from "../AI/gameplay.js";
@@ -69,6 +70,7 @@ const CountryInfoPanel = () => {
     const [country, setCountry] = useState(null); // { code, name, flagUrl, flagEmoji }
     const [events, setEvents] = useState([]);
     const [aliases, setAliases] = useState([]);
+    const [tags, setTags] = useState([]);
     const [regions, setRegions] = useState([]);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
@@ -89,15 +91,18 @@ const CountryInfoPanel = () => {
 
         (async () => {
             try {
-                const [allEvents, world, catalog] = await Promise.all([
+                const [allEvents, world, catalog, baseTags] = await Promise.all([
                     readEventsState({ force: true }).catch(() => []),
                     readWorldState({ force: true }),
                     loadRegionCatalog().catch(() => []),
+                    getNationTags().catch(() => ({})),
                 ]);
                 if (cancelled) return;
 
                 setEvents((allEvents ?? []).filter((event) => eventInvolvesCountry(event, country.code, country.name)));
                 setAliases(world.polityOverrides?.[country.code]?.aliases ?? []);
+                // The author's starting tags unless the AI has since rewritten them.
+                setTags(resolveCountryTags(baseTags, world, country.code));
 
                 const overrides = world.regionOwnershipOverrides ?? {};
                 const owned = [];
@@ -230,6 +235,20 @@ const CountryInfoPanel = () => {
                     </div>
                 )}
                 </div>
+            ))}
+            </div>
+        )}
+
+        {tags.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.5rem" }}>
+            {tags.map((tag) => (
+                <span
+                    key={tag}
+                    style={{ ...pillStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(124,58,237,0.5)" }}
+                    title="What this country is — the map-maker set this, and the AI reads it as context"
+                >
+                    {tag}
+                </span>
             ))}
             </div>
         )}

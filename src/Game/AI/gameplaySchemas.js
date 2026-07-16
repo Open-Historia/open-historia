@@ -112,6 +112,12 @@ const polityChangeSchema = {
       description:
         "International reputation 0-100, only when it changes. 0 is a pariah state, 100 is universally trusted.",
     },
+    tags: stringArraySchema(
+      "The country's defining traits after this change — ideology, alignment, posture "
+      + "(e.g. socialist, authoritarian, anti-nato). Only when they change: send the "
+      + "COMPLETE new list, not a delta. A revolution or a change of alignment should "
+      + "rewrite these.",
+    ),
     note: textSchema("Brief reason for the change."),
   },
   required: ["code"],

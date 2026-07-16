@@ -11,7 +11,8 @@ import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
-import { Row, TextField, SelectField, ColorField } from "./fields.jsx";
+import { Row, TextField, SelectField, ColorField, TagField } from "./fields.jsx";
+import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { rgbToHex } from "./fields.jsx";
 
 const commonOr = (arr, blank = "") => {
@@ -20,7 +21,7 @@ const commonOr = (arr, blank = "") => {
   return arr.every((v) => v === first) ? first ?? blank : blank;
 };
 
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, setSelection }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection],
@@ -44,6 +45,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
   // this colour, rather than it being the country's stock one.
   const isCustomColor = Boolean(form.owner && colorOverrides?.[form.owner]);
   const ownerFlag = form.owner ? flags?.[form.owner] : null;
+  const ownerTags = (form.owner && tags?.[form.owner]) || [];
 
   return (
     <Panel
@@ -133,6 +135,18 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
               {ownerFlag ? "Change" : "Choose flag"}
             </button>
           </span>
+        </Row>
+      )}
+      {form.owner && setTags && (
+        <Row
+          label="Tags"
+          title="What this country IS — ideology, alignment, posture. Shown in the country panel, and given to the AI as context for everything this country does."
+        >
+          <TagField
+            value={ownerTags}
+            suggestions={TAG_SUGGESTIONS}
+            onChange={(next) => setTags(form.owner, next)}
+          />
         </Row>
       )}
 

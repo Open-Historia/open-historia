@@ -175,6 +175,11 @@ const OPTIONAL_JSON_ASSET_FILES = {
   // every 5s by the running game, and a few hundred flags is megabytes that would
   // ride every poll. Like colors, this is fetched only when the scenario changes.
   flags: "flags.json",
+  // Author-set country tags: owner code -> string[] ("socialist", "anti-nato"…).
+  // A JSON asset for the same reason as flags: static author data that world.json's
+  // 5s poll has no business carrying. These are the starting tags — the AI's own
+  // changes accumulate in world.countryTags and are merged over these on read.
+  tags: "tags.json",
 };
 
 // Roll-back restore points, captured client-side each turn (see the "Roll back
@@ -2095,6 +2100,10 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       // and the background do: a shared map that loses them looks broken, and the
       // whole point of setting one is that other people see it.
       flags: buildScenarioBundleAsset(scenarioId, "flags", mode),
+      // Tags travel with the scenario for the same reason: they are the map-maker's
+      // characterisation of every country and the model reads them as context, so a
+      // shared map that loses them plays differently than its author intended.
+      tags: buildScenarioBundleAsset(scenarioId, "tags", mode),
       countries: buildScenarioBundleAsset(scenarioId, "countries", mode),
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),

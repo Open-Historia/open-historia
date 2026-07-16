@@ -10,6 +10,7 @@
 // save status, live region count) also lives here for the panels to read.
 
 import { useCallback, useEffect, useState } from "react";
+import { normalizeTagList } from "../runtime/countryTags.js";
 
 // The official editor ships a handful of region "types" carrying render +
 // gameplay settings. We seed the two core ones (Land / Coastal); users add more.
@@ -80,6 +81,12 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // owner code -> data URL (PNG, downscaled on upload). Author-set; the AI never
     // writes these.
     flags: {},
+    // owner code -> string[] (e.g. ["socialist","authoritarian","anti-nato"]).
+    // What a country IS, in the map-maker's words. Unlike flags these are only the
+    // STARTING characterisation: the AI reads them as context for everything that
+    // country does, and can rewrite them as the world changes (a revolution can
+    // drop "socialist"), which lands in world.countryTags — not here.
+    tags: {},
   };
 };
 
@@ -141,6 +148,21 @@ export const useMapDocument = (initial) => {
     setSaveStatus("dirty");
   }, []);
 
+  // Set (or clear) one country's tags. Note the .length check rather than the
+  // truthiness test setColorOverride/setFlag use: [] is truthy, so the same
+  // shape would persist an empty array for every country ever touched.
+  const setTags = useCallback((code, list) => {
+    const owner = String(code || "").toUpperCase();
+    if (!owner) return;
+    const tags = normalizeTagList(list);
+    setDoc((d) => {
+      const next = { ...(d.tags || {}) };
+      if (tags.length) next[owner] = tags; else delete next[owner];
+      return { ...d, tags: next };
+    });
+    setSaveStatus("dirty");
+  }, []);
+
   const patchMetadata = useCallback((patch) => {
     setDoc((d) => ({ ...d, metadata: { ...d.metadata, ...patch } }));
     setSaveStatus("dirty");
@@ -171,6 +193,8 @@ export const useMapDocument = (initial) => {
     setColorOverride,
     flags: doc.flags || {},
     setFlag,
+    tags: doc.tags || {},
+    setTags,
     mergeColors,
     types: doc.types,
     setTypes,
