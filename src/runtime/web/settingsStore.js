@@ -12,14 +12,21 @@ const isLangCode = (code) => /^[a-z]{2,3}$/.test(code);
 const langKey = (code) => `lang:${code}`;
 const shippedPackCache = new Map();
 
-// Fetch the shipped pack Vite copied to /lang/<code>.json (static, same-origin).
+// Fetch the shipped pack Vite copied to <base>lang/<code>.json (static, same-origin).
 // This is a non-/api path, so the wrapped fetch passes it straight to the network
 // (no recursion into the router). Missing packs (most languages ship none) → {}.
+//
+// Resolve against import.meta.env.BASE_URL, NOT location.origin. openhistoria.com
+// builds with --base /play/, so the packs deploy to /play/lang/*.json while an
+// origin-rooted /lang/*.json is a 404 — and the catch below turns that into an
+// empty pack, so every language silently fell back to untranslated English with
+// no error. BASE_URL is "/" for the local server, so one path serves both builds.
 const loadShippedPack = async (code) => {
   if (shippedPackCache.has(code)) return shippedPackCache.get(code);
   let pack = {};
   try {
-    const response = await fetch(new URL(`/lang/${code}.json`, location.origin), { cache: "force-cache" });
+    const base = new URL(import.meta.env.BASE_URL || "/", location.origin);
+    const response = await fetch(new URL(`lang/${code}.json`, base), { cache: "force-cache" });
     if (response.ok) {
       const data = await response.json();
       if (data && typeof data === "object" && !Array.isArray(data)) pack = data;
