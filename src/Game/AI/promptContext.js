@@ -307,28 +307,33 @@ export const buildRegionOwnershipReference = (world, regionCatalog = [], {
   const unitRegionIds = new Set(
     normalizeArray(normalizedWorld.units).map((unit) => normalizeString(unit?.regionId)).filter(Boolean),
   );
-  const focusCodes = new Set(player ? [player] : []);
+  const contextualCodes = new Set(player ? [player] : []);
+  const explicitFocusCodes = new Set();
   for (const unit of normalizeArray(normalizedWorld.units)) {
     const ownerCode = normalizeString(unit?.ownerCode).toLocaleUpperCase();
-    if (ownerCode) focusCodes.add(ownerCode);
+    if (ownerCode) contextualCodes.add(ownerCode);
   }
   for (const [code, polity] of Object.entries(normalizedWorld.polityOverrides)) {
     const names = [code, polity?.code, polity?.name, ...normalizeArray(polity?.aliases)]
       .map((value) => normalizeString(value).toLocaleLowerCase())
       .filter(Boolean);
-    if (names.some((name) => normalizedFocus.includes(name))) focusCodes.add(normalizeString(code).toLocaleUpperCase());
+    if (names.some((name) => normalizedFocus.includes(name))) {
+      explicitFocusCodes.add(normalizeString(code).toLocaleUpperCase());
+    }
   }
 
   const scoredEntries = entries.map((entry) => {
     const ownerCode = entry.ownerCode.toLocaleUpperCase();
     const countryCode = entry.countryCode.toLocaleUpperCase();
     let score = 0;
-    if (unitRegionIds.has(entry.id)) score += 1000;
-    if (normalizedFocus.includes(entry.id.toLocaleLowerCase())) score += 900;
-    if (entry.name.length >= 3 && normalizedFocus.includes(entry.name.toLocaleLowerCase())) score += 700;
-    if (entry.country.length >= 3 && normalizedFocus.includes(entry.country.toLocaleLowerCase())) score += 500;
-    if (focusWords.has(ownerCode) || focusWords.has(countryCode)) score += 400;
-    if (focusCodes.has(ownerCode) || focusCodes.has(countryCode)) score += 300;
+    if (normalizedFocus.includes(entry.id.toLocaleLowerCase())) score += 5000;
+    if (entry.name.length >= 3 && normalizedFocus.includes(entry.name.toLocaleLowerCase())) score += 4500;
+    if (entry.country.length >= 3 && normalizedFocus.includes(entry.country.toLocaleLowerCase())) score += 4000;
+    if ((ownerCode !== player && focusWords.has(ownerCode)) ||
+      (countryCode !== player && focusWords.has(countryCode))) score += 3500;
+    if (explicitFocusCodes.has(ownerCode) || explicitFocusCodes.has(countryCode)) score += 3000;
+    if (unitRegionIds.has(entry.id)) score += 1200;
+    if (contextualCodes.has(ownerCode) || contextualCodes.has(countryCode)) score += 300;
     if (player && ownerCode === player) score += 200;
     return { ...entry, score };
   }).sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
@@ -471,7 +476,7 @@ export const buildPromptContext = async (bundle, {
     gameMasterRequest,
     language: bundle.world.language || bundle.game.language || "English",
     lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
-    numberOfRegions: String(regionCatalog.length),
+    numberOfRegions: String(getActiveRegionCatalog(bundle.world, regionCatalog).length),
     plannedActions: buildActionHistoryText(bundle.actions),
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",

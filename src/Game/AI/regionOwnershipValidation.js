@@ -5,8 +5,7 @@ const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 export const getActiveRegionCatalog = (world, regionCatalog = []) => {
   const catalog = normalizeArray(regionCatalog);
-  const hasCustomGeometryMetadata = catalog.some((region) => region?.inCustomGeometry === true);
-  return world?.customRegions && hasCustomGeometryMetadata
+  return world?.customRegions
     ? catalog.filter((region) => region?.inCustomGeometry === true)
     : catalog;
 };
@@ -41,7 +40,7 @@ export const validateRegionTransfers = ({
   // If the geometry/catalog is temporarily unavailable, existing saved IDs are
   // safer than rejecting every transfer. Once a catalog exists, it is the sole
   // authority and phantom override keys are deliberately excluded.
-  if (knownRegionIds.size === 0) {
+  if (knownRegionIds.size === 0 && !normalizedWorld.customRegions) {
     Object.keys(normalizedWorld.regionOwnershipOverrides).forEach((id) => knownRegionIds.add(id));
   }
 
@@ -60,7 +59,7 @@ export const validateRegionTransfers = ({
       return { id, name: normalizeString(region?.name) || id, currentOwner };
     })
     .filter(Boolean);
-  if (activeRegions.length === 0) {
+  if (activeRegions.length === 0 && !normalizedWorld.customRegions) {
     for (const [id, currentOwner] of Object.entries(normalizedWorld.regionOwnershipOverrides)) {
       ownerByRegion.set(id, currentOwner);
       activeRegions.push({ id, name: id, currentOwner });
@@ -72,11 +71,14 @@ export const validateRegionTransfers = ({
     const code = normalizeString(value);
     if (code) knownCodes.add(code);
   };
-  normalizeArray(countryCatalog).forEach((country) => addCode(country?.code));
+  if (!normalizedWorld.customRegions) {
+    normalizeArray(countryCatalog).forEach((country) => addCode(country?.code));
+  }
   activeCatalog.forEach((region) => {
-    addCode(region?.countryCode);
+    if (!normalizedWorld.customRegions) addCode(region?.countryCode);
     addCode(region?.ownerCode);
   });
+  normalizeArray(normalizedWorld.ownerCodes).forEach(addCode);
   Object.values(normalizedWorld.regionOwnershipOverrides).forEach(addCode);
   Object.entries(normalizedWorld.polityOverrides).forEach(([code, polity]) => {
     addCode(code);

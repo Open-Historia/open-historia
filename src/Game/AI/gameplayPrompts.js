@@ -5,6 +5,14 @@ const normalizeString = (value) => String(value ?? "").trim();
 const REGION_OWNERSHIP_TASK_KEYS = new Set(["jumpForward", "autoJumpForward", "gameMaster"]);
 const REGION_OWNERSHIP_HEADING = "[Region Ownership Changes]";
 const REGION_OWNERSHIP_REFERENCE = "${regionOwnershipReference}";
+const REGION_OWNERSHIP_REQUIRED_MARKERS = [
+  REGION_OWNERSHIP_HEADING,
+  REGION_OWNERSHIP_REFERENCE,
+  "impacts.regionTransfers",
+  "exact region id",
+  "one transfer object per region",
+  "Do not invent",
+];
 
 export const REGION_OWNERSHIP_GUIDANCE = `[Region Ownership Changes]
 Region ownership changes ONLY through impacts.regionTransfers. Narrative prose, polityChanges, and unitOps do not move a border by themselves.
@@ -21,21 +29,27 @@ export const addRegionOwnershipGuidance = (taskKey, prompt) => {
     return normalized;
   }
 
-  const hasHeading = normalized.includes(REGION_OWNERSHIP_HEADING);
-  const hasReference = normalized.includes(REGION_OWNERSHIP_REFERENCE);
-  if (hasHeading && hasReference) return normalized;
+  const markerIndexes = REGION_OWNERSHIP_REQUIRED_MARKERS.map((marker) =>
+    normalized.indexOf(marker),
+  );
+  const hasCompleteVisibleGuidance = markerIndexes.every((index) => index >= 0 && index < 5000);
+  if (hasCompleteVisibleGuidance) return normalized;
 
-  const guidance = hasHeading
-    ? REGION_OWNERSHIP_REFERENCE
-    : hasReference
-      ? REGION_OWNERSHIP_GUIDANCE.replace(`\n\n${REGION_OWNERSHIP_REFERENCE}`, "")
-      : REGION_OWNERSHIP_GUIDANCE;
+  // A legacy/custom prompt may contain only the heading or inventory marker.
+  // Remove those incomplete markers before prepending the complete protocol so
+  // their mere presence cannot bypass the actual transfer rules.
+  const legacyBody = normalized
+    .replaceAll(REGION_OWNERSHIP_GUIDANCE, "")
+    .replaceAll(REGION_OWNERSHIP_HEADING, "")
+    .replaceAll(REGION_OWNERSHIP_REFERENCE, "")
+    .trim();
 
-  const outputMarker = "\n--- OUTPUT FORMAT";
-  const markerIndex = normalized.lastIndexOf(outputMarker);
-  if (markerIndex < 0) return `${normalized}\n\n${guidance}`;
-
-  return `${normalized.slice(0, markerIndex)}\n\n${guidance}${normalized.slice(markerIndex)}`;
+  // Saved games and custom scenarios may still contain a pre-feature prompt.
+  // Put the missing rules first so they are immediately visible in the editor
+  // and cannot be buried after tens of thousands of characters of legacy text.
+  return legacyBody
+    ? `${REGION_OWNERSHIP_GUIDANCE}\n\n${legacyBody}`
+    : REGION_OWNERSHIP_GUIDANCE;
 };
 
 const PROMPT_ADVISOR_DEFAULT = DEFAULT_PROMPTS.advisor;

@@ -45,6 +45,34 @@ test("buildRegionOwnershipReference stays bounded and prioritizes regions named 
   assert.match(reference, /showing \d+ of 500 visible regions/);
 });
 
+test("buildRegionOwnershipReference reserves space for an explicitly named target country", () => {
+  const playerRegions = Array.from({ length: 250 }, (_, index) => ({
+    country: "Playerland",
+    countryCode: "PLY",
+    id: `PLY.${index + 1}_1`,
+    name: `Player Province ${index + 1}`,
+    ownerCode: "PLY",
+  }));
+  const targetRegions = Array.from({ length: 10 }, (_, index) => ({
+    country: "France",
+    countryCode: "FRA",
+    id: `FRA.${index + 1}_1`,
+    name: `French Region ${index + 1}`,
+    ownerCode: "FRA",
+  }));
+
+  const reference = buildRegionOwnershipReference({}, [...playerRegions, ...targetRegions], {
+    focusText: "PLY orders the annexation of France",
+    maxCharacters: 20000,
+    maxRegions: 180,
+    playerCode: "PLY",
+  });
+
+  for (const region of targetRegions) {
+    assert.match(reference, new RegExp(`${region.id.replace(".", "\\.")}=${region.name}`));
+  }
+});
+
 test("buildRegionOwnershipReference excludes stock regions hidden by a custom map", () => {
   const reference = buildRegionOwnershipReference(
     {

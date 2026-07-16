@@ -71,3 +71,38 @@ test("validateRegionTransfers rejects stock ids outside active custom geometry",
 
   assert.match(error, /AAA\.1_1.*not on the active map/);
 });
+
+test("validateRegionTransfers fails closed when custom geometry has not loaded", () => {
+  const error = validate({
+    regionTransfers: [{ regionId: "AAA.1_1", toCode: "BBB" }],
+  }, {
+    regionCatalog: [
+      { countryCode: "AAA", id: "AAA.1_1", inCustomGeometry: false, name: "Hidden Earth" },
+    ],
+    world: { customRegions: true },
+  });
+
+  assert.match(error, /AAA\.1_1.*not on the active map/);
+});
+
+test("custom maps reject inactive global country codes but accept scenario ownerCodes", () => {
+  const customCatalog = [
+    { countryCode: "USA", id: "reg_visible", inCustomGeometry: true, name: "Marches", ownerCode: "FAN" },
+  ];
+  const globalOnlyError = validate({
+    regionTransfers: [{ fromCode: "FAN", regionId: "reg_visible", toCode: "USA" }],
+  }, {
+    countryCatalog: [{ code: "USA", name: "United States" }],
+    regionCatalog: customCatalog,
+    world: { customRegions: true, ownerCodes: ["FAN", "EXILE"] },
+  });
+  assert.match(globalOnlyError, /USA.*not an existing or newly created polity code/);
+
+  assert.equal(validate({
+    regionTransfers: [{ fromCode: "FAN", regionId: "reg_visible", toCode: "EXILE" }],
+  }, {
+    countryCatalog: [{ code: "USA", name: "United States" }],
+    regionCatalog: customCatalog,
+    world: { customRegions: true, ownerCodes: ["FAN", "EXILE"] },
+  }), "");
+});
