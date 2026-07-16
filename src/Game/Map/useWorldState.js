@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 
 // Singleton: all consumers share one poll interval and one set of results,
@@ -70,7 +70,7 @@ export function useWorldState() {
   };
 
   const prev = prevRef.current;
-  if (
+  const output =
     prev &&
     prev.worldKnown === derived.worldKnown &&
     prev.customRegions === derived.customRegions &&
@@ -79,10 +79,12 @@ export function useWorldState() {
     prev.background === derived.background &&
     areEqualShallow(prev.regionOwnershipOverrides, derived.regionOwnershipOverrides) &&
     areEqualShallow(prev.polityOverrides, derived.polityOverrides)
-  ) {
-    return prev;
-  }
+      ? prev
+      : derived;
 
-  prevRef.current = derived;
-  return derived;
+  useLayoutEffect(() => {
+    prevRef.current = output;
+  }, [output]);
+
+  return output;
 }
