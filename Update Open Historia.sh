@@ -7,17 +7,24 @@
 #  Replaces this install's files with the latest ones from
 #  GitHub, without touching your saved games or settings.
 #
-#   - Git installs (folder has .git):  git pull + LFS
+#   - Git installs (folder has .git):  git pull
 #   - ZIP installs:                    downloads the latest
 #     code and copies it over this folder (needs rsync)
+#
+#  Either way the big map binaries come from the map-data GitHub
+#  Release (scripts/fetch-map-assets.mjs), never from Git LFS -
+#  its free bandwidth is 1 GB/mo org-wide and a handful of
+#  installs exhausted it. They are not in the repo at all, so
+#  neither a git pull nor a codeload ZIP carries them. See
+#  scripts/map-assets.json.
 #
 #  What is protected:
 #   * server/data/games        (your save games)
 #   * server/data/*.json       (your library state)
 #   * existing scenario files  (new ones are added, yours
 #                               are never overwritten)
-#   * public/assets/*.pmtiles  (real map data is never
-#                               replaced by LFS pointer stubs)
+#   * public/assets/*.pmtiles  (your real map data is never
+#                               overwritten by an update)
 #
 #  After updating, run "Launch Open Historia.sh" as usual -
 #  it reinstalls dependencies and rebuilds automatically.
@@ -160,9 +167,12 @@ main() {
 
     echo "Updating files (saves and map data are preserved)..."
 
-    # Big map files ship as tiny LFS pointer stubs inside GitHub ZIPs. They must
-    # never overwrite (or trigger deletion of) the real local data. rsync never
-    # deletes excluded files, so these are safe under --delete too.
+    # The big map files are not in the repo at all, so a codeload ZIP carries no
+    # copy of them - not even an LFS pointer stub, as it used to. That makes the
+    # exclusion MORE important, not less: without it --delete would see them
+    # missing from the source and remove the real local data that
+    # fetch-map-assets.mjs downloaded from the Release. rsync never deletes
+    # excluded files.
     KEEP=(--exclude='*.pmtiles' --exclude='regions-seed.geojson' --exclude='cities-seed.json')
 
     # 1) Repo-owned code directories are MIRRORED: new files added, changed files
@@ -194,9 +204,9 @@ main() {
     #     (prompts, world, colors, cover image, template state), not player data
     #     - so its files are always refreshed, otherwise shipped updates to it
     #     never reach an existing install. Its large map geometry (regions.geojson)
-    #     is LFS-backed and arrives as a pointer stub in a codeload zip, so it is
-    #     excluded here and handled by the LFS resolver in 3c. Saved games
-    #     (server/data/games) are untouched regardless.
+    #     is not in a codeload zip at all, so it is excluded here and downloaded
+    #     from the Release in 3c. Saved games (server/data/games) are untouched
+    #     regardless.
     if [ -d "$SRC/server/data/scenarios/default" ]; then
         rsync -a --exclude='*.geojson' --exclude='*.pmtiles' \
             "$SRC/server/data/scenarios/default/" "./server/data/scenarios/default/" || fail_copy
@@ -204,8 +214,8 @@ main() {
 
     # 3c) Download the large map binaries (pmtiles, geojson, city seeds) from the
     #     GitHub Release that now hosts them. A codeload zip never carried these
-    #     (they were Git-LFS pointer stubs before, real files never), so a ZIP
-    #     install relies on this to get them and to refresh any that changed.
+    #     (LFS pointer stubs before, nothing at all now), so a ZIP install relies
+    #     on this to get them and to refresh any that changed.
     #     Checksum-verified. Best-effort: it needs Node (which running the game
     #     already requires) and never fails the update - a missing Node or a failed
     #     download just leaves the existing files in place. See scripts/map-assets.json.
