@@ -207,6 +207,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     }
   };
 
+  // The unload/visibility listeners below are registered once, so a closure would
+  // freeze whatever the document was at that moment and flush THAT on the way out
+  // — the same stale-closure bug the autosave effect above documents, except its
+  // victim is the user's last edits. Refs re-point every render instead.
+  const dRef = useRef(d);
+  dRef.current = d;
+  const saveNowRef = useRef(saveNow);
+  saveNowRef.current = saveNow;
+
   const newDoc = (kind) => {
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
     setDocId(null);
@@ -245,12 +254,60 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   };
 
   // Debounced autosave whenever the document is dirty.
+  //
+  // Depends on d.doc, not on a hand-listed set of its fields. That list had gone
+  // stale — it named name/types/features/metadata but not colorOverrides, flags
+  // or tags — and the failure was silent data loss, not a missed save: with the
+  // document ALREADY dirty, changing a colour re-rendered but changed no listed
+  // dep, so this effect did not re-run. The timer already pending then fired with
+  // the saveNow closure from BEFORE the change, wrote the older payload, and set
+  // the status to "saved" — leaving the new colour unsaved and the UI claiming
+  // otherwise. d.doc is a new object on every document change, so it cannot fall
+  // behind the way a field list does.
   useEffect(() => {
     if (!api || d.saveStatus !== "dirty") return;
     const t = setTimeout(() => saveNow(), 2000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, d.saveStatus, docId, d.name, d.types, d.features, d.metadata]);
+  }, [api, d.saveStatus, docId, d.doc]);
+
+  // Don't let the tab close on unsaved work. The autosave debounce means up to
+  // two seconds of edits exist only in memory at any moment, and on the website
+  // a closed tab takes them with it — there is no server-side copy to recover.
+  //
+  // The browser shows its own generic wording and ignores ours; assigning
+  // returnValue is what actually triggers the prompt (Chrome needs it even with
+  // preventDefault). "saving" counts as unsaved: the write is in flight and has
+  // not landed in IndexedDB yet.
+  useEffect(() => {
+    const unsaved = d.saveStatus === "dirty" || d.saveStatus === "saving";
+    if (!unsaved) return;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [d.saveStatus]);
+
+  // Flush the moment the tab is hidden rather than waiting out the debounce.
+  // Switching tabs or apps is the last event we reliably get before a phone or a
+  // laptop suspends the page, and on mobile pagehide is often the ONLY one — so
+  // this is what shrinks the loss window from "the last two seconds of work" to
+  // "nothing", in the cases the beforeunload prompt above never gets to appear.
+  useEffect(() => {
+    if (!api) return;
+    const flush = () => {
+      if (dRef.current.saveStatus === "dirty") saveNowRef.current();
+    };
+    const onVisibility = () => { if (document.hidden) flush(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [api]);
 
   // Hydrate the editor with the scenario's CURRENT map: its regions + owners
   // (custom geometry when it has one, else the stock world with the scenario's
@@ -419,7 +476,21 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           )}
           {onClose && (
             <button
-              onClick={onClose}
+              onClick={async () => {
+                // Closing with edits still in the debounce window would drop them
+                // silently — the button looks like "go back", not "discard". Try
+                // to save first, and only ask if that fails or is still pending,
+                // so the common case closes with no prompt and no loss.
+                if (d.saveStatus === "dirty") {
+                  await saveNow();
+                  if (dRef.current.saveStatus === "saved") { onClose(); return; }
+                }
+                if (d.saveStatus === "saved") { onClose(); return; }
+                const ok = window.confirm(
+                  "This map has changes that could not be saved. Close it and lose them?",
+                );
+                if (ok) onClose();
+              }}
               title="Close map editor"
               style={{
                 ...panelSurface,
