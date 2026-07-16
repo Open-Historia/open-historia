@@ -35,6 +35,17 @@ const UI_STRINGS = [
   "Related Events", "Search events...", "Filters", "All", "Major", "Minor",
   "No events found for this country.", "Details", "Alternative Names", "None",
   "Advisor Report", "Open Diplomacy", "Unclaimed Territory", "No flag available",
+  // Map editor — country colour + flag picker
+  "Choose flag", "Colour", "Country code that drives the fill color",
+  "Go back to this country's standard colour",
+  "Already on this map", "My flags", "Built-in flags", "In the game",
+  "Use this flag", "Use the standard flag again", "Remove from My flags",
+  "Share a flag", "Share this flag with the community", "Open hub ↗",
+  "Loading community flags…", "Could not load community flags.",
+  "Could not download that flag.", "Could not read that image.",
+  "No community flags yet — “⬆ Share a flag” posts one to the hub for everyone.",
+  "Opens the hub's flag form — drag your image in and submit", "Posted by the project",
+  "Applying…", "Search…",
   // Cheats menu (titles + subtitles)
   "Master AI", "Full control over the game with AI assistance",
   "Your Country", "Change which country you're playing as",

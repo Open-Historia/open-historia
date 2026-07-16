@@ -1,0 +1,84 @@
+# Open Historia — full app bundle build & release workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+name: Build app bundle
+
+# Packages the whole app - source PLUS the world-map data (pulled from the
+# map-data release) - into one Open-Historia.zip and attaches it to a rolling
+# per-channel release: "app-stable" from main, "app-beta" from beta. Players then
+# install with a single download - no Git, no Git LFS, no separate map-data step.
+# Runs on every push to main/beta (so the download never goes stale) and on demand
+# from the Actions tab.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, beta]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download the world-map data from the map-data release
+        # The big map binaries are not in the repo (they moved off Git LFS onto the
+        # map-data release); this writes them into the tree so the bundle is truly
+        # self-contained. Guarded so a run before the map-assets change is merged
+        # just produces a code-only bundle instead of failing.
+        run: |
+          if [ -f scripts/fetch-map-assets.mjs ]; then
+            node scripts/fetch-map-assets.mjs
+          else
+            echo "::warning::scripts/fetch-map-assets.mjs not present yet - bundling code only."
+          fi
+
+      - name: Assemble Open-Historia.zip
+        run: |
+          # Restore exec bits the launchers need (a fresh clone keeps them, but be safe).
+          chmod +x "Launch Open Historia.sh" "Update Open Historia.sh" \
+                   "Launch Open Historia.command" "Update Open Historia.command" 2>/dev/null || true
+          mkdir -p bundle/Open-Historia
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='bundle' \
+            ./ bundle/Open-Historia/
+          (cd bundle && zip -r -q ../Open-Historia.zip Open-Historia)
+          ls -lh Open-Historia.zip
+
+      - name: Pick the release channel
+        id: chan
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "tag=app-stable" >> "$GITHUB_OUTPUT"
+            echo "title=Open Historia — Stable (full download)" >> "$GITHUB_OUTPUT"
+            echo "channel=Stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=app-beta" >> "$GITHUB_OUTPUT"
+            echo "title=Open Historia — Beta (full download)" >> "$GITHUB_OUTPUT"
+            echo "channel=Beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to the rolling per-channel release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="The complete Open Historia app (${{ steps.chan.outputs.channel }} channel) in one download - source plus all world-map data. No Git and no Git LFS needed.
+
+          How to play:
+          1. Download Open-Historia.zip below and extract it.
+          2. Windows: double-click \"Launch Open Historia.bat\".  macOS: double-click \"Launch Open Historia.command\".  Linux: run ./\"Launch Open Historia.sh\".
+          The launcher installs dependencies, builds, and starts the game at http://localhost:3000.
+
+          To update later, run \"Update Open Historia\" - or just download this zip again. Rebuilt automatically on every push to ${{ github.ref_name }} (build ${{ github.run_number }})."
+          gh release create "${{ steps.chan.outputs.tag }}" --title "${{ steps.chan.outputs.title }}" --notes "$NOTES" --latest=false 2>/dev/null \
+            || gh release edit "${{ steps.chan.outputs.tag }}" --title "${{ steps.chan.outputs.title }}" --notes "$NOTES"
+          gh release upload "${{ steps.chan.outputs.tag }}" Open-Historia.zip --clobber
