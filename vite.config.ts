@@ -1,6 +1,48 @@
 /*! Open Historia — portions (dev API proxy + vendor chunks) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
+import path from 'node:path'
+
+// The big map binaries live in public/ so the dev server and the Express server can
+// serve them off disk, but NEITHER build serves them from the bundle: the desktop
+// streams them via /api/runtime/pmtiles/:assetKey, and the website fetches them from
+// the content nodes, hash-verified against the signed manifest.
+//
+// Vite copies publicDir wholesale and offers no partial exclude, so it duplicated
+// ~160MB into dist/ and — worse — made `npm run build:site` emit a site Cloudflare
+// Pages REJECTS outright: its limit is 25 MiB per file and regions.pmtiles is ~101.
+//
+// The trap is that it only fires on a machine that has actually played. The files
+// are gitignored and arrive from the map-data Release at first launch, so CI and a
+// fresh clone build fine and the deploy failure looks random. Dropping them after
+// the copy is the fix; "remember to delete them before deploying" is not.
+const MAP_BINARIES = [
+  'assets/regions.pmtiles',
+  'assets/countries.pmtiles',
+  'assets/cities.pmtiles',
+  'assets/regions-seed.geojson',
+  'assets/cities-seed.json',
+]
+
+const dropMapBinaries = () => {
+  // Take outDir from the resolved config rather than assuming: --outDir varies
+  // (dist for the desktop, dist-web for build:web/build:site).
+  let outDir = 'dist'
+  return {
+    name: 'oh-drop-map-binaries',
+    apply: 'build' as const,
+    configResolved(config: { build: { outDir: string } }) {
+      outDir = config.build.outDir
+    },
+    closeBundle() {
+      for (const rel of MAP_BINARIES) {
+        const target = path.resolve(outDir, rel)
+        if (fs.existsSync(target)) fs.rmSync(target)
+      }
+    },
+  }
+}
 
 // https://vite.dev/config/
 // `--mode web` (npm run build:web / build:site / dev:web) builds the website; any
@@ -23,6 +65,7 @@ export default defineConfig(({ mode }) => ({
         plugins: [['babel-plugin-react-compiler']],
       },
     }),
+    dropMapBinaries(),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's
   // save/load (and the game's runtime endpoints) work with hot-reload too.
