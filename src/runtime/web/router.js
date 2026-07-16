@@ -9,6 +9,7 @@
 import { errorResponse } from "./util.js";
 import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
+import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, getScenarioPmtilesOverride } from "./libraryStore.js";
 
 let installed = false;
@@ -59,6 +60,10 @@ const route = async (request, url) => {
   }
   if (domain === "basemaps") {
     const response = await handleBasemaps(ctx);
+    if (response) return response;
+  }
+  if (domain === "flags") {
+    const response = await handleFlags(ctx);
     if (response) return response;
   }
   if (domain === "library") {

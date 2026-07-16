@@ -23,6 +23,7 @@ import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import SearchBar from "./SearchBar.jsx";
 import BasemapPicker from "./BasemapPicker.jsx";
+import FlagPicker from "./FlagPicker.jsx";
 import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
@@ -48,6 +49,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
   const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
+  // Which country's flag we're picking, or null. Owned HERE, not in the inspector:
+  // panelSurface has backdrop-filter, which makes a containing block for
+  // position:fixed — an overlay rendered inside the panel gets clipped to it and
+  // trapped under its z-index, whatever z-index the overlay itself asks for.
+  const [flagPickerFor, setFlagPickerFor] = useState(null);
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
@@ -157,11 +163,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     }
   };
 
+  // Every field the document owns has to be listed here — this is a whitelist, and
+  // anything missing is dropped on save without a word. That is what makes a new
+  // doc field look like it works until the first reload.
   const buildPayload = () => ({
     name: d.name,
     metadata: d.metadata,
     types: d.types,
     features: d.features,
+    colorOverrides: d.colorOverrides,
+    flags: d.flags,
     regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
@@ -215,6 +226,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
         types: doc.types?.length ? doc.types : base.types,
         features: doc.features || [],
+        // Default to {} rather than leaving them undefined: a map saved before these
+        // existed has neither key, and setColorOverride/setFlag spread the current
+        // value.
+        colorOverrides: doc.colorOverrides || {},
+        flags: doc.flags || {},
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -469,6 +485,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         selection={d.selection}
         types={d.types}
         colors={d.colors}
+        colorOverrides={d.colorOverrides}
+        setColorOverride={d.setColorOverride}
+        flags={d.flags}
+        setFlag={d.setFlag}
+        onOpenFlagPicker={setFlagPickerFor}
         setSelection={d.setSelection}
       />
 
@@ -526,6 +547,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         }
       />
 
+      <FlagPicker
+        open={Boolean(flagPickerFor)}
+        onClose={() => setFlagPickerFor(null)}
+        ownerCode={flagPickerFor}
+        currentFlag={flagPickerFor ? d.flags?.[flagPickerFor] : null}
+        mapFlags={d.flags}
+        author={d.author}
+        onPick={(value) => d.setFlag(flagPickerFor, value)}
+      />
       <BasemapPicker
         open={basemapPickerOpen}
         onClose={() => setBasemapPickerOpen(false)}

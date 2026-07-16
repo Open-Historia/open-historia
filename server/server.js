@@ -47,6 +47,7 @@ import {
   getBasemapCatalog,
   getBasemapPayload,
 } from "./basemapStore.js";
+import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
   crossOriginWriteAllowed,
   isAllowedHubUrl,
@@ -722,6 +723,33 @@ app.put("/api/mapeditor/documents/:id", largeJsonParser, (req, res) => {
 app.delete("/api/mapeditor/documents/:id", (req, res) => {
   try {
     res.json(deleteMapEditorDocument(req.params.id));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// ---- Flag library ("My flags") -------------------------------------------
+// Flags are small (a 256px PNG), so there's no payload split: the catalog IS the
+// data. jsonParser, not largeJsonParser, for the same reason.
+app.get("/api/flags", (_req, res) => {
+  try {
+    res.json(listFlags());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/flags", jsonParser, (req, res) => {
+  try {
+    res.status(201).json(createFlag(req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/flags/:id", (req, res) => {
+  try {
+    res.json(deleteFlag(req.params.id));
   } catch (error) {
     sendError(res, 400, error);
   }

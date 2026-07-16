@@ -10,7 +10,7 @@
 // the author the real image file and opens a prefilled issue form to drag it into.
 
 import { createBasemap, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
-import { unzipBundle } from "./bundleZip.js";
+import { unzipBundle, zipBundle } from "./bundleZip.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
 // background.json file bytes; plain atob/btoa mangle non-Latin1 vector data).
@@ -231,7 +231,27 @@ const loadBasemapPayload = async (post) => {
   // An image the post links as a file (e.g. an .svg GitHub attaches rather than
   // rendering inline) is the image payload, not a data file.
   const imageFileUrl = post.bundleUrl && IMAGE_EXT_PATTERN.test(post.bundleUrl) ? post.bundleUrl : null;
-  // Old .basemap.json bundle, or a new vector .geojson file (a non-image data file).
+  // A vector basemap published as a .zip. GitHub's issue attachments reject
+  // .geojson outright ("File type .geojson not supported"), so a vector is shared
+  // zipped — the same trick scenario bundles already rely on.
+  if (post.bundleUrl && !imageFileUrl && /\.zip(\?|#|$)/i.test(post.bundleUrl)) {
+    const r = await fetchHubResponse(post.bundleUrl);
+    const zip = await unzipBundle(await r.arrayBuffer());
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n))
+      ?? zip.names().find((n) => /\.geojson$/i.test(n));
+    if (vectorName) {
+      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
+      return { meta: {}, kind: "vector", payload: { geojson } };
+    }
+    const imageName = zip.names().find((n) => /\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
+    if (imageName) {
+      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
+      return { meta: {}, kind: "image", payload: { dataUrl } };
+    }
+    throw new Error("That .zip has no basemap inside it.");
+  }
+  // Old .basemap.json bundle, or a vector .geojson file (posts made before GitHub
+  // started rejecting the extension, or linked from a release rather than attached).
   if (post.bundleUrl && !imageFileUrl) {
     const text = await fetchHubText(post.bundleUrl);
     let parsed;
@@ -293,21 +313,33 @@ const downloadFile = (blob, fileName) => {
 const safeName = (name) =>
   (name || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
 
-// Publish: hand the author the real basemap file (image, or .geojson for a vector)
-// and open the prefilled basemap issue form to drag it into. The image doubles as
-// the card cover, so there's no separate preview file and no base64 bloat.
-export const publishBasemap = (meta, payload) => {
+// Publish: hand the author the real basemap file and open the prefilled issue form
+// to drag it into. The image doubles as the card cover, so there's no separate
+// preview file and no base64 bloat.
+//
+// A VECTOR is handed over ZIPPED, not as a bare .geojson. GitHub's issue attachments
+// only accept a fixed set of extensions, and .geojson is not one of them — dragging
+// it in fails with "File type .geojson not supported", so the publish flow could
+// never actually complete for a vector basemap. .zip IS accepted, which is why
+// sharing a vector inside a scenario bundle always worked. Async now, because
+// zipping is.
+export const publishBasemap = async (meta, payload) => {
   const kind = meta.kind === "vector" ? "vector" : "image";
   const safe = safeName(meta.name);
+  let dropWhat;
   if (kind === "image") {
     if (!payload?.dataUrl) throw new Error("This basemap has no image to publish.");
     const { bytes, mime } = dataUrlToBytes(payload.dataUrl);
-    downloadFile(new Blob([bytes], { type: mime }), `${safe}.${mimeToExt(mime)}`);
+    dropWhat = `${safe}.${mimeToExt(mime)}`;
+    downloadFile(new Blob([bytes], { type: mime }), dropWhat);
   } else {
     if (!payload?.geojson) throw new Error("This vector basemap has no geometry to publish.");
-    downloadFile(new Blob([JSON.stringify(payload.geojson)], { type: "application/geo+json" }), `${safe}.geojson`);
+    // basemap.geojson inside: the same name loadBasemapPayload looks for in a
+    // scenario zip, so both paths read identically.
+    const zip = await zipBundle({ "basemap.geojson": JSON.stringify(payload.geojson) });
+    dropWhat = `${safe}.zip`;
+    downloadFile(zip, dropWhat);
   }
-  const dropWhat = kind === "image" ? `${safe}.${mimeToExt(dataUrlParts(payload.dataUrl).mime)}` : `${safe}.geojson`;
   const technical = `Basemap-Hash: ${meta.contentHash || ""}\nBasemap-Kind: ${kind}`;
   const query = [
     "template=basemap.yml",
