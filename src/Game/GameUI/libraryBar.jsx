@@ -1643,24 +1643,28 @@ const LibraryTopBar = () => {
           ))}
         </div>
 
-        {/* Top-right: shut the server down (phones/Termux have no terminal handy). */}
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={handleShutdownServer}
-            title="Exit: shut down the Open Historia server"
-            type="button"
-            style={{
-              ...actionButtonStyle,
-              background: "rgba(220,70,70,0.14)",
-              borderColor: "rgba(248,113,113,0.35)",
-              color: "#fca5a5",
-              minWidth: "2.35rem",
-              padding: isMobile ? "0.55rem 0.7rem" : undefined,
-            }}
-          >
-            ⏻
-          </button>
-        </div>
+        {/* Top-right: shut the server down (phones/Termux have no terminal handy).
+            Hidden on the hosted website (web build) — there's no local server to
+            stop there, and the compile-time flag strips this from that bundle. */}
+        {!import.meta.env.VITE_OH_WEB && (
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
+            <button
+              onClick={handleShutdownServer}
+              title="Exit: shut down the Open Historia server"
+              type="button"
+              style={{
+                ...actionButtonStyle,
+                background: "rgba(220,70,70,0.14)",
+                borderColor: "rgba(248,113,113,0.35)",
+                color: "#fca5a5",
+                minWidth: "2.35rem",
+                padding: isMobile ? "0.55rem 0.7rem" : undefined,
+              }}
+            >
+              ⏻
+            </button>
+          </div>
+        )}
       </div>
 
       {serverDown && (

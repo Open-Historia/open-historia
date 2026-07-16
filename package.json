@@ -8,6 +8,7 @@
     "dev:web": "node scripts/seed-web-defaults.mjs && vite --mode web",
     "build": "vite build",
     "build:web": "node scripts/seed-web-defaults.mjs && vite build --mode web --outDir dist-web --emptyOutDir",
+    "build:site": "node scripts/seed-web-defaults.mjs && vite build --mode web --base /play/ --outDir dist-web --emptyOutDir && node scripts/assemble-site.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:web": "vite preview --outDir dist-web",

@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Connect an AI to Open Historia — Setup Guide for Gemini, OpenAI, DeepSeek, Ollama &amp; More</title>
+  <link rel="canonical" href="https://openhistoria.com/ai-setup/" />
+  <meta name="description" content="Connect any AI provider to Open Historia for AI-powered diplomacy, events, and strategic advice. Covers Gemini, OpenAI, DeepSeek, Anthropic Claude, Ollama, LM Studio, and OpenAI-compatible APIs." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/ai-setup/" />
+  <meta property="og:title" content="Connect an AI to Open Historia — Setup Guide for Gemini, OpenAI, DeepSeek, Ollama &amp; More" />
+  <meta property="og:description" content="Connect any AI provider to Open Historia for AI-powered diplomacy, events, and strategic advice. Gemini, OpenAI, DeepSeek, Claude, Ollama, LM Studio, and OpenAI-compatible APIs." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Connect an AI to Open Historia — Setup for Gemini, OpenAI, DeepSeek &amp; More" />
+  <meta name="twitter:description" content="Connect any AI provider to Open Historia for AI-powered diplomacy, events, and strategic advice. Gemini, OpenAI, DeepSeek, Claude, Ollama, and more." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="stylesheet" href="/guides.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "How to Connect an AI to Open Historia",
+    "description": "Step-by-step guide to connect an AI provider (Gemini, OpenAI, DeepSeek, Anthropic Claude, Ollama, LM Studio, or any OpenAI-compatible API) to Open Historia for AI-powered diplomacy, events, and strategic advisor.",
+    "step": [
+      {
+        "@type": "HowToStep",
+        "position": "1",
+        "name": "Choose an AI provider",
+        "text": "Pick from Google Gemini, OpenAI, Anthropic Claude, DeepSeek, a local LLM (Ollama, LM Studio, llama.cpp), or any OpenAI-compatible cloud API."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "2",
+        "name": "Get credentials or set up the backend",
+        "text": "For cloud providers, get an API key. For local LLMs, install the backend and load a model."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "3",
+        "name": "Configure Open Historia's AI settings",
+        "text": "Open the in-game settings, select your AI provider, and enter the API key or endpoint URL."
+      },
+      {
+        "@type": "HowToStep",
+        "position": "4",
+        "name": "Start playing with AI",
+        "text": "AI diplomacy, events, and advisor features activate immediately once the provider is connected."
+      }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Open Historia",
+        "item": "https://openhistoria.com/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 2,
+        "name": "AI Setup Guide",
+        "item": "https://openhistoria.com/ai-setup/"
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> AI Setup Guide
+    </nav>
+
+    <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
+
+    <h1>Connect your AI</h1>
+    <p class="tagline">Unlock AI-powered diplomacy, dynamically generated historical events, and a strategic advisor by connecting any AI provider — from free local models to premium cloud APIs.</p>
+
+    <h2>What AI Powers in Open Historia</h2>
+    <div class="feature-grid">
+      <div class="feature-tag">AI Diplomacy — negotiate with any nation via natural language chat</div>
+      <div class="feature-tag">AI Intelligence Briefings — get summaries of any country's status</div>
+      <div class="feature-tag">AI-Generated Events — dynamic events shaped by your decisions and the world state</div>
+      <div class="feature-tag">AI Advisor — consult for strategic guidance, economic analysis, and war planning</div>
+      <div class="feature-tag">AI Combat Resolution — battles resolved by the AI based on troop strength, terrain, and strategy</div>
+    </div>
+
+    <h2>How It Works</h2>
+    <div class="card">
+      <p>Open Historia supports <strong>five types of AI providers</strong> from a single settings panel. You can switch between them at any time:</p>
+      <ul>
+        <li><strong>Gemini</strong> — Google's native API, with a generous free tier</li>
+        <li><strong>OpenAI</strong> — official GPT-4o, GPT-4.1, and o-series models</li>
+        <li><strong>Anthropic</strong> — Claude via the Messages API</li>
+        <li><strong>OpenAI Compatible</strong> — any API that speaks the <code>/v1/chat/completions</code> protocol (Ollama, LM Studio, llama.cpp, DeepSeek, Groq, Together.ai, OpenRouter, and more)</li>
+        <li><strong>Anthropic Compatible</strong> — any self-hosted proxy that speaks the Anthropic Messages API</li>
+      </ul>
+      <p>For providers that don't send CORS headers from the browser (OpenAI, OpenAI Compatible, Anthropic Compatible), the game's Express server includes a <code>/api/ai/relay</code> endpoint that proxies requests securely. Gemini and Anthropic's native APIs support direct browser access and don't use the relay.</p>
+    </div>
+
+    <h2>Provider Setup Options</h2>
+
+    <h3>Google Gemini (Free Tier Available)</h3>
+    <div class="card">
+      <p>Gemini is the default provider and the easiest way to get started. Google offers a <strong>free tier</strong> on <a href="https://aistudio.google.com" target="_blank" rel="noopener">Google AI Studio</a> that's more than enough for solo play.</p>
+      <div class="step">
+        <strong>Get an API key</strong>
+        <p>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>, sign in with a Google account, and click "Create API Key." It's free — no billing setup required.</p>
+      </div>
+      <div class="step">
+        <strong>Set the model</strong>
+        <p>The default <code>gemini-2.5-flash-lite</code> works great out of the box. You can switch to <code>gemini-2.5-flash</code> or <code>gemini-2.5-pro</code> for stronger reasoning (check rate limits on the free tier).</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>In the game's settings, select <strong>Gemini</strong> as the provider and paste your API key. No endpoint URL needed.</p>
+      </div>
+    </div>
+
+    <h3>OpenAI (GPT-4o, GPT-4.1, o-series)</h3>
+    <div class="card">
+      <p>Use <a href="https://platform.openai.com" target="_blank" rel="noopener">OpenAI's official API</a> for GPT-4o, GPT-4.1, or o-series reasoning models. Requires a paid API account with pre-loaded credits.</p>
+      <div class="step">
+        <strong>Get an API key</strong>
+        <p>Sign up at <a href="https://platform.openai.com" target="_blank" rel="noopener">platform.openai.com</a>, add a payment method, and create an API key under "API Keys."</p>
+      </div>
+      <div class="step">
+        <strong>Choose a model</strong>
+        <p><code>gpt-4.1-mini</code> is fast and inexpensive, <code>gpt-4.1</code> handles complex diplomacy, and <code>o4-mini</code> excels at strategic reasoning.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>OpenAI</strong> as the provider, paste your API key, and optionally specify a model. The endpoint is pre-configured.</p>
+      </div>
+    </div>
+
+    <h3>Anthropic Claude</h3>
+    <div class="card">
+      <p>Use <a href="https://anthropic.com" target="_blank" rel="noopener">Anthropic's Claude</a> via the Messages API. Known for nuanced writing and strong instruction-following — excellent for immersive diplomacy and rich event generation.</p>
+      <div class="step">
+        <strong>Get an API key</strong>
+        <p>Sign up at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> and generate an API key.</p>
+      </div>
+      <div class="step">
+        <strong>Choose a model</strong>
+        <p><code>claude-sonnet-4-20250514</code> offers the best balance of quality and speed. <code>claude-haiku-3-5-20241022</code> is faster and cheaper.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>Anthropic</strong> as the provider and paste your API key. Direct browser access — no relay needed.</p>
+      </div>
+    </div>
+
+    <h3>DeepSeek</h3>
+    <div class="card">
+      <p><a href="https://deepseek.com" target="_blank" rel="noopener">DeepSeek</a> offers powerful models at very low cost. Their API is OpenAI-compatible, so it works through the "OpenAI Compatible" provider option.</p>
+      <div class="step">
+        <strong>Get an API key</strong>
+        <p>Register at <a href="https://platform.deepseek.com" target="_blank" rel="noopener">platform.deepseek.com</a>, top up credits (minimum $2), and create an API key.</p>
+      </div>
+      <div class="step">
+        <strong>Set the endpoint</strong>
+        <p>DeepSeek's API base URL is <code>https://api.deepseek.com/v1</code>. The model <code>deepseek-chat</code> covers most needs; <code>deepseek-reasoner</code> is available for complex strategic reasoning.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>OpenAI Compatible</strong> as the provider. Set the endpoint to <code>https://api.deepseek.com/v1</code>, enter your API key, and set the model to <code>deepseek-chat</code>.</p>
+      </div>
+    </div>
+
+    <h3>Local LLMs (Free &amp; Private)</h3>
+    <div class="card">
+      <p>Run models entirely on your own hardware. No API keys, no internet required after download, completely private. Use the <strong>OpenAI Compatible</strong> provider in settings.</p>
+    </div>
+
+    <h4>Ollama (Recommended for Easiest Setup)</h4>
+    <div class="card">
+      <p><a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> is the simplest way to run LLMs locally. Works on Windows, macOS, and Linux.</p>
+      <div class="step">
+        <strong>Install Ollama</strong>
+        <p>Download from <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> and install.</p>
+      </div>
+      <div class="step">
+        <strong>Pull a model</strong>
+        <p><code>ollama pull llama3.2</code> — or any model you prefer. Recommended: <code>llama3.2</code> (lightweight), <code>mistral</code> (balanced), <code>qwen2.5</code> (strong reasoning).</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>OpenAI Compatible</strong>, set the endpoint to <code>http://localhost:11434/v1</code>. No API key needed for local use.</p>
+      </div>
+    </div>
+
+    <h4>LM Studio (GUI-Focused)</h4>
+    <div class="card">
+      <p><a href="https://lmstudio.ai" target="_blank" rel="noopener">LM Studio</a> provides a graphical interface for downloading and running models. Great for Windows and macOS users who prefer a GUI.</p>
+      <div class="step">
+        <strong>Install LM Studio</strong>
+        <p>Download from <a href="https://lmstudio.ai" target="_blank" rel="noopener">lmstudio.ai</a>.</p>
+      </div>
+      <div class="step">
+        <strong>Download a model</strong>
+        <p>Use the built-in model browser to search and download a model (e.g., Llama 3.2, Mistral 7B, Phi-3).</p>
+      </div>
+      <div class="step">
+        <strong>Start the local server</strong>
+        <p>Go to the "Local Server" tab, load your model, and click "Start Server." The default URL is <code>http://localhost:1234/v1</code>.</p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>OpenAI Compatible</strong>, set the endpoint to <code>http://localhost:1234/v1</code>. No API key needed.</p>
+      </div>
+    </div>
+
+    <h4>llama.cpp (Maximum Performance)</h4>
+    <div class="card">
+      <p><a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noopener">llama.cpp</a> is the most performant option for technical users. Runs GGUF-format models with minimal overhead.</p>
+      <div class="step">
+        <strong>Build llama.cpp server</strong>
+        <p>Follow the <a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noopener">build instructions</a> for your platform.</p>
+      </div>
+      <div class="step">
+        <strong>Download a GGUF model</strong>
+        <p>Get a GGUF model from Hugging Face (e.g., <code>Llama-3.2-3B-Instruct-Q4_K_M.gguf</code>).</p>
+      </div>
+      <div class="step">
+        <strong>Start the server</strong>
+        <p><code>./llama-server -m model.gguf --port 8080</code></p>
+      </div>
+      <div class="step">
+        <strong>Configure in Open Historia</strong>
+        <p>Select <strong>OpenAI Compatible</strong>, set the endpoint to <code>http://localhost:8080/v1</code>.</p>
+      </div>
+    </div>
+
+    <h3>Other Cloud APIs (OpenAI-Compatible)</h3>
+    <div class="card">
+      <p>Any cloud service that speaks the OpenAI chat completions protocol works through the <strong>OpenAI Compatible</strong> provider. Popular options:</p>
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Endpoint URL</th>
+            <th>Notable</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Groq</strong></td>
+            <td><code>https://api.groq.com/openai/v1</code></td>
+            <td>Fast inference, generous free tier</td>
+          </tr>
+          <tr>
+            <td><strong>Together.ai</strong></td>
+            <td><code>https://api.together.xyz/v1</code></td>
+            <td>Wide model selection, $1 free credit</td>
+          </tr>
+          <tr>
+            <td><strong>OpenRouter</strong></td>
+            <td><code>https://openrouter.ai/api/v1</code></td>
+            <td>Access 300+ models through one API</td>
+          </tr>
+          <tr>
+            <td><strong>DeepInfra</strong></td>
+            <td><code>https://api.deepinfra.com/v1/openai</code></td>
+            <td>Open-source models, pay-per-token</td>
+          </tr>
+          <tr>
+            <td><strong>Fireworks</strong></td>
+            <td><code>https://api.fireworks.ai/inference/v1</code></td>
+            <td>Fast, serverless GPU inference</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>For any of these, select <strong>OpenAI Compatible</strong>, paste the endpoint URL and your API key from that service, and set the model name. The relay handles CORS automatically.</p>
+    </div>
+
+    <h2>Choosing the Right Option</h2>
+    <div class="card">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Cost</th>
+            <th>Quality</th>
+            <th>Privacy</th>
+            <th>Best For</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemini</td>
+            <td>Free tier available</td>
+            <td>Excellent</td>
+            <td>Cloud</td>
+            <td>Quickest setup, casual play</td>
+          </tr>
+          <tr>
+            <td>OpenAI</td>
+            <td>Pay-per-token</td>
+            <td>Excellent</td>
+            <td>Cloud</td>
+            <td>Best quality, heavy use</td>
+          </tr>
+          <tr>
+            <td>Anthropic Claude</td>
+            <td>Pay-per-token</td>
+            <td>Excellent</td>
+            <td>Cloud</td>
+            <td>Rich narrative, diplomacy</td>
+          </tr>
+          <tr>
+            <td>DeepSeek</td>
+            <td>Very low cost</td>
+            <td>Very good</td>
+            <td>Cloud (China)</td>
+            <td>Budget-friendly quality</td>
+          </tr>
+          <tr>
+            <td>Ollama / LM Studio / llama.cpp</td>
+            <td>Free</td>
+            <td>Varies by model</td>
+            <td>Fully local</td>
+            <td>Privacy, offline play</td>
+          </tr>
+          <tr>
+            <td>Groq / Together / OpenRouter</td>
+            <td>Free tier / low cost</td>
+            <td>Very good</td>
+            <td>Cloud</td>
+            <td>Fast cloud inference, many models</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Model Recommendations</h2>
+    <div class="card">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Provider</th>
+            <th>Best For</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemini 2.5 Flash</td>
+            <td>Google (native)</td>
+            <td>All features, great free tier</td>
+            <td>Default — excellent all-rounder</td>
+          </tr>
+          <tr>
+            <td>Gemini 2.5 Flash Lite</td>
+            <td>Google (native)</td>
+            <td>Budget / free tier</td>
+            <td>Fast, generous rate limits</td>
+          </tr>
+          <tr>
+            <td>GPT-4.1 Mini</td>
+            <td>OpenAI (native)</td>
+            <td>Fast, inexpensive</td>
+            <td>Good for diplomacy and events</td>
+          </tr>
+          <tr>
+            <td>GPT-4.1</td>
+            <td>OpenAI (native)</td>
+            <td>Complex strategy &amp; narrative</td>
+            <td>Top-tier quality, higher cost</td>
+          </tr>
+          <tr>
+            <td>o4-mini</td>
+            <td>OpenAI (native)</td>
+            <td>Strategic reasoning</td>
+            <td>Reasoning model, excels at planning</td>
+          </tr>
+          <tr>
+            <td>Claude Sonnet 4</td>
+            <td>Anthropic (native)</td>
+            <td>Nuanced diplomacy, rich narrative</td>
+            <td>Best writing quality</td>
+          </tr>
+          <tr>
+            <td>DeepSeek-Chat (V3)</td>
+            <td>DeepSeek (compatible)</td>
+            <td>Budget-friendly quality</td>
+            <td>Very low cost per token</td>
+          </tr>
+          <tr>
+            <td>Llama 3.2 3B</td>
+            <td>Local (Ollama / LM Studio)</td>
+            <td>Diplomacy chat, advisor</td>
+            <td>~4 GB RAM needed</td>
+          </tr>
+          <tr>
+            <td>Mistral 7B</td>
+            <td>Local (Ollama / LM Studio)</td>
+            <td>Events, diplomacy, advisor</td>
+            <td>~8 GB RAM needed</td>
+          </tr>
+          <tr>
+            <td>Qwen 2.5 7B</td>
+            <td>Local (Ollama / LM Studio)</td>
+            <td>Strong reasoning, all features</td>
+            <td>~8 GB RAM needed</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>For local models: smaller models respond faster and use less RAM. Larger models generate richer events and better strategic advice. For cloud models: Gemini's free tier is the best starting point; DeepSeek offers the best quality-per-dollar.</p>
+    </div>
+
+    <h2>Troubleshooting</h2>
+    <div class="card">
+      <h3>AI features are greyed out or unresponsive</h3>
+      <p>Make sure your provider is configured correctly. For cloud APIs, verify your API key is valid and has credits. For local backends, check that the server is running and the endpoint URL matches. The game checks connectivity on load — if the backend isn't reachable, AI features won't activate.</p>
+      <h3>API key not working</h3>
+      <p>Double-check you've selected the correct provider in settings. A Gemini key won't work with the OpenAI provider, and vice versa. For OpenAI Compatible providers, ensure the endpoint URL includes the full base path (e.g., <code>https://api.deepseek.com/v1</code>, not just <code>https://api.deepseek.com</code>).</p>
+      <h3>AI responses are slow</h3>
+      <p>For local models: try a smaller model (3B parameters) or enable GPU acceleration. Ollama and LM Studio both support GPU offloading. For cloud APIs: slower models like GPT-4.1 or Claude Sonnet produce higher quality but take longer — try a faster model if latency is an issue. Groq is particularly fast for cloud inference.</p>
+      <h3>CORS errors when using a remote backend</h3>
+      <p>The game handles CORS automatically for OpenAI, OpenAI Compatible, and Anthropic Compatible providers via the relay endpoint. If you're seeing CORS errors, make sure you're using the correct provider type — Gemini and Anthropic work direct from the browser, everything else routes through <code>/api/ai/relay</code>.</p>
+      <h3>DeepSeek / OpenRouter returns errors</h3>
+      <p>These services use the OpenAI Compatible provider. Ensure the endpoint URL is correct and includes <code>/v1</code>. The model name must match exactly what the service expects (e.g., <code>deepseek-chat</code> for DeepSeek, or the full OpenRouter model slug like <code>openai/gpt-4.1</code>).</p>
+    </div>
+
+    <h2>Related Guides</h2>
+    <ul>
+      <li><a href="/get-started/">Get Started — installation and setup for all platforms</a></li>
+      <li><a href="/self-hosting/">Self-Hosting Guide — run your own server</a></li>
+      <li><a href="/how-to-play/">How to Play — gameplay mechanics and controls</a></li>
+    </ul>
+
+    <a href="/" class="cta">Play Open Historia</a>
+
+    <footer>
+      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/C3AVwHacZ4" target="_blank" rel="noopener">Discord</a> · <a href="/sitemap.xml">Sitemap</a></p>
+    </footer>
+  </div>
+</body>
+</html>
