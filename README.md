@@ -150,3 +150,16 @@ Open any scenario's editor and click **🗺️ Open Map Editor** (or visit
 `http://localhost:3000/?editor=1` for the standalone editor). Draw regions, split and
 merge borders freehand, paint owners, import 70k cities, sign your map, then
 **Apply & Play**.
+
+## 🖥️ Host a server node
+
+Want to help the network? Run a **content node** on your own device to cache and serve
+the game's map data to nearby players so everyone loads faster. It's a one-click install
+and deliberately safe — a node only ever serves **read-only, checksum-verified** map
+files, and never touches anyone's games, accounts, AI keys, or code.
+
+➡️ **[Set up a node → Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node)**
+
+Your node registers itself and starts serving players once an admin accepts it. See the
+[node README](https://github.com/Open-Historia/open-historia-node#readme) for the full
+walkthrough (including a free Cloudflare Tunnel to put it online).

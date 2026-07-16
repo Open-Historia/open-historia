@@ -1,6 +1,6 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { JSON_URLS } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -90,9 +90,20 @@ const StatsPane = ({ active }) => {
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
+    // Author-set flags from the scenario (flags.json). Memoized in assets.js, so
+    // this is one fetch per scenario; {} for every scenario that sets none.
+    const [customFlags, setCustomFlags] = useState({});
     const displayName = useCountryDisplayName(targetCode);
 
     // Which game and which date are we in? Also seeds the target: your country.
+    useEffect(() => {
+        let cancelled = false;
+        getNationFlags()
+            .then((flags) => { if (!cancelled) setCustomFlags(flags || {}); })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [activeGameId]);
+
     useEffect(() => {
         if (!active) return undefined;
         let cancelled = false;
@@ -183,7 +194,9 @@ const StatsPane = ({ active }) => {
 
     const sheet = state.sheet;
     const isPlayer = targetCode && targetCode.toUpperCase() === String(player.code).toUpperCase();
-    const flagUrl = polity?.flag || flagImageUrlFromGid(targetCode);
+    // An author-set flag (scenario flags.json) wins over the code-derived one, so a
+    // custom era polity shows the flag its map-maker drew instead of initials.
+    const flagUrl = customFlags[targetCode] || polity?.flag || flagImageUrlFromGid(targetCode);
     const initials = String(targetCode).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
 
     const breakdown = useMemo(() => {

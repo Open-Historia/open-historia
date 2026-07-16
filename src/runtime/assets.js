@@ -65,6 +65,7 @@ export const JSON_URLS = {
   actions: "",
   chat: "",
   colors: "",
+  flags: "",
   events: "",
   game: "",
   prompts: "",
@@ -142,6 +143,8 @@ const pmtilesProtocol = new Protocol();
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
 let nationColorsPromiseKey = "";
+let nationFlagsPromise = null;
+let nationFlagsPromiseKey = "";
 let countryNamesPromise = null;
 let countryNamesPromiseKey = "";
 let regionCatalogPromise = null;
@@ -156,6 +159,10 @@ const invalidateDerivedCachesForWrite = (url) => {
   if (url && url === JSON_URLS.colors) {
     nationColorsPromise = null;
     nationColorsPromiseKey = "";
+  }
+  if (url && url === JSON_URLS.flags) {
+    nationFlagsPromise = null;
+    nationFlagsPromiseKey = "";
   }
   if (url && url === JSON_URLS.world) {
     countryNamesPromise = null;
@@ -172,6 +179,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
   JSON_URLS.chat = withRuntimeToken("/api/runtime/json/chat");
   JSON_URLS.colors = withRuntimeToken("/api/runtime/json/colors");
+  JSON_URLS.flags = withRuntimeToken("/api/runtime/json/flags");
   JSON_URLS.events = withRuntimeToken("/api/runtime/json/events");
   JSON_URLS.game = withRuntimeToken("/api/runtime/json/game");
   JSON_URLS.prompts = withRuntimeToken("/api/runtime/json/prompts");
@@ -708,8 +716,24 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
   }
 
   const request = (async () => {
-    const { response } = await fetchWithPersistence(url, { signal });
-    const buffer = await response.arrayBuffer();
+    let buffer = null;
+    // Web build only: try the vetted node swarm first, verifying every byte
+    // against the signed content manifest. On any miss/failure we fall through to
+    // the canonical origin below, so a node outage is invisible. This whole block
+    // (and the content-trust module) is stripped from the local download.
+    if (import.meta.env.VITE_OH_WEB) {
+      try {
+        const { fetchVerifiedBuffer } = await import("./web/contentTrust.js");
+        buffer = await fetchVerifiedBuffer(url, { signal });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        buffer = null; // fall back to the origin
+      }
+    }
+    if (buffer == null) {
+      const { response } = await fetchWithPersistence(url, { signal });
+      buffer = await response.arrayBuffer();
+    }
     primePmtilesArchive(url, buffer);
     return buffer;
   })().finally(() => {
@@ -758,6 +782,27 @@ export const getNationColors = async () => {
   }
 
   return nationColorsPromise;
+};
+
+// Author-set country flags: owner code -> PNG data URL, from the scenario's
+// flags.json. Memoized exactly like getNationColors — same reasoning, same
+// invalidation in invalidateDerivedCachesForWrite. Most scenarios have no
+// flags.json at all, in which case this resolves to {} and every caller falls
+// back to the code-derived flag as before.
+export const getNationFlags = async () => {
+  const cacheKey = JSON_URLS.flags;
+
+  if (!nationFlagsPromise || nationFlagsPromiseKey !== cacheKey) {
+    nationFlagsPromiseKey = cacheKey;
+    const promise = readJson(JSON_URLS.flags, { defaultValue: {} }).catch((error) => {
+      console.warn("Failed to load nation flags (will retry):", error);
+      if (nationFlagsPromise === promise) nationFlagsPromise = null;
+      return {};
+    });
+    nationFlagsPromise = promise;
+  }
+
+  return nationFlagsPromise;
 };
 
 export const loadCountryNames = async ({ force = false } = {}) => {

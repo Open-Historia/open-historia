@@ -191,6 +191,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [activeTab, setActiveTab] = useState("advisor");
+    const inputRef = useRef(null);
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);
@@ -215,6 +216,20 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
+
+    const resizeTextarea = React.useCallback(() => {
+        const el = inputRef.current;
+        if (!el) {
+            return;
+        }
+
+        el.style.height = "0";
+        el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+    }, []);
+
+    React.useEffect(() => {
+        resizeTextarea();
+    }, [input, resizeTextarea]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -311,7 +326,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
 
         <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages */}
-        <div style={{ padding: "0.75rem", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+        <div style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
         {messages.length === 0 && (
             <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
             No messages yet. Ask your advisor something!
@@ -367,12 +382,15 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
         {/* Input */}
         <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <textarea
-        placeholder="Ask your advisor..."
+        ref={inputRef}
+        placeholder="Ask your advisor…  (Shift+Enter for a new line)"
         rows={1} value={input}
-        onChange={e => setInput(e.target.value)}
+        onChange={e => {
+            setInput(e.target.value);
+            resizeTextarea();
+        }}
         onKeyDown={handleKeyDown}
-        onInput={e => { e.target.style.height = "auto"; }}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "hidden", transition: "border-color 0.2s" }}
+        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "auto", scrollbarWidth: "none", transition: "border-color 0.2s" }}
         onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
         />
