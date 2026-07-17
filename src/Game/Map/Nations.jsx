@@ -786,12 +786,16 @@ const WorldMap = ({ isGlobe = false }) => {
       </Source>
       )}
 
-      {/* Not mounted at all on a custom map, rather than painted at zero alpha.
-          MapLibre's isHidden() only consults visibility:"none" — an opacity-0
-          layer still fetches, decodes and renders its tiles — so leaving these
-          mounted made every custom-map player stream the stock world's geometry
-          in order to draw none of it. */}
-      {!customFlag && (
+      {/* Deliberately NOT gated on customFlag, unlike countries-source above —
+          this source is not decoration on a custom map, it IS the map. On a
+          re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry,
+          nothing hand-drawn) regions-fill is the ONLY thing painting owners
+          above z6.5, because custom-regions-fill-far stops at maxzoom 7 and
+          FAR_FILL_FADE has already faded it to 0 by 6.5 — the crossfade hands
+          off to these tiles by design. Unmounting it here left every such map
+          blank past 6.5 and, via the getLayer() filter at the click handler,
+          unclickable too. The hairlines are needed on stock maps as well:
+          regionsOutlinePaint is gated on worldKnown, not on customActive. */}
       <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
         <Layer
           id="regions-fill"
@@ -806,7 +810,6 @@ const WorldMap = ({ isGlobe = false }) => {
           paint={regionsOutlinePaint}
         />
       </Source>
-      )}
 
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)

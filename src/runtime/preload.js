@@ -79,26 +79,6 @@ const buildInitialViewportTextureUrls = (
   });
 };
 
-// A custom map draws its own geometry and NEVER draws the stock world's tiles —
-// Nations.jsx does not even mount those sources when world.customRegions is set.
-// Warming them anyway meant every custom-map player downloaded 161MB of
-// modern-day Earth to render none of it, which on the website is the single
-// longest thing between pressing play and seeing a map.
-//
-// Safe to read here: the "state" task above already warmed JSON_URLS.world and
-// runs before these, so this resolves from cache rather than adding a request.
-// Defaults to false — an unreadable world cannot be PROVEN custom, and warming
-// tiles we might not need is a slow start, while skipping tiles we do need is a
-// blank map.
-const worldIsCustom = async () => {
-  try {
-    const world = await readJson(JSON_URLS.world, { defaultValue: {} });
-    return Boolean(world?.customRegions);
-  } catch {
-    return false;
-  }
-};
-
 const STARTUP_TASKS = [
   {
     id: "state",
@@ -169,12 +149,14 @@ const STARTUP_TASKS = [
   },
   {
     id: "regions",
+    // Warmed on EVERY world, custom included — this archive is what paints
+    // owners above z6.5 on a re-ownership scenario (Nations.jsx: regions-fill
+    // fades in as the seed's far layer fades out), so a custom map needs it
+    // just as much as a stock one. Skipping it here was the mistake the note
+    // at the top of this file warns about: skipping tiles we DO need.
     label: "Caching regional borders",
     weight: 24,
-    run: async ({ signal }) => {
-      if (await worldIsCustom()) return;
-      await warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal });
-    },
+    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal }),
   },
 ];
 
