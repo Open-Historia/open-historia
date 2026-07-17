@@ -398,9 +398,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             display: "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            // Tall desktops keep the old size; laptops/phones get a usable 30rem
-            // instead of the sliver calc(100vh - 33rem) left them.
-            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
+            // Grow to use the height a taller screen offers (leaving ~16rem for the
+            // top bar), never dropping below a usable 30rem floor for laptops/phones,
+            // and never past the 9rem the top UI needs (so it can't overflow up).
+            height: "min(calc(100vh - 9rem), max(calc(100vh - 16rem), 30rem))",
             minHeight: "10rem",
             left: "0rem",
             maxWidth: "calc(100vw - 1rem)",
