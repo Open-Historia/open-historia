@@ -13,6 +13,8 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import COUNTRY_NAMES from "../src/runtime/generated/countryNames.js";
+import { OWNER_SCHEMA } from "../server/ownerMigration.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -46,16 +48,28 @@ for (const feature of seed.features ?? []) {
   const gid1 = props.id != null ? String(props.id) : "";
   if (!gid1 || !feature.geometry) continue;
   const gid0 = props.gid0 ? String(props.gid0) : "";
-  if (gid0 && !colors[gid0]) colors[gid0] = codeToColor(gid0);
+  // The owner is the country's NAME, resolved through the registry rather than
+  // taken from the seed's own `country` field: the seed says "México" where
+  // everything else says "Mexico", and truncates "United States Minor Outlying
+  // Isl" at 32 characters. Falls back to the code so an unknown gid0 still
+  // identifies its regions instead of silently unowning them.
+  const owner = gid0 ? COUNTRY_NAMES[gid0] || gid0 : "";
+  // Keyed by NAME, hashed from the CODE. Both halves matter: the key has to match
+  // what the game now looks colours up by, and the hash has to stay on gid0 or
+  // every procedurally-coloured country changes colour — 171 of the 240 here have
+  // no curated entry and would be re-rolled by hashing the name instead.
+  if (owner && !colors[owner]) colors[owner] = codeToColor(gid0);
   features.push({
     type: "Feature",
     geometry: feature.geometry,
     properties: {
       id: gid1,
-      owner: gid0,
+      owner,
+      // GADM provenance. Stays a code — the tiles are keyed on it and the preset
+      // grants resolve through it.
       gid0,
       name: props.name ? String(props.name) : "",
-      country: props.country ? String(props.country) : "",
+      // No `country`: owner IS the country's name.
       typeId: "land",
     },
   });
@@ -72,7 +86,21 @@ writeFileSync(path.join(SCENARIO_DIR, "colors.json"), `${JSON.stringify(colors, 
 const worldPath = path.join(SCENARIO_DIR, "world.json");
 const world = existsSync(worldPath) ? JSON.parse(readFileSync(worldPath, "utf8")) : {};
 world.customRegions = true;
+// Country names now, despite the field's name — renaming the key would be a second
+// migration for no gain, and shipped FMG worlds already store names under it.
 world.ownerCodes = [...new Set(features.map((f) => f.properties.owner).filter(Boolean))].sort();
+// This map is BUILT name-keyed, so mark it migrated. Without the marker the store
+// would run the migrator over a freshly-generated map on first read — harmless
+// (the resolver is a fixpoint) but a pointless 55MB rewrite on every clean build.
+world.ownerSchema = OWNER_SCHEMA;
+// The auto-generated disputed-territory polities go with the codes that named them:
+// each said {"Z01": {name: "Z01"}}, which is now both false and unreachable —
+// Z01's regions are owned by "India".
+if (world.polityOverrides && typeof world.polityOverrides === "object") {
+  for (const key of Object.keys(world.polityOverrides)) {
+    if (/^Z\d\d$/.test(key)) delete world.polityOverrides[key];
+  }
+}
 writeFileSync(worldPath, `${JSON.stringify(world, null, 2)}\n`, "utf8");
 
 // Cover image: the modern-era loading artwork fits the Modern Day scenario.

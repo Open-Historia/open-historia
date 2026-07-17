@@ -26,13 +26,16 @@ export default {
       "The world as the Wehrmacht crosses into Poland. The Axis is ascendant, the " +
       "colonial empires span the globe, and the United States stands neutral. Lead any " +
       "power through the deadliest conflict in human history.",
-    // 1939 country names mostly still fit, so only relabel the German annexations
-    // (Austria, the Czech lands) and a couple of period names. Colonies keep their
-    // own names but share their empire's color.
-    countryNameOverrides: { THA: "Siam", AUT: "Germany", CZE: "Germany" },
   },
 
-  // Keep modern names except the hand-authored annexations above.
+  // Keep modern names: in 1939 most of them still fit, and relabelling every whole
+  // country grant would name each colony after its empire.
+  //
+  // The era names this preset does need are polities now, not labels. Austria and
+  // the Czech lands read "Germany" because Germany OWNS them below — the annexation
+  // is the ownership, so no separate label is needed. Siam is the one that had to be
+  // converted rather than dropped: Thailand keeps its modern owner here, so it had
+  // no polity to take a name from, and the label was the only record of the era name.
   relabelOwnedCountries: false,
 
   // 1939 is near-modern: countries the spec does not assign (Mexico, Brazil,
@@ -40,11 +43,17 @@ export default {
   // owner on the map instead of rendering as unclaimed land.
   unassignedKeepModernOwner: true,
 
-  // Player starts as Germany. game.country MUST equal the owner code used below.
+  // Player starts as Germany. game.country MUST be a polity code declared below —
+  // the build resolves it to that polity's name, which is what the map's owners say.
   game: { country: "GER", startDate: "1939-09-01", gameDate: "1939-09-01" },
 
   polities: {
     GER: { name: "Germany", color: "#3a3a3a", aliases: ["Third Reich", "German Reich", "Nazi Germany", "Deutsches Reich"] },
+    // Was a countryNameOverrides label (THA -> "Siam"). A label could only rename
+    // what the map already showed; a polity is a country the game and the model can
+    // actually reason about. The colour is what Thailand rendered as before —
+    // codeToColor("THA") — so the map looks identical.
+    SIA: { name: "Siam", color: "#4068bf", aliases: ["Thailand", "Kingdom of Siam"] },
     SVK: { name: "Slovakia", color: "#9a9a4f", aliases: ["Slovak Republic"] },
     ITA: { name: "Italy", color: "#4f7942", aliases: ["Kingdom of Italy", "Fascist Italy"] },
     JAP: { name: "Japan", color: "#b23b3b", aliases: ["Empire of Japan", "Imperial Japan"] },
@@ -67,7 +76,13 @@ export default {
   // Whole-country grants (every GID_1 of these modern GID_0 -> owner).
   countryAssignments: {
     // — Greater Germany: Anschluss (Austria) + the Czech lands (Protectorate).
+    // This grant IS the annexation, and it is why Austria and the Czech lands read
+    // "Germany" on the map without a relabel: their owner is Germany.
     GER: ["DEU", "AUT", "CZE"],
+    // Siam — independent in 1939, and not renamed until 1949. It owns its own land
+    // rather than keeping the modern owner, which is what makes the era name real
+    // instead of a label painted over "Thailand".
+    SIA: ["THA"],
     // Slovakia: a German client state, distinct from the Czech Protectorate.
     SVK: ["SVK"],
     // — Italian Empire: Libya, Italian East Africa (Ethiopia/Eritrea/Somaliland), Albania (occ. Apr 1939).

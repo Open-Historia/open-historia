@@ -18,6 +18,7 @@ import {
   readJson,
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
+import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
@@ -62,8 +63,21 @@ const buildFallbackColorExpression = () => ([
   ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 1, 2], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
 ]);
 
-const fallbackColorFromCode = (code = "") => {
-  const normalized = String(code ?? "").toUpperCase();
+// Procedural colour for an owner with no entry in the palette. Takes the owner —
+// a country NAME now ("Russia", "Roman Empire"), not a GID_0 code.
+//
+// Stripping to A-Z first is what makes a name hash usefully. The letters are read
+// positionally, so "Côte d'Ivoire" would otherwise hash on 'C', 'Ô', 'T' — and 'Ô'
+// is not in the alphabet, so indexOf returns -1 and the channel clamps to 0. Every
+// accented or two-word name would collapse toward the same dark corner of the
+// space. Stripping gives "COTEDIVOIRE" and a colour that actually differs from its
+// neighbours'.
+//
+// NOTE this is the JS twin of buildFallbackColorExpression above, which reads
+// GID_0 off the stock tiles and must keep hashing the CODE — tile properties are
+// baked GADM and never become names.
+const fallbackColorFromOwner = (owner = "") => {
+  const normalized = String(owner ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   if (normalized.length < 3) {
     return "rgb(96, 96, 96)";
   }
@@ -483,14 +497,26 @@ const WorldMap = ({ isGlobe = false }) => {
     // On custom maps, stock-tile hits carry modern props only — resolve the era
     // owner (possibly "" = unclaimed) from the ownership lookup.
     const owner = props.owner ?? (ownerLookupRef.current.size ? ownerLookupRef.current.get(regionId) : undefined);
+    // The region's underlying real country, as GADM knows it. A code, and staying
+    // one: it comes off the baked tiles.
+    const gid0 = props.gid0 ?? props.GID_0 ?? "";
     onRegionSelected({
-      COUNTRY: props.COUNTRY ?? props.country ?? "",
+      // Despite the name, this field carries the OWNER — every downstream reader
+      // (the flag lookup, the country panel) treats it that way. Resolved to a
+      // NAME here so it is one namespace: it used to hand back the owner's name
+      // when there was an owner and a raw GADM code when there wasn't, and the
+      // difference only showed up as an occasional "RUS" where a country name
+      // belonged. owner === "" means genuinely unclaimed and must stay empty.
+      GID_0: owner || (owner === "" ? "" : COUNTRY_NAMES[gid0] || gid0),
+      // A stock-tile hit carries GADM's own COUNTRY attribute; a custom region has
+      // no such property (and no longer carries `country` at all), so name it from
+      // the provenance rather than handing the panel a blank.
+      COUNTRY: props.COUNTRY ?? COUNTRY_NAMES[gid0] ?? "",
       NAME_1: props.NAME_1 ?? props.name ?? "",
-      GID_0: owner || (owner === "" ? "" : props.GID_0 ?? props.gid0 ?? ""),
       GID_1: regionId,
-      // gid0 = the region's underlying real country (flag fallback when the owner
-      // is a custom polity like "HRE"). owner "" flags an unclaimed region.
-      gid0: props.gid0 ?? props.GID_0 ?? "",
+      // Kept as the flag fallback when the owner is an invented polity: "Roman
+      // Empire" has no flag, but the land underneath it is still Italy.
+      gid0,
       owner,
       lngLat: event.lngLat,
     });
@@ -507,6 +533,7 @@ const WorldMap = ({ isGlobe = false }) => {
       .then(setColorMap)
       .catch((error) => console.error("Error loading colors:", error));
   }, []);
+
 
   // Load custom region geometry once, only when the active map declares it. Stock
   // scenarios never hit the network for this. Ownership recolors live via the
@@ -557,16 +584,27 @@ const WorldMap = ({ isGlobe = false }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownedCodesKey, labelEpoch]);
 
+  // DEAD as it stands, and deliberately left alone rather than half-fixed. It is
+  // the only expression in the game that matches a country CODE — ["get", "GID_0"]
+  // off the stock tiles — and it cannot fire: readRuntimeJsonAsset forces
+  // customRegions:true onto every world it serves (normalizeRuntimeWorld), so
+  // showStockCountries is always false and countries-source never mounts.
+  //
+  // Its stops would need a code->name bridge to work, which is exactly the thing
+  // this rename exists to remove. It belongs in the dead-code sweep with
+  // countries-source, not in a patch that keeps codes alive to colour nothing.
+  // The layer that DOES paint the political map (stockRegionsFillPaint) matches
+  // GID_1 — a region id, not a country — and needs no bridge at all.
   const fillStyle = useMemo(() => {
-    const stops = Object.entries(colorMap).flatMap(([iso, rgb]) => [
-      iso, `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
+    const stops = Object.entries(colorMap).flatMap(([owner, rgb]) => [
+      owner, `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
     ]);
     const fallback = buildFallbackColorExpression();
     const regionOverrideStops = Object.entries(regionOwnershipOverrides).flatMap(([regionId, ownerCode]) => [
       regionId,
       colorMap[ownerCode]
         ? `rgb(${colorMap[ownerCode][0]}, ${colorMap[ownerCode][1]}, ${colorMap[ownerCode][2]})`
-        : fallbackColorFromCode(ownerCode),
+        : fallbackColorFromOwner(ownerCode),
     ]);
 
     return {
@@ -601,7 +639,7 @@ const WorldMap = ({ isGlobe = false }) => {
     for (const [regionId, ownerCode] of Object.entries(regionOwnershipOverrides)) {
       overrideColor[regionId] = colorMap[ownerCode]
         ? `rgb(${colorMap[ownerCode][0]}, ${colorMap[ownerCode][1]}, ${colorMap[ownerCode][2]})`
-        : fallbackColorFromCode(ownerCode);
+        : fallbackColorFromOwner(ownerCode);
     }
 
     return {
@@ -615,7 +653,7 @@ const WorldMap = ({ isGlobe = false }) => {
         } else if (props.owner && colorByOwner[props.owner]) {
           fillColor = colorByOwner[props.owner];
         } else if (props.owner) {
-          fillColor = fallbackColorFromCode(props.owner);
+          fillColor = fallbackColorFromOwner(props.owner);
         } else {
           fillColor = NEUTRAL_LAND_COLOR;
         }
@@ -685,7 +723,7 @@ const WorldMap = ({ isGlobe = false }) => {
         owner
           ? colorMap[owner]
             ? `rgb(${colorMap[owner][0]}, ${colorMap[owner][1]}, ${colorMap[owner][2]})`
-            : fallbackColorFromCode(owner)
+            : fallbackColorFromOwner(owner)
           : NEUTRAL_LAND_COLOR,
       );
     }

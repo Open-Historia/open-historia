@@ -6,6 +6,11 @@
 // emoji are built from that alpha-2 code's regional-indicator letters. These
 // replace restcountries.com, whose public API was deprecated and no longer
 // returns flag data.
+//
+// nameToAlpha2 is generated from server/country-names.json by
+// scripts/generate-name-to-alpha2.mjs, and is committed — see that script for why
+// it derives the table from the real lookup below rather than restating it.
+import NAME_TO_ALPHA2 from "./generated/nameToAlpha2.js";
 
 // ISO 3166-1 alpha-3 -> alpha-2.
 const ISO3_TO_ISO2 = {
@@ -53,10 +58,23 @@ const SPECIAL_TERRITORY_PARENT = {
     ZNC: "TUR",
 };
 
-// Resolve a GID_0 (ISO3) code to a lowercase ISO 3166-1 alpha-2 code, or null.
-export const gidToAlpha2 = (gid0) => {
-    if (!gid0) return null;
-    const code = String(gid0).trim().toUpperCase();
+// Resolve an owner to a lowercase ISO 3166-1 alpha-2 code, or null.
+//
+// Takes a country NAME ("Russia") or a GID_0 code ("RUS"). The name path has to
+// exist because a region's owner is its name now, and 5 of the 7 flag call sites
+// hand this the owner — including game.country, which has no code sibling to fall
+// back on. The code path stays: the pmtiles carry GID_0 forever, so chat.jsx and
+// anything reading tile properties still arrive here with a code.
+//
+// Order is name-then-code and the two can't collide: names are lowercased keys
+// ("russia"), codes are uppercased ("RUS"), and no country is named after a
+// three-letter code.
+export const gidToAlpha2 = (owner) => {
+    if (!owner) return null;
+    const raw = String(owner).trim();
+    const byName = NAME_TO_ALPHA2[raw.toLowerCase()];
+    if (byName) return byName;
+    const code = raw.toUpperCase();
     const iso3 = DISPUTED_TERRITORY_PARENT[code] ?? SPECIAL_TERRITORY_PARENT[code] ?? code;
     const alpha2 = ISO3_TO_ISO2[iso3];
     return alpha2 ? alpha2.toLowerCase() : null;

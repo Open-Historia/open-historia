@@ -717,10 +717,15 @@ export const normalizeWorldState = (world) => {
       .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
   );
 
+  // Keyed by country NAME, verbatim — same namespace as internationalReputation
+  // above, polityOverrides and colors. This used to uppercase while its neighbours
+  // did not, so one applyEventImpacts change.code landed under two different keys
+  // (countryTags["RUSSIA"] but internationalReputation["Russia"]). Harmless while
+  // owners were uppercase GADM codes; a silent desync the moment they are names.
   const countryTags = Object.fromEntries(
     Object.entries(nextWorld.countryTags ?? {})
-      .map(([code, list]) => [normalizeOptionalString(code).toUpperCase(), normalizeTagList(list)])
-      .filter(([code, list]) => code && list.length),
+      .map(([country, list]) => [normalizeOptionalString(country), normalizeTagList(list)])
+      .filter(([country, list]) => country && list.length),
   );
 
   return {

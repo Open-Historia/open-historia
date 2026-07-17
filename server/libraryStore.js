@@ -3,6 +3,16 @@ import fs from "fs";
 import path from "path";
 import url from "url";
 import { resolveChildPath as resolveWithinDirectory } from "./security.js";
+import {
+  buildOwnerRenameMap,
+  migrateChat,
+  migrateEvents,
+  migrateGame,
+  migrateRegions,
+  migrateWorld as migrateOwnerWorld,
+  needsMigration as needsOwnerMigration,
+  rekeyOwnerMap,
+} from "./ownerMigration.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -20,11 +30,20 @@ const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
 
 // ---------------------------------------------------------------------------
-// One naming scheme for authors: FULL COUNTRY NAMES work everywhere a country
-// is referenced (ownership overrides, ownerCodes, polity keys, colors, the
-// played country). Known names canonicalize to their internal code — flags
-// and stock colors keep working — and unknown names simply ARE the
-// identifier. Codes remain valid input too.
+// One naming scheme, and it is the COUNTRY'S NAME. Everywhere a country is
+// referenced — ownership overrides, ownerCodes, polity keys, colors, the played
+// country — the identifier is "Russia", not "RUS".
+//
+// This used to run the other way: names canonicalized DOWN to a GADM code. That
+// inverted here for two reasons. The obvious one is that owners are names now, so
+// the old direction silently undid every edit at the persistence boundary. The
+// other is that the name->code direction could not be made correct: NAME_TO_CODE
+// was built by last-write-wins over a registry where six codes share the name
+// "India", so canonicalizeCountryRef("India") returned Z07 — a disputed sliver of
+// Kashmir — rather than IND.
+//
+// A code still resolves (an old client, or a model that says "RUS"), and so does
+// a polity's alias, so an author writing "Rome" still reaches "Roman Empire".
 // ---------------------------------------------------------------------------
 const COUNTRY_NAMES_PATH = path.join(__dirname, "country-names.json");
 
@@ -38,65 +57,93 @@ const loadCountryNameRegistry = () => {
 };
 
 const COUNTRY_NAME_REGISTRY = loadCountryNameRegistry(); // code -> name
-const NAME_TO_CODE = new Map(
-  Object.entries(COUNTRY_NAME_REGISTRY).map(([code, name]) => [String(name).trim().toLowerCase(), code]),
-);
-const KNOWN_CODES = new Set(Object.keys(COUNTRY_NAME_REGISTRY));
 
-// Resolve one author-supplied country reference (name or code) to the
-// canonical identifier. `world` extends the lookup with the scenario's own
-// polities (their names and aliases map to their codes).
-const canonicalizeCountryRef = (value, world) => {
+// Resolve one author-supplied country reference — a name, a polity alias, or a
+// legacy GADM code — to the canonical NAME. `world` extends the lookup with the
+// scenario's own polities.
+const resolveOwnerRef = (value, world) => {
   const raw = String(value ?? "").trim();
   if (!raw) return raw;
-  if (KNOWN_CODES.has(raw)) return raw;
 
   const lower = raw.toLowerCase();
   const overrides = world?.polityOverrides;
   if (overrides && typeof overrides === "object") {
-    if (overrides[raw]) return raw; // already a scenario polity code
-    for (const [code, polity] of Object.entries(overrides)) {
-      if (!polity || typeof polity !== "object") continue;
-      if (String(polity.name ?? "").trim().toLowerCase() === lower) return polity.code || code;
-      if (Array.isArray(polity.aliases) &&
+    for (const [key, polity] of Object.entries(overrides)) {
+      const name = String(polity?.name ?? key).trim();
+      // A polity that names itself after the very token we are resolving tells us
+      // nothing the token didn't already say — skip it and let the registry decide.
+      //
+      // This is the same guard resolveOwnerName has, and it is not a nicety. Without
+      // it {"MNG": {name: "MNG"}} — which is exactly what an editor export emits for
+      // an owner it thinks is custom — shadows the registry, so "MNG" resolves to
+      // "MNG" and can NEVER become "Mongolia". Any author or model that writes a
+      // self-naming polity pins that token permanently.
+      //
+      // Skipping is safe for the polities that are genuinely self-named ("Votengia",
+      // "Roman Empire"): they fall through to a registry miss and come back as
+      // themselves — the same answer, reached honestly.
+      if (name === raw) continue;
+      if (name.toLowerCase() === lower) return name; // already canonical, bar case
+      if (polity && Array.isArray(polity.aliases) &&
           polity.aliases.some((alias) => String(alias).trim().toLowerCase() === lower)) {
-        return polity.code || code;
+        return name; // "Rome" -> "Roman Empire"
       }
+      if (key === raw) return name; // a legacy code key still maps to its polity
     }
   }
 
-  const byName = NAME_TO_CODE.get(lower);
-  if (byName) return byName;
+  const known = COUNTRY_NAME_REGISTRY[raw];
+  if (known) return known; // legacy code, or a model still saying "RUS"
 
-  // Unknown reference: it is its own identifier (custom polities may simply
-  // BE their name).
+  // Unknown reference: it already IS its own identifier — a custom polity simply
+  // is its name.
   return raw;
 };
 
-// Canonicalize every country reference inside a world payload, in place-safe
-// copies. Region ids are untouched; only OWNER references translate.
+// Resolve every country reference inside a world payload, in place-safe copies.
+// Region ids are untouched; only OWNER references translate.
+//
+// A LEGACY world is returned untouched. This looks like a hole and is the opposite:
+// canonicalizing a code-keyed world rekeys polityOverrides from {"ROM": {...}} to
+// {"Roman Empire": {...}} — which destroys the migration's rule 1, the one that
+// exists to catch exactly ROM -> "Roman Empire". Every invented polity then falls
+// through to feature consensus and gets named after whatever modern country it
+// happens to sit on (Xiongnu -> "Mongolia", Olmec -> "Mexico"), and the
+// degenerate-polity guard eats the rest because canonicalization made them
+// self-named. Measured on the six published bundles: roman-117 lost 8 of 13
+// polities, medieval-1200 lost 26, mongol-1300 lost 32.
+//
+// The migration IS the canonicaliser for that shape, and it has strictly more
+// context — the scenario's countryNameOverrides and its regions. Leave the world
+// alone and let it run.
 const canonicalizeWorldCountryRefs = (world) => {
   if (!world || typeof world !== "object" || Array.isArray(world)) return world;
+  if (needsOwnerMigration(world)) return world;
   const next = { ...world };
 
   if (next.regionOwnershipOverrides && typeof next.regionOwnershipOverrides === "object") {
     next.regionOwnershipOverrides = Object.fromEntries(
       Object.entries(next.regionOwnershipOverrides).map(([regionId, owner]) => [
         regionId,
-        canonicalizeCountryRef(owner, world),
+        resolveOwnerRef(owner, world),
       ]),
     );
   }
 
   if (Array.isArray(next.ownerCodes)) {
-    next.ownerCodes = [...new Set(next.ownerCodes.map((entry) => canonicalizeCountryRef(entry, world)))];
+    next.ownerCodes = [...new Set(next.ownerCodes.map((entry) => resolveOwnerRef(entry, world)))];
   }
 
   if (next.polityOverrides && typeof next.polityOverrides === "object") {
+    // Keyed by name, and `.code` is dropped rather than rewritten: the key IS the
+    // identifier now, so a `.code` beside it is the exact thing being deleted and
+    // would only mislead the next reader.
     next.polityOverrides = Object.fromEntries(
       Object.entries(next.polityOverrides).map(([key, polity]) => {
-        const code = canonicalizeCountryRef(polity?.code || key, world);
-        return [code, polity && typeof polity === "object" ? { ...polity, code } : polity];
+        const name = resolveOwnerRef(polity?.name || key, world);
+        if (!polity || typeof polity !== "object") return [name, polity];
+        const { code, ...rest } = polity;
+        return [name, { ...rest, name }];
       }),
     );
   }
@@ -104,30 +151,58 @@ const canonicalizeWorldCountryRefs = (world) => {
   if (Array.isArray(next.units)) {
     next.units = next.units.map((unit) =>
       unit && typeof unit === "object" && unit.ownerCode
-        ? { ...unit, ownerCode: canonicalizeCountryRef(unit.ownerCode, world) }
+        ? { ...unit, ownerCode: resolveOwnerRef(unit.ownerCode, world) }
         : unit,
+    );
+  }
+
+  if (next.countryTags && typeof next.countryTags === "object" && !Array.isArray(next.countryTags)) {
+    next.countryTags = Object.fromEntries(
+      Object.entries(next.countryTags).map(([key, value]) => [resolveOwnerRef(key, world), value]),
+    );
+  }
+
+  if (next.internationalReputation && typeof next.internationalReputation === "object" && !Array.isArray(next.internationalReputation)) {
+    next.internationalReputation = Object.fromEntries(
+      Object.entries(next.internationalReputation).map(([key, value]) => [resolveOwnerRef(key, world), value]),
     );
   }
 
   return next;
 };
 
-// Colors may be keyed by name as well; keys canonicalize like everything else.
+// Colors may be keyed by a code or an alias; keys resolve like everything else.
 const canonicalizeColorKeys = (colors, world) => {
   if (!colors || typeof colors !== "object" || Array.isArray(colors)) return colors;
   return Object.fromEntries(
-    Object.entries(colors).map(([key, value]) => [canonicalizeCountryRef(key, world), value]),
+    Object.entries(colors).map(([key, value]) => [resolveOwnerRef(key, world), value]),
   );
 };
 
-// The played country may be written as a full name too.
-const canonicalizeGameCountry = (game) => {
+// The played country. `world` is REQUIRED: without it a preset's game.country
+// ("ROM") can reach neither its polity nor the registry, so it stays a raw code
+// while every region around it says "Roman Empire" — and the player owns nothing.
+const canonicalizeGameCountry = (game, world) => {
   if (!game || typeof game !== "object" || Array.isArray(game) || !game.country) return game;
-  return { ...game, country: canonicalizeCountryRef(game.country, null) };
+  return { ...game, country: resolveOwnerRef(game.country, world) };
 };
 const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
-const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle";
-const SCENARIO_BUNDLE_VERSION = 1;
+// Bundles are files strangers swap, so the schema string is a compatibility gate
+// and the ONLY one: `version` below is written and read by nobody, on either side.
+//
+// It changes with the owner rename because a name-keyed bundle is not safely
+// readable by an older build. An old build validates the schema string, sees a
+// familiar one, accepts the file, and then runs its own canonicaliser, which
+// resolves names DOWN to codes — "Roman Empire" is not a code it knows, so it
+// becomes its own identifier, matches no colour and no region, and the player owns
+// nothing. Rejecting on an unfamiliar schema turns that into "Unsupported scenario
+// bundle", which is a sentence someone can act on.
+const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
+// Every schema this build can READ. v1 bundles — the six on the community release,
+// and everything anyone has ever shared — import fine: they arrive unmarked and the
+// migration names them on first read.
+const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+const SCENARIO_BUNDLE_VERSION = 2;
 
 const DEFAULT_SCENARIO_META = {
   accentColor: "#7c3aed",
@@ -1500,10 +1575,23 @@ const updateScenario = (
                     subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
 
+  // The world this update's country references resolve against: the one being
+  // written in the same call if there is one, else what is already on disk. It is
+  // needed even for the game write — game.country is an owner reference, and a
+  // preset's "ROM" reaches "Roman Empire" only through its polityOverrides.
+  const scenarioWorldContext = () =>
+    (world && typeof world === "object" ? world
+      : worldPatch && typeof worldPatch === "object" ? worldPatch
+        : readJsonFile(getScenarioJsonPath(scenarioId, "world"), JSON_ASSET_DEFAULTS.world));
+
   if (game && typeof game === "object") {
-    writeJsonFile(getScenarioJsonPath(scenarioId, "game"), canonicalizeGameCountry(game));
+    writeJsonFile(getScenarioJsonPath(scenarioId, "game"), canonicalizeGameCountry(game, scenarioWorldContext()));
   } else if (gamePatch && typeof gamePatch === "object") {
-    mergeJsonAsset(getScenarioJsonPath(scenarioId, "game"), canonicalizeGameCountry(gamePatch), JSON_ASSET_DEFAULTS.game);
+    mergeJsonAsset(
+      getScenarioJsonPath(scenarioId, "game"),
+      canonicalizeGameCountry(gamePatch, scenarioWorldContext()),
+      JSON_ASSET_DEFAULTS.game,
+    );
   }
 
   if (prompts && typeof prompts === "object") {
@@ -1575,10 +1663,21 @@ const updateGame = (
                 subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
 
+  // See the note in updateScenario: game.country is an owner reference and needs
+  // the world to resolve a preset's polity.
+  const gameWorldContext = () =>
+    (world && typeof world === "object" ? world
+      : worldPatch && typeof worldPatch === "object" ? worldPatch
+        : readJsonFile(getGameJsonPath(gameId, "world"), JSON_ASSET_DEFAULTS.world));
+
   if (game && typeof game === "object") {
-    writeJsonFile(getGameJsonPath(gameId, "game"), canonicalizeGameCountry(game));
+    writeJsonFile(getGameJsonPath(gameId, "game"), canonicalizeGameCountry(game, gameWorldContext()));
   } else if (gamePatch && typeof gamePatch === "object") {
-    mergeJsonAsset(getGameJsonPath(gameId, "game"), canonicalizeGameCountry(gamePatch), JSON_ASSET_DEFAULTS.game);
+    mergeJsonAsset(
+      getGameJsonPath(gameId, "game"),
+      canonicalizeGameCountry(gamePatch, gameWorldContext()),
+      JSON_ASSET_DEFAULTS.game,
+    );
   }
 
   if (prompts && typeof prompts === "object") {
@@ -1857,13 +1956,156 @@ const normalizeRuntimeWorld = (assetKey, data) => {
   return data.customRegions ? data : { ...data, customRegions: true };
 };
 
+// ---------------------------------------------------------------------------
+// Owner schema migration: rewrite a record whose owners are GADM codes into one
+// whose owners are country names. Once per record, eagerly, on disk.
+//
+// Eager rather than read-time for one decisive reason: `owner` physically lives
+// in regions.geojson, and that branch of readRuntimeJsonAsset returns before any
+// read-side hook could touch it. A read transform would also have to re-walk a
+// 55MB FeatureCollection on every poll.
+//
+// Detection is the MARKER, never the values. Sniffing is undecidable: "ROM" may
+// be a legacy code or a polity legitimately named ROM, and "Russia" may be a name
+// or a custom polity that happens to read like one.
+// ---------------------------------------------------------------------------
+const ownerSchemaChecked = new Set();
+
+const migrateOwnerRecordAtPaths = (label, paths) => {
+  const world = readJsonFile(paths.world, null);
+  if (!world || !needsOwnerMigration(world)) return false;
+
+  const game = paths.game ? readJsonFile(paths.game, null) : null;
+  const meta = paths.meta ? readJsonFile(paths.meta, null) : null;
+  const colors = paths.colors && fs.existsSync(paths.colors) ? readJsonFile(paths.colors, null) : null;
+  const flags = paths.flags && fs.existsSync(paths.flags) ? readJsonFile(paths.flags, null) : null;
+  const tags = paths.tags && fs.existsSync(paths.tags) ? readJsonFile(paths.tags, null) : null;
+  const regions = paths.regions && fs.existsSync(paths.regions) ? readJsonFile(paths.regions, null) : null;
+  const events = paths.events && fs.existsSync(paths.events) ? readJsonFile(paths.events, null) : null;
+  const chat = paths.chat && fs.existsSync(paths.chat) ? readJsonFile(paths.chat, null) : null;
+
+  const renames = buildOwnerRenameMap({
+    polityOverrides: world.polityOverrides,
+    countryNameOverrides: meta?.countryNameOverrides,
+    registry: COUNTRY_NAME_REGISTRY,
+    features: regions?.features,
+    ownershipOverrides: world.regionOwnershipOverrides,
+    ownerCodes: world.ownerCodes,
+    colors,
+    flags,
+    tags,
+    units: world.units,
+    countryTags: world.countryTags,
+    internationalReputation: world.internationalReputation,
+    gameCountry: game?.country,
+  });
+  const warn = (message) => console.warn(`[owner-migration] ${label}: ${message}`);
+
+  if (colors) writeJsonFile(paths.colors, rekeyOwnerMap(colors, renames, "colors", warn));
+  if (flags) writeJsonFile(paths.flags, rekeyOwnerMap(flags, renames, "flags", warn));
+  if (tags) writeJsonFile(paths.tags, rekeyOwnerMap(tags, renames, "tags", warn));
+  // regionsReadOnly: a game borrows its scenario's regions purely as resolver
+  // context. Writing them back from here would rewrite another record's map using
+  // this record's renames — the scenario migrates its own map, with its own.
+  if (regions && !paths.regionsReadOnly) writeJsonFile(paths.regions, migrateRegions(regions, renames));
+  if (events) writeJsonFile(paths.events, migrateEvents(events, renames));
+  if (chat) writeJsonFile(paths.chat, migrateChat(chat, renames));
+  if (game) writeJsonFile(paths.game, migrateGame(game, renames));
+
+  // Roll-back points hold a full nested copy of world+game+colors+chat+events and
+  // are blind-written back over live state on restore, with no marker of their own
+  // to catch. Rather than migrate that surface, drop them: a stale restore point
+  // would re-inject every code-keyed structure at once, silently.
+  if (paths.snapshots && fs.existsSync(paths.snapshots)) {
+    try {
+      fs.rmSync(paths.snapshots);
+      warn("discarded roll-back snapshots — they predate the owner rename");
+    } catch { /* best effort */ }
+  }
+
+  // World last: it carries the marker, so a crash mid-migration leaves the record
+  // unmarked and the next read simply redoes it.
+  writeJsonFile(paths.world, migrateOwnerWorld(world, renames, warn));
+  console.log(`[owner-migration] ${label}: ${renames.size} owner(s) -> ${new Set(renames.values()).size} name(s)`);
+  return true;
+};
+
+const ensureScenarioOwnerSchema = (scenarioId) => {
+  const key = `scenario:${scenarioId}`;
+  if (ownerSchemaChecked.has(key)) return;
+  ownerSchemaChecked.add(key);
+  try {
+    migrateOwnerRecordAtPaths(key, {
+      world: getScenarioJsonPath(scenarioId, "world"),
+      game: getScenarioJsonPath(scenarioId, "game"),
+      meta: getScenarioMetaPath(scenarioId),
+      colors: getScenarioJsonPath(scenarioId, "colors"),
+      flags: getScenarioJsonPath(scenarioId, "flags"),
+      tags: getScenarioJsonPath(scenarioId, "tags"),
+      regions: getScenarioUploadPath(scenarioId, "regionsGeojson"),
+    });
+  } catch (error) {
+    ownerSchemaChecked.delete(key); // let the next read retry rather than pin a half state
+    console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+  }
+};
+
+const ensureGameOwnerSchema = (gameId) => {
+  const key = `game:${gameId}`;
+  if (ownerSchemaChecked.has(key)) return;
+  ownerSchemaChecked.add(key);
+  try {
+    // A game MUST resolve owners with its scenario's context, not its own.
+    //
+    // countryNameOverrides lives on scenario meta and regions.geojson lives in the
+    // scenario directory, so a game that resolves alone can reach neither rule 2
+    // (the legacy label) nor rule 4 (feature consensus). It is not academic: a game
+    // reads world.json from its own directory but regions.geojson and colors.json
+    // from the scenario, so the two would be resolved by different rules and served
+    // to one running game. wwii-1939's THA becomes "Thailand" in the save while the
+    // map underneath it says "Siam" — the player's country owns nothing and 77
+    // regions belong to a country no list contains. CZE splits the same way
+    // ("Czechia" vs "Germany"), so this is a missing-context bug, not a Siam quirk.
+    const parentId = getGameSummary(gameId)?.scenarioId || DEFAULT_SCENARIO_ID;
+    // Migrate the scenario first: it is the record that owns the map, and doing it
+    // here means a game can never be resolved against an unmigrated parent.
+    ensureScenarioOwnerSchema(parentId);
+    migrateOwnerRecordAtPaths(key, {
+      world: getGameJsonPath(gameId, "world"),
+      game: getGameJsonPath(gameId, "game"),
+      colors: getGameJsonPath(gameId, "colors"),
+      flags: getGameJsonPath(gameId, "flags"),
+      tags: getGameJsonPath(gameId, "tags"),
+      events: path.join(getGameDirectory(gameId), "storage", "events.json"),
+      chat: path.join(getGameDirectory(gameId), "storage", "chat.json"),
+      snapshots: getGameJsonPath(gameId, "snapshots"),
+      // From the SCENARIO — the same two inputs the scenario resolved against, so
+      // one token cannot mean two things inside one game.
+      meta: getScenarioMetaPath(parentId),
+      regions: getScenarioUploadPath(parentId, "regionsGeojson"),
+      // The scenario's regions are read for context only; the scenario's own
+      // migration already rewrote that file, and rewriting it from here would
+      // resolve the map against the wrong record.
+      regionsReadOnly: true,
+    });
+  } catch (error) {
+    ownerSchemaChecked.delete(key);
+    console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+  }
+};
+
 const readRuntimeJsonAsset = (assetKey) => {
   ensureGameStore();
+  // Above the geojson branch deliberately: that branch returns before anything
+  // else runs, and it is the branch that serves the file `owner` lives in.
+  const activeGame = getActiveGameSummary();
+  if (activeGame?.id) ensureGameOwnerSchema(activeGame.id);
 
   // Custom region/city geometry is scenario-scoped (static map data). Resolve it
   // from the active game's scenario, mirroring how pmtiles overrides resolve.
   if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
     const scenario = getActiveRuntimeScenarioSummary();
+    ensureScenarioOwnerSchema(scenario.id);
     let sourcePath = getScenarioUploadPath(scenario.id, assetKey);
     if (!fs.existsSync(sourcePath)) {
       sourcePath = null;
@@ -1872,6 +2114,12 @@ const readRuntimeJsonAsset = (assetKey) => {
       // scenario's ownership overrides still recolor it). Cities stay absent
       // unless the scenario ships its own set.
       if (assetKey === "regionsGeojson" && scenario.id !== DEFAULT_SCENARIO_ID) {
+        // Borrowing the Modern Day map. Migrate it as DEFAULT'S record, not this
+        // scenario's: the file's owners live in default's owner-space, so
+        // resolving them against this scenario's polities would name Russia after
+        // whatever this world calls that token. This scenario's own ownership is
+        // in its world.regionOwnershipOverrides and migrated with its own record.
+        ensureScenarioOwnerSchema(DEFAULT_SCENARIO_ID);
         const defaultPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, assetKey);
         if (fs.existsSync(defaultPath)) sourcePath = defaultPath;
       }
@@ -1883,8 +2131,9 @@ const readRuntimeJsonAsset = (assetKey) => {
     };
   }
 
-  // No games yet — runtime data resolves from the scenario below.
-  const activeGame = getActiveGameSummary();
+  // No games yet — runtime data resolves from the scenario below. (activeGame is
+  // resolved at the top of this function, above the geojson branch, so the
+  // migration hook can see it.)
   const gamePath =
   activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)
   ? getGameJsonPath(activeGame.id, assetKey)
@@ -1968,17 +2217,28 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     activeGameId = details.game.id;
     console.log(`No active game — created "${activeGameId}" from scenario "${scenario.id}".`);
   }
-  // Authors and the AI may reference countries by full name anywhere; the
-  // stored form is canonical (see canonicalizeCountryRef).
+  // Authors and the AI may reference a country by an alias or a legacy code
+  // anywhere; the stored form is the country's name (see resolveOwnerRef).
+  //
+  // The world is read through readRuntimeJsonAsset rather than readJsonFile so it
+  // arrives migrated — resolving a name against a still-code-keyed world would
+  // match none of its polities and quietly invent a parallel one.
+  const activeWorld = () => {
+    if (assetKey === "world" && value && typeof value === "object") return value;
+    try {
+      return readRuntimeJsonAsset("world")?.data ?? null;
+    } catch {
+      return null;
+    }
+  };
+
   let canonical = value;
   if (assetKey === "world") {
     canonical = canonicalizeWorldCountryRefs(value);
   } else if (assetKey === "game") {
-    canonical = canonicalizeGameCountry(value);
+    canonical = canonicalizeGameCountry(value, activeWorld());
   } else if (assetKey === "colors") {
-    const worldPath = getGameJsonPath(activeGameId, "world");
-    const worldContext = fs.existsSync(worldPath) ? readJsonFile(worldPath, {}) : null;
-    canonical = canonicalizeColorKeys(value, worldContext);
+    canonical = canonicalizeColorKeys(value, activeWorld());
   }
 
   const targetPath = getGameJsonPath(activeGameId, assetKey);
@@ -2146,7 +2406,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     throw new Error("Scenario bundle must be a JSON object.");
   }
 
-  if (bundle.schema !== SCENARIO_BUNDLE_SCHEMA) {
+  // Accept every schema we can read, not just the one we write — a v1 bundle is
+  // still perfectly importable, it just arrives unmarked and gets named by the
+  // migration on first read.
+  if (!ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
 

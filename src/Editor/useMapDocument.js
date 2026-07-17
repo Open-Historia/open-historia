@@ -10,6 +10,7 @@
 // save status, live region count) also lives here for the panels to read.
 
 import { useCallback, useEffect, useState } from "react";
+import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 
 // The official editor ships a handful of region "types" carrying render +
@@ -76,12 +77,17 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // the document. The base palette (293 countries) and any scenario palette are
     // fetched at mount and merged for display only — saving those into every doc
     // would bloat it and freeze a copy of a file that is meant to be shared.
-    // owner code -> [r,g,b]
+    // A document created now is name-keyed by construction, so say so. Without the
+    // marker a brand-new map reads as legacy to documentMigration and gets migrated
+    // on every open — harmless, since the resolver is a fixpoint, but it means the
+    // marker never tells the truth about anything.
+    ownerSchema: OWNER_SCHEMA,
+    // country name -> [r,g,b]
     colorOverrides: {},
-    // owner code -> data URL (PNG, downscaled on upload). Author-set; the AI never
+    // country name -> data URL (PNG, downscaled on upload). Author-set; the AI never
     // writes these.
     flags: {},
-    // owner code -> string[] (e.g. ["socialist","authoritarian","anti-nato"]).
+    // country name -> string[] (e.g. ["socialist","authoritarian","anti-nato"]).
     // What a country IS, in the map-maker's words. Unlike flags these are only the
     // STARTING characterisation: the AI reads them as context for everything that
     // country does, and can rewrite them as the world changes (a revolution can
@@ -124,8 +130,8 @@ export const useMapDocument = (initial) => {
   // choice, so it goes in the document — the fetched palette is display-only and
   // would be thrown away on reload. buildGameSeed layers these over the base
   // palette, which is what makes an edited colour actually reach the game.
-  const setColorOverride = useCallback((code, rgb) => {
-    const owner = String(code || "").toUpperCase();
+  const setColorOverride = useCallback((country, rgb) => {
+    const owner = String(country || "").trim();
     if (!owner) return;
     setDoc((d) => {
       const next = { ...(d.colorOverrides || {}) };
@@ -137,8 +143,8 @@ export const useMapDocument = (initial) => {
 
   // Set (or clear, with null) one country's flag. The value is an already
   // downscaled PNG data URL — see flagImage.js; we never store the raw upload.
-  const setFlag = useCallback((code, dataUrl) => {
-    const owner = String(code || "").toUpperCase();
+  const setFlag = useCallback((country, dataUrl) => {
+    const owner = String(country || "").trim();
     if (!owner) return;
     setDoc((d) => {
       const next = { ...(d.flags || {}) };
@@ -151,8 +157,8 @@ export const useMapDocument = (initial) => {
   // Set (or clear) one country's tags. Note the .length check rather than the
   // truthiness test setColorOverride/setFlag use: [] is truthy, so the same
   // shape would persist an empty array for every country ever touched.
-  const setTags = useCallback((code, list) => {
-    const owner = String(code || "").toUpperCase();
+  const setTags = useCallback((country, list) => {
+    const owner = String(country || "").trim();
     if (!owner) return;
     const tags = normalizeTagList(list);
     setDoc((d) => {

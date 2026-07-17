@@ -13,6 +13,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { loadRegionCatalog, buildCountryRegionIndex } from "./lib/regionCatalog.mjs";
+import COUNTRY_NAMES from "../../src/runtime/generated/countryNames.js";
+import { OWNER_SCHEMA } from "../../server/ownerMigration.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
@@ -134,32 +136,32 @@ for (const [gid1, owner] of Object.entries(spec.regionAssignments ?? {})) {
 }
 if (errors.length) die(`spec validation failed:\n  - ${errors.join("\n  - ")}`);
 
+// Specs keep the CODE as their authoring key — assignments reference it in their
+// thousands and the GID_0 grants resolve through it — but everything EMITTED is
+// keyed by the polity's NAME, because that is what a region's owner says now.
+const polityName = (code) => String(spec.polities?.[code]?.name ?? code);
+
 // ── 2. Compose regionOwnershipOverrides (country-level, then region-level) ─────
 const overrides = {};
 for (const [owner, gid0List] of Object.entries(spec.countryAssignments ?? {})) {
   for (const gid0 of gid0List) {
-    for (const gid1 of index.get(gid0) ?? []) overrides[gid1] = owner;
+    for (const gid1 of index.get(gid0) ?? []) overrides[gid1] = polityName(owner);
   }
 }
 for (const [gid1, owner] of Object.entries(spec.regionAssignments ?? {})) {
-  overrides[gid1] = owner; // region-level wins
+  overrides[gid1] = polityName(owner); // region-level wins
 }
 
-// ── 2b. countryNameOverrides so map labels read as era polities, not modern ────
-// Start from any hand-authored labels in the spec (e.g. annexations). When
-// `relabelOwnedCountries` is set, additionally label every whole-country grant
-// with its polity name (e.g. Germany/Austria -> "Holy Roman Empire"). This is
-// right for eras where modern names are wholesale anachronistic (1200), but is
-// left off where modern names mostly still fit (1939) to avoid labelling every
-// colony with its empire's name.
-const countryNameOverrides = { ...(spec.meta?.countryNameOverrides ?? {}) };
-if (spec.relabelOwnedCountries) {
-  for (const [owner, gid0List] of Object.entries(spec.countryAssignments ?? {})) {
-    const polityName = spec.polities?.[owner]?.name;
-    if (!polityName) continue;
-    for (const gid0 of gid0List) countryNameOverrides[gid0] = polityName;
-  }
-}
+// countryNameOverrides is GONE, and could not survive this rename: it mapped a
+// GADM code to the label to print over it, which is meaningless once the owner IS
+// the label. Every relabel it used to do now falls out of the ownership above —
+// grant Germany to HRE and the region's owner reads "Holy Roman Empire", so that
+// is what the map says.
+//
+// One case needed converting rather than deleting: a label on a country the preset
+// KEEPS modern (wwii-1939's Thailand -> "Siam") had no polity to inherit from, so
+// the label was the only record of the era name. Those are real polities in the
+// spec now. See wwii-1939.spec.mjs.
 
 // ── 3. polityOverrides + colors.json ──────────────────────────────────────────
 // colors.json fully REPLACES the base palette at runtime (it is not merged), so
@@ -169,14 +171,15 @@ const baseColors = existsSync(BASE_COLORS_PATH) ? JSON.parse(readFileSync(BASE_C
 const polityOverrides = {};
 const colors = { ...baseColors };
 for (const [code, p] of Object.entries(spec.polities ?? {})) {
-  polityOverrides[code] = {
-    code,
-    name: p.name ?? code,
+  const name = polityName(code);
+  polityOverrides[name] = {
+    // No `code`: the key IS the identifier now.
+    name,
     aliases: Array.isArray(p.aliases) ? p.aliases : [],
     color: p.color ?? "#888888",
     note: p.note ?? "",
   };
-  colors[code] = hexToRgb(p.color ?? "#888888");
+  colors[name] = hexToRgb(p.color ?? "#888888");
 }
 
 // ── 4. Emit scenario folder ───────────────────────────────────────────────────
@@ -213,7 +216,7 @@ const seedFc = JSON.parse(readFileSync(REGIONS_SEED_PATH, "utf8"));
 // grants must also resolve by GID_0 or they leak their modern owner.
 const gid0Owner = {};
 for (const [owner, gid0List] of Object.entries(spec.countryAssignments ?? {})) {
-  for (const gid0 of gid0List) gid0Owner[gid0] = owner;
+  for (const gid0 of gid0List) gid0Owner[gid0] = polityName(owner);
 }
 const regionFeatures = [];
 for (const feature of seedFc.features ?? []) {
@@ -226,17 +229,23 @@ for (const feature of seedFc.features ?? []) {
   // while near-modern presets (spec.unassignedKeepModernOwner) keep the modern
   // sovereign — Mexico or Turkey in 1939 were real states, not empty land.
   // Antarctica stays unclaimed in every era.
+  //
+  // The guard still tests gid0 — "is this Antarctica?" is a question about the
+  // land, not about who owns it — but the owner it produces is the country's NAME.
   const fallbackOwner =
-    spec.unassignedKeepModernOwner && gid0 && gid0 !== "ATA" ? gid0 : "";
+    spec.unassignedKeepModernOwner && gid0 && gid0 !== "ATA"
+      ? COUNTRY_NAMES[gid0] || gid0
+      : "";
   regionFeatures.push({
     type: "Feature",
     geometry: feature.geometry,
     properties: {
       id: gid1,
       owner: overrides[gid1] ?? gid0Owner[gid0] ?? fallbackOwner,
+      // GADM provenance. Stays a code: the grants above resolve through it.
       gid0,
       name: props.name ? String(props.name) : "",
-      country: props.country ? String(props.country) : "",
+      // No `country`: owner IS the country's name.
       typeId: "land",
     },
   });
@@ -246,13 +255,22 @@ for (const feature of seedFc.features ?? []) {
 // every distinct owner actually present on the finished map — era polities plus,
 // on near-modern presets, the independent countries that kept their modern owner.
 world.ownerCodes = [...new Set(regionFeatures.map((f) => f.properties.owner).filter(Boolean))].sort();
+// Built name-keyed, so mark it migrated: otherwise the store runs the migrator
+// over a freshly-generated preset on first read.
+world.ownerSchema = OWNER_SCHEMA;
 writeJson(path.join(scenarioDir, "world.json"), world);
 
 // Guarantee a color for every owner in the map (curated where known, else a
 // stable procedural tone) so no region renders on the client's gray fallback.
+//
+// Keyed by NAME, hashed from the region's GADM CODE. The hash source matters: an
+// unassigned country keeps its modern owner, so hashing the name would re-roll
+// every such country's colour against what it was when the owner was a code.
+// Hashing gid0 keeps them all exactly where they were. Era polities never reach
+// here — they took their curated colour from the spec above.
 for (const feature of regionFeatures) {
-  const owner = feature.properties.owner;
-  if (owner && !colors[owner]) colors[owner] = codeToColor(owner);
+  const { owner, gid0 } = feature.properties;
+  if (owner && !colors[owner]) colors[owner] = codeToColor(gid0 || owner);
 }
 writeJson(path.join(scenarioDir, "colors.json"), colors);
 writeFileSync(
@@ -266,7 +284,9 @@ if (cityCollection) {
 }
 
 writeJson(path.join(scenarioDir, "game.json"), {
-  country: spec.game?.country ?? "",
+  // The played country is an owner reference like any other: "ROM" must reach
+  // "Roman Empire", or the player starts owning nothing on every preset.
+  country: spec.game?.country ? polityName(spec.game.country) : "",
   startDate: spec.game?.startDate ?? "",
   gameDate: spec.game?.gameDate ?? spec.game?.startDate ?? "",
   round: 1,
@@ -292,7 +312,6 @@ if (m.coverImage) {
 writeJson(path.join(scenarioDir, "scenario.json"), {
   accentColor: m.accentColor ?? "#7c3aed",
   coverImageContentType: coverContentType,
-  countryNameOverrides,
   createdAt: now,
   description: m.description ?? "",
   eyebrow: m.eyebrow ?? "Historical Preset",

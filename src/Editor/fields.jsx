@@ -40,10 +40,14 @@ export const NumberField = ({ value, onChange, step = 1, min, max, width = 76 })
   />
 );
 
-export const TextField = ({ value, onChange, placeholder, width }) => (
+// `list` opts the field into a <datalist> of suggestions while staying free text
+// — the Country field offers the names already on the map without preventing a
+// new one from being typed.
+export const TextField = ({ value, onChange, placeholder, width, list }) => (
   <input
     value={value ?? ""}
     placeholder={placeholder}
+    list={list}
     onChange={(e) => onChange(e.target.value)}
     style={{ ...inputStyle, width: width || "100%", padding: "5px 7px" }}
   />

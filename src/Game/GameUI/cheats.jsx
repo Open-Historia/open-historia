@@ -15,6 +15,7 @@ import {
     writeGameData,
     writeWorldState,
 } from "../../runtime/gameState.js";
+import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterCommand } from "../AI/gameplay.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
@@ -121,16 +122,23 @@ const loadPolities = async () => {
     // Owners of the actually-rendered geometry, with current overrides applied: the
     // scenario's own custom regions when present, otherwise the stock GADM catalog.
     const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
+    // Owners are country NAMES. Both fallback tails below reach for the region's
+    // GADM provenance, which is a code — so this set used to be a mix of "Russia"
+    // and "RUS" depending only on whether a given region had an override, and the
+    // two never compared equal. Resolve the code to its name at ingest so the set
+    // is one namespace.
     if (Array.isArray(custom?.features) && custom.features.length) {
         for (const feature of custom.features) {
             const props = feature?.properties ?? {};
             const id = props.id != null ? String(props.id) : "";
-            const owner = overrides[id] ?? props.owner ?? props.gid0;
+            const gid0 = props.gid0 ? String(props.gid0) : "";
+            const owner = overrides[id] ?? props.owner ?? COUNTRY_NAMES[gid0] ?? gid0;
             if (owner) owners.add(String(owner));
         }
     } else {
         for (const region of await loadRegionCatalog().catch(() => [])) {
-            const owner = overrides[region.id] ?? region.countryCode;
+            const code = region.countryCode ? String(region.countryCode) : "";
+            const owner = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
             if (owner) owners.add(String(owner));
         }
     }
@@ -560,13 +568,23 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         : props.GID_1 != null
                                             ? String(props.GID_1)
                                             : "";
+                                // Both sides of the comparison below must be in ONE
+                                // namespace. `source` came from the click (an owner
+                                // name, or a GADM code via the tail) and `effective`
+                                // from the catalog (always a code), so a miss here
+                                // transfers nothing and reports success.
+                                const clickedGid0 = String(props.GID_0 || props.gid0 || "");
                                 const source =
-                                    (clickedId && overrides[clickedId]) || props.owner || props.GID_0 || props.gid0;
+                                    (clickedId && overrides[clickedId])
+                                    || props.owner
+                                    || COUNTRY_NAMES[clickedGid0]
+                                    || clickedGid0;
                                 if (!source || source === owner) return;
                                 const catalog = await loadRegionCatalog();
                                 let count = 0;
                                 for (const region of catalog) {
-                                    const effective = overrides[region.id] ?? region.countryCode;
+                                    const code = String(region.countryCode || "");
+                                    const effective = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
                                     if (effective === source) {
                                         overrides[region.id] = owner;
                                         count += 1;
