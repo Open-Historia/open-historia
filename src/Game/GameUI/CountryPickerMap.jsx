@@ -21,6 +21,15 @@ const codeToColor = (code) => {
   return `hsl(${hue}, 52%, 42%)`;
 };
 
+// "#rrggbb" + alpha -> an rgba() OL accepts. The faction's chosen colour is a hex
+// string; region fills need it translucent so the dark basemap reads through.
+const withAlpha = (hex, alpha) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return `rgba(124,58,237,${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
+
 const parseGeoJSONFeatures = (geojson) => {
   const fmt = new GeoJSON();
   const features = fmt.readFeatures(geojson, {
@@ -36,13 +45,43 @@ const parseGeoJSONFeatures = (geojson) => {
   return features;
 };
 
-const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => {
+const CountryPickerMap = ({
+  countryOptions,
+  onPickCountry,
+  regionsGeojson,
+  // "country" (default): click a whole country to pick it — the new-game selector.
+  // "regions": click regions to toggle them in/out of a selection — the faction
+  // creator picking its starting territory. selectedRegionIds + onToggleRegion +
+  // selectionColor drive it. Kept as one component so both share the OL map, the
+  // seed load and the hover machinery.
+  selectionMode = "country",
+  selectedRegionIds = null,
+  onToggleRegion = null,
+  selectionColor = "#7c3aed",
+}) => {
   const containerRef = useRef(null);
   const layerRef = useRef(null);
   const sourceRef = useRef(null);
   const hoveredCodeRef = useRef(null);
+  const hoveredRegionRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
+
+  // Refs the once-created map's handlers read at click time — so switching mode or
+  // toggling a region never rebuilds the map.
+  const modeRef = useRef(selectionMode);
+  modeRef.current = selectionMode;
+  const onToggleRegionRef = useRef(onToggleRegion);
+  onToggleRegionRef.current = onToggleRegion;
+  const selectedRegionsRef = useRef(new Set());
+  const selectionColorRef = useRef(selectionColor);
+  selectionColorRef.current = selectionColor;
+  useEffect(() => {
+    selectedRegionsRef.current = selectedRegionIds instanceof Set
+      ? selectedRegionIds
+      : new Set(selectedRegionIds || []);
+    if (layerRef.current) layerRef.current.changed();
+  }, [selectedRegionIds]);
 
   playableCodesRef.current = useMemo(
     () => new Set(countryOptions.map((c) => c.code)),
@@ -83,7 +122,27 @@ const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => 
       }),
     });
 
+    const regionIdOf = (feature) =>
+      (feature.getId?.() ?? feature.get("id") ?? feature.get("GID_1") ?? null);
+
     const styleFn = (feature) => {
+      if (modeRef.current === "regions") {
+        const id = regionIdOf(feature);
+        const isSelected = id != null && selectedRegionsRef.current.has(String(id));
+        const isHovered = id != null && String(id) === hoveredRegionRef.current;
+        return new Style({
+          fill: new Fill({
+            color: isSelected
+              ? withAlpha(selectionColorRef.current, 0.6)
+              : isHovered ? "rgba(124,58,237,0.28)" : "rgba(60,65,80,0.3)",
+          }),
+          stroke: new Stroke({
+            color: isSelected ? withAlpha(selectionColorRef.current, 0.95) : "rgba(150,155,170,0.4)",
+            width: isSelected ? 1.6 : isHovered ? 1.4 : 0.6,
+          }),
+        });
+      }
+
       const code = feature.get("owner") || feature.get("gid0");
       const isPlayable = code && playableCodesRef.current.has(code);
       const isHovered = code === hoveredCodeRef.current;
@@ -118,11 +177,15 @@ const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => 
         (f) => f,
         { hitTolerance: 5 },
       );
-      if (hit) {
-        const code = hit.get("owner") || hit.get("gid0");
-        if (code && playableCodesRef.current.has(code)) {
-          onPickCountry(code);
-        }
+      if (!hit) return;
+      if (modeRef.current === "regions") {
+        const id = regionIdOf(hit);
+        if (id != null && onToggleRegionRef.current) onToggleRegionRef.current(String(id));
+        return;
+      }
+      const code = hit.get("owner") || hit.get("gid0");
+      if (code && playableCodesRef.current.has(code)) {
+        onPickCountry(code);
       }
     });
 
@@ -132,6 +195,16 @@ const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => 
         (f) => f,
         { hitTolerance: 5 },
       );
+      if (modeRef.current === "regions") {
+        const id = hit ? regionIdOf(hit) : null;
+        olMap.getTargetElement().style.cursor = id != null ? "pointer" : "";
+        const key = id != null ? String(id) : null;
+        if (hoveredRegionRef.current !== key) {
+          hoveredRegionRef.current = key;
+          layer.changed();
+        }
+        return;
+      }
       const code = hit ? hit.get("owner") || hit.get("gid0") : null;
       const isClickable = code && playableCodesRef.current.has(code);
       olMap.getTargetElement().style.cursor = isClickable ? "pointer" : "";
@@ -171,30 +244,40 @@ const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => 
       .catch(() => {});
   }, [!!regionsGeojson]);
 
-  // Re-style when countryOptions change
+  // Re-style when the playable set OR the selection mode changes (the style fn
+  // reads modeRef, so the layer must be told to repaint when the mode flips).
   useEffect(() => {
     const source = sourceRef.current;
     if (source) source.changed();
-  }, [countryOptions]);
+  }, [countryOptions, selectionMode, selectionColor]);
+
+  const regionMode = selectionMode === "regions";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <input
-        autoFocus
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search countries…"
-        style={{
-          padding: "0.55rem 0.7rem",
-          borderRadius: 8,
-          border: "1px solid rgba(255,255,255,0.16)",
-          background: "rgba(0,0,0,0.28)",
-          color: "#fff",
-          outline: "none",
-          fontFamily: "sans-serif",
-          fontSize: "0.85rem",
-        }}
-      />
+      {regionMode ? (
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.78rem" }}>
+          Click regions on the map to claim them as your faction's starting
+          territory. Click again to release one.
+        </div>
+      ) : (
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search countries…"
+          style={{
+            padding: "0.55rem 0.7rem",
+            borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.16)",
+            background: "rgba(0,0,0,0.28)",
+            color: "#fff",
+            outline: "none",
+            fontFamily: "sans-serif",
+            fontSize: "0.85rem",
+          }}
+        />
+      )}
       <div
         ref={containerRef}
         style={{
@@ -208,7 +291,7 @@ const CountryPickerMap = ({ countryOptions, onPickCountry, regionsGeojson }) => 
       />
       <div
         style={{
-          display: "flex",
+          display: regionMode ? "none" : "flex",
           flexDirection: "column",
           gap: 2,
           maxHeight: query.trim() ? 180 : 120,

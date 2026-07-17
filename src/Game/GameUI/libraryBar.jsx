@@ -1040,11 +1040,18 @@ const LibraryTopBar = () => {
         name: (polityName && polityName !== code ? polityName : null) || scenarioName || fallbackName,
       };
     };
-    const options = !ownerCodes || !ownerCodes.length
-      ? list.map((entry) => resolveOption(entry.code, entry.name))
-      : ownerCodes
-        .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
-        .map((code) => resolveOption(code, nameByCode.get(code) || code));
+    // ownerCodes lists only owners that hold territory (it is the deduped values of
+    // regionOwnershipOverrides). A LANDLESS faction — a polity that owns no regions,
+    // e.g. a government-in-exile — is defined in polityOverrides but appears in no
+    // ownership override, so it would never reach this list. Union the two: a
+    // faction is playable if it holds land OR exists as a polity. The map surface
+    // needs no change — a landless faction has nothing to click, and the list
+    // button is selection enough.
+    const codes = new Set(ownerCodes && ownerCodes.length ? ownerCodes : list.map((e) => e.code));
+    for (const code of Object.keys(polity)) codes.add(code);
+    const options = [...codes]
+      .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
+      .map((code) => resolveOption(code, nameByCode.get(code) || code));
     return options
       .sort((left, right) => left.name.localeCompare(right.name));
   };
