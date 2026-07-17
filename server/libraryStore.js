@@ -70,7 +70,20 @@ const resolveOwnerRef = (value, world) => {
   if (overrides && typeof overrides === "object") {
     for (const [key, polity] of Object.entries(overrides)) {
       const name = String(polity?.name ?? key).trim();
-      if (name.toLowerCase() === lower) return name; // already canonical
+      // A polity that names itself after the very token we are resolving tells us
+      // nothing the token didn't already say — skip it and let the registry decide.
+      //
+      // This is the same guard resolveOwnerName has, and it is not a nicety. Without
+      // it {"MNG": {name: "MNG"}} — which is exactly what an editor export emits for
+      // an owner it thinks is custom — shadows the registry, so "MNG" resolves to
+      // "MNG" and can NEVER become "Mongolia". Any author or model that writes a
+      // self-naming polity pins that token permanently.
+      //
+      // Skipping is safe for the polities that are genuinely self-named ("Votengia",
+      // "Roman Empire"): they fall through to a registry miss and come back as
+      // themselves — the same answer, reached honestly.
+      if (name === raw) continue;
+      if (name.toLowerCase() === lower) return name; // already canonical, bar case
       if (polity && Array.isArray(polity.aliases) &&
           polity.aliases.some((alias) => String(alias).trim().toLowerCase() === lower)) {
         return name; // "Rome" -> "Roman Empire"

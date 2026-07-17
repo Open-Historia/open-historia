@@ -10,6 +10,7 @@
 // save status, live region count) also lives here for the panels to read.
 
 import { useCallback, useEffect, useState } from "react";
+import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 
 // The official editor ships a handful of region "types" carrying render +
@@ -76,6 +77,11 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // the document. The base palette (293 countries) and any scenario palette are
     // fetched at mount and merged for display only — saving those into every doc
     // would bloat it and freeze a copy of a file that is meant to be shared.
+    // A document created now is name-keyed by construction, so say so. Without the
+    // marker a brand-new map reads as legacy to documentMigration and gets migrated
+    // on every open — harmless, since the resolver is a fixpoint, but it means the
+    // marker never tells the truth about anything.
+    ownerSchema: OWNER_SCHEMA,
     // country name -> [r,g,b]
     colorOverrides: {},
     // country name -> data URL (PNG, downscaled on upload). Author-set; the AI never

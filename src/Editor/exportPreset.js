@@ -181,7 +181,12 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // "USA" or "UAE" still trips the regex and gets NO entry, leaving the model
     // with no idea their country exists. Ask the real question instead: does the
     // stock world already know this name?
-    if (!STOCK_COUNTRY_NAMES.has(owner)) {
+    // Also skip an owner that is a known CODE, not just a known name. A document
+    // authored before the rename still owns regions by "MNG", and emitting
+    // {"MNG": {name: "MNG"}} for it is actively harmful: a self-naming polity
+    // shadows the registry in every write-path resolver, so that token can never
+    // become "Mongolia" again. Say nothing and let the registry name it.
+    if (!STOCK_COUNTRY_NAMES.has(owner) && !COUNTRY_NAMES[owner]) {
       polityOverrides[owner] = {
         // No `code`: the key IS the identifier now. `name` mirrors the key because
         // readers expect the field, not because they can differ.

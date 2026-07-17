@@ -93,6 +93,11 @@ export const resolveOwnerRef = (value, world) => {
   if (overrides && typeof overrides === "object") {
     for (const [key, polity] of Object.entries(overrides)) {
       const name = String(polity?.name ?? key).trim();
+      // Self-named: tells us nothing the token didn't. Skip it so the registry gets
+      // a chance — {"MNG":{name:"MNG"}} would otherwise pin MNG forever. Safe for
+      // genuinely self-named polities: they miss the registry and come back as
+      // themselves. See server/libraryStore.js for the full note.
+      if (name === raw) continue;
       if (name.toLowerCase() === lower) return name;
       if (polity && Array.isArray(polity.aliases)
           && polity.aliases.some((alias) => String(alias).trim().toLowerCase() === lower)) {
