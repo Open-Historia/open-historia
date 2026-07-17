@@ -7,6 +7,7 @@
 // game's world.json, colors.json and flags.json.
 
 import { lazy, Suspense, useState } from "react";
+import { createPortal } from "react-dom";
 import CountryPickerMap from "./CountryPickerMap.jsx";
 
 // The editor's flag picker drops in unchanged — it is prop-driven and pulls in no
@@ -173,16 +174,27 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
         <button type="button" onClick={onCancel} style={{ ...pill(false), padding: "0.55rem 1rem" }}>Cancel</button>
       </div>
 
-      {flagOpen && (
+      {/* Portalled to <body>, exactly as the editor mounts it outside its own
+          backdrop-filtered panel. Two things trap it otherwise: the new-game modal
+          card has backdrop-filter, which makes a containing block for position:fixed
+          — so the picker's full-screen overlay resolves to the card's box, not the
+          viewport, and its top is cut off (its own comment documents this). And the
+          picker's overlay is z-index 130 while the modal is 10060, so even freed it
+          would sit behind. The portal escapes the containing block; the wrapper's
+          stacking context (above the modal) lifts it in front. */}
+      {flagOpen && createPortal(
         <Suspense fallback={null}>
-          <FlagPicker
-            open
-            onClose={() => setFlagOpen(false)}
-            ownerCode={trimmedName}
-            currentFlag={flag}
-            onPick={(picked) => setFlag(picked || null)}
-          />
-        </Suspense>
+          <div style={{ position: "relative", zIndex: 10070 }}>
+            <FlagPicker
+              open
+              onClose={() => setFlagOpen(false)}
+              ownerCode={trimmedName}
+              currentFlag={flag}
+              onPick={(picked) => setFlag(picked || null)}
+            />
+          </div>
+        </Suspense>,
+        document.body,
       )}
     </div>
   );
