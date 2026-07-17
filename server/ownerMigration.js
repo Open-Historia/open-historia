@@ -125,8 +125,10 @@ const preferredToken = (a, b) => {
   return a.localeCompare(b) <= 0 ? a : b;
 };
 
-// Re-key an owner-keyed map, resolving collisions as above.
-const rekey = (source, renames, label, warn) => {
+// Re-key an owner-keyed map, resolving collisions as above. Exported because the
+// sibling assets (colors.json / flags.json / tags.json) live outside world.json
+// and are re-keyed by the caller in the same transaction as the marker.
+export const rekeyOwnerMap = (source, renames, label, warn) => {
   if (!source || typeof source !== "object" || Array.isArray(source)) return source;
   const out = {};
   const winner = new Map(); // name -> the token that claimed it
@@ -182,19 +184,33 @@ export const migrateWorld = (world, renames, warn) => {
     // The `.code` field goes: the KEY is the name, and a `.code` alongside it is
     // the very thing being deleted. Keeping it would leave every polity carrying a
     // stale second identifier for the next reader to be misled by.
-    next.polityOverrides = rekey(
-      Object.fromEntries(
-        Object.entries(next.polityOverrides).map(([key, polity]) => {
-          if (!polity || typeof polity !== "object") return [key, polity];
-          const { code, ...rest } = polity;
-          const name = renames.get(str(key)) ?? str(key);
-          return [key, { ...rest, name }];
-        }),
-      ),
-      renames,
-      "polityOverrides",
-      warn,
-    );
+    //
+    // Degenerate entries are DROPPED rather than renamed. default/world.json
+    // auto-generates {"Z01": {code:"Z01", name:"Z01", color:<disputed teal>}} for
+    // each disputed sliver: the entry claims the token is named after itself, which
+    // the registry contradicts (Z01 means India). Renaming it instead produces a
+    // polity asserting "India is a custom polity called India", coloured Kashmir's
+    // teal — and promptContext feeds polities to the model, so that noise is taught.
+    //
+    // The test is NOT `name === key`: an FMG world's {"Votengia": {name:"Votengia"}}
+    // has exactly that shape and is entirely real. What marks the junk is that the
+    // self-name DISAGREES with what the token actually resolves to.
+    const kept = {};
+    for (const [key, polity] of Object.entries(next.polityOverrides)) {
+      const token = str(key);
+      const name = renames.get(token) ?? token;
+      if (!polity || typeof polity !== "object") {
+        kept[token] = polity;
+        continue;
+      }
+      if (str(polity.name) === token && name !== token) {
+        warn?.(`polityOverrides: dropped degenerate ${token} (self-named, but resolves to "${name}")`);
+        continue;
+      }
+      const { code, ...rest } = polity;
+      kept[token] = { ...rest, name };
+    }
+    next.polityOverrides = rekeyOwnerMap(kept, renames, "polityOverrides", warn);
   }
 
   if (Array.isArray(next.units)) {
@@ -205,8 +221,8 @@ export const migrateWorld = (world, renames, warn) => {
     );
   }
 
-  next.countryTags = rekey(next.countryTags, renames, "countryTags", warn);
-  next.internationalReputation = rekey(next.internationalReputation, renames, "internationalReputation", warn);
+  next.countryTags = rekeyOwnerMap(next.countryTags, renames, "countryTags", warn);
+  next.internationalReputation = rekeyOwnerMap(next.internationalReputation, renames, "internationalReputation", warn);
 
   next.ownerSchema = OWNER_SCHEMA;
   return next;
