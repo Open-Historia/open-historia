@@ -60,7 +60,7 @@ async function dedupKeyFor(request, env, id) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (!env.IMPORTS) return json({ error: "KV namespace binding 'IMPORTS' is not configured" }, 500);
@@ -86,6 +86,15 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/counts") {
+        // Edge-cache the whole map for a minute. The community tab is read FAR more
+        // than scenarios are imported, and each uncached read is a KV list() over
+        // every counter key — so without this a busy hub could burn through the KV
+        // read allowance on refreshes alone. A ≤60s-stale install number is fine; a
+        // fresh /hit still lands immediately, it just shows on the next cache cycle.
+        const cache = caches.default;
+        const cacheKey = new Request(`${url.origin}/counts`);
+        const hit = await cache.match(cacheKey);
+        if (hit) return hit;
         const out = {};
         let cursor;
         do {
@@ -93,7 +102,11 @@ export default {
           for (const k of page.keys) out[k.name.slice(2)] = k.metadata || { count: 0 };
           cursor = page.list_complete ? undefined : page.cursor;
         } while (cursor);
-        return json(out);
+        const resp = new Response(JSON.stringify(out), {
+          headers: { "Content-Type": "application/json", ...CORS, "Cache-Control": "public, max-age=60" },
+        });
+        ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+        return resp;
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/count/")) {
