@@ -760,7 +760,17 @@ const WorldMap = ({ isGlobe = false }) => {
 
   return (
     <>
-      <Source id="countries-source" type="vector" url={countriesUrl}>
+      {/* maxzoom 8, not the archive's 10, because 8 is what the editor can
+          actually author against. z10 cannot be stitched into a seed at all —
+          extract-regions.mjs completes and then dies in JSON.stringify, over V8's
+          512MB max string length. z9 stitches, but 4.1M vertices then ran the
+          editor's tab out of heap: Chrome killed the renderer with "Aw, Snap"
+          while the machine still had 3GB free, because the cap is per-renderer.
+          z8's 2.6M is stable. Rendering finer than the editor can edit only draws
+          detail no map can be built against. Past z8 MapLibre overzooms, exactly
+          as it already did past z10. */}
+      {!customFlag && (
+      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={8}>
         <Layer
           id="countries-fill"
           type="fill"
@@ -774,8 +784,19 @@ const WorldMap = ({ isGlobe = false }) => {
           paint={countriesOutlinePaint}
         />
       </Source>
+      )}
 
-      <Source id="regions-source" type="vector" url={regionsUrl}>
+      {/* Deliberately NOT gated on customFlag, unlike countries-source above —
+          this source is not decoration on a custom map, it IS the map. On a
+          re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry,
+          nothing hand-drawn) regions-fill is the ONLY thing painting owners
+          above z6.5, because custom-regions-fill-far stops at maxzoom 7 and
+          FAR_FILL_FADE has already faded it to 0 by 6.5 — the crossfade hands
+          off to these tiles by design. Unmounting it here left every such map
+          blank past 6.5 and, via the getLayer() filter at the click handler,
+          unclickable too. The hairlines are needed on stock maps as well:
+          regionsOutlinePaint is gated on worldKnown, not on customActive. */}
+      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
         <Layer
           id="regions-fill"
           type="fill"

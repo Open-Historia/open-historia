@@ -18,6 +18,7 @@ import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
 import VectorLayer from "ol/layer/Vector";
+import VectorImageLayer from "ol/layer/VectorImage";
 import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
 import Text from "ol/style/Text";
@@ -40,7 +41,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
-import { unionGeoms, translatedClone } from "./geometry.js";
+import { unionGeoms, translatedClone, subtractFrom, overlaps } from "./geometry.js";
 
 const BASEMAP_BG = {
   dark: "#0b1020",
@@ -56,6 +57,66 @@ const BASEMAP_BG = {
 const WORLD_EXTENT_3857 = [-20037508.342789244, -20037508.342789244, 20037508.342789244, 20037508.342789244];
 
 const LABEL_MIN_ZOOM = 4;
+
+// City markers. Module scope because the style cache below needs them and it
+// outlives any single map instance; nothing here depends on the component.
+const markerShape = (radius) =>
+  new RegularShape({
+    points: 4,
+    radius,
+    angle: Math.PI / 4,
+    fill: new Fill({ color: "#ffd54a" }),
+    stroke: new Stroke({ color: "#000", width: 1 }),
+  });
+const SHAPES = { large: markerShape(6), mid: markerShape(4.5), small: markerShape(3.5) };
+
+// One Style per (size, label text) instead of a fresh Style + Text + Fill +
+// Stroke for every city on every frame. SHAPES was already shared for exactly
+// this reason — the Style wrapping it was not. The key collapses to just the size
+// when the label is hidden, so a zoomed-out world uses three objects in total no
+// matter how many cities were imported.
+const cityStyleCache = new Map();
+const cityStyle = (size, name) => {
+  const key = name ? `${size}|${name}` : size;
+  let style = cityStyleCache.get(key);
+  if (!style) {
+    style = new Style({
+      image: SHAPES[size],
+      text: name
+        ? new Text({
+            text: name,
+            font: "600 11px sans-serif",
+            offsetY: -11,
+            fill: new Fill({ color: "#fff" }),
+            stroke: new Stroke({ color: "rgba(0,0,0,0.85)", width: 3 }),
+          })
+        : undefined,
+    });
+    cityStyleCache.set(key, style);
+  }
+  return style;
+};
+
+// Same reasoning for region labels: the region styles are memoised (see
+// olStyle.js) and these were the one place still allocating per feature per
+// frame. Keyed on the text, the only thing that varies.
+const labelStyleCache = new Map();
+const labelStyle = (name) => {
+  let style = labelStyleCache.get(name);
+  if (!style) {
+    style = new Style({
+      text: new Text({
+        text: name,
+        font: "600 12px sans-serif",
+        overflow: false,
+        fill: new Fill({ color: "rgba(255,255,255,0.95)" }),
+        stroke: new Stroke({ color: "rgba(0,0,0,0.85)", width: 3 }),
+      }),
+    });
+    labelStyleCache.set(name, style);
+  }
+  return style;
+};
 
 const toTypesById = (types) => {
   const map = {};
@@ -156,11 +217,41 @@ const OlMap = ({
   };
 
   useEffect(() => {
-    const regionSource = new VectorSource();
+    // wrapX:false — the single biggest thing the editor was doing wrong.
+    //
+    // OpenLayers defaults it to true, and the canvas vector renderer then loops
+    // over world copies and redraws EVERY feature for each one
+    // (renderer/canvas/VectorLayer.js: `endWorld`, plus extendX_ adding another
+    // world on each side). So a zoomed-out world map painted all 3,662 regions
+    // two or three times per frame. It looks like broken culling — an endless
+    // horizontal band of map that never disappears — but it is the renderer
+    // deliberately repeating the world sideways. There is nothing to repeat
+    // vertically, which is why culling only ever LOOKED broken left-to-right.
+    //
+    // It is also what OL's own docs prescribe for this exact use case: "For
+    // vector editing across the -180° and 180° meridians to work properly, this
+    // should be set to false." So this is a correctness fix that happens to be
+    // the performance fix.
+    const regionSource = new VectorSource({ wrapX: false });
     const getZoom = (res) => mapRef.current?.getView().getZoomForResolution(res) ?? 3;
 
-    const regionLayer = new VectorLayer({
+    // VectorImage, not Vector: the regions are ~3,662 separate filled+stroked
+    // paths, and a plain vector layer re-rasterises every one of them on every
+    // frame. That is the ~1.6s presentation delay after each interaction —
+    // processing time is ~1ms, so it is the paint, not the JS. VectorImage
+    // rasterises once and re-blits the image while panning, re-rendering only
+    // when the view leaves the buffered image or the data changes.
+    //
+    // Safe for the tools: Draw/Modify/Snap bind to the SOURCE, not the layer, so
+    // they still see full-resolution geometry. Translate and click-selection go
+    // through forEachFeatureAtPixel, which VectorImage supports.
+    //
+    // imageRatio 2 renders twice the viewport, so short pans stay inside the
+    // existing image instead of triggering a fresh rasterisation.
+    const regionLayer = new VectorImageLayer({
       source: regionSource,
+      imageRatio: 2,
+      wrapX: false,
       style: makeRegionStyle({
         getTypesById: () => typesByIdRef.current,
         getColors: () => colorsRef.current,
@@ -175,25 +266,23 @@ const OlMap = ({
 
     const labelLayer = new VectorLayer({
       source: regionSource,
+      wrapX: false,
       declutter: true,
       updateWhileInteracting: false,
       updateWhileAnimating: false,
-      style: (feature, resolution) => {
-        const zoom = getZoom(resolution);
-        if (zoom < LABEL_MIN_ZOOM) return null;
+      // Skip this whole layer below the zoom its labels appear at. The style
+      // function already returned null there — but OpenLayers has to CALL it to
+      // find that out, so a zoomed-out world paid 3,662 style calls plus a
+      // declutter pass every frame to draw nothing. minZoom makes the renderer
+      // skip the layer outright, and zoomed-out is exactly where the editor was
+      // slowest, because that is when every region is on screen at once.
+      minZoom: LABEL_MIN_ZOOM,
+      style: (feature) => {
         const type = typesByIdRef.current[feature.get("typeId") || "land"];
         if (type && type.includedInLabels === false) return null;
         const name = feature.get("name");
         if (!name) return null;
-        return new Style({
-          text: new Text({
-            text: name,
-            font: "600 12px sans-serif",
-            overflow: false,
-            fill: new Fill({ color: "rgba(255,255,255,0.95)" }),
-            stroke: new Stroke({ color: "rgba(0,0,0,0.85)", width: 3 }),
-          }),
-        });
+        return labelStyle(name);
       },
     });
     labelLayer.setZIndex(20);
@@ -201,18 +290,10 @@ const OlMap = ({
     // Point/symbol feature layer (cities). With ~70k cities available, dots and
     // labels are gated by zoom + prominence so the whole set never renders at once
     // (capitals/large cities appear first; everything shows when zoomed in).
-    const pointSource = new VectorSource();
-    const markerShape = (radius) =>
-      new RegularShape({
-        points: 4,
-        radius,
-        angle: Math.PI / 4,
-        fill: new Fill({ color: "#ffd54a" }),
-        stroke: new Stroke({ color: "#000", width: 1 }),
-      });
-    const SHAPES = { large: markerShape(6), mid: markerShape(4.5), small: markerShape(3.5) };
+    const pointSource = new VectorSource({ wrapX: false });
     const pointLayer = new VectorLayer({
       source: pointSource,
+      wrapX: false,
       declutter: true,
       updateWhileInteracting: false,
       updateWhileAnimating: false,
@@ -225,18 +306,7 @@ const OlMap = ({
         if (!(large || (mid && zoom >= 3.5) || zoom >= 5)) return null;
         const size = large ? "large" : mid ? "mid" : "small";
         const showLabel = zoom >= 6 || (large && zoom >= 4.3) || (mid && zoom >= 5.3);
-        return new Style({
-          image: SHAPES[size],
-          text: showLabel
-            ? new Text({
-                text: feature.get("name") || "",
-                font: "600 11px sans-serif",
-                offsetY: -11,
-                fill: new Fill({ color: "#fff" }),
-                stroke: new Stroke({ color: "rgba(0,0,0,0.85)", width: 3 }),
-              })
-            : undefined,
-        });
+        return cityStyle(size, showLabel ? feature.get("name") || "" : "");
       },
     });
     pointLayer.setZIndex(30);
@@ -641,16 +711,19 @@ const OlMap = ({
       },
       // Serialize all region geometry to a GeoJSON FeatureCollection (WGS84) for
       // saving/exporting; load one back into the source.
-      serializeRegions: () => {
-        const fmt = new GeoJSON();
-        return JSON.parse(
-          fmt.writeFeatures(regionSource.getFeatures(), {
-            dataProjection: "EPSG:4326",
-            featureProjection: "EPSG:3857",
-            decimals: 5,
-          }),
-        );
-      },
+      // writeFeaturesObject, NOT JSON.parse(writeFeatures(...)). OL's writeFeatures
+      // is literally JSON.stringify(writeFeaturesObject(...)) (format/JSONFeature.js),
+      // so parsing its result built an ~83MB string at z9 and immediately tore it
+      // back apart — to reach the object writeFeaturesObject already had. And this
+      // runs on the 2s autosave, so the editor did that on a loop while you worked;
+      // saveDocument then stringifies the payload anyway, making it string -> objects
+      // -> string. That churn is what ran the tab out of memory.
+      serializeRegions: () =>
+        new GeoJSON().writeFeaturesObject(regionSource.getFeatures(), {
+          dataProjection: "EPSG:4326",
+          featureProjection: "EPSG:3857",
+          decimals: 5,
+        }),
       loadRegions: (fc) => {
         const fmt = new GeoJSON();
         regionSource.clear();
@@ -757,9 +830,68 @@ const OlMap = ({
         if (!f.get("name")) f.set("name", "New Region");
         if (f.get("gid0") == null) f.set("gid0", "");
         if (f.get("country") == null) f.set("country", "");
+
+        // Take the new region's land OUT of whatever it was drawn over. Two
+        // regions covering the same ground is not a cosmetic problem: the place
+        // is then owned twice, only the last-rendered owner is visible, and the
+        // exported ownership map disagrees with the map the author was looking
+        // at. Drawing inside a region leaves a hole in it; drawing across an
+        // edge takes a bite; drawing over one entirely deletes it.
+        const cutter = f.getGeometry();
+        const carved = [];
+        // Ask the source's R-tree for the handful of regions whose extents meet the
+        // new one, rather than walking all 3,662 and running a full boolean op on
+        // each. overlaps() is polygon-clipping, which builds sweep-line structures
+        // per call — doing that against every region on the map allocated hard
+        // enough to run the tab out of memory once the seed went to z9 and each
+        // polygon carried ~1,116 vertices instead of ~156. The extent query is an
+        // index lookup and rejects everything that cannot possibly touch.
+        const candidates = [];
+        source.forEachFeatureIntersectingExtent(cutter.getExtent(), (other) => {
+          if (other !== f) candidates.push(other);
+        });
+        for (const other of candidates) {
+          const geom = other.getGeometry();
+          if (!geom || !overlaps(geom, cutter)) continue;
+          const before = geom.clone();
+          const after = subtractFrom(geom, cutter);
+          if (!after) {
+            // Fully covered: nothing of it is left to own.
+            source.removeFeature(other);
+            carved.push({ feature: other, before, after: null });
+          } else {
+            other.setGeometry(after);
+            // Mark it edited so the exporter ships this geometry rather than
+            // assuming the stock GADM shape still describes it.
+            other.set("edited", true);
+            carved.push({ feature: other, before, after: after.clone() });
+          }
+        }
+        if (carved.length) {
+          layer.changed();
+          labelLayerRef.current?.changed();
+        }
+
         // defer so drawend finishes adding to the source before we count
         setTimeout(notifyRegions, 0);
-        pushCmd({ undo: () => source.removeFeature(f), redo: () => source.addFeature(f) });
+        pushCmd({
+          undo: () => {
+            source.removeFeature(f);
+            for (const c of carved) {
+              c.feature.setGeometry(c.before.clone());
+              if (!c.after) source.addFeature(c.feature);
+            }
+            layer.changed();
+          },
+          redo: () => {
+            source.addFeature(f);
+            for (const c of carved) {
+              if (!c.after) source.removeFeature(c.feature);
+              else c.feature.setGeometry(c.after.clone());
+            }
+            layer.changed();
+          },
+        });
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
     } else if (activeTool === "modify") {

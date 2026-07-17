@@ -40,15 +40,26 @@ export const loadSeedFeatures = async ({ signal } = {}) => {
   }
   const fc = await res.json();
   const fmt = new GeoJSON();
-  const features = fmt.readFeatures(fc, {
-    dataProjection: "EPSG:4326",
-    featureProjection: "EPSG:3857",
-  });
-  for (const feature of features) {
+  const opts = { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" };
+
+  // One feature at a time, dropping each raw one as it is converted — NOT
+  // readFeatures(fc), which is the same work but holds two entire worlds in
+  // memory at once: the parsed GeoJSON (every coordinate its own [lon,lat] JS
+  // array) and OpenLayers' flat-coordinate copy of the same thing. At the seed's
+  // ~4M vertices that peak is what ran the editor out of memory. Releasing each
+  // raw feature here lets the parsed half be collected while the OL half is
+  // still being built, so the peak is roughly one copy instead of two.
+  const raw = fc.features || [];
+  fc.features = null; // the array is reachable via `raw` alone from here
+  const features = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const feature = fmt.readFeature(raw[i], opts);
+    raw[i] = null; // this one is converted; let it go now, not at the end
     const props = feature.getProperties();
     if (props.id != null) feature.setId(String(props.id));
     if (feature.get("owner") == null) feature.set("owner", props.gid0 || null);
     if (feature.get("typeId") == null) feature.set("typeId", "land");
+    features.push(feature);
   }
   return features;
 };

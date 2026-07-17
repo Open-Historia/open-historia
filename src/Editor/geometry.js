@@ -32,6 +32,30 @@ export const unionGeoms = (geoms) => {
   return coordsToOl(res);
 };
 
+// `target` minus `cutter`. Returns:
+//   - an OL geometry for what survives,
+//   - null when the cutter swallows the target whole (caller deletes it),
+//   - the target unchanged when they don't actually overlap.
+//
+// A region drawn inside another must take that land OUT of the one beneath it,
+// or the two overlap: the map then has one place owned twice, whichever renders
+// last wins, and the exported ownership map disagrees with what the author sees.
+// difference() also handles the interesting case for free — a region drawn in the
+// middle of another leaves a hole (an interior ring) rather than a bitten edge.
+export const subtractFrom = (target, cutter) => {
+  const res = polygonClipping.difference(olToCoords(target), olToCoords(cutter));
+  if (!res || res.length === 0) return null;
+  return coordsToOl(res);
+};
+
+// Do these two geometries share any area at all? Cheap-ish guard so drawing a
+// region only rewrites the neighbours it genuinely overlaps, instead of running a
+// difference against every region on the map and marking them all edited.
+export const overlaps = (a, b) => {
+  const res = polygonClipping.intersection(olToCoords(a), olToCoords(b));
+  return Boolean(res && res.length > 0);
+};
+
 // Build a thin ribbon polygon (MultiPolygon coords) around a polyline — used as
 // a cutter: subtracting it from a region bisects the region along the line.
 const bufferLine = (line, hw) => {
