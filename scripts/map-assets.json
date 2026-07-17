@@ -8,7 +8,7 @@
     { "path": "public/assets/countries.pmtiles", "asset": "countries.pmtiles", "bytes": 62739546, "sha256": "596e3dffb0aba5bf6f2dd103c441020730161c55b67a6993dc3e0fb924fe1727" },
     { "path": "public/assets/cities.pmtiles", "asset": "cities.pmtiles", "bytes": 1547924, "sha256": "41edf847114a0c1b04c9a11e9501fc97e680a105b2ec618f5caffca3df61e87a" },
     { "path": "public/assets/cities-seed.json", "asset": "cities-seed.json", "bytes": 7857627, "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101" },
-    { "path": "public/assets/regions-seed.geojson", "asset": "regions-seed.geojson", "bytes": 12708948, "sha256": "5c468ae1fc0607f90d1a30f22ea12a97acbc464f733b307fc2a1ad32ec660aca" },
-    { "path": "server/data/scenarios/default/regions.geojson", "asset": "default-regions.geojson", "bytes": 12818777, "sha256": "4e92b2f8210306b85c51a8affdb1a92bc0e3aa8ffb5dce137a66c08c71ccaa8a" }
+    { "path": "public/assets/regions-seed.geojson", "asset": "regions-seed-z8.geojson", "bytes": 55350393, "sha256": "64f1e3708e1f17016f38f86d3b6f928971c7842e8126d74efa65eb04654c770d" },
+    { "path": "server/data/scenarios/default/regions.geojson", "asset": "default-regions-z8.geojson", "bytes": 55460252, "sha256": "da2ca7cde61a09b04991bc37ba91118c9750dfda94508f7b8b483818e1dae2c1" }
   ]
 }

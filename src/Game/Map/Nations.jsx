@@ -760,8 +760,17 @@ const WorldMap = ({ isGlobe = false }) => {
 
   return (
     <>
+      {/* maxzoom 8, not the archive's 10, because 8 is what the editor can
+          actually author against. z10 cannot be stitched into a seed at all —
+          extract-regions.mjs completes and then dies in JSON.stringify, over V8's
+          512MB max string length. z9 stitches, but 4.1M vertices then ran the
+          editor's tab out of heap: Chrome killed the renderer with "Aw, Snap"
+          while the machine still had 3GB free, because the cap is per-renderer.
+          z8's 2.6M is stable. Rendering finer than the editor can edit only draws
+          detail no map can be built against. Past z8 MapLibre overzooms, exactly
+          as it already did past z10. */}
       {!customFlag && (
-      <Source id="countries-source" type="vector" url={countriesUrl}>
+      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={8}>
         <Layer
           id="countries-fill"
           type="fill"
@@ -783,7 +792,7 @@ const WorldMap = ({ isGlobe = false }) => {
           mounted made every custom-map player stream the stock world's geometry
           in order to draw none of it. */}
       {!customFlag && (
-      <Source id="regions-source" type="vector" url={regionsUrl}>
+      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
         <Layer
           id="regions-fill"
           type="fill"
