@@ -89,8 +89,23 @@ const resolveOwnerRef = (value, world) => {
 
 // Resolve every country reference inside a world payload, in place-safe copies.
 // Region ids are untouched; only OWNER references translate.
+//
+// A LEGACY world is returned untouched. This looks like a hole and is the opposite:
+// canonicalizing a code-keyed world rekeys polityOverrides from {"ROM": {...}} to
+// {"Roman Empire": {...}} — which destroys the migration's rule 1, the one that
+// exists to catch exactly ROM -> "Roman Empire". Every invented polity then falls
+// through to feature consensus and gets named after whatever modern country it
+// happens to sit on (Xiongnu -> "Mongolia", Olmec -> "Mexico"), and the
+// degenerate-polity guard eats the rest because canonicalization made them
+// self-named. Measured on the six published bundles: roman-117 lost 8 of 13
+// polities, medieval-1200 lost 26, mongol-1300 lost 32.
+//
+// The migration IS the canonicaliser for that shape, and it has strictly more
+// context — the scenario's countryNameOverrides and its regions. Leave the world
+// alone and let it run.
 const canonicalizeWorldCountryRefs = (world) => {
   if (!world || typeof world !== "object" || Array.isArray(world)) return world;
+  if (needsOwnerMigration(world)) return world;
   const next = { ...world };
 
   if (next.regionOwnershipOverrides && typeof next.regionOwnershipOverrides === "object") {
@@ -159,8 +174,22 @@ const canonicalizeGameCountry = (game, world) => {
   return { ...game, country: resolveOwnerRef(game.country, world) };
 };
 const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
-const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle";
-const SCENARIO_BUNDLE_VERSION = 1;
+// Bundles are files strangers swap, so the schema string is a compatibility gate
+// and the ONLY one: `version` below is written and read by nobody, on either side.
+//
+// It changes with the owner rename because a name-keyed bundle is not safely
+// readable by an older build. An old build validates the schema string, sees a
+// familiar one, accepts the file, and then runs its own canonicaliser, which
+// resolves names DOWN to codes — "Roman Empire" is not a code it knows, so it
+// becomes its own identifier, matches no colour and no region, and the player owns
+// nothing. Rejecting on an unfamiliar schema turns that into "Unsupported scenario
+// bundle", which is a sentence someone can act on.
+const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
+// Every schema this build can READ. v1 bundles — the six on the community release,
+// and everything anyone has ever shared — import fine: they arrive unmarked and the
+// migration names them on first read.
+const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+const SCENARIO_BUNDLE_VERSION = 2;
 
 const DEFAULT_SCENARIO_META = {
   accentColor: "#7c3aed",
@@ -1962,7 +1991,10 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   if (colors) writeJsonFile(paths.colors, rekeyOwnerMap(colors, renames, "colors", warn));
   if (flags) writeJsonFile(paths.flags, rekeyOwnerMap(flags, renames, "flags", warn));
   if (tags) writeJsonFile(paths.tags, rekeyOwnerMap(tags, renames, "tags", warn));
-  if (regions) writeJsonFile(paths.regions, migrateRegions(regions, renames));
+  // regionsReadOnly: a game borrows its scenario's regions purely as resolver
+  // context. Writing them back from here would rewrite another record's map using
+  // this record's renames — the scenario migrates its own map, with its own.
+  if (regions && !paths.regionsReadOnly) writeJsonFile(paths.regions, migrateRegions(regions, renames));
   if (events) writeJsonFile(paths.events, migrateEvents(events, renames));
   if (chat) writeJsonFile(paths.chat, migrateChat(chat, renames));
   if (game) writeJsonFile(paths.game, migrateGame(game, renames));
@@ -2010,6 +2042,21 @@ const ensureGameOwnerSchema = (gameId) => {
   if (ownerSchemaChecked.has(key)) return;
   ownerSchemaChecked.add(key);
   try {
+    // A game MUST resolve owners with its scenario's context, not its own.
+    //
+    // countryNameOverrides lives on scenario meta and regions.geojson lives in the
+    // scenario directory, so a game that resolves alone can reach neither rule 2
+    // (the legacy label) nor rule 4 (feature consensus). It is not academic: a game
+    // reads world.json from its own directory but regions.geojson and colors.json
+    // from the scenario, so the two would be resolved by different rules and served
+    // to one running game. wwii-1939's THA becomes "Thailand" in the save while the
+    // map underneath it says "Siam" — the player's country owns nothing and 77
+    // regions belong to a country no list contains. CZE splits the same way
+    // ("Czechia" vs "Germany"), so this is a missing-context bug, not a Siam quirk.
+    const parentId = getGameSummary(gameId)?.scenarioId || DEFAULT_SCENARIO_ID;
+    // Migrate the scenario first: it is the record that owns the map, and doing it
+    // here means a game can never be resolved against an unmigrated parent.
+    ensureScenarioOwnerSchema(parentId);
     migrateOwnerRecordAtPaths(key, {
       world: getGameJsonPath(gameId, "world"),
       game: getGameJsonPath(gameId, "game"),
@@ -2019,6 +2066,14 @@ const ensureGameOwnerSchema = (gameId) => {
       events: path.join(getGameDirectory(gameId), "storage", "events.json"),
       chat: path.join(getGameDirectory(gameId), "storage", "chat.json"),
       snapshots: getGameJsonPath(gameId, "snapshots"),
+      // From the SCENARIO — the same two inputs the scenario resolved against, so
+      // one token cannot mean two things inside one game.
+      meta: getScenarioMetaPath(parentId),
+      regions: getScenarioUploadPath(parentId, "regionsGeojson"),
+      // The scenario's regions are read for context only; the scenario's own
+      // migration already rewrote that file, and rewriting it from here would
+      // resolve the map against the wrong record.
+      regionsReadOnly: true,
     });
   } catch (error) {
     ownerSchemaChecked.delete(key);
@@ -2338,7 +2393,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     throw new Error("Scenario bundle must be a JSON object.");
   }
 
-  if (bundle.schema !== SCENARIO_BUNDLE_SCHEMA) {
+  // Accept every schema we can read, not just the one we write — a v1 bundle is
+  // still perfectly importable, it just arrives unmarked and gets named by the
+  // migration on first read.
+  if (!ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
 

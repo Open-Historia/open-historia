@@ -9,8 +9,13 @@ import { cloneJson } from "./util.js";
 export const DEFAULT_SCENARIO_ID = "default";
 export const DEFAULT_GAME_ID = "default";
 export const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
-export const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle";
-export const SCENARIO_BUNDLE_VERSION = 1;
+// Mirrors server/libraryStore.js — see there for why the schema string moves with
+// the owner rename. In short: it is the ONLY compatibility gate on a file strangers
+// swap, and an old build would otherwise accept a name-keyed bundle and resolve its
+// names down to codes, leaving the player owning nothing.
+export const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
+export const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+export const SCENARIO_BUNDLE_VERSION = 2;
 export const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 export const COVER_IMAGE_ASSET_KEY = "cover";
 

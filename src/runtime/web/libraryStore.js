@@ -15,7 +15,7 @@ import {
   DEFAULT_SCENARIO_ID, DEFAULT_GAME_ID, EMPTY_FEATURE_COLLECTION, COVER_IMAGE_ASSET_KEY,
   JSON_ASSET_KEYS, STORAGE_JSON_ASSET_KEYS, OPTIONAL_JSON_ASSET_KEYS, RUNTIME_ONLY_JSON_ASSET_KEYS,
   PMTILES_ASSET_KEYS, SCENARIO_GEOJSON_ASSET_KEYS, UPLOADABLE_SCENARIO_ASSET_KEYS, UPLOADABLE_GAME_ASSET_KEYS,
-  JSON_ASSET_DEFAULTS, SCENARIO_BUNDLE_SCHEMA, SCENARIO_BUNDLE_VERSION, SUPPORTED_IMAGE_CONTENT_TYPES,
+  JSON_ASSET_DEFAULTS, SCENARIO_BUNDLE_SCHEMA, ACCEPTED_BUNDLE_SCHEMAS, SCENARIO_BUNDLE_VERSION, SUPPORTED_IMAGE_CONTENT_TYPES,
   DEFAULT_SCENARIO_META, DEFAULT_GAME_META, canonicalizeWorldCountryRefs, canonicalizeGameCountry, canonicalizeColorKeys,
   readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
@@ -628,6 +628,17 @@ const applyJsonMutations = (record, body, canonicalize, kind) => {
     const merged = { ...jsonAsset(record, "world"), ...body.worldPatch };
     record.json.world = canonicalize ? canonicalizeWorldCountryRefs(merged) : merged;
   }
+  // The world we just wrote may be a LEGACY one — importScenarioBundle replaces the
+  // record's world wholesale, and the ensureOwnerSchema above ran against whatever
+  // was there before it (for a new scenario, a copy of the already-migrated default).
+  // That marked this record done while its real, unmigrated payload was still on its
+  // way in, and every later read then short-circuits on the mark: world name-keyed,
+  // colours/flags/tags/regions still code-keyed, patchwork map, no error.
+  //
+  // The mark has to describe what is actually PERSISTED, so re-derive it from the
+  // world that ended up on the record rather than the one that happened to be there
+  // when we looked.
+  if (record.id && needsOwnerMigration(record.json.world)) migratedRecords.delete(`${kind}:${record.id}`);
   if (body.storage && typeof body.storage === "object") {
     for (const key of STORAGE_JSON_ASSET_KEYS) if (key in body.storage) record.json[key] = body.storage[key];
   }
@@ -843,7 +854,9 @@ const exportScenarioBundle = async (id, mode = "light") => {
 };
 
 const importScenarioBundle = async (bundle) => {
-  if (!bundle || typeof bundle !== "object" || bundle.schema !== SCENARIO_BUNDLE_SCHEMA) throw new Error("Unsupported scenario bundle.");
+  // Accept every schema we can read, not just the one we write — a v1 bundle
+  // imports fine, arriving unmarked and named by the migration on first read.
+  if (!bundle || typeof bundle !== "object" || !ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) throw new Error("Unsupported scenario bundle.");
   const created = await createScenario({ ...(bundle.scenario ?? {}), setActive: false });
   const newId = created.scenario.id;
   // Server coerces missing bundle data to empty ({} / []) which then OVERWRITES
