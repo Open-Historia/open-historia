@@ -30,9 +30,6 @@ const HUB_OWNER = "Open-Historia";
 const HUB_REPO = "Open-historia-scenarios";
 const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 const HUB_API_ISSUES = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
-// Official bundles live as assets on the "bundles" release — GitHub counts
-// every download of those, which is the install number shown on the cards.
-const HUB_API_BUNDLES_RELEASE = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/releases/tags/bundles`;
 const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -51,21 +48,6 @@ const COVER_IMAGE_PATTERN =
 
 let hubCache = { at: 0, posts: null };
 
-// Installs per bundle file (release-asset download counts). Community posts
-// attach their bundles to the issue instead, which GitHub can't count — those
-// show no install number.
-const fetchInstallCounts = async () => {
-  try {
-    const response = await fetch(HUB_API_BUNDLES_RELEASE, {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!response.ok) return new Map();
-    const release = await response.json();
-    return new Map((release.assets ?? []).map((asset) => [asset.name, asset.download_count ?? 0]));
-  } catch {
-    return new Map();
-  }
-};
 
 // Self-hosted import counts (keyed by hub issue number), read back through the
 // server proxy from our own counter Worker. Unlike GitHub's release download
@@ -86,7 +68,7 @@ const fetchImportCounts = async () => {
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-const parsePost = (issue, installsByFile, importsById) => {
+const parsePost = (issue, importsById) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   // The issue-form body is a series of "### <label>\n<value>" sections. Show only
@@ -108,11 +90,13 @@ const parsePost = (issue, installsByFile, importsById) => {
     .trim();
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
   const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
-  // Import count: prefer our own counter (covers every scenario, deduped per
-  // person); fall back to the GitHub release download count; null if neither.
-  const selfHostedImports = importsById?.[String(issue.number)]?.count;
-  const githubInstalls = bundleUrl && installsByFile ? installsByFile.get(bundleUrl.split("/").pop()) : undefined;
-  const installs = selfHostedImports != null ? selfHostedImports : (githubInstalls ?? null);
+  // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
+  // It is deduped per person (an account, or an IP hash) and covers every scenario —
+  // release assets and attachment posts alike. We deliberately do NOT fall back to
+  // GitHub's release download count: that counts every file download, including
+  // repeat downloads by the same person and non-import curiosity clicks, so it both
+  // over-counts and disagrees between posts. One accurate source for all.
+  const installs = importsById?.[String(issue.number)]?.count ?? null;
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -142,9 +126,8 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
     return hubCache.posts;
   }
-  const [response, installsByFile, importsById] = await Promise.all([
+  const [response, importsById] = await Promise.all([
     fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
-    fetchInstallCounts(),
     fetchImportCounts(),
   ]);
   if (!response.ok) {
@@ -157,7 +140,7 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   const issues = await response.json();
   const posts = (Array.isArray(issues) ? issues : [])
     .filter((issue) => !issue.pull_request)
-    .map((issue) => parsePost(issue, installsByFile, importsById));
+    .map((issue) => parsePost(issue, importsById));
   hubCache = { at: Date.now(), posts };
   return posts;
 };
