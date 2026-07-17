@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Small form-field building blocks + color helpers for the editor panels.
 
@@ -119,22 +119,55 @@ export const SelectField = ({ value, onChange, options, width }) => (
 // open (alt-history can't be enumerated), so `suggestions` only feeds a datalist —
 // it steers spelling toward one form without ever rejecting a new tag.
 //
-// Commit on Enter/comma/blur; Backspace on an empty box removes the last chip.
-// The comma split is what makes pasting "socialist, authoritarian, anti-nato"
-// work, which is how anyone with a list in hand will actually enter these.
+// Commit on Enter/comma/blur, on a click anywhere outside the field, or when the
+// field unmounts; Backspace on an empty box removes the last chip. The comma split
+// is what makes pasting "socialist, authoritarian, anti-nato" work, which is how
+// anyone with a list in hand will actually enter these.
 export const TagField = ({ value, onChange, suggestions = [], placeholder = "add a tag…" }) => {
   const [draft, setDraft] = useState("");
   const tags = Array.isArray(value) ? value : [];
   const listId = "oh-tag-suggestions";
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
 
   const commit = (raw) => {
     const parts = String(raw).split(",").map((t) => t.trim()).filter(Boolean);
-    if (parts.length) onChange([...tags, ...parts]);
     setDraft("");
+    // Clear the DOM value too, not just React state: a click-out commits here, but
+    // a blur can still fire later in the same gesture — reading an already-empty
+    // box stops it re-adding the tag before React has re-rendered the input.
+    if (inputRef.current) inputRef.current.value = "";
+    if (parts.length) onChange([...tags, ...parts]);
   };
+  // The listeners below are bound once; route through a ref so they always see the
+  // latest tags (a stale closure would drop tags added earlier this session).
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+
+  // Commit a half-typed tag on a pointer-down ANYWHERE outside the field — the map
+  // included — and when the field unmounts (e.g. you click another region). Without
+  // this you had to press Enter: the editor map is an OpenLayers canvas that calls
+  // preventDefault on pointerdown, which cancels this input's blur, so onBlur alone
+  // never fired and the tag was silently lost. A capture-phase listener runs first,
+  // before that preventDefault.
+  useEffect(() => {
+    const onPointerDown = (e) => {
+      const input = inputRef.current;
+      const wrap = wrapRef.current;
+      if (input && wrap && input.value.trim() && !wrap.contains(e.target)) {
+        commitRef.current(input.value);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      // Flush a pending tag on unmount so switching regions mid-type never drops it.
+      if (inputRef.current?.value.trim()) commitRef.current(inputRef.current.value);
+    };
+  }, []);
 
   return (
-    <span style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+    <span ref={wrapRef} style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
       {tags.length > 0 && (
         <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
           {tags.map((tag) => (
@@ -162,6 +195,7 @@ export const TagField = ({ value, onChange, suggestions = [], placeholder = "add
         </span>
       )}
       <input
+        ref={inputRef}
         value={draft}
         list={listId}
         placeholder={placeholder}
@@ -175,7 +209,10 @@ export const TagField = ({ value, onChange, suggestions = [], placeholder = "add
           if (e.key === "Enter") { e.preventDefault(); commit(draft); }
           else if (e.key === "Backspace" && !draft && tags.length) onChange(tags.slice(0, -1));
         }}
-        onBlur={() => draft.trim() && commit(draft)}
+        // Read the live value, not the `draft` closure: keeps blur and the
+        // click-out path from disagreeing, and both are deduped by commit()
+        // clearing the box.
+        onBlur={(e) => { if (e.target.value.trim()) commit(e.target.value); }}
         style={{ ...inputStyle, width: "100%", padding: "5px 7px" }}
       />
       <datalist id={listId}>
