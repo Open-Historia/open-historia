@@ -839,8 +839,18 @@ const OlMap = ({
         // edge takes a bite; drawing over one entirely deletes it.
         const cutter = f.getGeometry();
         const carved = [];
-        for (const other of source.getFeatures()) {
-          if (other === f) continue;
+        // Ask the source's R-tree for the handful of regions whose extents meet the
+        // new one, rather than walking all 3,662 and running a full boolean op on
+        // each. overlaps() is polygon-clipping, which builds sweep-line structures
+        // per call — doing that against every region on the map allocated hard
+        // enough to run the tab out of memory once the seed went to z9 and each
+        // polygon carried ~1,116 vertices instead of ~156. The extent query is an
+        // index lookup and rejects everything that cannot possibly touch.
+        const candidates = [];
+        source.forEachFeatureIntersectingExtent(cutter.getExtent(), (other) => {
+          if (other !== f) candidates.push(other);
+        });
+        for (const other of candidates) {
           const geom = other.getGeometry();
           if (!geom || !overlaps(geom, cutter)) continue;
           const before = geom.clone();
