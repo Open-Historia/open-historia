@@ -29,6 +29,7 @@ import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } 
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
+import { useIsMobile } from "../runtime/useIsMobile.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
@@ -37,6 +38,7 @@ import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
 const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}) => {
   const d = useMapDocument();
+  const isMobile = useIsMobile();
   // Opened from a scenario: the scenario's own map (regions/cities/colors) is
   // loaded once it arrives, so never auto-seed the default world underneath it.
   const scenarioMode = Boolean(onApplyToScenario);
@@ -465,7 +467,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       />
 
       {(onClose || onApplyToScenario) && (
-        <div style={{ position: "fixed", top: 12, right: 12, zIndex: 40, display: "flex", gap: 8 }}>
+        // On a phone the buttons stack vertically (Apply above Close) and drop their
+        // labels, so the block is one icon wide and does not overlap the centred
+        // toolbar. On desktop it stays a labelled horizontal row.
+        <div style={{ position: "fixed", top: 12, right: 12, zIndex: 40, display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8 }}>
           {onApplyToScenario && (
             <button
               onClick={applyToScenario}
@@ -473,20 +478,21 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
               title={`Save this map into ${scenarioName || "the scenario"} and start playing it`}
               style={{
                 ...panelSurface,
-                padding: "8px 15px",
+                padding: isMobile ? "9px 11px" : "8px 15px",
                 cursor: applying ? "default" : "pointer",
                 color: "white",
                 fontWeight: 700,
-                fontSize: 13,
+                fontSize: isMobile ? 16 : 13,
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
+                justifyContent: "center",
+                gap: isMobile ? 0 : 6,
                 background: applying ? "rgba(59,130,246,0.35)" : "rgba(59,130,246,0.85)",
                 border: "1px solid rgba(147,197,253,0.5)",
                 opacity: applying ? 0.8 : 1,
               }}
             >
-              {applying ? "Applying…" : "▶ Apply & Play"}
+              {isMobile ? (applying ? "…" : "▶") : (applying ? "Applying…" : "▶ Apply & Play")}
             </button>
           )}
           {onClose && (
@@ -509,17 +515,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
               title="Close map editor"
               style={{
                 ...panelSurface,
-                padding: "8px 13px",
+                padding: isMobile ? "9px 11px" : "8px 13px",
                 cursor: "pointer",
                 color: "white",
                 fontWeight: 700,
-                fontSize: 13,
+                fontSize: isMobile ? 16 : 13,
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
+                justifyContent: "center",
+                gap: isMobile ? 0 : 6,
               }}
             >
-              ✕ Close
+              {isMobile ? "✕" : "✕ Close"}
             </button>
           )}
         </div>

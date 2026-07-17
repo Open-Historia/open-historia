@@ -206,18 +206,40 @@ export const buildUnitsSummaryText = (world) => {
 
 const loadRegions = async () => loadRegionCatalog().catch(() => []);
 
+// The land the player's polity holds — or an explicit statement that it holds none.
+// A landless player is a deliberate scenario, not missing data (a government in
+// exile, a stateless movement leading a campaign to take a nation back), so it must
+// read to the model as an intentional condition rather than an empty field, or the
+// model tries to run a normal territorial power and invents holdings.
+const LANDLESS_PLAYER_TEXT =
+  "This polity is LANDLESS — it currently holds no territory. It is a stateless "
+  + "actor (a government-in-exile, a movement, or a power that has lost its land), "
+  + "and its story is about influence, alliances, insurgency, and the fight to gain "
+  + "or retake territory — not about administering provinces it does not have.";
+
 export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null) => {
   const playerCode = normalizeString(bundle.game.country);
   if (!playerCode) return "No player polity is currently set.";
-  const entries = Object.entries(normalizeWorldState(bundle.world).regionOwnershipOverrides);
-  if (entries.length === 0) return "No explicit player region override list is currently recorded.";
+  const world = normalizeWorldState(bundle.world);
+  const entries = Object.entries(world.regionOwnershipOverrides);
+  const owns = entries.some(([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === playerCode.toLowerCase());
+  // Zero regions AND the polity exists = deliberately landless. Distinguish that
+  // from a scenario that simply ships no override list (a stock modern map, where
+  // the player owns their country through the base tiles, not an override).
+  if (!owns) {
+    const isKnownPolity = Boolean(normalizeWorldState(bundle.world).polityOverrides?.[playerCode]);
+    if (entries.length === 0 && !isKnownPolity) {
+      return "No explicit player region override list is currently recorded.";
+    }
+    return LANDLESS_PLAYER_TEXT;
+  }
   const regions = regionCatalog ?? await loadRegions();
   const lookup = new Map(regions.map((region) => [region.id, region]));
   const names = entries
     .filter(([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === playerCode.toLowerCase())
     .slice(0, 24)
     .map(([regionId]) => lookup.get(regionId)?.name || regionId);
-  return names.length > 0 ? names.join(", ") : "No explicit player region override list is currently recorded.";
+  return names.join(", ");
 };
 
 export const buildWorldSummary = async (bundle, regionCatalog = null) => {
@@ -235,7 +257,10 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   const politySummary = polities.length === 0
     ? "No dynamic polity overrides are currently recorded."
     : polities.slice(0, 16).map((entry) =>
-      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}`,
+      // `note` is the polity's lore — the author's (or the faction creator's) own
+      // description of who this power is. It was persisted but never reached the
+      // model, so a player-written backstory did nothing. It steers the story now.
+      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}${entry.note ? ` — ${entry.note}` : ""}`,
     ).join("\n");
 
   // What each country IS: the map-maker's tags with the AI's own changes layered

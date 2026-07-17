@@ -21,6 +21,7 @@ import {
 } from "../runtime/communityFlags.js";
 import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 import { listFlags, saveFlag, deleteFlag } from "../runtime/flagLibrary.js";
+import { useIsMobile } from "../runtime/useIsMobile.js";
 
 const overlay = {
   position: "fixed",
@@ -167,6 +168,7 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
 const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(8rem, 1fr))", gap: "0.7rem" };
 
 const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, author = "", onPick }) => {
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -262,8 +264,12 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={headerBar}>
-          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>
+        {/* Wraps to a second row rather than overflowing off-screen when it can't
+            fit — which is what a phone does with the title, both tabs, the search,
+            Upload and the close button all on one line. On mobile the search grows
+            to fill its row and Upload drops its label to an icon. */}
+        <div style={{ ...headerBar, flexWrap: "wrap", gap: isMobile ? "0.4rem" : "0.6rem" }}>
+          <div style={{ fontSize: isMobile ? "0.95rem" : "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>
             Flags{ownerCode ? ` — ${ownerCode}` : ""}
           </div>
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>In the game</button>
@@ -274,12 +280,15 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
             placeholder="Search…"
             style={{
               background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.14)",
-              borderRadius: 8, color: "#fff", fontSize: "0.8rem", padding: "0.35rem 0.6rem", width: "9rem",
+              borderRadius: 8, color: "#fff", fontSize: "0.8rem", padding: "0.35rem 0.6rem",
+              width: isMobile ? "auto" : "9rem", flex: isMobile ? "1 1 6rem" : "0 0 auto", minWidth: "5rem",
             }}
           />
-          <div style={{ flex: 1 }} />
-          <label style={uploadBtn}>
-            ⬆ Upload your own
+          {/* The flex spacer that right-aligns Upload only helps when everything is
+              on one row; on mobile it would eat a whole wrapped line, so drop it. */}
+          {!isMobile && <div style={{ flex: 1 }} />}
+          <label style={uploadBtn} title="Upload your own">
+            {isMobile ? "⬆" : "⬆ Upload your own"}
             <input
               type="file"
               accept={FLAG_ACCEPT}
@@ -289,10 +298,10 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
           </label>
           {currentFlag && (
             <button type="button" style={closeBtn} title="Use the standard flag again" onClick={() => pick(null)}>
-              Remove
+              {isMobile ? "↺" : "Remove"}
             </button>
           )}
-          <button type="button" style={closeBtn} onClick={onClose}>✕</button>
+          <button type="button" style={{ ...closeBtn, marginLeft: isMobile ? "auto" : undefined }} onClick={onClose}>✕</button>
         </div>
 
         <div style={bodyBox}>
