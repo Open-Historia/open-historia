@@ -527,18 +527,40 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
     throw new Error(`Failed to save ${url}: HTTP ${response.status}`);
   }
 
-  primeJson(url, data);
+  // Cache what the store SAYS IT STORED, not what we sent it. Both stores already
+  // return the normalized record from their PUT and it used to be thrown away, so
+  // any difference between the two — the store rewriting a legacy record on the
+  // way in, say — was pinned out of view for the rest of the session: primeJson
+  // pins it in memory, persistResponse pins it in Cache Storage across reloads,
+  // and the return value hands it back to the caller. Three copies of the bytes
+  // we guessed at, zero of the truth.
+  //
+  // Falls back to the sent payload when the store answers with no body (or a
+  // non-JSON one), which is the older shape of these routes.
+  let saved = data;
+  let savedPayload = payload;
+  try {
+    const echoed = await response.text();
+    if (echoed) {
+      saved = JSON.parse(echoed);
+      savedPayload = echoed;
+    }
+  } catch {
+    /* no body, or not JSON — keep what we sent */
+  }
+
+  primeJson(url, saved);
   invalidateDerivedCachesForWrite(url);
   persistResponse(
     url,
-    new Response(payload, {
-      headers: jsonHeadersFor(payload),
+    new Response(savedPayload, {
+      headers: jsonHeadersFor(savedPayload),
       status: 200,
       statusText: "OK",
     }),
   );
 
-  return cloneJson(data);
+  return cloneJson(saved);
 };
 
 export const readRuntimeJson = async (

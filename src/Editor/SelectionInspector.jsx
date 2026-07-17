@@ -3,9 +3,13 @@
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 
-// Inspector for the current region selection: edit name (single), type, and owner
-// for one or many selected regions. Writes straight to the OL features via the map
-// API, which live-restyles the map.
+// Inspector for the current region selection: edit name (single), type, and the
+// owning country for one or many selected regions. Writes straight to the OL
+// features via the map API, which live-restyles the map.
+//
+// The Country field is free text holding the country's NAME. Typing a name that
+// doesn't exist yet is how a new country is created — there is no separate "add
+// country" step, because a country exists precisely when a region says it owns it.
 
 import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
@@ -27,6 +31,14 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     [api, selection],
   );
   const [form, setForm] = useState({ name: "", typeId: "", owner: "" });
+  // Recomputed per selection rather than memoised on the region set: the map has
+  // no change event to key on, and a scan of 3,662 features to build ~230 strings
+  // is cheap next to opening a panel.
+  const countryNames = useMemo(
+    () => (api?.listOwners ? api.listOwners() : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, selection.join(",")],
+  );
 
   useEffect(() => {
     setForm({
@@ -57,7 +69,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     >
       {single && (
         <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
-          {summaries[0]?.id} · {summaries[0]?.country || "—"}
+          {summaries[0]?.id}
         </div>
       )}
       {single && (
@@ -86,19 +98,33 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           width={160}
         />
       </Row>
-      <Row label="Owner" title="Country code that drives the fill color">
+      <Row label="Country" title="The country that owns this region — type its full name. A name that doesn't exist yet becomes a new country.">
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {ownerRgb && (
             <span style={{ width: 18, height: 18, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: rgbToHex(ownerRgb) }} />
           )}
+          {/* Every country already on the map, so an author picks "United Arab
+              Emirates" rather than retyping it and forking a near-miss. Free-text
+              still wins — typing a new name is how a new country is created. */}
+          <datalist id="oh-country-names">
+            {countryNames.map((name) => <option key={name} value={name} />)}
+          </datalist>
           <TextField
+            list="oh-country-names"
             value={form.owner}
             onChange={(v) => {
-              const code = v.toUpperCase();
-              setForm((f) => ({ ...f, owner: code }));
-              apply({ owner: code || null });
+              // No case-folding: the owner IS the country's display name, so
+              // "Russia" must stay "Russia".
+              //
+              // The field keeps v RAW and only what's applied is trimmed. Trimming
+              // the state would make multi-word names untypeable: "United " trims
+              // back to "United", so the next keystroke yields "UnitedS". Trimming
+              // on apply still matters — a trailing space forks a second polity
+              // that looks identical to a human.
+              setForm((f) => ({ ...f, owner: v }));
+              apply({ owner: v.trim() || null });
             }}
-            width={96}
+            width={180}
           />
         </span>
       </Row>
@@ -158,7 +184,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           }}
           style={pillButton(false)}
         >
-          Clear owner
+          Clear country
         </button>
         {selection.length >= 2 && (
           <button onClick={() => api?.mergeRegions(selection)} style={{ ...pillButton(false), display: "flex", alignItems: "center", gap: 4 }}>

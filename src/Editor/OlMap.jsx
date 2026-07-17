@@ -381,7 +381,11 @@ const OlMap = ({
       if (tool === "paint") {
         if (hit) {
           const before = hit.get("owner") || null;
-          const after = (paintOwnerRef.current || "").toUpperCase() || null;
+          // Trim, never case-fold: the owner IS the country's display name. This
+          // line is why the six uppercasers had to go together — it re-folded
+          // whatever the input handed it, so fixing the field alone looked fixed
+          // and wasn't.
+          const after = (paintOwnerRef.current || "").trim() || null;
           hit.set("owner", after);
           regionLayer.changed();
           labelLayer.changed();
@@ -449,6 +453,37 @@ const OlMap = ({
         next = cur.has(hitId) ? Array.from(cur).filter((x) => x !== hitId) : [...cur, hitId];
       else next = [hitId];
       onSelectionRef.current?.(next);
+    });
+
+    // Double-click with Select = select the whole country. Picking one region at a
+    // time to recolour or retag a country is the most common thing a map-maker does
+    // here, and countries run to 35+ regions.
+    //
+    // Returning false is load-bearing: the map takes ol's default interactions,
+    // which include DoubleClickZoom, and ol skips them entirely when a dblclick
+    // listener returns false. Without it you'd select the country AND zoom into it.
+    // singleclick needs no guard — ol holds it for 250ms and cancels it outright
+    // when the second click arrives, so these two never both fire.
+    map.on("dblclick", (evt) => {
+      if (activeToolRef.current !== "select") return undefined; // let dbl-click zoom work
+      let hit = null;
+      map.forEachFeatureAtPixel(
+        evt.pixel,
+        (feature) => {
+          hit = feature;
+          return true;
+        },
+        { layerFilter: (l) => l === regionLayerRef.current, hitTolerance: 2 },
+      );
+      if (!hit) return undefined;
+      const owner = hit.get("owner") || null;
+      // Unowned land has no country to gather, so fall back to just this region —
+      // "every unowned region on the map" is never what the double-click meant.
+      const ids = owner
+        ? regionSource.getFeatures().filter((f) => (f.get("owner") || null) === owner).map((f) => f.getId())
+        : [hit.getId()];
+      onSelectionRef.current?.(ids);
+      return false;
     });
 
     map.on("pointermove", (evt) => {
@@ -680,12 +715,24 @@ const OlMap = ({
         const f = regionSource.getFeatureById(id);
         return f ? summarize(f) : null;
       },
+      // Every country currently on the map, sorted. Backs the Country field's
+      // suggestions, so re-owning a region offers the names that already exist
+      // rather than inviting a near-miss that forks a second country.
+      listOwners: () => {
+        const owners = new Set();
+        for (const f of regionSource.getFeatures()) {
+          const owner = f.get("owner");
+          if (owner) owners.add(String(owner));
+        }
+        return [...owners].sort((a, b) => a.localeCompare(b));
+      },
       queryRegions: (text, limit = 200) => {
         const q = (text || "").trim().toLowerCase();
         const out = [];
         for (const f of regionSource.getFeatures()) {
           if (q) {
-            const hay = `${f.getId()} ${f.get("name") || ""} ${f.get("owner") || ""} ${f.get("country") || ""}`.toLowerCase();
+            // `country` is gone from region props — owner IS the country name now.
+            const hay = `${f.getId()} ${f.get("name") || ""} ${f.get("owner") || ""}`.toLowerCase();
             if (!hay.includes(q)) continue;
           }
           out.push(summarize(f));

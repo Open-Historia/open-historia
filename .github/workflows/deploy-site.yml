@@ -1,0 +1,78 @@
+# Open Historia — website build & deploy workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+name: Deploy website
+
+# Builds openhistoria.com and publishes it on every push to main, so the site is
+# never behind the code. Also runnable on demand from the Actions tab.
+#
+# Why an Action rather than connecting Pages to the repo: the Pages project is a
+# direct-upload one, and Cloudflare cannot convert those to Git-connected. Doing
+# it that way would mean a NEW project and moving openhistoria.com onto it, i.e.
+# downtime on the live domain to gain what this file already gives.
+#
+# A happy side effect: CI is the one place the map-binary trap cannot fire. The
+# pmtiles are gitignored and only ever arrive from the map-data Release, so a
+# runner never has them, and `build:site` cannot sweep 160MB of them into the
+# site the way it can on a machine that has actually played the game.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Docs and the mobile app can't change what the site serves; skip the build
+    # rather than spend minutes rebuilding an identical bundle.
+    paths-ignore:
+      - "**.md"
+      - "mobile/**"
+      - ".github/**"
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  # A push while a deploy is running should supersede it, not race it onto the
+  # live domain in whatever order the two happen to finish.
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the site
+        # Landing page at /, game at /play/. seed-web-defaults.mjs reads the
+        # default scenario out of server/data, which IS committed, so this needs
+        # nothing from the map-data Release.
+        run: npm run build:site
+
+      - name: Refuse to deploy an oversized bundle
+        # Cloudflare Pages rejects any file over 25 MiB, and it rejects it AFTER
+        # reporting a successful build — so without this the failure looks like a
+        # green deploy that silently kept serving the old site.
+        run: |
+          big=$(find dist-site -type f -size +24M)
+          if [ -n "$big" ]; then
+            echo "::error::Files over Pages' 25 MiB limit:"; echo "$big"
+            exit 1
+          fi
+          echo "No oversized files. dist-site is $(du -sh dist-site | cut -f1)."
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # --branch main is what marks this the PRODUCTION deployment. Without
+          # it Pages treats the upload as a preview and openhistoria.com keeps
+          # serving the previous build while the deploy still reports success.
+          command: pages deploy dist-site --project-name=open-historia --branch=main

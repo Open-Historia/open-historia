@@ -9,6 +9,6 @@
     { "path": "public/assets/cities.pmtiles", "asset": "cities.pmtiles", "bytes": 1547924, "sha256": "41edf847114a0c1b04c9a11e9501fc97e680a105b2ec618f5caffca3df61e87a" },
     { "path": "public/assets/cities-seed.json", "asset": "cities-seed.json", "bytes": 7857627, "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101" },
     { "path": "public/assets/regions-seed.geojson", "asset": "regions-seed-z8.geojson", "bytes": 55350393, "sha256": "64f1e3708e1f17016f38f86d3b6f928971c7842e8126d74efa65eb04654c770d" },
-    { "path": "server/data/scenarios/default/regions.geojson", "asset": "default-regions-z8.geojson", "bytes": 55460252, "sha256": "da2ca7cde61a09b04991bc37ba91118c9750dfda94508f7b8b483818e1dae2c1" }
+    { "path": "server/data/scenarios/default/regions.geojson", "asset": "default-regions-names.geojson", "bytes": 55401660, "sha256": "ec77627d2f081339cef679147a4a5aa53d73af89991225b11173e96c2ba131f2" }
   ]
 }

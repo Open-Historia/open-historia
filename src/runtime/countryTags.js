@@ -48,8 +48,12 @@ export const normalizeTagList = (list, { maxTags = MAX_TAGS, maxLen = MAX_TAG_LE
 // The tags in force right now for one country: the AI's live list if it has ever
 // set one, else the author's starting list. NOT a merge — a revolution that
 // dropped "socialist" must not have it restored by the scenario file underneath.
-export const resolveCountryTags = (baseTags, world, code) => {
-  const key = String(code || "").toUpperCase();
+// Keyed by the country's NAME, verbatim. The uppercasing this used to do worked
+// only while owners were GADM codes, which are already uppercase — with names it
+// looked up baseTags["RUSSIA"] for a tags.json keyed "Russia" and every author tag
+// silently vanished.
+export const resolveCountryTags = (baseTags, world, country) => {
+  const key = String(country || "").trim();
   if (!key) return [];
   const live = world?.countryTags?.[key];
   if (Array.isArray(live)) return normalizeTagList(live);
@@ -60,12 +64,14 @@ export const resolveCountryTags = (baseTags, world, code) => {
 // the world summary the model reads.
 export const resolveAllCountryTags = (baseTags, world) => {
   const out = {};
-  for (const code of new Set([
+  for (const country of new Set([
     ...Object.keys(baseTags || {}),
     ...Object.keys(world?.countryTags || {}),
   ])) {
-    const tags = resolveCountryTags(baseTags, world, code);
-    if (tags.length) out[String(code).toUpperCase()] = tags;
+    const tags = resolveCountryTags(baseTags, world, country);
+    // Emit the key verbatim. Uppercasing here fed "RUSSIA" into the model's world
+    // summary while polityOverrides said "Russia" — the same string in two cases.
+    if (tags.length) out[String(country)] = tags;
   }
   return out;
 };

@@ -28,6 +28,7 @@ import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
+import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
@@ -166,6 +167,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   // Every field the document owns has to be listed here — this is a whitelist, and
   // anything missing is dropped on save without a word. That is what makes a new
   // doc field look like it works until the first reload.
+  // This list is a whitelist and it drops anything not named here, silently. A
+  // field left off does not fail to save — it fails to EXIST, and only when someone
+  // reopens the document.
   const buildPayload = () => ({
     name: d.name,
     metadata: d.metadata,
@@ -174,6 +178,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     colorOverrides: d.colorOverrides,
     flags: d.flags,
     tags: d.tags,
+    // Without this the marker never persists, so a document migrates on every open,
+    // forever — and, far worse, a document saved after being migrated still reads
+    // as legacy to everything downstream.
+    ownerSchema: d.doc?.ownerSchema ?? OWNER_SCHEMA,
     regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
@@ -228,11 +236,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
 
   const openDoc = async (id) => {
     try {
-      const doc = await loadDocument(id);
+      const stored = await loadDocument(id);
+      // Bring a pre-rename document forward before anything reads it. A document
+      // saved when owners were codes renders in hash colours (every palette lookup
+      // misses) and forks a country in two on the first edit. It is also the one
+      // path where legacy owners can reach a scenario already wearing an
+      // ownerSchema marker, past the store's migration. No-op once migrated.
+      const doc = migrateDocumentOwners(stored);
       const base = createDocument();
       d.setDoc({
         id: doc.id,
         version: doc.version || 1,
+        ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
         metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
         types: doc.types?.length ? doc.types : base.types,
         features: doc.features || [],
@@ -542,9 +557,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           )}
           <input
             value={paintOwner}
-            onChange={(e) => setPaintOwner(e.target.value.toUpperCase())}
-            placeholder="e.g. FRA"
-            style={{ ...inputStyle, width: 90, padding: "4px 7px" }}
+            onChange={(e) => setPaintOwner(e.target.value)}
+            placeholder="e.g. France"
+            style={{ ...inputStyle, width: 160, padding: "4px 7px" }}
           />
           <span style={{ color: "rgba(255,255,255,0.4)" }}>click regions · empty = unowned</span>
         </div>
