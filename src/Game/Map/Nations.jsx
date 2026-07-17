@@ -760,13 +760,16 @@ const WorldMap = ({ isGlobe = false }) => {
 
   return (
     <>
-      {/* maxzoom 9, not the archive's 10: the map editor stitches its region seed
-          from these tiles at z9 (extract-regions.mjs — z10 cannot be stitched at
-          all, the result exceeds V8's 512MB max string length), so rendering the
-          game at z10 drew borders one level finer than any map anyone can author
-          against them. Capping here makes the two agree. Past z9 MapLibre
-          overzooms, exactly as it already did past z10. */}
-      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={9}>
+      {/* maxzoom 8, not the archive's 10, because 8 is what the editor can
+          actually author against. z10 cannot be stitched into a seed at all —
+          extract-regions.mjs completes and then dies in JSON.stringify, over V8's
+          512MB max string length. z9 stitches, but 4.1M vertices then ran the
+          editor's tab out of heap: Chrome killed the renderer with "Aw, Snap"
+          while the machine still had 3GB free, because the cap is per-renderer.
+          z8's 2.6M is stable. Rendering finer than the editor can edit only draws
+          detail no map can be built against. Past z8 MapLibre overzooms, exactly
+          as it already did past z10. */}
+      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={8}>
         <Layer
           id="countries-fill"
           type="fill"
@@ -781,7 +784,7 @@ const WorldMap = ({ isGlobe = false }) => {
         />
       </Source>
 
-      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={9}>
+      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
         <Layer
           id="regions-fill"
           type="fill"
