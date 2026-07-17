@@ -5,6 +5,7 @@ import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { generateCountryStatSheet } from "../AI/gameplay.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
@@ -86,14 +87,14 @@ const stabilityColor = (value) => (value < 40 ? "#ef4444" : value < 70 ? "#f59e0
 const StatsPane = ({ active }) => {
     const { activeGameId } = useLibraryState();
     const [player, setPlayer] = useState({ code: "", date: "", gameKey: "game" });
-    const [targetCode, setTargetCode] = useState("");
+    const [targetCountry, setTargetCountry] = useState("");
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
     // Author-set flags from the scenario (flags.json). Memoized in assets.js, so
     // this is one fetch per scenario; {} for every scenario that sets none.
     const [customFlags, setCustomFlags] = useState({});
-    const displayName = useCountryDisplayName(targetCode);
+    const displayName = useCountryDisplayName(targetCountry);
 
     // Which game and which date are we in? Also seeds the target: your country.
     useEffect(() => {
@@ -118,10 +119,10 @@ const StatsPane = ({ active }) => {
                     gameKey: String(JSON_URLS.game || game?.id || game?.name || "game"),
                 };
                 if (player.gameKey !== nextPlayer.gameKey) {
-                    setTargetCode(code);
+                    setTargetCountry(code);
                     setState({ status: "idle", sheet: null, error: "" });
                 } else {
-                    setTargetCode((target) => target || code);
+                    setTargetCountry((target) => target || code);
                 }
                 setPlayer((current) =>
                     current.code === nextPlayer.code &&
@@ -145,14 +146,19 @@ const StatsPane = ({ active }) => {
     useEffect(() => {
         if (!active) return undefined;
         setRegionClickObserver((props) => {
-            const code = String(props?.owner || props?.gid0 || props?.GID_0 || "").trim();
-            if (code) setTargetCode(code);
+            // One namespace: the owning country's NAME. The gid0/GID_0 tail is the
+            // region's GADM provenance — a code — so falling through to it used to
+            // hand this pane "RUS" for an unowned region while every owned one gave
+            // a name. The sheet is keyed by country, and the two never matched.
+            const gid0 = String(props?.gid0 || props?.GID_0 || "").trim();
+            const country = String(props?.owner || "").trim() || COUNTRY_NAMES[gid0] || gid0;
+            if (country) setTargetCountry(country);
         });
         return () => setRegionClickObserver(null);
     }, [active]);
 
     const loadSheet = useCallback(async ({ force = false } = {}) => {
-        const code = targetCode;
+        const code = targetCountry;
         if (!code) return;
         const cacheKey = `${player.gameKey}:${code}`;
         if (!force) {
@@ -172,32 +178,32 @@ const StatsPane = ({ active }) => {
             memoryCache.set(cacheKey, entry);
             storeSheet(cacheKey, entry);
             setState((current) =>
-                targetCode === code ? { status: "ready", sheet, error: "" } : current);
+                targetCountry === code ? { status: "ready", sheet, error: "" } : current);
         } catch (error) {
             setState((current) =>
-                targetCode === code
+                targetCountry === code
                     ? { status: "error", sheet: null, error: error?.message || "The stat sheet failed." }
                     : current);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [targetCode, player.gameKey, player.date, displayName]);
+    }, [targetCountry, player.gameKey, player.date, displayName]);
 
     useEffect(() => {
-        if (!active || !targetCode) return;
+        if (!active || !targetCountry) return;
         setFlagFailed(false);
         loadSheet();
         readWorldState({ force: false })
-            .then((world) => setPolity(world?.polityOverrides?.[targetCode] ?? null))
+            .then((world) => setPolity(world?.polityOverrides?.[targetCountry] ?? null))
             .catch(() => setPolity(null));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [active, targetCode, player.date]);
+    }, [active, targetCountry, player.date]);
 
     const sheet = state.sheet;
-    const isPlayer = targetCode && targetCode.toUpperCase() === String(player.code).toUpperCase();
+    const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
     // custom era polity shows the flag its map-maker drew instead of initials.
-    const flagUrl = customFlags[targetCode] || polity?.flag || flagImageUrlFromGid(targetCode);
-    const initials = String(targetCode).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
+    const flagUrl = customFlags[targetCountry] || polity?.flag || flagImageUrlFromGid(targetCountry);
+    const initials = String(targetCountry).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
 
     const breakdown = useMemo(() => {
         const raw = sheet?.gdpBreakdown ?? {};
@@ -216,13 +222,13 @@ const StatsPane = ({ active }) => {
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "0.9rem 1rem 1.25rem", scrollbarWidth: "none" }}>
 
-        {!targetCode && (
+        {!targetCountry && (
             <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
             No active game. Start one to see national statistics.
             </p>
         )}
 
-        {targetCode && (
+        {targetCountry && (
             <>
             {/* Country header */}
             <div style={{ alignItems: "flex-start", display: "flex", gap: "0.7rem" }}>
@@ -239,7 +245,7 @@ const StatsPane = ({ active }) => {
             <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
             <span style={{ fontSize: "1.05rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {displayName || targetCode}
+            {displayName || targetCountry}
             </span>
             {isPlayer && (
                 <span style={{ backgroundColor: "rgba(245,158,11,0.18)", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "999px", color: "#fbbf24", flexShrink: 0, fontSize: "0.62rem", fontWeight: 700, padding: "0.14rem 0.5rem" }}>

@@ -18,6 +18,7 @@ import {
   readJson,
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
+import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
@@ -496,14 +497,26 @@ const WorldMap = ({ isGlobe = false }) => {
     // On custom maps, stock-tile hits carry modern props only — resolve the era
     // owner (possibly "" = unclaimed) from the ownership lookup.
     const owner = props.owner ?? (ownerLookupRef.current.size ? ownerLookupRef.current.get(regionId) : undefined);
+    // The region's underlying real country, as GADM knows it. A code, and staying
+    // one: it comes off the baked tiles.
+    const gid0 = props.gid0 ?? props.GID_0 ?? "";
     onRegionSelected({
-      COUNTRY: props.COUNTRY ?? props.country ?? "",
+      // Despite the name, this field carries the OWNER — every downstream reader
+      // (the flag lookup, the country panel) treats it that way. Resolved to a
+      // NAME here so it is one namespace: it used to hand back the owner's name
+      // when there was an owner and a raw GADM code when there wasn't, and the
+      // difference only showed up as an occasional "RUS" where a country name
+      // belonged. owner === "" means genuinely unclaimed and must stay empty.
+      GID_0: owner || (owner === "" ? "" : COUNTRY_NAMES[gid0] || gid0),
+      // A stock-tile hit carries GADM's own COUNTRY attribute; a custom region has
+      // no such property (and no longer carries `country` at all), so name it from
+      // the provenance rather than handing the panel a blank.
+      COUNTRY: props.COUNTRY ?? COUNTRY_NAMES[gid0] ?? "",
       NAME_1: props.NAME_1 ?? props.name ?? "",
-      GID_0: owner || (owner === "" ? "" : props.GID_0 ?? props.gid0 ?? ""),
       GID_1: regionId,
-      // gid0 = the region's underlying real country (flag fallback when the owner
-      // is a custom polity like "HRE"). owner "" flags an unclaimed region.
-      gid0: props.gid0 ?? props.GID_0 ?? "",
+      // Kept as the flag fallback when the owner is an invented polity: "Roman
+      // Empire" has no flag, but the land underneath it is still Italy.
+      gid0,
       owner,
       lngLat: event.lngLat,
     });
