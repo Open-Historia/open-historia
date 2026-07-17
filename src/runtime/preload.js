@@ -141,10 +141,13 @@ const STARTUP_TASKS = [
     id: "countries",
     label: "Caching country geometry",
     weight: 26,
-    run: async ({ signal }) => {
-      if (await worldIsCustom()) return;
-      await warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal });
-    },
+    // NOT skipped on a custom map, unlike regions below. countries.pmtiles is
+    // not only rendered: loadCountryNames reads its z0 tile for the country index
+    // (assets.js) and warmCountryLabelCollections reads it for the labels
+    // (countryLabels.js), and both run for every map. Skipping the warm would not
+    // avoid the download — it would just make those tasks fetch the whole archive
+    // lazily, later, and serially. Strictly worse than warming it here.
+    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal }),
   },
   {
     id: "country-index",
