@@ -760,6 +760,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
   return (
     <>
+      {!customFlag && (
       <Source id="countries-source" type="vector" url={countriesUrl}>
         <Layer
           id="countries-fill"
@@ -774,7 +775,14 @@ const WorldMap = ({ isGlobe = false }) => {
           paint={countriesOutlinePaint}
         />
       </Source>
+      )}
 
+      {/* Not mounted at all on a custom map, rather than painted at zero alpha.
+          MapLibre's isHidden() only consults visibility:"none" — an opacity-0
+          layer still fetches, decodes and renders its tiles — so leaving these
+          mounted made every custom-map player stream the stock world's geometry
+          in order to draw none of it. */}
+      {!customFlag && (
       <Source id="regions-source" type="vector" url={regionsUrl}>
         <Layer
           id="regions-fill"
@@ -789,6 +797,7 @@ const WorldMap = ({ isGlobe = false }) => {
           paint={regionsOutlinePaint}
         />
       </Source>
+      )}
 
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)
