@@ -17,15 +17,30 @@ import path from 'node:path'
 // are gitignored and arrive from the map-data Release at first launch, so CI and a
 // fresh clone build fine and the deploy failure looks random. Dropping them after
 // the copy is the fix; "remember to delete them before deploying" is not.
-const MAP_BINARIES = [
+// Never wanted in EITHER build: nothing loads a pmtiles archive from the bundle.
+// The desktop streams them off disk via /api/runtime/pmtiles/:assetKey and the
+// website fetches them from the content nodes, hash-verified. Copying them in only
+// broke the Pages deploy at its 25 MiB-per-file limit.
+const PMTILES = [
   'assets/regions.pmtiles',
   'assets/countries.pmtiles',
   'assets/cities.pmtiles',
+]
+
+// Wanted by the DESKTOP, fatal to the WEBSITE. The map editor loads these, and the
+// desktop server serves exactly one directory (`app.use(express.static(distDir))`)
+// — so dropping them there makes /assets/regions-seed.geojson fall through to the
+// SPA fallback, answer with index.html, and the editor open with zero regions.
+//
+// The web build resolves them from VITE_OH_PMTILES_URL instead (see
+// regionImport.js), so it never reads them from the bundle — and it must not carry
+// them: regions-seed.geojson is 52.8MB at z8 and Pages rejects any file over 25MiB.
+const EDITOR_SEEDS = [
   'assets/regions-seed.geojson',
   'assets/cities-seed.json',
 ]
 
-const dropMapBinaries = () => {
+const dropMapBinaries = (isWeb) => {
   // Take outDir from the resolved config rather than assuming: --outDir varies
   // (dist for the desktop, dist-web for build:web/build:site).
   let outDir = 'dist'
@@ -36,7 +51,7 @@ const dropMapBinaries = () => {
       outDir = config.build.outDir
     },
     closeBundle() {
-      for (const rel of MAP_BINARIES) {
+      for (const rel of isWeb ? [...PMTILES, ...EDITOR_SEEDS] : PMTILES) {
         const target = path.resolve(outDir, rel)
         if (fs.existsSync(target)) fs.rmSync(target)
       }
@@ -65,7 +80,7 @@ export default defineConfig(({ mode }) => ({
         plugins: [['babel-plugin-react-compiler']],
       },
     }),
-    dropMapBinaries(),
+    dropMapBinaries(mode === 'web'),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's
   // save/load (and the game's runtime endpoints) work with hot-reload too.
