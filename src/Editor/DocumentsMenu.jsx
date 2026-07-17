@@ -10,6 +10,7 @@ import { useState } from "react";
 import Icon from "./Icon.jsx";
 import { panelSurface } from "./editorStyles.js";
 import { listDocuments, deleteDocument } from "./documentIO.js";
+import { useIsMobile } from "../runtime/useIsMobile.js";
 
 const menuItem = {
   display: "flex",
@@ -29,6 +30,10 @@ const menuItem = {
 const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSave, onExport, onExportGame, onOpen }) => {
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState([]);
+  // On a phone the three top bars (this one, the centred toolbar, the top-right
+  // action buttons) fight for the same row. Collapse to just the icon so this one
+  // stays narrow and clear of the toolbar.
+  const isMobile = useIsMobile();
 
   const refresh = async () => setDocs(await listDocuments());
   const toggle = async () => {
@@ -42,20 +47,26 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
     <div style={{ position: "fixed", top: 12, left: 12, zIndex: 36 }}>
       <button
         onClick={toggle}
+        title={isMobile ? (docName || "Untitled Map") : undefined}
         style={{
           ...panelSurface,
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "7px 12px",
-          fontSize: 13,
+          gap: isMobile ? 0 : 8,
+          padding: isMobile ? "8px 10px" : "7px 12px",
+          fontSize: isMobile ? 16 : 13,
           fontWeight: 700,
           cursor: "pointer",
           color: "white",
         }}
       >
-        🗺️ <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName || "Untitled Map"}</span>
-        <Icon name="plus" size={12} style={{ transform: "rotate(45deg)", opacity: 0.5 }} />
+        🗺️
+        {!isMobile && (
+          <>
+            <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName || "Untitled Map"}</span>
+            <Icon name="plus" size={12} style={{ transform: "rotate(45deg)", opacity: 0.5 }} />
+          </>
+        )}
       </button>
 
       {open && (
