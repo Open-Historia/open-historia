@@ -12,9 +12,12 @@
 // regions): the exported regions.geojson carries the shapes and world.customRegions
 // tells the game to render them from a GeoJSON layer (see src/Game/Map/Nations.jsx).
 
+import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
+
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
-// regions.pmtiles) cannot render.
+// regions.pmtiles) cannot render. This tests the region's ID, which stays a GADM
+// identifier — it is not an owner test and does not move with the rename.
 const isGid1 = (id) => /\./.test(String(id || "")) && !/^reg_/.test(String(id || ""));
 
 // Deterministic pleasant color from an owner code (used when colors.json has no
@@ -35,7 +38,8 @@ const codeToColor = (code) => {
 // OpenLayers' GeoJSON writer puts the feature id at the top level (feature.id),
 // not in properties, and MapLibre's ["get","id"] reads from properties. Rebuild a
 // FeatureCollection whose properties carry everything the game renderer/selection
-// needs: id, owner (GID_0-style code driving fill), name, country, gid0, typeId.
+// needs: id, owner (the owning country's NAME, which drives the fill), name,
+// gid0, typeId.
 const normalizeRegionsForGame = (regionsFC) => {
   const features = [];
   for (const f of regionsFC?.features || []) {
@@ -51,9 +55,13 @@ const normalizeRegionsForGame = (regionsFC) => {
       properties: {
         id,
         owner,
-        gid0: props.gid0 ? String(props.gid0) : owner,
+        // GADM provenance: which real country this polygon physically is. Blank
+        // for a region drawn in the editor, which is on no GADM map. It used to
+        // fall back to the owner, which was harmless while owner was a code and
+        // is now a category error — it would file "Roman Empire" as a GADM code.
+        gid0: props.gid0 ? String(props.gid0) : "",
         name: props.name ? String(props.name) : "",
-        country: props.country ? String(props.country) : "",
+        // No `country`: owner IS the country's name.
         typeId: props.typeId ? String(props.typeId) : "land",
       },
     });
@@ -127,10 +135,15 @@ const buildBackgroundForGame = (customBackground) => {
   return { background: null, backgroundData: null };
 };
 
-export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {}) => {
+// Every country the stock world already knows by name. An owner in here is a real
+// GADM country the game can name, colour and flag on its own; an owner outside it
+// is something the map-maker invented, and only a polity entry tells the game and
+// the model that it exists at all.
+const STOCK_COUNTRY_NAMES = new Set(Object.values(COUNTRY_NAMES));
+
+export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = {}) => {
   const regionOwnershipOverrides = {};
   const owners = new Set();
-  const ownerNames = new Map(); // owner code -> real display name carried on region.country
   let customCount = 0;
 
   for (const f of regionsFC?.features || []) {
@@ -142,8 +155,6 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
     if (owner) {
       regionOwnershipOverrides[id] = owner;
       owners.add(owner);
-      const cname = props.country ? String(props.country).trim() : "";
-      if (cname && !ownerNames.has(owner)) ownerNames.set(owner, cname);
     }
   }
 
@@ -151,35 +162,34 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
 
-  // colors.json: owner code -> [r,g,b]. A colour the map-maker picked wins over
-  // everything: it is the only one a human actually chose. Then the base palette,
-  // then a stable hash. Without the override check first, every real country's
-  // edit was silently discarded here — the palette has ~293 of them, so "change
-  // France to green" could never survive the export.
+  // colors.json: country name -> [r,g,b]. A colour the map-maker picked wins over
+  // everything: it is the only one a human actually chose. Then the palette, then a
+  // stable hash. Without the override check first, every real country's edit was
+  // silently discarded here, so "change France to green" could never survive.
   const overrides = doc.colorOverrides || {};
   const colors = {};
   const polityOverrides = {};
   for (const owner of owners) {
-    if (overrides[owner]) {
-      colors[owner] = overrides[owner];
-    } else if (palette[owner]) {
-      colors[owner] = palette[owner];
-    } else {
-      // owner not in the base palette — give it a stable color; add a polity entry
-      // only for genuinely custom (non-GADM) codes so the game/AI know the name.
-      // Name comes from the region's country property (the real country name), never
-      // the code, so the game shows "Kuizltan", not a raw identifier.
-      const rgb = codeToColor(owner);
-      colors[owner] = rgb;
-      if (!/^[A-Z]{2,3}$/.test(owner)) {
-        polityOverrides[owner] = {
-          code: owner,
-          name: ownerNames.get(owner) || owner,
-          aliases: [],
-          color: `#${rgb.map((n) => n.toString(16).padStart(2, "0")).join("")}`,
-          note: "",
-        };
-      }
+    const rgb = overrides[owner] || palette[owner] || codeToColor(owner);
+    colors[owner] = rgb;
+
+    // A polity entry exists to tell the game and the model about a country the
+    // stock world has never heard of. That test used to be /^[A-Z]{2,3}$/ — "is
+    // this owner shaped like a GADM code?" — which worked only while owners WERE
+    // codes. Against names it inverts: "Russia" isn't code-shaped, so every real
+    // country would get a spurious polity, while a map-maker who names a country
+    // "USA" or "UAE" still trips the regex and gets NO entry, leaving the model
+    // with no idea their country exists. Ask the real question instead: does the
+    // stock world already know this name?
+    if (!STOCK_COUNTRY_NAMES.has(owner)) {
+      polityOverrides[owner] = {
+        // No `code`: the key IS the identifier now. `name` mirrors the key because
+        // readers expect the field, not because they can differ.
+        name: owner,
+        aliases: [],
+        color: `#${rgb.map((n) => n.toString(16).padStart(2, "0")).join("")}`,
+        note: "",
+      };
     }
   }
 
@@ -213,7 +223,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCode } = {})
   };
   const firstOwner = Object.values(regionOwnershipOverrides)[0] || "";
   const game = {
-    country: playerCode || firstOwner,
+    country: playerCountry || firstOwner,
     startDate: doc.metadata?.startDate || "",
     gameDate: doc.metadata?.gameDate || "",
   };
