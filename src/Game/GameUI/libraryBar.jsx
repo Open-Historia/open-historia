@@ -34,6 +34,12 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import {
+  splitScenarioBundleImage,
+  embedScenarioBundleImage,
+  embedScenarioBundleVector,
+} from "../../runtime/communityBasemaps.js";
+import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -223,8 +229,7 @@ const buildGameEditorState = (details) => {
   };
 };
 
-const saveJsonBundleToDisk = (bundle, fileName) => {
-  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+const saveBlobToDisk = (blob, fileName) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -233,6 +238,10 @@ const saveJsonBundleToDisk = (bundle, fileName) => {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+};
+
+const saveJsonBundleToDisk = (bundle, fileName) => {
+  saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
 };
 
 const AssetBadgeRow = ({ badges }) =>
@@ -872,10 +881,13 @@ const EditorDrawer = ({
       {editorSection === "bundles" && kind === "scenario" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.82rem", lineHeight: 1.5, marginBottom: "0.85rem" }}>
-            Download the scenario as one self-contained JSON file — any custom map geometry, cities and basemap travel inside it, so it's ready to share or re-import.
+            Download the scenario as one self-contained file — custom map geometry, cities and basemap all travel with it, ready to share or re-import. The <strong>.zip</strong> carries a custom basemap as a real image file (smaller, and the form the community hub expects); the <strong>JSON</strong> packs everything into one text file.
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
-            <button onClick={() => onExportBundle("light")} style={actionButtonStyle} type="button">
+            <button onClick={() => onExportBundle("light", "zip")} style={actionButtonStyle} type="button">
+              Download .zip
+            </button>
+            <button onClick={() => onExportBundle("light", "json")} style={actionButtonStyle} type="button">
               Download JSON
             </button>
           </div>
@@ -1403,7 +1415,7 @@ const LibraryTopBar = () => {
     }
   };
 
-  const handleExportBundle = async (mode) => {
+  const handleExportBundle = async (mode, format = "json") => {
     if (editorKind !== "scenario" || !editorDetails) {
       return;
     }
@@ -1412,8 +1424,26 @@ const LibraryTopBar = () => {
     setIsBusy(true);
 
     try {
-      const bundle = await exportScenarioBundle(editorDetails.scenario.id, mode);
-      saveJsonBundleToDisk(bundle, `${editorDetails.scenario.id}-${mode}.json`);
+      const id = editorDetails.scenario.id;
+      const bundle = await exportScenarioBundle(id, mode);
+      if (format === "zip") {
+        // Package the scenario as a real .zip. When it carries a custom basemap, that
+        // image/geojson rides inside as an actual file (+ a small preview) instead of a
+        // base64 data URL bloating the JSON — the same self-contained form the community
+        // hub shares. With no custom basemap there's nothing to split out, so the zip
+        // just holds scenario.json (still a valid, self-contained bundle).
+        const split = await splitScenarioBundleImage(bundle).catch(() => null);
+        const files = { "scenario.json": JSON.stringify(bundle) };
+        if (split) {
+          delete bundle.assets.backgroundData; // the basemap now travels as a real file
+          files["scenario.json"] = JSON.stringify(bundle);
+          files[split.imageName] = split.imageBytes;
+          if (split.previewBytes) files[split.previewName] = split.previewBytes;
+        }
+        saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
+      } else {
+        saveJsonBundleToDisk(bundle, `${id}-${mode}.json`);
+      }
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -1433,8 +1463,27 @@ const LibraryTopBar = () => {
     setIsBusy(true);
 
     try {
-      const text = await file.text();
-      const bundle = JSON.parse(text);
+      // A scenario exported with a custom basemap arrives as a .zip (scenario.json +
+      // the raw basemap file); everything else is a plain JSON bundle. Detect the zip
+      // by its magic bytes so a renamed file still works, then re-embed the basemap so
+      // the importer sees a normal self-contained bundle.
+      const buffer = await file.arrayBuffer();
+      let bundle;
+      if (looksLikeZip(new Uint8Array(buffer))) {
+        const zip = await unzipBundle(buffer);
+        const scenarioText = await zip.text("scenario.json");
+        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+        bundle = JSON.parse(scenarioText);
+        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+        if (imageName) {
+          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+        } else {
+          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
+        }
+      } else {
+        bundle = JSON.parse(new TextDecoder().decode(buffer));
+      }
       const details = await importScenarioBundle(bundle);
       setActiveTab("scenarios");
       setIsPanelOpen(true);
@@ -1957,7 +2006,7 @@ const LibraryTopBar = () => {
 
       <input
         ref={importScenarioInputRef}
-        accept=".json,application/json"
+        accept=".json,application/json,.zip,application/zip"
         onChange={handleImportScenarioFile}
         style={{ display: "none" }}
         type="file"
