@@ -173,9 +173,6 @@ const saveBlobToDisk = (blob, fileName) => {
   URL.revokeObjectURL(url);
 };
 
-const saveJsonToDisk = (data, fileName) =>
-  saveBlobToDisk(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }), fileName);
-
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
   border: "1px solid rgba(255,255,255,0.09)",
@@ -558,28 +555,32 @@ const CommunityPanel = ({ onImported }) => {
       // If this scenario's custom basemap is already on the community hub,
       // reference it instead of re-embedding the whole image (smaller bundle).
       const dedup = await dedupeScenarioBundleBackground(bundle).catch(() => ({ referenced: false, needsPublish: false }));
-      // A not-yet-shared custom image basemap ships bundled as ONE .zip
-      // (scenario.json + the raw basemap image + a preview) so the author drags a
-      // single file and the image travels as real bytes, not a bloated data URL.
       const split = dedup.referenced ? null : await splitScenarioBundleImage(bundle).catch(() => null);
-      let fileName;
+      // ALWAYS ship a .zip. GitHub issue attachments reject a bare .json, so a
+      // scenario with no splittable image — e.g. a geometry-only preset like WWII,
+      // whose custom borders live in an embedded regions.geojson, not a basemap —
+      // could never actually be dragged into the post: the download looked fine, but
+      // the share was impossible. Wrapping scenario.json in a zip makes EVERY scenario
+      // attachable. A custom image basemap still rides alongside as a real file
+      // (scenario.json + basemap + preview) when there is one, instead of bloating the
+      // JSON as a base64 data URL.
+      const files = {};
       let extra;
       if (split) {
         delete bundle.assets.backgroundData; // the image now rides in the zip as a real file
-        const files = { "scenario.json": JSON.stringify(bundle), [split.imageName]: split.imageBytes };
+        files[split.imageName] = split.imageBytes;
         if (split.previewBytes) files[split.previewName] = split.previewBytes;
-        fileName = `${scenario.id}-scenario.zip`;
-        saveBlobToDisk(await zipBundle(files), fileName);
         extra =
           " Its custom basemap is bundled inside the .zip, so the scenario is self-contained — just drag the one file." +
           " (To also list the basemap on its own in the community Basemaps tab, open the editor's Basemap picker and hit ⤴ on it.)";
       } else {
-        fileName = `${scenario.id}-scenario.json`;
-        saveJsonToDisk(bundle, fileName);
         extra = dedup.referenced
           ? " Its custom basemap was reused from the community hub, so the file stays small."
           : "";
       }
+      files["scenario.json"] = JSON.stringify(bundle);
+      const fileName = `${scenario.id}-scenario.zip`;
+      saveBlobToDisk(await zipBundle(files), fileName);
       // When the scenario carries a basemap, tag the post with the basemap hash so
       // the community Basemaps browser (which surfaces scenario-carried basemaps) can
       // dedupe it against dedicated posts. Harmless if the scenario form has no such

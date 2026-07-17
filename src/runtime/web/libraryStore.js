@@ -873,10 +873,20 @@ const importScenarioBundle = async (bundle) => {
     if (key === COVER_IMAGE_ASSET_KEY) {
       if (embedded && descriptor.data) await uploadScenarioAsset(newId, key, base64ToBytes(descriptor.data), descriptor.contentType);
       else await removeScenarioAsset(newId, key);
-    } else if (key === "colors") {
-      if (embedded && descriptor.data !== undefined) { const r = await getScenario(newId); r.colors = descriptor.data; writeScenarioMeta(r, {}); await putScenario(r); }
-      else await removeScenarioAsset(newId, key);
-    } else if (embedded && descriptor.data) {
+    } else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
+      // colors / flags / tags are JSON descriptor assets: `descriptor.data` is the
+      // object itself, NOT base64. Store it verbatim on the record. Passing it to
+      // base64ToBytes (as the binary branch below does) makes atob throw
+      // "string to be decoded is not correctly encoded" — which made EVERY scenario
+      // carrying tags or flags (e.g. the WWII preset) fail to import on the web build.
+      const r = await getScenario(newId);
+      if (embedded && descriptor.data !== undefined) r[key] = descriptor.data;
+      else delete r[key];
+      writeScenarioMeta(r, {});
+      await putScenario(r);
+    } else if (embedded && typeof descriptor.data === "string") {
+      // geojson / pmtiles: base64-encoded binary. The typeof guard keeps any stray
+      // non-string payload from reaching atob and crashing the whole import.
       await uploadScenarioAsset(newId, key, base64ToBytes(descriptor.data), descriptor.contentType);
     } else {
       await removeScenarioAsset(newId, key);
