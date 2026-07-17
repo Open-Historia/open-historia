@@ -27,7 +27,8 @@ import {
   uploadScenarioAsset,
   useLibraryState,
 } from "../../runtime/library.js";
-import { loadCountryNames } from "../../runtime/assets.js";
+import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
+import FactionCreator from "./FactionCreator.jsx";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
@@ -51,6 +52,16 @@ const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 
 const BAR_HEIGHT = 64;
+
+// "#rrggbb" -> [r,g,b], the shape colors.json stores. Faults to a neutral grey
+// rather than throwing, so a bad colour never blocks creating the faction.
+const hexToRgbArray = (hex) => {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || "").trim());
+  if (!m) return [128, 128, 128];
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
 const TECHNICAL_OWNER_CODES = new Set([
   "NA",
   "XCA",
@@ -1015,6 +1026,74 @@ const LibraryTopBar = () => {
     }
   };
 
+  // Create a game led by a player-invented faction. It is written into the game's
+  // OWN world/colors/flags — a game carries its own copies and falls back to the
+  // scenario only for what it doesn't set, so the scenario is never touched.
+  const startGameForFaction = async (scenario, faction, difficulty) => {
+    setCountryPicker(null);
+    setCustomRegionData(null);
+    setEditorError(null);
+    setIsBusy(true);
+    try {
+      const details = await createGame({
+        name: `${faction.name} — ${scenario.name}`,
+        scenarioId: scenario.id,
+        setActive: true,
+      });
+      const gameId = details.game.id;
+
+      // Read the game's world, which createGame seeded from the scenario, and merge
+      // the faction into its existing maps. This read-merge-write is load-bearing:
+      // saveGame writes `world` whole (a worldPatch would SHALLOW-merge, replacing
+      // polityOverrides/ownerCodes/regionOwnershipOverrides outright and wiping
+      // every other country on the map).
+      const gameDetails = await loadGameDetails(gameId).catch(() => null);
+      const world = { ...(gameDetails?.data?.world ?? {}) };
+      const name = faction.name;
+      const hexColor = /^#[0-9a-fA-F]{6}$/.test(faction.color) ? faction.color : "#7c3aed";
+
+      world.polityOverrides = {
+        ...(world.polityOverrides ?? {}),
+        [name]: { name, aliases: [], color: hexColor, note: faction.lore || "" },
+      };
+      world.regionOwnershipOverrides = { ...(world.regionOwnershipOverrides ?? {}) };
+      for (const regionId of faction.regionIds ?? []) {
+        world.regionOwnershipOverrides[regionId] = name;
+      }
+      // ownerCodes lists who is playable — include the faction even when landless.
+      world.ownerCodes = [...new Set([...(world.ownerCodes ?? []), name])].sort();
+      // A faction that claimed drawn/overridden territory needs the custom-region
+      // renderer on so its regions paint; a landless faction leaves the flag as-is.
+      if ((faction.regionIds ?? []).length) world.customRegions = true;
+
+      await saveGame(gameId, { world, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
+
+      // Colour and flag live in their own runtime assets. createGame set this game
+      // active, so JSON_URLS.colors/flags now resolve to it — and reading them gives
+      // the EFFECTIVE asset (the scenario's, since a fresh game has none of its own).
+      // Read-merge-write materialises that whole palette into the game with the
+      // faction added; writing only the faction would shadow the scenario file and
+      // leave every other country uncoloured. This is the "Add Country" cheat's path.
+      try {
+        const colors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
+        await writeJson(JSON_URLS.colors, { ...colors, [name]: hexToRgbArray(hexColor) }, { pretty: true });
+      } catch { /* colours are cosmetic — a landless faction paints nothing anyway */ }
+
+      if (faction.flag) {
+        try {
+          const flags = await readJson(JSON_URLS.flags, { defaultValue: {}, force: true });
+          await writeJson(JSON_URLS.flags, { ...flags, [name]: faction.flag }, { pretty: true });
+        } catch { /* flag is cosmetic */ }
+      }
+
+      await openGameEditor(gameId);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   // Build the start-country list for a scenario: only the factions that actually
   // exist in it (world.ownerCodes), named as era polities where defined. Falls
   // back to every country for scenarios without an owner list.
@@ -1040,11 +1119,18 @@ const LibraryTopBar = () => {
         name: (polityName && polityName !== code ? polityName : null) || scenarioName || fallbackName,
       };
     };
-    const options = !ownerCodes || !ownerCodes.length
-      ? list.map((entry) => resolveOption(entry.code, entry.name))
-      : ownerCodes
-        .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
-        .map((code) => resolveOption(code, nameByCode.get(code) || code));
+    // ownerCodes lists only owners that hold territory (it is the deduped values of
+    // regionOwnershipOverrides). A LANDLESS faction — a polity that owns no regions,
+    // e.g. a government-in-exile — is defined in polityOverrides but appears in no
+    // ownership override, so it would never reach this list. Union the two: a
+    // faction is playable if it holds land OR exists as a polity. The map surface
+    // needs no change — a landless faction has nothing to click, and the list
+    // button is selection enough.
+    const codes = new Set(ownerCodes && ownerCodes.length ? ownerCodes : list.map((e) => e.code));
+    for (const code of Object.keys(polity)) codes.add(code);
+    const options = [...codes]
+      .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
+      .map((code) => resolveOption(code, nameByCode.get(code) || code));
     return options
       .sort((left, right) => left.name.localeCompare(right.name));
   };
@@ -1058,6 +1144,7 @@ const LibraryTopBar = () => {
     setCountryOptions([]);
     setCustomRegionData(null);
     setPlayGameId(null);
+    setPickerTab("country");
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
@@ -1403,6 +1490,8 @@ const LibraryTopBar = () => {
   const [countryOptions, setCountryOptions] = useState([]);
   const [customRegionData, setCustomRegionData] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
+  // Which tab of the new-game dialog: pick an existing country, or invent one.
+  const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction"
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
@@ -1580,10 +1669,18 @@ const LibraryTopBar = () => {
   // Picking a country moves to step two (difficulty); picking a difficulty
   // actually creates/updates the game.
   const pickCountry = (countryCode) => setDifficultyPick({ countryCode });
+  // A created faction routes through the SAME difficulty step as a picked country —
+  // it just carries a faction draft instead of a country code.
+  const pickFaction = (faction) => setDifficultyPick({ faction });
 
   const pickDifficulty = (difficultyId) => {
-    const countryCode = difficultyPick?.countryCode || "";
+    const draft = difficultyPick;
     setDifficultyPick(null);
+    if (draft?.faction) {
+      startGameForFaction(countryPicker, draft.faction, difficultyId);
+      return;
+    }
+    const countryCode = draft?.countryCode || "";
     if (playGameId) {
       choosePlayCountry(countryCode, difficultyId);
     } else {
@@ -1779,33 +1876,79 @@ const LibraryTopBar = () => {
               </>
             ) : (
               <>
-                <div style={{ fontWeight: 800, fontSize: "1rem" }}>Choose your country</div>
-                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.7rem" }}>
+                <div style={{ fontWeight: 800, fontSize: "1rem" }}>
+                  {pickerTab === "faction" ? "Create your faction" : "Choose your country"}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.6rem" }}>
                   Starting “{countryPicker.name}”
                 </div>
-                <button
-                  type="button"
-                  onClick={() => pickCountry("")}
-                  style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)", marginBottom: "0.4rem" }}
-                >
-                  {playGameId ? "Keep scenario default" : "Scenario default"}
-                </button>
-                <Suspense
-                  fallback={
-                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "3rem 0", textAlign: "center" }}>
-                      Loading map…
-                    </div>
-                  }
-                >
-                  <CountryPickerMap
-                    countryOptions={countryOptions}
+                {/* Refining an existing game (Apply-&-Play) only swaps the country;
+                    inventing a faction is a fresh-game concern, so the tabs show
+                    only for a true new game. */}
+                {!playGameId && (
+                  <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.7rem" }}>
+                    <button
+                      type="button"
+                      onClick={() => setPickerTab("country")}
+                      style={{
+                        ...actionButtonStyle,
+                        flex: 1,
+                        fontWeight: 700,
+                        background: pickerTab === "country" ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "country" ? "rgba(124,58,237,0.7)" : undefined,
+                      }}
+                    >
+                      Pick a country
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPickerTab("faction")}
+                      style={{
+                        ...actionButtonStyle,
+                        flex: 1,
+                        fontWeight: 700,
+                        background: pickerTab === "faction" ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "faction" ? "rgba(124,58,237,0.7)" : undefined,
+                      }}
+                    >
+                      Create a faction
+                    </button>
+                  </div>
+                )}
+                {pickerTab === "faction" && !playGameId ? (
+                  <FactionCreator
                     regionsGeojson={customRegionData}
-                    onPickCountry={(code) => pickCountry(code)}
+                    busy={isBusy}
+                    onCreate={(faction) => pickFaction(faction)}
+                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); }}
                   />
-                </Suspense>
-                <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
-                  {playGameId ? "Done" : "Cancel"}
-                </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => pickCountry("")}
+                      style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)", marginBottom: "0.4rem" }}
+                    >
+                      {playGameId ? "Keep scenario default" : "Scenario default"}
+                    </button>
+                    <Suspense
+                      fallback={
+                        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "3rem 0", textAlign: "center" }}>
+                          Loading map…
+                        </div>
+                      }
+                    >
+                      <CountryPickerMap
+                        countryOptions={countryOptions}
+                        regionsGeojson={customRegionData}
+                        onPickCountry={(code) => pickCountry(code)}
+                      />
+                    </Suspense>
+                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                      {playGameId ? "Done" : "Cancel"}
+                    </button>
+                  </>
+                )}
               </>
             )}
           </div>
