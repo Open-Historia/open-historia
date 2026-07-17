@@ -40,7 +40,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
-import { unionGeoms, translatedClone } from "./geometry.js";
+import { unionGeoms, translatedClone, subtractFrom, overlaps } from "./geometry.js";
 
 const BASEMAP_BG = {
   dark: "#0b1020",
@@ -757,9 +757,58 @@ const OlMap = ({
         if (!f.get("name")) f.set("name", "New Region");
         if (f.get("gid0") == null) f.set("gid0", "");
         if (f.get("country") == null) f.set("country", "");
+
+        // Take the new region's land OUT of whatever it was drawn over. Two
+        // regions covering the same ground is not a cosmetic problem: the place
+        // is then owned twice, only the last-rendered owner is visible, and the
+        // exported ownership map disagrees with the map the author was looking
+        // at. Drawing inside a region leaves a hole in it; drawing across an
+        // edge takes a bite; drawing over one entirely deletes it.
+        const cutter = f.getGeometry();
+        const carved = [];
+        for (const other of source.getFeatures()) {
+          if (other === f) continue;
+          const geom = other.getGeometry();
+          if (!geom || !overlaps(geom, cutter)) continue;
+          const before = geom.clone();
+          const after = subtractFrom(geom, cutter);
+          if (!after) {
+            // Fully covered: nothing of it is left to own.
+            source.removeFeature(other);
+            carved.push({ feature: other, before, after: null });
+          } else {
+            other.setGeometry(after);
+            // Mark it edited so the exporter ships this geometry rather than
+            // assuming the stock GADM shape still describes it.
+            other.set("edited", true);
+            carved.push({ feature: other, before, after: after.clone() });
+          }
+        }
+        if (carved.length) {
+          layer.changed();
+          labelLayerRef.current?.changed();
+        }
+
         // defer so drawend finishes adding to the source before we count
         setTimeout(notifyRegions, 0);
-        pushCmd({ undo: () => source.removeFeature(f), redo: () => source.addFeature(f) });
+        pushCmd({
+          undo: () => {
+            source.removeFeature(f);
+            for (const c of carved) {
+              c.feature.setGeometry(c.before.clone());
+              if (!c.after) source.addFeature(c.feature);
+            }
+            layer.changed();
+          },
+          redo: () => {
+            source.addFeature(f);
+            for (const c of carved) {
+              if (!c.after) source.removeFeature(c.feature);
+              else c.feature.setGeometry(c.after.clone());
+            }
+            layer.changed();
+          },
+        });
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
     } else if (activeTool === "modify") {
