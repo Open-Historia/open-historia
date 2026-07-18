@@ -322,6 +322,7 @@ const Main = ({
       {isSettingsOpen && (
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
+          redditUrl="https://www.reddit.com/r/OpenHistoria"
           githubUrl="https://github.com/Open-Historia/open-historia"
           onOpenCheats={() => {
             setShouldLoadCheats(true);
