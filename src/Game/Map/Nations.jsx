@@ -76,17 +76,62 @@ const buildFallbackColorExpression = () => ([
 // NOTE this is the JS twin of buildFallbackColorExpression above, which reads
 // GID_0 off the stock tiles and must keep hashing the CODE — tile properties are
 // baked GADM and never become names.
-const fallbackColorFromOwner = (owner = "") => {
+const fallbackRgbFromOwner = (owner = "") => {
   const normalized = String(owner ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   if (normalized.length < 3) {
-    return "rgb(96, 96, 96)";
+    return [96, 96, 96];
   }
 
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   const a = Math.max(0, alphabet.indexOf(normalized[0]));
   const b = Math.max(0, alphabet.indexOf(normalized[1]));
   const c = Math.max(0, alphabet.indexOf(normalized[2]));
-  return `rgb(${64 + a * 5}, ${64 + c * 5}, ${64 + b * 5})`;
+  return [64 + a * 5, 64 + c * 5, 64 + b * 5];
+};
+
+const fallbackColorFromOwner = (owner = "") => {
+  const [r, g, b] = fallbackRgbFromOwner(owner);
+  return `rgb(${r}, ${g}, ${b})`;
+};
+
+// ---- Disputed-region stripes ------------------------------------------------
+// A region whose `claimants` list names the countries contesting it renders
+// striped in their colors (current administrator first). The stripe tile's
+// image id encodes the rgb list itself ("oh-stripes-r_g_b-r_g_b"), so the
+// styleimagemissing handler can rebuild any tile the style asks for — including
+// after the globe/mercator toggle remounts the map and its images are gone.
+const STRIPE_PREFIX = "oh-stripes-";
+const STRIPE_BAND_PX = 8;
+
+const stripeImageId = (rgbList) => STRIPE_PREFIX + rgbList.map((rgb) => rgb.join("_")).join("-");
+
+const parseStripeImageId = (id) => {
+  if (typeof id !== "string" || !id.startsWith(STRIPE_PREFIX)) return null;
+  const colors = id
+    .slice(STRIPE_PREFIX.length)
+    .split("-")
+    .map((part) => part.split("_").map(Number));
+  const valid = colors.length >= 2 &&
+    colors.every((rgb) => rgb.length === 3 && rgb.every((n) => Number.isFinite(n) && n >= 0 && n <= 255));
+  return valid ? colors : null;
+};
+
+// Diagonal stripe tile as raw RGBA: band = (x+y) mod period, which tiles
+// seamlessly in both directions.
+const buildStripeImage = (rgbList) => {
+  const size = rgbList.length * STRIPE_BAND_PX;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const rgb = rgbList[Math.floor(((x + y) % size) / STRIPE_BAND_PX)];
+      const p = (y * size + x) * 4;
+      data[p] = rgb[0];
+      data[p + 1] = rgb[1];
+      data[p + 2] = rgb[2];
+      data[p + 3] = 255;
+    }
+  }
+  return { width: size, height: size, data };
 };
 
 // Neutral tone for unowned custom regions (land with no owner code).
@@ -153,8 +198,51 @@ const ringCentroidLngLat = (ring) => {
   return [x / s, y / s];
 };
 
-const CLUSTER_JOIN_DEGREES = 28; // centroids closer than this merge into one label cluster
-const MIN_CLUSTER_AREA = 6; // in lng/lat degrees^2 — skips tiny extra islands
+// Clusters are primarily CONTIGUOUS territory (region adjacency, below); the
+// centroid join only mops up islands near their mainland and hairline adjacency
+// misses. Keeping it small is what gives a colony or exclave its own label —
+// at the old 28° France's metropole merged with its African empire across the
+// Mediterranean and only the empire got named.
+const CLUSTER_JOIN_DEGREES = 10; // centroids closer than this merge into one label cluster
+const MIN_CLUSTER_AREA = 1.5; // in lng/lat degrees^2 — skips tiny extra islands
+
+// Which regions physically touch, from shared border vertices. The seed
+// simplifies each region on its own, so mid-border vertices don't always match
+// between neighbours — but junction corners (tripoints) survive any
+// simplification, and most border runs still share long identical stretches.
+// Hashing EVERY vertex on a ~11m grid (1e-4°) catches both; the centroid
+// mop-up in the label builder heals whatever this still misses. Owner-agnostic
+// (geometry only) so it can be memoized per world and reused across ownership
+// changes.
+const buildRegionAdjacency = (regionsFC) => {
+  const features = regionsFC?.features ?? [];
+  const firstSeen = new Map(); // packed vertex -> first feature index
+  const neighbors = features.map(() => null);
+  const link = (a, b) => {
+    (neighbors[a] ??= new Set()).add(b);
+    (neighbors[b] ??= new Set()).add(a);
+  };
+  for (let index = 0; index < features.length; index += 1) {
+    const geometry = features[index]?.geometry;
+    const polys = geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+    for (const poly of polys) {
+      for (const ring of poly ?? []) {
+        if (!ring) continue;
+        for (let v = 0; v < ring.length; v += 1) {
+          const pt = ring[v];
+          // 1e-4° grid, packed into one number (fits 2^53).
+          const key = Math.round((pt[0] + 180) * 1e4) * 4194304 + Math.round((pt[1] + 90) * 1e4);
+          const seen = firstSeen.get(key);
+          if (seen === undefined) firstSeen.set(key, index);
+          else if (seen !== index) link(seen, index);
+        }
+      }
+    }
+  }
+  return neighbors;
+};
 
 // Merge same-owner clusters until stable — the greedy pass alone under-merges
 // long landmass chains (Siberia), which printed the same name a dozen times.
@@ -191,51 +279,83 @@ const DISPUTED_TERRITORY_CLAIMANT = {
   Z06: "Pakistan", Z07: "India", Z08: "China", Z09: "India",
 };
 
-const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameResolver) => {
-  const perOwner = new Map(); // owner -> [{c:[lng,lat], area}]
+const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameResolver, adjacency = null) => {
+  const allFeatures = regionsFC?.features ?? [];
   const countryNameByCode = new Map(); // gid0 -> modern country name (fallback labels)
+  const ownerByIndex = new Array(allFeatures.length).fill("");
+  const entryByIndex = new Array(allFeatures.length).fill(null);
 
-  for (const feature of regionsFC?.features ?? []) {
-    const props = feature.properties || {};
-    const owner = overrides?.[props.id] ?? props.owner;
+  for (let index = 0; index < allFeatures.length; index += 1) {
+    const props = allFeatures[index].properties || {};
     if (props.gid0 && props.country && !countryNameByCode.has(props.gid0)) {
       countryNameByCode.set(props.gid0, props.country);
     }
+    const owner = overrides?.[props.id] ?? props.owner;
     if (!owner) continue;
-    const best = largestRingOf(feature.geometry);
+    const best = largestRingOf(allFeatures[index].geometry);
     if (!best || best.area <= 0) continue;
-    const entry = { c: ringCentroidLngLat(best.ring), area: best.area };
-    if (!perOwner.has(owner)) perOwner.set(owner, []);
-    perOwner.get(owner).push(entry);
+    ownerByIndex[index] = owner;
+    entryByIndex[index] = { c: ringCentroidLngLat(best.ring), area: best.area };
+  }
+
+  // Union-find over same-owner ADJACENT regions: each root is one contiguous
+  // territory. Contiguity, not distance, is what separates a colony from its
+  // metropole: France's mainland and French West Africa sit close enough that
+  // distance clustering merged them into one label across the Mediterranean,
+  // while a touching chain like Siberia must stay a single label.
+  const parent = new Int32Array(allFeatures.length);
+  for (let i = 0; i < parent.length; i += 1) parent[i] = i;
+  const find = (i) => {
+    let root = i;
+    while (parent[root] !== root) root = parent[root];
+    while (parent[i] !== root) {
+      const next = parent[i];
+      parent[i] = root;
+      i = next;
+    }
+    return root;
+  };
+  if (adjacency) {
+    for (let i = 0; i < allFeatures.length; i += 1) {
+      if (!ownerByIndex[i] || !adjacency[i]) continue;
+      for (const j of adjacency[i]) {
+        if (j <= i || ownerByIndex[j] !== ownerByIndex[i]) continue;
+        const ri = find(i);
+        const rj = find(j);
+        if (ri !== rj) parent[rj] = ri;
+      }
+    }
+  }
+
+  // Fold each region into its territory's cluster (area-weighted centroid).
+  const perOwner = new Map(); // owner -> Map(root -> cluster)
+  for (let index = 0; index < allFeatures.length; index += 1) {
+    const owner = ownerByIndex[index];
+    const entry = entryByIndex[index];
+    if (!owner || !entry) continue;
+    let roots = perOwner.get(owner);
+    if (!roots) {
+      roots = new Map();
+      perOwner.set(owner, roots);
+    }
+    const root = find(index);
+    const cluster = roots.get(root);
+    if (cluster) {
+      const total = cluster.area + entry.area;
+      cluster.cx = (cluster.cx * cluster.area + entry.c[0] * entry.area) / total;
+      cluster.cy = (cluster.cy * cluster.area + entry.c[1] * entry.area) / total;
+      cluster.area = total;
+    } else {
+      roots.set(root, { cx: entry.c[0], cy: entry.c[1], area: entry.area });
+    }
   }
 
   const features = [];
   let id = 0;
-  for (const [owner, entries] of perOwner) {
-    // Greedy proximity clustering, biggest regions first so clusters seed sensibly.
-    entries.sort((a, b) => b.area - a.area);
-    const clusters = [];
-    for (const entry of entries) {
-      let best = null;
-      let bestDist = Infinity;
-      for (const cluster of clusters) {
-        const d = Math.hypot(entry.c[0] - cluster.cx, entry.c[1] - cluster.cy);
-        if (d < bestDist) {
-          bestDist = d;
-          best = cluster;
-        }
-      }
-      if (best && bestDist <= CLUSTER_JOIN_DEGREES) {
-        const total = best.area + entry.area;
-        best.cx = (best.cx * best.area + entry.c[0] * entry.area) / total;
-        best.cy = (best.cy * best.area + entry.c[1] * entry.area) / total;
-        best.area = total;
-      } else {
-        clusters.push({ cx: entry.c[0], cy: entry.c[1], area: entry.area });
-      }
-    }
-
-    mergeOwnerClusters(clusters, CLUSTER_JOIN_DEGREES);
+  for (const [owner, roots] of perOwner) {
+    // Islands still join their nearby mainland (and any adjacency near-miss
+    // heals) via the small centroid merge.
+    const clusters = mergeOwnerClusters([...roots.values()], CLUSTER_JOIN_DEGREES);
     clusters.sort((a, b) => b.area - a.area);
     const rawName = DISPUTED_TERRITORY_CLAIMANT[owner]
       ? `Disputed (${DISPUTED_TERRITORY_CLAIMANT[owner]})`
@@ -418,9 +538,37 @@ const WorldMap = ({ isGlobe = false }) => {
     return () => window.removeEventListener("i18n:updated", onUpdated);
   }, []);
 
+  // Disputed-region stripe tiles, generated the moment the style asks for one.
+  // Reactive (rather than pre-registered) so any stripe combination works and
+  // the globe/mercator remount — which rebuilds the style without its images —
+  // heals itself on the next frame.
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on) return undefined;
+    const onMissing = (event) => {
+      const colors = parseStripeImageId(event?.id);
+      if (!colors) return;
+      if (mapInstance.hasImage?.(event.id)) return;
+      try {
+        mapInstance.addImage(event.id, buildStripeImage(colors), { pixelRatio: 1 });
+      } catch (error) {
+        console.warn("Failed to build stripe tile:", error);
+      }
+    };
+    mapInstance.on("styleimagemissing", onMissing);
+    return () => mapInstance.off("styleimagemissing", onMissing);
+  }, [map]);
+
   // Owner (polity) labels for custom maps — one label per landmass-cluster per
   // owner, named by the scenario's polity registry ("Soviet Union", not "Russia").
   // Recomputed as ownership overrides poll in, so labels follow conquests.
+  // Geometry-only, so it survives ownership polls — rebuilt only when the
+  // world's region geometry itself changes.
+  const regionAdjacency = useMemo(
+    () => (customActive ? buildRegionAdjacency(customRegionData) : null),
+    [customActive, customRegionData],
+  );
+
   const ownerLabelData = useMemo(() => {
     if (!customActive) return EMPTY_FEATURE_COLLECTION;
     return buildOwnerLabelCollection(
@@ -428,10 +576,11 @@ const WorldMap = ({ isGlobe = false }) => {
       regionOwnershipOverrides,
       polityOverrides,
       (raw, owner) => translateLabel(resolveCountryDisplayName(raw, owner)),
+      regionAdjacency,
     );
     // labelEpoch: rebuild once new translations land.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customActive, customRegionData, regionOwnershipOverrides, polityOverrides, labelEpoch]);
+  }, [customActive, customRegionData, regionOwnershipOverrides, polityOverrides, regionAdjacency, labelEpoch]);
 
   // On custom maps the stock modern-country labels are replaced wholesale by the
   // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
@@ -642,6 +791,8 @@ const WorldMap = ({ isGlobe = false }) => {
         : fallbackColorFromOwner(ownerCode);
     }
 
+    const rgbForOwner = (owner) => colorMap[owner] ?? fallbackRgbFromOwner(owner);
+
     return {
       ...customRegionData,
       features: customRegionData.features.map((f) => {
@@ -657,10 +808,43 @@ const WorldMap = ({ isGlobe = false }) => {
         } else {
           fillColor = NEUTRAL_LAND_COLOR;
         }
-        return { ...f, properties: { ...props, _fillColor: fillColor } };
+        // Disputed regions carry a stripe-tile id built from the current
+        // administrator's color plus every claimant's — the layers below select
+        // on _stripes and paint with fill-pattern instead of the solid fill.
+        let stripes = null;
+        if (Array.isArray(props.claimants) && props.claimants.length > 0) {
+          const liveOwner = regionOwnershipOverrides[id] ?? props.owner ?? "";
+          const seen = new Set();
+          const stripeRgbs = [];
+          for (const name of (liveOwner ? [liveOwner, ...props.claimants] : props.claimants)) {
+            const key = String(name ?? "").trim();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            stripeRgbs.push(rgbForOwner(key));
+          }
+          if (stripeRgbs.length >= 2) stripes = stripeImageId(stripeRgbs);
+        }
+        return {
+          ...f,
+          properties: stripes
+            ? { ...props, _fillColor: fillColor, _stripes: stripes }
+            : { ...props, _fillColor: fillColor },
+        };
       }),
     };
   }, [customRegionData, colorMap, regionOwnershipOverrides]);
+
+  // GADM disputed regions also paint the stock tiles (the crisp z>6.5 layer):
+  // GID_1 -> stripe-tile id stops for the tile twin of the disputed layer.
+  const disputedTileStops = useMemo(() => {
+    const stops = [];
+    for (const f of enrichedCustomRegionData?.features ?? []) {
+      const props = f.properties || {};
+      if (!props._stripes || !String(props.id ?? "").includes(".")) continue;
+      stops.push(String(props.id), props._stripes);
+    }
+    return stops;
+  }, [enrichedCustomRegionData]);
 
   // Region id -> current owner (live overrides win). Drives the stock-tile fill,
   // and the click handler uses it to resolve era owner/unclaimed for the popup.
@@ -841,6 +1025,20 @@ const WorldMap = ({ isGlobe = false }) => {
           source-layer="regions"
           paint={stockRegionsFillPaint}
         />
+        {/* Striped fill for disputed GADM regions on the crisp tile geometry —
+            fades in with the tile fills, exactly like the color layer above. */}
+        {disputedTileStops.length > 0 && (
+          <Layer
+            id="regions-disputed"
+            type="fill"
+            source-layer="regions"
+            filter={["in", ["get", "GID_1"], ["literal", disputedTileStops.filter((_, i) => i % 2 === 0)]]}
+            paint={{
+              "fill-pattern": ["match", ["get", "GID_1"], ...disputedTileStops, disputedTileStops[1]],
+              "fill-opacity": customActive && worldKnown ? TILE_FILL_FADE : 0,
+            }}
+          />
+        )}
         <Layer
           id="regions-outline"
           type="line"
@@ -882,11 +1080,28 @@ const WorldMap = ({ isGlobe = false }) => {
               : 0,
           }}
         />
+        {/* Striped fill over disputed regions: far twin for GADM seed geometry,
+            all-zoom twin for author-drawn shapes. The stripes REPLACE the solid
+            look (they sit above it at the same opacity, administrator's color
+            first), so a contested border reads at a glance. */}
+        <Layer
+          id="custom-regions-disputed-far"
+          type="fill"
+          maxzoom={7}
+          filter={["all", GADM_GEOMETRY_FILTER, ["has", "_stripes"]]}
+          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+        />
         <Layer
           id="custom-regions-fill"
           type="fill"
           filter={CUSTOM_GEOMETRY_FILTER}
           paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": 0.72 }}
+        />
+        <Layer
+          id="custom-regions-disputed"
+          type="fill"
+          filter={["all", CUSTOM_GEOMETRY_FILTER, ["has", "_stripes"]]}
+          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? 0.72 : 0 }}
         />
         <Layer
           id="custom-regions-outline"

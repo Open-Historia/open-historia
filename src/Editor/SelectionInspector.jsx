@@ -30,7 +30,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection],
   );
-  const [form, setForm] = useState({ name: "", typeId: "", owner: "" });
+  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [] });
   // Recomputed per selection rather than memoised on the region set: the map has
   // no change event to key on, and a scan of 3,662 features to build ~230 strings
   // is cheap next to opening a panel.
@@ -41,10 +41,13 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
   );
 
   useEffect(() => {
+    // Claimants are an array, so "common value" compares serialized lists.
+    const claimantKeys = summaries.map((s) => JSON.stringify(s.claimants || []));
     setForm({
       name: summaries.length === 1 ? summaries[0].name : "",
       typeId: commonOr(summaries.map((s) => s.typeId)),
       owner: commonOr(summaries.map((s) => s.owner || "")),
+      claimants: JSON.parse(commonOr(claimantKeys, "[]") || "[]"),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.join(",")]);
@@ -127,6 +130,20 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
             width={180}
           />
         </span>
+      </Row>
+      <Row
+        label="Disputed by"
+        title="Countries that claim this region. With any claimant set, the region renders STRIPED — the current owner's colour plus each claimant's — here and in the game."
+      >
+        <TagField
+          value={form.claimants}
+          suggestions={countryNames}
+          onChange={(next) => {
+            const claimants = next.map((v) => String(v).trim()).filter(Boolean);
+            setForm((f) => ({ ...f, claimants }));
+            apply({ claimants });
+          }}
+        />
       </Row>
       {form.owner && setColorOverride && (
         <Row label="Colour" title="The colour this country is painted, here and in the game">

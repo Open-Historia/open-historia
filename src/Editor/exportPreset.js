@@ -47,6 +47,11 @@ const normalizeRegionsForGame = (regionsFC) => {
     const id = props.id != null ? String(props.id) : f.id != null ? String(f.id) : "";
     if (!id || !f.geometry) continue;
     const owner = props.owner ? String(props.owner) : "";
+    // Disputed regions ship their claimant list — the game renders these striped
+    // in the claimants' colors.
+    const claimants = Array.isArray(props.claimants)
+      ? props.claimants.map((c) => String(c).trim()).filter(Boolean)
+      : [];
     // Keep the id in properties only (MapLibre reads ["get","id"]); a non-integer
     // top-level feature id would spam console warnings across thousands of regions.
     features.push({
@@ -63,6 +68,7 @@ const normalizeRegionsForGame = (regionsFC) => {
         name: props.name ? String(props.name) : "",
         // No `country`: owner IS the country's name.
         typeId: props.typeId ? String(props.typeId) : "land",
+        ...(claimants.length ? { claimants } : {}),
       },
     });
   }
