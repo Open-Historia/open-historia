@@ -564,6 +564,20 @@ const CommunityPanel = ({ onImported }) => {
       files["scenario.json"] = JSON.stringify(bundle);
       const fileName = `${scenario.id}-scenario.zip`;
       saveBlobToDisk(await zipBundle(files), fileName);
+      // Also download the scenario's cover image as its own file so the author can drag
+      // it into the post: GitHub renders a dragged image inline, and the hub reads that
+      // as the card cover — exactly like a basemap/flag preview. (The cover still rides
+      // inside the .zip, so the scenario stays self-contained; this copy is for display.)
+      let hasCover = false;
+      const cover = bundle.assets?.cover;
+      if (cover?.mode === "embedded" && cover.data) {
+        const ext = /png/i.test(cover.contentType || "") ? "png" : /webp/i.test(cover.contentType || "") ? "webp" : "jpg";
+        try {
+          const coverBlob = await (await fetch(`data:${cover.contentType || "image/jpeg"};base64,${cover.data}`)).blob();
+          saveBlobToDisk(coverBlob, `${scenario.id}-cover.${ext}`);
+          hasCover = true;
+        } catch { /* the cover is a nicety — never block the publish over it */ }
+      }
       // When the scenario carries a basemap, tag the post with the basemap hash so
       // the community Basemaps browser (which surfaces scenario-carried basemaps) can
       // dedupe it against dedicated posts. Harmless if the scenario form has no such
@@ -573,7 +587,9 @@ const CommunityPanel = ({ onImported }) => {
         (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: ${split.kind}`)}` : "");
       window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
-        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,
+        `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
+          `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
+          `${hasCover ? " The cover image becomes the card's preview in the hub." : ""}${extra}`,
       );
     } catch (nextError) {
       setError(`Publish failed: ${nextError.message}`);
