@@ -561,9 +561,29 @@ const CommunityPanel = ({ onImported }) => {
           ? " Its custom basemap was reused from the community hub, so the file stays small."
           : "";
       }
+      // The cover rides inside the .zip as its own file (cover.<ext>) so the bundle is
+      // complete and browsable on its own. It ALSO downloads separately, because GitHub
+      // can't render an image that lives inside a .zip: the author drags that copy into
+      // the post, where the hub reads it as the card cover — like a basemap/flag preview.
+      // The base64 copy already in scenario.json is what import reads, so the .zip stays
+      // self-contained with no import-side changes needed.
+      let hasCover = false;
+      let coverBlob = null;
+      let coverDownloadName = "";
+      const cover = bundle.assets?.cover;
+      if (cover?.mode === "embedded" && cover.data) {
+        const ext = /png/i.test(cover.contentType || "") ? "png" : /webp/i.test(cover.contentType || "") ? "webp" : "jpg";
+        try {
+          coverBlob = await (await fetch(`data:${cover.contentType || "image/jpeg"};base64,${cover.data}`)).blob();
+          files[`cover.${ext}`] = new Uint8Array(await coverBlob.arrayBuffer());
+          coverDownloadName = `${scenario.id}-cover.${ext}`;
+          hasCover = true;
+        } catch { /* the cover is a nicety — never block the publish over it */ }
+      }
       files["scenario.json"] = JSON.stringify(bundle);
       const fileName = `${scenario.id}-scenario.zip`;
       saveBlobToDisk(await zipBundle(files), fileName);
+      if (coverBlob && coverDownloadName) saveBlobToDisk(coverBlob, coverDownloadName);
       // When the scenario carries a basemap, tag the post with the basemap hash so
       // the community Basemaps browser (which surfaces scenario-carried basemaps) can
       // dedupe it against dedicated posts. Harmless if the scenario form has no such
@@ -573,7 +593,9 @@ const CommunityPanel = ({ onImported }) => {
         (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: ${split.kind}`)}` : "");
       window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
-        `"${fileName}" was downloaded. On the GitHub page that just opened, drag that file into the Description box, then submit.${extra}`,
+        `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
+          `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
+          `${hasCover ? " The cover image becomes the card's preview in the hub." : ""}${extra}`,
       );
     } catch (nextError) {
       setError(`Publish failed: ${nextError.message}`);

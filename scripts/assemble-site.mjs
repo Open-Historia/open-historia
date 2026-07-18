@@ -25,6 +25,19 @@ const ROOT_PAGES = [
   "guides.css", "robots.txt", "sitemap.xml",
 ];
 
+// Image assets referenced with absolute "/…" paths by BOTH the root guide pages and
+// the web game (logo, startup images, PWA icons). The game lives under /play/, so an
+// absolute "/logo.png" resolves against the ORIGIN, not the /play/ base — without a
+// copy at the site root these 404 on openhistoria.com (the game keeps its own copy at
+// /play/ regardless). Skipped silently if one is renamed away; a missing image is a
+// cosmetic 404, not a crawler-visible broken page, so it must not fail the build.
+const ROOT_ASSETS = [
+  "logo.png",
+  "loading_screen.jpg", "loading_screen_2.jpg", "loading_screen_3.jpg",
+  "loading_screen_4.jpg", "loading_screen_5.png",
+  "icon-192.png", "icon-512.png", "screenshot.png",
+];
+
 if (!existsSync(path.join(gameDir, "index.html"))) {
   console.error("dist-web/ is missing — build the game first: vite build --mode web --base /play/ --outDir dist-web");
   process.exit(1);
@@ -43,4 +56,9 @@ cpSync(gameDir, path.join(outDir, "play"), { recursive: true }); // game at /pla
 for (const name of ROOT_PAGES) {                                 // guides + robots/sitemap at /
   cpSync(path.join(gameDir, name), path.join(outDir, name), { recursive: true });
 }
-console.log(`Assembled dist-site/: landing page at /, game at /play/, ${ROOT_PAGES.length} root page(s) at /.`);
+let rootAssets = 0;
+for (const name of ROOT_ASSETS) {                                // logo + startup images at /
+  const src = path.join(gameDir, name);
+  if (existsSync(src)) { cpSync(src, path.join(outDir, name)); rootAssets += 1; }
+}
+console.log(`Assembled dist-site/: landing page at /, game at /play/, ${ROOT_PAGES.length} root page(s) + ${rootAssets} asset(s) at /.`);

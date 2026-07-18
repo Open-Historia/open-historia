@@ -1223,6 +1223,12 @@ const DateWidget = ({
     const [fallbackWarning, setFallbackWarning] = useState("");
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
+    // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
+    // stale read from a genuinely newer one — and never revert a just-completed jump.
+    const gameStampRef = React.useRef({ round: 0, date: "" });
+    React.useEffect(() => {
+        gameStampRef.current = { round: Number(gameData?.round) || 0, date: gameData?.gameDate || "" };
+    }, [gameData]);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
@@ -1279,6 +1285,18 @@ const DateWidget = ({
                 ]);
 
                 if (cancelled) {
+                    return;
+                }
+
+                // Never let this background poll overwrite a fresher turn with an older
+                // read. A jump advances the round (and date); if the store read comes
+                // back behind what's already on screen — a write still settling, an
+                // eventually-consistent read, a poll that fired mid-jump — applying it
+                // would revert the date and wipe the just-generated events. Skip it.
+                const local = gameStampRef.current;
+                const polledRound = Number(game?.round) || 0;
+                const polledDate = game?.gameDate || "";
+                if (polledRound < local.round || (polledRound === local.round && polledDate < local.date)) {
                     return;
                 }
 
