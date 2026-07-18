@@ -583,6 +583,7 @@ const OlMap = ({
       owner: f.get("owner") || null,
       typeId: f.get("typeId") || "land",
       country: f.get("country") || "",
+      claimants: f.get("claimants") || [],
     });
     onReady?.({
       map,
@@ -618,6 +619,7 @@ const OlMap = ({
           if ("owner" in patch) { before.owner = f.get("owner") || null; f.set("owner", patch.owner || null); }
           if ("typeId" in patch) { before.typeId = f.get("typeId"); f.set("typeId", patch.typeId); }
           if ("name" in patch) { before.name = f.get("name"); f.set("name", patch.name); }
+          if ("claimants" in patch) { before.claimants = f.get("claimants") || null; f.set("claimants", patch.claimants?.length ? patch.claimants : null); }
           undos.push([f, before]);
         }
         regionLayer.changed();
@@ -631,6 +633,7 @@ const OlMap = ({
               if ("owner" in after) f.set("owner", after.owner || null);
               if ("typeId" in after) f.set("typeId", after.typeId);
               if ("name" in after) f.set("name", after.name);
+              if ("claimants" in after) f.set("claimants", after.claimants?.length ? after.claimants : null);
             }),
           });
         }
@@ -698,6 +701,7 @@ const OlMap = ({
             name: (f.get("name") || "Region") + " copy",
             gid0: f.get("gid0") || "",
             country: f.get("country") || "",
+            claimants: f.get("claimants") || null,
           });
           regionSource.addFeature(nf);
           createdFeats.push(nf);
