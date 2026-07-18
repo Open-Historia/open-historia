@@ -41,6 +41,37 @@ const codeToColor = (code) => {
   return rgb;
 };
 
+// Striped CanvasPattern for disputed regions: diagonal bands of the owner's
+// colour plus each claimant's. band = (x+y) mod period tiles seamlessly.
+// Cached per colour-list + alpha (few distinct combinations exist).
+const stripePatternCache = new Map();
+const makeStripePattern = (rgbList, alpha) => {
+  const key = rgbList.map((rgb) => rgb.join("_")).join("-") + "|" + alpha;
+  const hit = stripePatternCache.get(key);
+  if (hit) return hit;
+  const band = 7;
+  const size = rgbList.length * band;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const image = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const rgb = rgbList[Math.floor(((x + y) % size) / band)];
+      const p = (y * size + x) * 4;
+      image.data[p] = rgb[0];
+      image.data[p + 1] = rgb[1];
+      image.data[p + 2] = rgb[2];
+      image.data[p + 3] = Math.round(alpha * 255);
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  const pattern = ctx.createPattern(canvas, "repeat");
+  stripePatternCache.set(key, pattern);
+  return pattern;
+};
+
 export const FALLBACK_TYPE = {
   id: "land",
   opacity: 0.55,
@@ -93,17 +124,36 @@ export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZo
       bandKey = `${band.minZoom ?? 0}-${band.maxZoom ?? 24}`;
     }
 
-    const key = `${typeId}|${owner || "-"}|${selected ? 1 : 0}|${bandKey}`;
+    // A disputed region (any claimants) is filled with stripes, so its style
+    // must not share a cache slot with the owner's solid fill.
+    const claimants = feature.get("claimants");
+    const claimantKey = Array.isArray(claimants) && claimants.length ? claimants.join(",") : "";
+    const key = `${typeId}|${owner || "-"}|${selected ? 1 : 0}|${bandKey}|${claimantKey}`;
     const hit = cache.get(key);
     if (hit) return hit;
 
+    const ownerRgb = (name) => asRgb(palette[name] || codeToColor(name));
     const fillRgb = type.overrideColor
       ? asRgb(type.overrideColor)
       : owner
-        ? asRgb(palette[owner] || codeToColor(owner))
+        ? ownerRgb(owner)
         : NEUTRAL;
     const baseAlpha = owner ? (band.opacity ?? type.opacity) : type.unownedOpacity;
     const alpha = selected ? Math.min(1, baseAlpha + 0.22) : baseAlpha;
+
+    // Stripe colours: administrator first, then each claimant, deduped.
+    let fillColor = rgba(fillRgb, alpha);
+    if (claimantKey) {
+      const seen = new Set();
+      const stripeRgbs = [];
+      for (const name of (owner ? [owner, ...claimants] : claimants)) {
+        const trimmed = String(name ?? "").trim();
+        if (!trimmed || seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        stripeRgbs.push(ownerRgb(trimmed));
+      }
+      if (stripeRgbs.length >= 2) fillColor = makeStripePattern(stripeRgbs, Math.max(alpha, 0.5));
+    }
 
     const strokeRgb = selected ? ACCENT_RGB : asRgb(type.strokeColor);
     const strokeWidth = selected
@@ -112,7 +162,7 @@ export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZo
 
     const style = new Style({
       zIndex: selected ? 999 : type.zIndex ?? 1,
-      fill: new Fill({ color: rgba(fillRgb, alpha) }),
+      fill: new Fill({ color: fillColor }),
       stroke: new Stroke({
         color: rgba(strokeRgb, type.strokeOpacity ?? 1),
         width: strokeWidth,
