@@ -174,6 +174,22 @@ export const readStoredImageContentType = (value) =>
     ? value.trim().toLowerCase()
     : null;
 
+// Hub-import provenance (server/libraryStore.js normalizeHubOrigin twin): the
+// post's issue number + the exact bundle URL imported. A post whose current
+// bundleUrl differs from this has an update (attachment URLs are immutable —
+// a new upload gets a new URL).
+export const normalizeHubOrigin = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+  const postId = Number(raw.postId);
+  const bundleUrl = String(raw.bundleUrl ?? "").trim();
+  if (!Number.isFinite(postId) || postId <= 0 || !bundleUrl) return null;
+  return {
+    bundleUrl,
+    postId,
+    syncedAt: String(raw.syncedAt ?? "").trim() || nowIso(),
+  };
+};
+
 export const readScenarioMeta = (scenarioId, raw = {}) => {
   const name = String(raw?.name ?? "").trim() || DEFAULT_SCENARIO_META.name;
   const subtitle = String(raw?.subtitle ?? "").trim() || DEFAULT_SCENARIO_META.subtitle;
@@ -187,6 +203,7 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     eyebrow: String(raw?.eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
+    hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     id: scenarioId,
     name,
     subtitle,
