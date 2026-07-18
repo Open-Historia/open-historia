@@ -995,13 +995,24 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
         for (const feature of custom?.features ?? []) {
           const props = feature?.properties ?? {};
           const id = props.id != null ? String(props.id) : "";
-          if (!id || seen.has(id)) continue;
+          if (!id) continue;
+          const name = props.name ? String(props.name) : "";
+          const existing = seen.get(id);
+          if (existing) {
+            // The scenario's own name for a stock region WINS. A world that
+            // renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about
+            // South Konisburg everywhere — the AI's region transfers can only
+            // resolve against the name the world actually uses.
+            if (name) existing.name = name;
+            if (props.country) existing.country = String(props.country);
+            continue;
+          }
           const countryCode = props.gid0 ? String(props.gid0) : "";
           seen.set(id, {
             country: props.country ? String(props.country) : "",
             countryCode,
             id,
-            name: props.name ? String(props.name) : id,
+            name: name || id,
           });
         }
       } catch {
