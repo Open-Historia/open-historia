@@ -331,6 +331,18 @@ export const importScenarioBundle = async (bundle) => {
   return details;
 };
 
+// Replace an existing scenario's content with a fresh bundle — the hub's
+// "Update" button. Keeps the local scenario id, so games that reference it
+// keep working.
+export const updateScenarioFromBundle = async (scenarioId, bundle) => {
+  const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/import`, {
+    body: bundle,
+    method: "PUT",
+  });
+  await refreshLibraryCatalog({ force: true });
+  return details;
+};
+
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 

@@ -15,6 +15,7 @@ import {
   ensureLibraryCatalog,
   exportScenarioBundle,
   importScenarioBundle,
+  updateScenarioFromBundle,
   loadGameDetails,
   loadScenarioDetails,
   refreshLibraryCatalog,
@@ -338,7 +339,7 @@ const PromptSectionEditor = ({
   );
 };
 
-const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, scenario, selected }) => {
+const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable }) => {
   const isBuiltIn = scenario.id === "default";
   const assetBadges = Object.entries(scenarioBadgeLabels)
     .filter(([key]) => scenario.assetStatus?.[key])
@@ -466,18 +467,23 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, scenario, selected })
           </div>
           <AssetBadgeRow badges={assetBadges} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
+            {/* A hub-imported, unmodified scenario whose post has a newer bundle
+                swaps its primary action for Update; everyone else starts games. */}
             <button
-              onClick={() => onPlay(scenario)}
+              onClick={() => (updateAvailable ? onUpdate(scenario) : onPlay(scenario))}
               style={{
                 ...actionButtonStyle,
-                background: `${scenario.accentColor}cc`,
-                borderColor: `${scenario.accentColor}dd`,
+                background: updateAvailable ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
+                borderColor: updateAvailable ? "#27a663dd" : `${scenario.accentColor}dd`,
                 color: "#fff",
                 flex: 1,
               }}
+              title={updateAvailable
+                ? "A newer version of this scenario is on the community hub. Updating replaces this copy (existing games keep working)."
+                : undefined}
               type="button"
             >
-              New Game
+              {updateAvailable ? "⬆ Update" : "New Game"}
             </button>
             <button onClick={() => onEdit(scenario.id)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
               Edit
@@ -1174,6 +1180,57 @@ const LibraryTopBar = () => {
         }
       })
       .catch(() => setCountryOptions([]));
+  };
+
+  // Hub update detection: scenarios imported straight from the community tab
+  // (and not modified since) carry hubOrigin. When the Scenarios tab shows any,
+  // fetch the hub posts (lazily — same chunk as the Community tab, and the
+  // module's 5-minute cache dedupes) and compare each post's CURRENT bundle
+  // file against the one imported. A silent failure just means no Update
+  // buttons — offline behaves exactly as before.
+  const [hubPostById, setHubPostById] = useState(null);
+  useEffect(() => {
+    if (activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
+    let cancelled = false;
+    import("./communityHub.jsx")
+      .then(({ fetchHubPosts }) => fetchHubPosts())
+      .then((posts) => {
+        if (cancelled) return;
+        const byId = {};
+        for (const post of posts) byId[post.id] = post;
+        setHubPostById(byId);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, scenarios]);
+
+  const scenarioUpdateAvailable = (scenario) => Boolean(
+    scenario.hubOrigin &&
+    hubPostById?.[scenario.hubOrigin.postId]?.bundleUrl &&
+    hubPostById[scenario.hubOrigin.postId].bundleUrl !== scenario.hubOrigin.bundleUrl,
+  );
+
+  // Pull the post's current bundle and replace this scenario in place. The
+  // scenario keeps its local id, so existing games keep pointing at it; the
+  // fresh hubOrigin stamp flips the card back to New Game on refresh.
+  const handleScenarioUpdate = async (scenario) => {
+    const post = scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null;
+    if (!post?.bundleUrl) return;
+    setEditorError(null);
+    setIsBusy(true);
+
+    try {
+      const { downloadHubBundle } = await import("./communityHub.jsx");
+      const bundle = await downloadHubBundle(post.bundleUrl);
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
+      await updateScenarioFromBundle(scenario.id, bundle);
+    } catch (nextError) {
+      setEditorError(`Update failed: ${nextError.message}`);
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleScenarioClone = async (scenario) => {
@@ -2069,8 +2126,10 @@ const LibraryTopBar = () => {
                       onEdit={openScenarioEditor}
                       onPlay={handleScenarioPlay}
                       onSelect={selectScenario}
+                      onUpdate={handleScenarioUpdate}
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
+                      updateAvailable={scenarioUpdateAvailable(scenario)}
                     />
                   ))}
             </div>

@@ -555,6 +555,23 @@ const saveGameManifest = (manifest) => {
   });
 };
 
+// Provenance for scenarios imported straight from the community hub: which post
+// (issue number), which exact bundle file, and when. The bundle URL doubles as
+// the update signal — GitHub mints a new attachment URL for every re-upload, so
+// a post whose current bundleUrl differs from the recorded one has an update
+// (the hub-cache route relies on the same immutability).
+const normalizeHubOrigin = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+  const postId = Number(raw.postId);
+  const bundleUrl = String(raw.bundleUrl ?? "").trim();
+  if (!Number.isFinite(postId) || postId <= 0 || !bundleUrl) return null;
+  return {
+    bundleUrl,
+    postId,
+    syncedAt: String(raw.syncedAt ?? "").trim() || new Date().toISOString(),
+  };
+};
+
 const readScenarioMeta = (scenarioId) => {
   const raw = readJsonFile(getScenarioMetaPath(scenarioId), {});
   const name = String(raw?.name ?? "").trim() || DEFAULT_SCENARIO_META.name;
@@ -573,6 +590,7 @@ const readScenarioMeta = (scenarioId) => {
     eyebrow: String(raw?.eyebrow ?? "").trim() || DEFAULT_SCENARIO_META.eyebrow,
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
+    hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     id: scenarioId,
     name,
     subtitle,
@@ -595,6 +613,14 @@ const writeScenarioMeta = (scenarioId, updates) => {
     updates?.countryNameOverrides && typeof updates.countryNameOverrides === "object"
     ? updates.countryNameOverrides
     : current.countryNameOverrides,
+    // Hub provenance survives ONLY when a write explicitly carries it (the
+    // import/update paths stamp it last). Every other meta write is a local
+    // modification — a rename, an editor apply, a cover change — which turns
+    // the copy into a fork, and a fork must stop offering hub updates that
+    // would overwrite the player's work.
+    hubOrigin: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubOrigin")
+      ? normalizeHubOrigin(updates.hubOrigin)
+      : null,
     id: scenarioId,
     updatedAt: new Date().toISOString(),
   };
@@ -2416,6 +2442,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
+  // Provenance the community hub attaches to a direct import (bundle.hubOrigin
+  // rides alongside the schema fields; absent on file imports). Stamped LAST so
+  // the import's own meta writes don't clear it.
+  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
 
   const created = createScenario({
     accentColor: scenario.accentColor,
@@ -2448,43 +2478,103 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     if (!(assetKey in UPLOADABLE_SCENARIO_ASSET_FILES)) {
       continue;
     }
-
-    if (assetKey === COVER_IMAGE_ASSET_KEY) {
-      if (assetValue?.mode === "embedded") {
-        const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
-        fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
-        writeScenarioMeta(scenarioId, {
-          coverImageContentType: normalizeImageContentType(assetValue.contentType),
-        });
-      } else {
-        removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
-        writeScenarioMeta(scenarioId, { coverImageContentType: null });
-      }
-      continue;
-    }
-
-    if (assetValue?.mode === "embedded") {
-      if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-        writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), assetValue.data ?? {});
-      } else {
-        const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
-        fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
-      }
-      continue;
-    }
-
-
-    if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
-      removeFileIfPresent(getScenarioJsonPath(scenarioId, assetKey));
-    }
-    removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
+    applyScenarioBundleAsset(scenarioId, assetKey, assetValue);
   }
 
-  writeScenarioMeta(scenarioId, {});
+  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
 
   if (setSelected) {
     setSelectedScenario(scenarioId);
   }
+
+  return getScenarioDetails(scenarioId);
+};
+
+// Write one bundle asset slot onto a scenario: embedded content lands on disk,
+// anything else clears the slot. Shared by import (which visits the keys the
+// bundle carries) and update-in-place (which visits EVERY key, so an asset the
+// new version dropped doesn't linger from the old one).
+const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
+  if (assetKey === COVER_IMAGE_ASSET_KEY) {
+    if (assetValue?.mode === "embedded") {
+      const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
+      fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
+      writeScenarioMeta(scenarioId, {
+        coverImageContentType: normalizeImageContentType(assetValue.contentType),
+      });
+    } else {
+      removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
+      writeScenarioMeta(scenarioId, { coverImageContentType: null });
+    }
+    return;
+  }
+
+  if (assetValue?.mode === "embedded") {
+    if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+      writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), assetValue.data ?? {});
+    } else {
+      const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
+      fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
+    }
+    return;
+  }
+
+  if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+    removeFileIfPresent(getScenarioJsonPath(scenarioId, assetKey));
+  }
+  removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
+};
+
+// The "Update" path for a hub-imported scenario: replace an EXISTING scenario's
+// content with a fresh bundle. Keeps the local id (games reference scenarios by
+// id, so their link survives) and createdAt; the name, description, world, and
+// assets all come from the new bundle, and every uploadable asset the bundle
+// doesn't carry is cleared. The new hubOrigin is stamped last, so the card's
+// Update button reverts to New Game once the catalog refreshes.
+const updateScenarioFromBundle = (scenarioId, bundle) => {
+  ensureScenarioStore();
+
+  if (!bundle || typeof bundle !== "object") {
+    throw new Error("Scenario bundle must be a JSON object.");
+  }
+  if (!ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) {
+    throw new Error("Unsupported scenario bundle schema.");
+  }
+  if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+
+  const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
+  const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
+  const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
+  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
+
+  const metaPatch = {};
+  for (const key of ["accentColor", "name", "subtitle", "description", "eyebrow", "heroTitle", "heroSubtitle"]) {
+    if (scenario[key] != null) metaPatch[key] = scenario[key];
+  }
+  if (scenario.countryNameOverrides && typeof scenario.countryNameOverrides === "object") {
+    metaPatch.countryNameOverrides = scenario.countryNameOverrides;
+  }
+  writeScenarioMeta(scenarioId, metaPatch);
+
+  updateScenario(scenarioId, {
+    game: data.game ?? {},
+    prompts: data.prompts ?? {},
+    storage: {
+      actions: data.actions ?? [],
+      advisor: data.advisor ?? [],
+      chat: data.chat ?? [],
+      events: data.events ?? [],
+    },
+    world: data.world ?? {},
+  });
+
+  for (const assetKey of Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)) {
+    applyScenarioBundleAsset(scenarioId, assetKey, assets[assetKey]);
+  }
+
+  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
 
   return getScenarioDetails(scenarioId);
 };
@@ -2505,6 +2595,7 @@ export {
   getScenarioDetails,
   getSelectedScenarioSummary,
   importScenarioBundle,
+  updateScenarioFromBundle,
   readRuntimeJsonAsset,
   removeGameAsset,
   removeScenarioAsset,

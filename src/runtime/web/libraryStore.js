@@ -19,7 +19,7 @@ import {
   DEFAULT_SCENARIO_META, DEFAULT_GAME_META, canonicalizeWorldCountryRefs, canonicalizeGameCountry, canonicalizeColorKeys,
   readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
-  normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY,
+  normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
 } from "./models.js";
 // Imported, not mirrored: server/ownerMigration.js is pure ESM with no node
 // imports, so Vite bundles it into the web build. One implementation of the
@@ -89,6 +89,12 @@ const writeScenarioMeta = (record, updates = {}) => {
         : current.coverImageContentType,
     countryNameOverrides: updates.countryNameOverrides && typeof updates.countryNameOverrides === "object"
       ? updates.countryNameOverrides : current.countryNameOverrides,
+    // Hub provenance survives ONLY when a write explicitly carries it — any
+    // other meta write is a local modification, which turns the copy into a
+    // fork that must stop offering hub updates (server twin has the same rule).
+    hubOrigin: Object.prototype.hasOwnProperty.call(updates, "hubOrigin")
+      ? normalizeHubOrigin(updates.hubOrigin)
+      : null,
     id: record.id,
     updatedAt: nowIso(),
   };
@@ -857,6 +863,9 @@ const importScenarioBundle = async (bundle) => {
   // Accept every schema we can read, not just the one we write — a v1 bundle
   // imports fine, arriving unmarked and named by the migration on first read.
   if (!bundle || typeof bundle !== "object" || !ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  // Hub provenance the community tab attaches to a direct import — stamped
+  // LAST so the import's own meta writes don't clear it.
+  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
   const created = await createScenario({ ...(bundle.scenario ?? {}), setActive: false });
   const newId = created.scenario.id;
   // Server coerces missing bundle data to empty ({} / []) which then OVERWRITES
@@ -892,8 +901,70 @@ const importScenarioBundle = async (bundle) => {
       await removeScenarioAsset(newId, key);
     }
   }
+  if (hubOrigin) {
+    const record = await getScenario(newId);
+    writeScenarioMeta(record, { hubOrigin });
+    await putScenario(record);
+  }
   await setSelectedScenario(newId);
   return getScenarioDetails(newId);
+};
+
+// The "Update" path for a hub-imported scenario: replace an EXISTING scenario's
+// content with a fresh bundle, keeping the local id (games reference scenarios
+// by id) and createdAt. Every uploadable asset the new bundle doesn't carry is
+// cleared so a dropped basemap or cover doesn't linger; the new hubOrigin is
+// stamped last (server twin: updateScenarioFromBundle).
+const updateScenarioFromBundle = async (scenarioId, bundle) => {
+  if (!bundle || typeof bundle !== "object" || !ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  const existing = await getScenario(scenarioId);
+  if (!existing) throw new Error(`Scenario not found: ${scenarioId}`);
+  const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
+  const data = bundle.data ?? {};
+  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
+
+  const metaPatch = {};
+  for (const key of ["accentColor", "name", "subtitle", "description", "eyebrow", "heroTitle", "heroSubtitle"]) {
+    if (scenario[key] != null) metaPatch[key] = scenario[key];
+  }
+  if (scenario.countryNameOverrides && typeof scenario.countryNameOverrides === "object") {
+    metaPatch.countryNameOverrides = scenario.countryNameOverrides;
+  }
+  writeScenarioMeta(existing, metaPatch);
+  await putScenario(existing);
+
+  await updateScenario(scenarioId, {
+    game: data.game ?? {}, prompts: data.prompts ?? {}, world: data.world ?? {},
+    storage: { actions: data.actions ?? [], advisor: data.advisor ?? [], chat: data.chat ?? [], events: data.events ?? [] },
+  });
+
+  for (const key of UPLOADABLE_SCENARIO_ASSET_KEYS) {
+    const descriptor = (bundle.assets ?? {})[key];
+    const embedded = descriptor?.mode === "embedded";
+    if (key === COVER_IMAGE_ASSET_KEY) {
+      if (embedded && descriptor.data) await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
+      else await removeScenarioAsset(scenarioId, key);
+    } else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
+      // JSON descriptor assets carry the object itself, not base64 (see the
+      // matching branch in importScenarioBundle above).
+      const r = await getScenario(scenarioId);
+      if (embedded && descriptor.data !== undefined) r[key] = descriptor.data;
+      else delete r[key];
+      writeScenarioMeta(r, {});
+      await putScenario(r);
+    } else if (embedded && typeof descriptor.data === "string") {
+      await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
+    } else {
+      await removeScenarioAsset(scenarioId, key);
+    }
+  }
+
+  if (hubOrigin) {
+    const record = await getScenario(scenarioId);
+    writeScenarioMeta(record, { hubOrigin });
+    await putScenario(record);
+  }
+  return getScenarioDetails(scenarioId);
 };
 
 // --- pmtiles override (runtime binary) ------------------------------------
@@ -957,6 +1028,7 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
       if (method === "DELETE") return jsonResponse(await deleteScenario(id));
       return null;
     }
+    if (sub === "import" && method === "PUT") return jsonResponse(await updateScenarioFromBundle(id, body ?? {}));
     if (sub === "export" && method === "GET") return jsonResponse(await exportScenarioBundle(id, query?.get("mode") || "light"));
     if (sub === "assets" && segments[2]) {
       const key = decodeURIComponent(segments[2]);
