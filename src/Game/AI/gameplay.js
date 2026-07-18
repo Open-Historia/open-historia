@@ -662,12 +662,31 @@ const resolveRegionTransfers = async (containers, world) => {
     if (bucket) bucket.push(region);
     else byName.set(key, [region]);
   }
-  const owners = normalizeWorldState(world).regionOwnershipOverrides;
-  // Owner comparisons are case- and diacritic-insensitive: the model writes
-  // "poland" or "German reich" for polities the world stores capitalized.
-  const ownerKeyOf = (regionId) => regionKey(owners[regionId] ?? "");
+  const worldState = normalizeWorldState(world);
+  const owners = worldState.regionOwnershipOverrides;
+  // Owner comparisons are case- and diacritic-insensitive, and the model may
+  // name a polity by its era DISPLAY name or an alias ("Second Polish
+  // Republic") while ownership is keyed by the owner token ("Poland") —
+  // canonicalize through the polity registry before comparing.
+  const ownerAlias = new Map();
+  for (const [token, entry] of Object.entries(worldState.polityOverrides ?? {})) {
+    const canonical = regionKey(token);
+    if (!canonical) continue;
+    ownerAlias.set(canonical, canonical);
+    const displayName = regionKey(entry?.name);
+    if (displayName) ownerAlias.set(displayName, canonical);
+    for (const alias of entry?.aliases ?? []) {
+      const aliasKey = regionKey(alias);
+      if (aliasKey) ownerAlias.set(aliasKey, canonical);
+    }
+  }
+  const canonicalOwnerKey = (token) => {
+    const key = regionKey(token);
+    return ownerAlias.get(key) ?? key;
+  };
+  const ownerKeyOf = (regionId) => canonicalOwnerKey(owners[regionId] ?? "");
   const regionsOwnedBy = (ownerToken) => {
-    const key = regionKey(ownerToken);
+    const key = canonicalOwnerKey(ownerToken);
     if (!key) return [];
     return catalog.filter((region) => ownerKeyOf(region.id) === key);
   };
@@ -675,7 +694,7 @@ const resolveRegionTransfers = async (containers, world) => {
   const resolve = (transfer) => {
     // A model that did emit a real id keeps working.
     if (byId.has(normalizeString(transfer?.regionId))) return normalizeString(transfer.regionId);
-    const fromKey = regionKey(transfer?.fromCode);
+    const fromKey = canonicalOwnerKey(transfer?.fromCode);
     // Otherwise the name may be in either field: the prompt puts it in regionId,
     // the schema also offers regionName.
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
