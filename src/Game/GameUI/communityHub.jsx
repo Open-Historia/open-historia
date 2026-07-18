@@ -561,23 +561,29 @@ const CommunityPanel = ({ onImported }) => {
           ? " Its custom basemap was reused from the community hub, so the file stays small."
           : "";
       }
-      files["scenario.json"] = JSON.stringify(bundle);
-      const fileName = `${scenario.id}-scenario.zip`;
-      saveBlobToDisk(await zipBundle(files), fileName);
-      // Also download the scenario's cover image as its own file so the author can drag
-      // it into the post: GitHub renders a dragged image inline, and the hub reads that
-      // as the card cover — exactly like a basemap/flag preview. (The cover still rides
-      // inside the .zip, so the scenario stays self-contained; this copy is for display.)
+      // The cover rides inside the .zip as its own file (cover.<ext>) so the bundle is
+      // complete and browsable on its own. It ALSO downloads separately, because GitHub
+      // can't render an image that lives inside a .zip: the author drags that copy into
+      // the post, where the hub reads it as the card cover — like a basemap/flag preview.
+      // The base64 copy already in scenario.json is what import reads, so the .zip stays
+      // self-contained with no import-side changes needed.
       let hasCover = false;
+      let coverBlob = null;
+      let coverDownloadName = "";
       const cover = bundle.assets?.cover;
       if (cover?.mode === "embedded" && cover.data) {
         const ext = /png/i.test(cover.contentType || "") ? "png" : /webp/i.test(cover.contentType || "") ? "webp" : "jpg";
         try {
-          const coverBlob = await (await fetch(`data:${cover.contentType || "image/jpeg"};base64,${cover.data}`)).blob();
-          saveBlobToDisk(coverBlob, `${scenario.id}-cover.${ext}`);
+          coverBlob = await (await fetch(`data:${cover.contentType || "image/jpeg"};base64,${cover.data}`)).blob();
+          files[`cover.${ext}`] = new Uint8Array(await coverBlob.arrayBuffer());
+          coverDownloadName = `${scenario.id}-cover.${ext}`;
           hasCover = true;
         } catch { /* the cover is a nicety — never block the publish over it */ }
       }
+      files["scenario.json"] = JSON.stringify(bundle);
+      const fileName = `${scenario.id}-scenario.zip`;
+      saveBlobToDisk(await zipBundle(files), fileName);
+      if (coverBlob && coverDownloadName) saveBlobToDisk(coverBlob, coverDownloadName);
       // When the scenario carries a basemap, tag the post with the basemap hash so
       // the community Basemaps browser (which surfaces scenario-carried basemaps) can
       // dedupe it against dedicated posts. Harmless if the scenario form has no such
