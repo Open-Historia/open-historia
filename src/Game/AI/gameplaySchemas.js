@@ -85,7 +85,10 @@ const regionTransferSchema = {
   type: "object",
   description: "A transfer of one map region to a new polity owner.",
   properties: {
-    regionId: textSchema("Exact map region identifier."),
+    regionId: textSchema(
+      "Exact map region identifier when known; otherwise the region's plain name "
+      + "(the engine resolves names to ids).",
+    ),
     regionName: textSchema("Human-readable region name, when known."),
     fromCode: textSchema("Previous owner polity code, when known."),
     toCode: textSchema("New owner polity code."),
@@ -232,7 +235,10 @@ const impactsSchema = {
     },
     regionTransfers: {
       type: "array",
-      description: "Map ownership changes.",
+      description:
+        "Map ownership changes. REQUIRED whenever the event text says territory was "
+        + "captured, occupied, annexed, ceded, liberated, or otherwise changed hands - "
+        + "one entry per affected region, or the map will not match the story.",
       items: regionTransferSchema,
     },
     unitOps: {
