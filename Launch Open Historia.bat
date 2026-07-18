@@ -54,6 +54,19 @@ if errorlevel 1 (
 )
 
 for /f "delims=" %%V in ('node --version 2^>nul') do set "NODEVER=%%V"
+REM Require Node 18+. The map-fetch/build scripts are ES modules that ancient Node
+REM (e.g. v6) can't parse, so an old version would otherwise fail later with a
+REM cryptic "Unexpected token import". Parse the major number out of "vXX.Y.Z".
+for /f "tokens=1 delims=." %%M in ("!NODEVER!") do set "NODEMAJOR=%%M"
+set "NODEMAJOR=!NODEMAJOR:v=!"
+set /a NODEMAJORNUM=NODEMAJOR 2>nul
+if !NODEMAJORNUM! LSS 18 (
+    echo [ERROR] Node.js !NODEVER! is too old - Open Historia needs Node 18 or newer.
+    echo Update Node.js ^(LTS^) from https://nodejs.org/ then run this launcher again.
+    echo.
+    pause
+    exit /b 1
+)
 echo [OK] Node.js !NODEVER! detected.
 echo.
 
