@@ -67,7 +67,19 @@ if ! command -v node >/dev/null 2>&1; then
     fi
 fi
 
-echo "[OK] Node.js $(node --version 2>/dev/null) detected."
+NODEVER="$(node --version 2>/dev/null)"
+# Require Node 18+. The map-fetch/build scripts are ES modules that ancient Node
+# (e.g. v6) can't parse, so an old version would otherwise fail later with a cryptic
+# "Unexpected token import". Parse the major number out of "vXX.Y.Z".
+NODEMAJOR="$(printf '%s' "$NODEVER" | sed -E 's/^v?([0-9]+).*/\1/')"
+case "$NODEMAJOR" in ''|*[!0-9]*) NODEMAJOR=0 ;; esac
+if [ "$NODEMAJOR" -lt 18 ]; then
+    echo "[ERROR] Node.js $NODEVER is too old - Open Historia needs Node 18 or newer."
+    echo "Update Node.js (LTS) from https://nodejs.org/ then run this launcher again."
+    echo ""
+    exit 1
+fi
+echo "[OK] Node.js $NODEVER detected."
 echo ""
 
 # ---- 2. Ensure world map data ----------------------------

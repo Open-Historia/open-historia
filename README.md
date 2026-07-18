@@ -13,6 +13,11 @@
     <img src="https://img.shields.io/badge/discord-join-5865F2.svg?style=flat-square&logo=discord&logoColor=white"
       alt="Discord" />
   </a>
+  <!-- Reddit -->
+  <a href="https://www.reddit.com/r/OpenHistoria">
+    <img src="https://img.shields.io/badge/reddit-r%2FOpenHistoria-FF4500.svg?style=flat-square&logo=reddit&logoColor=white"
+      alt="Reddit" />
+  </a>
   <!-- License -->
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square"
