@@ -343,12 +343,39 @@ export const JUMP_FORWARD_SCHEMA = {
       description: "Whether planned player actions were resolved by this jump.",
     },
     catalyst: nullableCatalystSchema,
+    diplomaticOutreach: {
+      type: "array",
+      description:
+        "Polities reaching out to the player ON THEIR OWN initiative - treaty "
+        + "feelers, trade proposals, warnings, summit invitations - not tied to "
+        + "any single event. One-on-one or group. Empty when nobody would "
+        + "plausibly reach out this period.",
+      items: createdChatSchema,
+    },
   },
   required: ["events", "stopDate", "summary", "clearActions"],
   additionalProperties: false,
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// The idle-time diplomatic drip: while the player sits between jumps, a polity
+// may send a short note to their inbox. `chat: null` means nobody plausibly
+// would right now - silence is the common, correct answer.
+export const IDLE_DIPLOMACY_SCHEMA = {
+  type: "object",
+  description: "At most one short unprompted diplomatic note to the player, or null for silence.",
+  properties: {
+    chat: {
+      anyOf: [
+        { type: "null", description: "No polity would plausibly reach out right now." },
+        createdChatSchema,
+      ],
+    },
+  },
+  required: ["chat"],
+  additionalProperties: false,
+};
 
 export const DESCRIPTION_TO_ACTION_SCHEMA = {
   type: "object",
@@ -500,6 +527,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   catalystSummary: CATALYST_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
+  idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -570,6 +598,12 @@ export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   COUNTRY_STAT_SHEET_SCHEMA,
 );
 
+export const IDLE_DIPLOMACY_TOOL = makeTool(
+  "submit_idle_diplomacy",
+  "Submit at most one short unprompted diplomatic note to the player, or null for silence.",
+  IDLE_DIPLOMACY_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -582,6 +616,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   catalystSummary: CATALYST_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
+  idleDiplomacy: IDLE_DIPLOMACY_TOOL,
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
