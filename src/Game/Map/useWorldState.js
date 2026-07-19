@@ -91,6 +91,9 @@ export function useWorldState() {
     regionClaimants: state?.regionClaimants ?? {},
     polityOverrides: state?.polityOverrides ?? {},
     markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+    labelFont: state?.labelFont ?? "",
+    labelHaloColor: state?.labelHaloColor ?? "",
+    labelTextColor: state?.labelTextColor ?? "",
   };
 
   const prev = prevRef.current;
@@ -101,6 +104,9 @@ export function useWorldState() {
     prev.customCities === derived.customCities &&
     prev.basemap === derived.basemap &&
     prev.background === derived.background &&
+    prev.labelFont === derived.labelFont &&
+    prev.labelHaloColor === derived.labelHaloColor &&
+    prev.labelTextColor === derived.labelTextColor &&
     areEqualShallow(prev.regionOwnershipOverrides, derived.regionOwnershipOverrides) &&
     // Claimant values are ARRAYS (fresh objects every poll), so reference
     // equality would churn every 5s — compare content. The map is tiny.
