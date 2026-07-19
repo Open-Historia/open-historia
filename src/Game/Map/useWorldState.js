@@ -31,6 +31,9 @@ const stopPolling = () => {
   }
 };
 
+// Stable [] so a world with no markers doesn't churn the memo every poll.
+const EMPTY_MARKERS = [];
+
 const areEqualShallow = (a, b) => {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -68,6 +71,7 @@ export function useWorldState() {
     regionOwnershipOverrides: state?.regionOwnershipOverrides ?? {},
     regionClaimants: state?.regionClaimants ?? {},
     polityOverrides: state?.polityOverrides ?? {},
+    markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
   };
 
   const prev = prevRef.current;
@@ -82,6 +86,8 @@ export function useWorldState() {
     // Claimant values are ARRAYS (fresh objects every poll), so reference
     // equality would churn every 5s — compare content. The map is tiny.
     JSON.stringify(prev.regionClaimants) === JSON.stringify(derived.regionClaimants) &&
+    // Markers are an array of small objects; same content-compare reasoning.
+    JSON.stringify(prev.markers) === JSON.stringify(derived.markers) &&
     areEqualShallow(prev.polityOverrides, derived.polityOverrides)
       ? prev
       : derived;

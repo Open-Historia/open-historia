@@ -218,6 +218,61 @@ const unitOpSchema = {
   ],
 };
 
+const markerSchema = {
+  type: "object",
+  description:
+    "A named structure on the map. kind is free-form lowercase - city, military base, "
+    + "bunker, missile silo, embassy, port, airfield, factory, monument, or anything else.",
+  properties: {
+    id: textSchema("Stable marker identifier."),
+    name: nonEmptyTextSchema("Display name of the structure."),
+    kind: nonEmptyTextSchema("What the structure is, as a short lowercase noun phrase."),
+    ownerCode: textSchema("Owning polity code, when owned."),
+    lng: {
+      type: "number",
+      description: "Longitude of the structure.",
+      minimum: -180,
+      maximum: 180,
+    },
+    lat: {
+      type: "number",
+      description: "Latitude of the structure.",
+      minimum: -90,
+      maximum: 90,
+    },
+    note: textSchema("Brief description shown when the structure is inspected."),
+    foundedAt: textSchema("In-game date the structure was built or founded."),
+  },
+  required: ["name", "kind", "lng", "lat"],
+  additionalProperties: false,
+};
+
+const markerOpSchema = {
+  description: "A structure mutation. Use op build or remove and fill the fields that op needs.",
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["build"] },
+        marker: markerSchema,
+      },
+      required: ["op", "marker"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["remove"] },
+        markerId: textSchema("Existing marker identifier, when known."),
+        name: nonEmptyTextSchema("Name of the structure to remove."),
+        note: textSchema("Brief explanation of the removal."),
+      },
+      required: ["op", "name"],
+      additionalProperties: false,
+    },
+  ],
+};
+
 const impactsSchema = {
   type: "object",
   description: "Optional structured world-state effects. Include only effect arrays that are relevant.",
@@ -245,6 +300,14 @@ const impactsSchema = {
       type: "array",
       description: "Military unit operations.",
       items: unitOpSchema,
+    },
+    markerOps: {
+      type: "array",
+      description:
+        "Structures built or destroyed on the map. Use whenever the event founds, "
+        + "constructs, or destroys a named place - a city, military base, bunker, "
+        + "missile silo, embassy, port - so the map shows it.",
+      items: markerOpSchema,
     },
   },
   additionalProperties: false,

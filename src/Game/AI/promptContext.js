@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import { JSON_URLS, getNationTags, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import {
   buildActionDisplayText,
@@ -204,6 +204,78 @@ export const buildUnitsSummaryText = (world) => {
   }).join("\n");
 };
 
+// Structures founded during play (world.markers): cities, military bases,
+// bunkers, missile silos, embassies. Listed with coordinates so the model can
+// reference, defend, target, or expand them — and knows their names are taken.
+export const buildMarkersSummaryText = (world) => {
+  const markers = normalizeArray(world?.markers);
+  if (markers.length === 0) return "No structures have been built during play yet.";
+  return markers.slice(0, 60).map((marker) => {
+    const lat = Number(marker.lat);
+    const lng = Number(marker.lng);
+    const coords = Number.isFinite(lat) && Number.isFinite(lng)
+      ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+      : "unknown location";
+    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}) at ${coords}${marker.note ? ` — ${marker.note}` : ""}`;
+  }).join("\n");
+};
+
+// City coordinates for the model, so troop deployments and events land on the
+// actual city instead of a guess. Two sources, mirroring the map's own layer:
+// custom-city scenarios use their era set; everything else uses the significant
+// slice of the stock database (capitals + metropolises). Only the stock slice is
+// cached — it's a static asset, while the custom set changes with the scenario.
+const CITY_CATALOG_LIMIT = 200;
+let _stockCityCatalogCache = null;
+
+// Same resolution the editor's city importer uses: the seed rides the content
+// node on web builds and same-origin /assets locally.
+const CITY_SEED_URL = `${(import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "")}/cities-seed.json`;
+
+const formatCityLine = (name, country, lat, lng, extra = "") =>
+  `- ${name}${country ? ` (${country})` : ""}: lat ${Number(lat).toFixed(2)}, lng ${Number(lng).toFixed(2)}${extra}`;
+
+export const buildCityCatalogText = async (world) => {
+  try {
+    if (world?.customCities) {
+      const geojson = await readJson(JSON_URLS.citiesGeojson, { defaultValue: null, force: true });
+      const features = normalizeArray(geojson?.features)
+        .filter((feature) => Array.isArray(feature?.geometry?.coordinates))
+        .sort((a, b) =>
+          (b.properties?.tier ?? 0) - (a.properties?.tier ?? 0)
+          || (b.properties?.population ?? 0) - (a.properties?.population ?? 0))
+        .slice(0, CITY_CATALOG_LIMIT);
+      if (features.length) {
+        return features.map((feature) => {
+          const props = feature.properties ?? {};
+          const [lng, lat] = feature.geometry.coordinates;
+          return formatCityLine(props.city || props.name || "Unnamed", "", lat, lng, props.capital === "primary" ? " (capital)" : "");
+        }).join("\n");
+      }
+      return "No city coordinate catalog is available.";
+    }
+
+    if (_stockCityCatalogCache) return _stockCityCatalogCache;
+    const response = await fetch(CITY_SEED_URL);
+    const seed = response.ok ? await response.json() : [];
+    const significant = normalizeArray(seed)
+      .filter((city) => Array.isArray(city?.coord)
+        && (city.capital === "primary" || (city.population ?? 0) >= 2000000))
+      .sort((a, b) => (b.population ?? 0) - (a.population ?? 0))
+      .slice(0, CITY_CATALOG_LIMIT);
+    if (significant.length) {
+      _stockCityCatalogCache = significant.map((city) =>
+        formatCityLine(city.name, city.country, city.coord[1], city.coord[0], city.capital === "primary" ? " (capital)" : ""),
+      ).join("\n");
+      return _stockCityCatalogCache;
+    }
+    return "No city coordinate catalog is available.";
+  } catch {
+    // A missing catalog degrades to the old behavior (model guesses), never breaks a jump.
+    return "No city coordinate catalog is available.";
+  }
+};
+
 const loadRegions = async () => loadRegionCatalog().catch(() => []);
 
 // The land the player's polity holds — or an explicit statement that it holds none.
@@ -326,6 +398,7 @@ export const buildPromptContext = async (bundle, {
   const date = bundle.game.gameDate || "";
   const target = targetDate || date;
   const worldSummary = await buildWorldSummary(bundle, regionCatalog);
+  const citiesSummary = await buildCityCatalogText(bundle.world);
   const recentEvents = buildEventHistoryText(bundle.events, { limit: eventLimit, world: bundle.world });
   const campaignHistory = buildCampaignHistoryText(bundle.events, bundle.world, { limit: longEventLimit });
   const allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
@@ -350,6 +423,7 @@ export const buildPromptContext = async (bundle, {
       ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
       : "0%",
     catalystPremise,
+    citiesSummary,
     chat: JSON.stringify(unconsolidatedChats),
     chatHistory: currentChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") || "No chat history.",
     chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit }),
@@ -366,6 +440,7 @@ export const buildPromptContext = async (bundle, {
     gameMasterRequest,
     language: bundle.world.language || bundle.game.language || "English",
     lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
+    markersSummary: buildMarkersSummaryText(bundle.world),
     numberOfRegions: String(regionCatalog.length),
     plannedActions: buildActionHistoryText(bundle.actions),
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),

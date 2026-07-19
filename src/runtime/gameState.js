@@ -28,6 +28,11 @@ export const WORLD_DEFAULTS = {
   lastJumpMode: "",
   lastJumpSummary: "",
   lastJumpTargetDate: "",
+  // Structures built during play (world.markers[]): free-form kinds — a city, a
+  // military base, a bunker, a missile silo, an embassy — placed at coordinates
+  // and rendered as map markers beside the stock cities. Stored here so they
+  // share every existing read/write/poll/normalize path, exactly like units.
+  markers: [],
   notes: "",
   polityOverrides: {},
   // Region id -> claimant polity names: the world-data way to mark a region
@@ -480,6 +485,82 @@ export const normalizeUnits = (units) =>
     .map((entry, index) => normalizeUnitEntry(entry, index))
     .filter(Boolean);
 
+// A structure built during play: any named point on the map — city, military
+// base, bunker, missile silo, embassy, port. `kind` is deliberately free-form
+// (lowercased for stable styling/grouping); unknown kinds are first-class.
+export const normalizeMarkerEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  const lat = finiteOrNull(entry.lat ?? entry.latitude);
+  const name = normalizeOptionalString(entry.name || entry.title);
+  if (lng === null || lat === null || !name) {
+    return null;
+  }
+
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
+    name,
+    kind: (normalizeOptionalString(entry.kind || entry.type) || "landmark").toLowerCase(),
+    ownerCode: normalizeOptionalString(entry.ownerCode || entry.owner || entry.code),
+    lng,
+    lat,
+    note: normalizeOptionalString(entry.note || entry.description),
+    foundedAt: normalizeOptionalString(entry.foundedAt || entry.date),
+    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+  };
+};
+
+export const normalizeMarkers = (markers) =>
+  normalizeArray(markers)
+    .map((entry, index) => normalizeMarkerEntry(entry, index))
+    .filter(Boolean);
+
+// One AI-authored mutation to the built-structure list: build | remove.
+const normalizeMarkerOp = (entry) => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const op = normalizeOptionalString(entry.op).toLowerCase();
+
+  if (op === "build" || op === "found") {
+    const marker = normalizeMarkerEntry(entry.marker ?? entry, 0);
+    if (!marker) return null;
+    return { op: "build", marker };
+  }
+
+  if (op === "remove" || op === "destroy") {
+    const markerId = normalizeOptionalString(entry.markerId || entry.id);
+    const name = normalizeOptionalString(entry.name);
+    if (!markerId && !name) return null;
+    return { op: "remove", markerId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  return null;
+};
+
+// Apply a batch of marker ops (pure). Rebuilding under an existing name
+// replaces it rather than stacking duplicates; removal matches id first, then
+// exact name — the AI usually knows the name, rarely the id.
+export const applyMarkerOps = (markers, ops) => {
+  let next = normalizeMarkers(markers);
+  for (const op of normalizeArray(ops)) {
+    if (op.op === "build") {
+      next = [
+        ...next.filter((marker) => marker.name.toLowerCase() !== op.marker.name.toLowerCase()),
+        op.marker,
+      ];
+    } else if (op.op === "remove") {
+      next = next.filter((marker) =>
+        op.markerId ? marker.id !== op.markerId : marker.name.toLowerCase() !== op.name.toLowerCase());
+    }
+  }
+  return next;
+};
+
 // One AI-authored mutation to the unit list: spawn | move | strength | remove.
 const normalizeUnitOp = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -563,6 +644,7 @@ const normalizeEventImpacts = (value) => {
     return {
       actionIds: [],
       createdChats: [],
+      markerOps: [],
       polityChanges: [],
       regionTransfers: [],
       unitOps: [],
@@ -572,6 +654,7 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeChats(value.createdChats),
+    markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     unitOps: normalizeArray(value.unitOps).map(normalizeUnitOp).filter(Boolean),
@@ -784,6 +867,7 @@ export const normalizeWorldState = (world) => {
         };
       })
       .filter(Boolean),
+    markers: normalizeMarkers(nextWorld.markers),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units: normalizeUnits(nextWorld.units),
@@ -934,6 +1018,10 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
 
     if (event.impacts.unitOps?.length) {
       nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps);
+    }
+
+    if (event.impacts.markerOps?.length) {
+      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps);
     }
   }
 
