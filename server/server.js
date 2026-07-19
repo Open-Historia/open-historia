@@ -18,6 +18,7 @@ import {
   getScenarioCatalog,
   getScenarioDetails,
   importScenarioBundle,
+  updateScenarioFromBundle,
   readRuntimeJsonAsset,
   removeGameAsset,
   removeScenarioAsset,
@@ -308,6 +309,16 @@ app.get("/api/scenarios/:scenarioId/export", (req, res) => {
 app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
   try {
     res.status(201).json(importScenarioBundle(req.body ?? {}, { setSelected: true }));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// Replace an existing scenario's content with a fresh bundle — the community
+// hub's "Update" button for scenarios imported unmodified from a post.
+app.put("/api/scenarios/:scenarioId/import", largeJsonParser, (req, res) => {
+  try {
+    res.json(updateScenarioFromBundle(req.params.scenarioId, req.body ?? {}));
   } catch (error) {
     sendError(res, 400, error);
   }

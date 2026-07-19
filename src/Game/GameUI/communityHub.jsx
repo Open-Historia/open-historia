@@ -145,6 +145,42 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   return posts;
 };
 
+// Download + assemble a hub post's scenario bundle, ready for import: fetches
+// through the server's allowlisted /api/hub/file proxy, unpacks a .zip (re-
+// embedding the basemap that rides alongside scenario.json), and inlines a
+// referenced community basemap. Shared by the Community tab's Import button and
+// the Scenarios tab's Update button (which lazy-loads this module).
+export const downloadHubBundle = async (bundleUrl) => {
+  const response = await fetch(`/api/hub/file?url=${encodeURIComponent(bundleUrl)}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
+  }
+  // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
+  // basemap file + preview); everything else is a plain JSON bundle. The basemap
+  // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
+  let bundle;
+  if (/\.zip(\?|$)/i.test(bundleUrl)) {
+    const zip = await unzipBundle(await response.arrayBuffer());
+    const scenarioText = await zip.text("scenario.json");
+    if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+    bundle = JSON.parse(scenarioText);
+    const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+    if (imageName) {
+      embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
+    } else {
+      const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+      if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
+    }
+  } else {
+    bundle = await response.json();
+  }
+  // A shared scenario may reference a community basemap instead of embedding
+  // it — fetch and inline it before importing so the map isn't blank.
+  await resolveScenarioBundleBackground(bundle);
+  return bundle;
+};
+
 const saveBlobToDisk = (blob, fileName) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -471,33 +507,12 @@ const CommunityPanel = ({ onImported }) => {
     setBusyId(post.id);
     clearBanners();
     try {
-      const response = await fetch(`/api/hub/file?url=${encodeURIComponent(post.bundleUrl)}`);
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
-      }
-      // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-      // basemap file + preview); everything else is a plain JSON bundle. The basemap
-      // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
-      let bundle;
-      if (/\.zip(\?|$)/i.test(post.bundleUrl)) {
-        const zip = await unzipBundle(await response.arrayBuffer());
-        const scenarioText = await zip.text("scenario.json");
-        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-        bundle = JSON.parse(scenarioText);
-        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-        if (imageName) {
-          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-        } else {
-          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-        }
-      } else {
-        bundle = await response.json();
-      }
-      // A shared scenario may reference a community basemap instead of embedding
-      // it — fetch and inline it before importing so the map isn't blank.
-      await resolveScenarioBundleBackground(bundle);
+      const bundle = await downloadHubBundle(post.bundleUrl);
+      // Provenance: which post and which exact bundle file this copy came from.
+      // The library's Scenarios tab compares this against the post's CURRENT
+      // bundle URL to offer an Update button — and drops it the moment the
+      // scenario is modified locally (see writeScenarioMeta).
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
       const details = await importScenarioBundle(bundle);
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
