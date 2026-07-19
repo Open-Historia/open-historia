@@ -165,38 +165,6 @@ const validateTimelineDates = ({ candidate, mode, originDate, targetDate }) => {
   return "";
 };
 
-// Attempt-2 salvage for timeline dates: rather than discarding a finished
-// (possibly very long) generation to the canned fallback because the model
-// simulated a little past the window, pull the strays in. Events dated on or
-// before the origin land on the first simulated day, events past the stop land
-// on the stop date, unparseable dates become the stop date, and ordering is
-// restored monotonically. The CONTENT is untouched — a good story with sloppy
-// dates beats canned events every time (a 1-day skip whose model "kept going"
-// used to trash the whole turn exactly this way).
-export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) => {
-  if (!parseIsoDate(originDate)) return; // textual/BCE scenarios use the lenient branch
-  const dayAfterOrigin = addIsoDays(originDate, 1) || targetDate;
-  let stopDate = normalizeString(candidate?.stopDate);
-  if (mode === "auto") {
-    if (!parseIsoDate(stopDate) || stopDate <= originDate || stopDate > targetDate) stopDate = targetDate;
-  } else {
-    stopDate = targetDate;
-  }
-  candidate.stopDate = stopDate;
-  const floor = dayAfterOrigin > stopDate ? stopDate : dayAfterOrigin;
-  let previous = floor;
-  for (const event of normalizeArray(candidate?.events)) {
-    if (!event || typeof event !== "object") continue;
-    let date = normalizeString(event.date);
-    if (!parseIsoDate(date)) date = stopDate;
-    if (date <= originDate) date = floor;
-    if (date > stopDate) date = stopDate;
-    if (date < previous) date = previous;
-    event.date = date;
-    previous = date;
-  }
-};
-
 const sentenceCase = (value) => {
   const text = normalizeString(value);
   if (!text) return "";
@@ -1645,22 +1613,12 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
            `spread across the skipped period.`,
     validatePayload: async (candidate) => {
       validationAttempts += 1;
-      // Shape-of-story problems (event count, stray dates) are STRICT on the
-      // first attempt — the model gets the exact error and usually fixes its
-      // own answer — and SALVAGED on the second: a finished generation must
-      // never lose to the canned fallback over its date stamps or an extra
-      // event. Only real errors reach the fallback now.
-      const strict = validationAttempts === 1;
       const eventCount = normalizeArray(candidate?.events).length;
-      if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+      if (mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
         return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
       }
-      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate });
-      if (dateError) {
-        if (strict) return dateError;
-        clampTimelineDates(candidate, { mode, originDate, targetDate });
-      }
-      return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
+      return validateTimelineDates({ candidate, mode, originDate, targetDate }) ||
+        await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: validationAttempts === 1 });
     },
     variables,
   });
