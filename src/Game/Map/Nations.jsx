@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
+import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
 import {
   getInteractionMode,
   clearInteractionMode,
@@ -23,7 +24,6 @@ import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
-import polygonClipping from "polygon-clipping";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -384,104 +384,6 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
   return { type: "FeatureCollection", features };
 };
 
-// Union country borders ship disabled — the Settings toggle is greyed out
-// ("coming soon") until the pass is production-ready. Flip the key below in
-// localStorage to preview; keep it in sync with settings.jsx.
-const COUNTRY_BORDERS_KEY = "country-borders-enabled";
-const countryBordersEnabled = () => {
-  try {
-    return localStorage.getItem(COUNTRY_BORDERS_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
-
-// Era country borders (experiment, round 2): every owner's regions are
-// geometrically UNIONED and the union outline is the border — continuous by
-// construction even where neighbouring regions don't share vertices. Drawn
-// at full strength at EVERY zoom level this time.
-const computeOwnerBorderCollection = async (regionsFC, ownerById, isCancelled) => {
-  const byOwner = new Map();
-  for (const feature of regionsFC?.features ?? []) {
-    const props = feature.properties || {};
-    const id = props.id != null ? String(props.id) : "";
-    // Unclaimed land is its own "owner" so its frontier is drawn too.
-    const owner = (ownerById.get(id) ?? props.owner ?? "") || "~unclaimed";
-    const geometry = feature.geometry;
-    const polygons = geometry?.type === "Polygon"
-      ? [geometry.coordinates]
-      : geometry?.type === "MultiPolygon"
-        ? geometry.coordinates
-        : [];
-    if (!polygons.length) continue;
-    if (!byOwner.has(owner)) byOwner.set(owner, []);
-    byOwner.get(owner).push(...polygons);
-  }
-
-  // Chunked incremental union. One degenerate polygon must never poison a
-  // whole owner group — that used to make the huge "unclaimed" group fall
-  // back to raw per-region shapes, which drew a country-style border around
-  // every single region. Broken shapes are quarantined individually.
-  const unionPolygonsSafely = async (polygons, isCancelled) => {
-    const CHUNK = 40;
-    let merged = null;
-    for (let start = 0; start < polygons.length; start += CHUNK) {
-      // Yield every chunk: the incremental merge calls grow with the shape,
-      // and long synchronous stretches were felt as lag.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      if (isCancelled()) return null;
-      const chunk = polygons.slice(start, start + CHUNK);
-      let chunkResult = null;
-      try {
-        chunkResult = polygonClipping.union(...chunk);
-      } catch {
-        chunkResult = null;
-        for (const polygon of chunk) {
-          try {
-            chunkResult = chunkResult
-              ? polygonClipping.union(chunkResult, polygon)
-              : polygonClipping.union(polygon);
-          } catch {
-            // Skip just this shape; a hairline hole beats broken borders.
-          }
-        }
-      }
-      if (!chunkResult?.length) continue;
-      try {
-        merged = merged ? polygonClipping.union(merged, chunkResult) : chunkResult;
-      } catch {
-        // Keep what we have rather than losing the whole owner.
-      }
-    }
-    return merged;
-  };
-
-  const features = [];
-  for (const [owner, polygons] of byOwner) {
-    // Yield between owners so big maps don't freeze the UI while merging.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (isCancelled()) return null;
-    const merged = await unionPolygonsSafely(polygons, isCancelled);
-    if (isCancelled()) return null;
-    if (merged?.length) {
-      features.push({
-        type: "Feature",
-        geometry: { type: "MultiPolygon", coordinates: merged },
-        properties: { owner },
-      });
-    } else if (polygons.length) {
-      // Total failure for this owner: keep the raw shapes for the FILL but
-      // never outline them — regions must not carry country-style borders.
-      features.push({
-        type: "Feature",
-        geometry: { type: "MultiPolygon", coordinates: polygons },
-        properties: { owner, noOutline: true },
-      });
-    }
-  }
-
-  return { type: "FeatureCollection", features };
-};
 
 const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
@@ -491,6 +393,7 @@ const WorldMap = ({ isGlobe = false }) => {
     worldKnown,
     customRegions: customFlag,
     regionOwnershipOverrides,
+    regionClaimants,
     polityOverrides,
   } = useWorldState();
   const mapDisplaySettings = {
@@ -624,11 +527,41 @@ const WorldMap = ({ isGlobe = false }) => {
     const unitHits = unitsAt();
     if (unitHits.length) {
       dismissRegionPopup();
+      dismissFeaturePopup();
       onUnitSelected({ id: unitHits[0].properties.id, lngLat: event.lngLat });
       return;
     }
 
     dismissUnitPopup();
+
+    // A city or built structure under the cursor wins over the region: point
+    // features are tiny targets, so a hit is always deliberate. Built structures
+    // (world.markers) outrank cities when the two overlap.
+    const featureLayers = ["markers-shapes", "cities-shapes", "cities-labels"]
+      .filter((id) => map.getLayer(id));
+    const featureHits = featureLayers.length
+      ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
+      : [];
+    if (featureHits.length) {
+      dismissRegionPopup();
+      const hit = featureHits.find((entry) => entry.layer.id === "markers-shapes") ?? featureHits[0];
+      const props = hit.properties ?? {};
+      const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
+      onFeatureSelected(hit.layer.id === "markers-shapes"
+        ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
+        : {
+          source: "city",
+          name: props.city || props.name || "",
+          population: props.population,
+          capital: props.capital,
+          tier: props.tier,
+          lng,
+          lat,
+        });
+      return;
+    }
+
+    dismissFeaturePopup();
     // Custom (editor) regions render on top of the stock regions. On a map with its
     // OWN drawn/generated geometry, query only the custom layers — a click on empty
     // sea must resolve to nothing, not the leftover Earth country underneath. On a
@@ -811,12 +744,21 @@ const WorldMap = ({ isGlobe = false }) => {
         // Disputed regions carry a stripe-tile id built from the current
         // administrator's color plus every claimant's — the layers below select
         // on _stripes and paint with fill-pattern instead of the solid fill.
+        // Claimants come from WORLD data first (regionClaimants — how the
+        // modern-world scenario declares its disputes, since its geometry is an
+        // immutable seed), then from the region feature's own claimants prop
+        // (editor-authored maps).
         let stripes = null;
-        if (Array.isArray(props.claimants) && props.claimants.length > 0) {
+        const claimants = regionClaimants[id]?.length
+          ? regionClaimants[id]
+          : Array.isArray(props.claimants) && props.claimants.length > 0
+            ? props.claimants
+            : null;
+        if (claimants) {
           const liveOwner = regionOwnershipOverrides[id] ?? props.owner ?? "";
           const seen = new Set();
           const stripeRgbs = [];
-          for (const name of (liveOwner ? [liveOwner, ...props.claimants] : props.claimants)) {
+          for (const name of (liveOwner ? [liveOwner, ...claimants] : claimants)) {
             const key = String(name ?? "").trim();
             if (!key || seen.has(key)) continue;
             seen.add(key);
@@ -832,7 +774,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }),
     };
-  }, [customRegionData, colorMap, regionOwnershipOverrides]);
+  }, [customRegionData, colorMap, regionOwnershipOverrides, regionClaimants]);
 
   // GADM disputed regions also paint the stock tiles (the crisp z>6.5 layer):
   // GID_1 -> stripe-tile id stops for the tile twin of the disputed layer.
@@ -864,34 +806,6 @@ const WorldMap = ({ isGlobe = false }) => {
     ownerLookupRef.current = ownerByRegionId;
   }, [ownerByRegionId]);
 
-  // Stable fingerprint of the ownership map: the world poll rebuilds
-  // ownerByRegionId every 5s, but border geometry only needs recomputing
-  // when an owner actually changes.
-  const computedOwnershipKey = useMemo(() => {
-    if (!customActive || !countryBordersEnabled()) return "";
-    let key = "";
-    for (const [regionId, owner] of ownerByRegionId) key += `${regionId}:${owner};`;
-    return key;
-  }, [customActive, ownerByRegionId]);
-
-  const [ownerBorderData, setOwnerBorderData] = useState(EMPTY_FEATURE_COLLECTION);
-  useEffect(() => {
-    if (!customActive || !countryBordersEnabled()) {
-      setOwnerBorderData(EMPTY_FEATURE_COLLECTION);
-      return undefined;
-    }
-    let cancelled = false;
-    computeOwnerBorderCollection(customRegionData, ownerLookupRef.current, () => cancelled)
-      .then((collection) => {
-        if (!cancelled && collection) setOwnerBorderData(collection);
-      })
-      .catch((error) => console.error("Failed to compute era borders:", error));
-    return () => {
-      cancelled = true;
-    };
-    // computedOwnershipKey stands in for ownerByRegionId's contents.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customActive, customRegionData, computedOwnershipKey]);
 
 
   // GADM regions on custom maps paint the STOCK vector tiles (sharp geometry at
@@ -1118,24 +1032,6 @@ const WorldMap = ({ isGlobe = false }) => {
             "line-opacity": customActive
               ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.35, 8, 0.6]
               : 0,
-          }}
-        />
-      </Source>
-
-      {/* Era country borders: OUTLINES ONLY of the colored areas. Fills stay
-          on the fast tile-painted pipeline (the union fills were the lag);
-          the union geometry draws just the lines, with dynamic zoom styling —
-          strong at world/mid zoom, fading out up close where the crisp
-          tile-rendered region borders take over. */}
-      <Source id="owner-zones-source" type="geojson" data={ownerBorderData}>
-        <Layer
-          id="owner-borders"
-          type="line"
-          filter={["!=", ["coalesce", ["get", "noOutline"], false], true]}
-          paint={{
-            "line-color": "#000",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.9, 6, 1.6],
-            "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.85, 7, 0.85, 8.5, 0],
           }}
         />
       </Source>

@@ -165,6 +165,38 @@ const validateTimelineDates = ({ candidate, mode, originDate, targetDate }) => {
   return "";
 };
 
+// Attempt-2 salvage for timeline dates: rather than discarding a finished
+// (possibly very long) generation to the canned fallback because the model
+// simulated a little past the window, pull the strays in. Events dated on or
+// before the origin land on the first simulated day, events past the stop land
+// on the stop date, unparseable dates become the stop date, and ordering is
+// restored monotonically. The CONTENT is untouched — a good story with sloppy
+// dates beats canned events every time (a 1-day skip whose model "kept going"
+// used to trash the whole turn exactly this way).
+export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) => {
+  if (!parseIsoDate(originDate)) return; // textual/BCE scenarios use the lenient branch
+  const dayAfterOrigin = addIsoDays(originDate, 1) || targetDate;
+  let stopDate = normalizeString(candidate?.stopDate);
+  if (mode === "auto") {
+    if (!parseIsoDate(stopDate) || stopDate <= originDate || stopDate > targetDate) stopDate = targetDate;
+  } else {
+    stopDate = targetDate;
+  }
+  candidate.stopDate = stopDate;
+  const floor = dayAfterOrigin > stopDate ? stopDate : dayAfterOrigin;
+  let previous = floor;
+  for (const event of normalizeArray(candidate?.events)) {
+    if (!event || typeof event !== "object") continue;
+    let date = normalizeString(event.date);
+    if (!parseIsoDate(date)) date = stopDate;
+    if (date <= originDate) date = floor;
+    if (date > stopDate) date = stopDate;
+    if (date < previous) date = previous;
+    event.date = date;
+    previous = date;
+  }
+};
+
 const sentenceCase = (value) => {
   const text = normalizeString(value);
   if (!text) return "";
@@ -841,6 +873,25 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       if (!unitId) return `${operationPath}.unitId must not be blank.`;
       if (!unitIds.has(unitId)) return `${operationPath}.unitId does not identify an existing unit.`;
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
+    }
+
+    // Marker ops that would be silently dropped by normalization instead fail
+    // here, so the retry tells the model what was missing.
+    for (let index = 0; index < normalizeArray(impacts?.markerOps).length; index += 1) {
+      const operation = impacts.markerOps[index];
+      const operationPath = `${path}.markerOps[${index}]`;
+      const op = normalizeString(operation?.op).toLowerCase();
+      if (op === "build" || op === "found") {
+        const marker = operation.marker ?? operation;
+        if (!normalizeString(marker?.name)) return `${operationPath}.marker.name must not be blank.`;
+        if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
+          return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+        }
+      } else if (op === "remove" || op === "destroy") {
+        if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
+          return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+        }
+      }
     }
   }
 
@@ -1613,12 +1664,22 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
            `spread across the skipped period.`,
     validatePayload: async (candidate) => {
       validationAttempts += 1;
+      // Shape-of-story problems (event count, stray dates) are STRICT on the
+      // first attempt — the model gets the exact error and usually fixes its
+      // own answer — and SALVAGED on the second: a finished generation must
+      // never lose to the canned fallback over its date stamps or an extra
+      // event. Only real errors reach the fallback now.
+      const strict = validationAttempts === 1;
       const eventCount = normalizeArray(candidate?.events).length;
-      if (mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+      if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
         return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
       }
-      return validateTimelineDates({ candidate, mode, originDate, targetDate }) ||
-        await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: validationAttempts === 1 });
+      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate });
+      if (dateError) {
+        if (strict) return dateError;
+        clampTimelineDates(candidate, { mode, originDate, targetDate });
+      }
+      return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
     },
     variables,
   });
