@@ -204,15 +204,34 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         : null,
     [terrainEnabled, isGlobe, customBg, bgDeclared],
   );
+  // Render at reduced pixel density when zoomed far out: the whole-world view
+  // draws every region, border and label at once, and full native resolution
+  // there spends frames on detail nobody can see at that scale. Hysteresis
+  // (re-sharpen at 5, soften below 4.5) prevents flapping at the boundary.
+  const pixelRatioModeRef = useRef(null);
+  const applyDynamicPixelRatio = useCallback((zoom) => {
+    const map = mapRef?.current?.getMap?.();
+    if (!map || typeof map.setPixelRatio !== "function") return;
+    const mode = zoom <= 4.5 ? "low" : zoom >= 5 ? "native" : pixelRatioModeRef.current;
+    if (!mode || mode === pixelRatioModeRef.current) return;
+    pixelRatioModeRef.current = mode;
+    const native = window.devicePixelRatio || 1;
+    map.setPixelRatio(mode === "low" ? Math.min(native, 1) * 0.75 : native);
+  }, [mapRef]);
+
   const handleMove = useCallback(({ viewState }) => {
     viewStateRef.current = viewState;
-  }, []);
+    applyDynamicPixelRatio(viewState.zoom);
+  }, [applyDynamicPixelRatio]);
   const handleIdle = useCallback(() => {
+    // The soft ratio applies from the very first frame settled at world zoom —
+    // not only after the player first moves the camera.
+    applyDynamicPixelRatio(viewStateRef.current?.zoom ?? 0);
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
     setLoading(false);
-  }, [onInitialIdle]);
+  }, [applyDynamicPixelRatio, onInitialIdle]);
   const handleLoading = useCallback(() => {
     setLoading(true);
     clearTimeout(loadTimerRef.current);
