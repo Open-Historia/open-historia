@@ -161,7 +161,7 @@ const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country
     </select>
 );
 
-const CheatsPanel = ({ open, onClose }) => {
+const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     const [tool, setTool] = useState(null);
     const [busy, setBusy] = useState(false);
     const [status, setStatus] = useState("");
@@ -284,6 +284,18 @@ const CheatsPanel = ({ open, onClose }) => {
             <>
             {header("Cheats")}
             <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", overflowY: "auto" }}>
+            {/* Manual force deployment moved here from the toolbar: hand-
+                placing troops is a cheat, not a normal play surface. */}
+            {typeof onOpenForces === "function" && (
+                <button
+                type="button"
+                onClick={onOpenForces}
+                style={{ ...buttonStyle, alignItems: "flex-start", flexDirection: "column", gap: "0.1rem", textAlign: "left" }}
+                >
+                <span style={{ fontWeight: 700 }}>⚔️ Manual force deployment</span>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontWeight: 500 }}>Open the Forces panel to spawn, move, and command units by hand.</span>
+                </button>
+            )}
             {TOOLS.map((entry) => (
                 <button
                 key={entry.id}
