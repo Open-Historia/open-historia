@@ -5,6 +5,7 @@ import advancedFormat from "dayjs/plugin/advancedFormat";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplay.js";
+import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
     normalizeActionEntry,
@@ -339,6 +340,18 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     };
 
     const handleDelete = async (index) => {
+        const removed = actions[index];
+        // Deleting a queued troop order also undoes what it did to the map —
+        // otherwise a manual move/deploy stays in place while the AI is never
+        // told about it (#368). Only planned orders carry a revert; anything
+        // already resolved by a jump keeps its outcome.
+        if (removed?.unitRevert && (removed.status ?? "planned") === "planned") {
+            try {
+                await revertUnitOrder(removed.unitRevert);
+            } catch (error) {
+                console.warn("[actions] could not revert the unit order:", error);
+            }
+        }
         await persistActions(actions.filter((_, actionIndex) => actionIndex !== index));
     };
 

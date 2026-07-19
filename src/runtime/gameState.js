@@ -114,6 +114,23 @@ const normalizeActionParticipants = (value) =>
     .map((entry) => normalizeString(entry))
     .filter(Boolean);
 
+// How to undo a queued manual troop order if its action is deleted before the
+// next jump (see unitsController): a deploy is removed again, a move snaps the
+// unit back, a long-range order restores the prior status (#368).
+const normalizeUnitRevert = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const unitId = normalizeOptionalString(value.unitId);
+  if (!unitId) return null;
+  const lng = finiteOrNull(value.lng);
+  const lat = finiteOrNull(value.lat);
+  return {
+    unitId,
+    ...(lng !== null && lat !== null ? { lng, lat } : {}),
+    ...(value.remove === true ? { remove: true } : {}),
+    ...(normalizeOptionalString(value.status) ? { status: normalizeOptionalString(value.status) } : {}),
+  };
+};
+
 export const normalizeActionEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const text = normalizeString(entry);
@@ -151,6 +168,8 @@ export const normalizeActionEntry = (entry, index = 0) => {
       ? "chat"
       : "action";
 
+  const unitRevert = normalizeUnitRevert(entry.unitRevert);
+
   return {
     chatStarter: normalizeOptionalString(entry.chatStarter || entry.openingMessage),
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -164,6 +183,7 @@ export const normalizeActionEntry = (entry, index = 0) => {
     suggestionTopic: normalizeOptionalString(entry.suggestionTopic || entry.topic),
     text: text || rawInput || title,
     title: title || rawInput || text,
+    ...(unitRevert ? { unitRevert } : {}),
   };
 };
 

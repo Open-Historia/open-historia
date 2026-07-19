@@ -106,7 +106,10 @@ const commit = async (mutator) => {
   }
 };
 
-const queueOrder = async (text) => {
+// unitRevert records how to undo the order if the player deletes the queued
+// action before the next jump (#368): without it, a manual move stayed on the
+// map while the AI was never told about it.
+const queueOrder = async (text, unitRevert = null) => {
   try {
     const actions = await readActionsState({ force: true });
     actions.push({
@@ -115,6 +118,7 @@ const queueOrder = async (text) => {
       status: "planned",
       text,
       title: text.length > 60 ? `${text.slice(0, 57)}...` : text,
+      ...(unitRevert ? { unitRevert } : {}),
     });
     await writeActionsState(actions);
   } catch (error) {
@@ -122,27 +126,50 @@ const queueOrder = async (text) => {
   }
 };
 
+// Undo a queued manual order whose action the player deleted (#368): a pending
+// deploy is removed again, a moved unit snaps back to its recorded position,
+// and a long-range/approach order restores the unit's prior status.
+export const revertUnitOrder = async (revert) => {
+  const unitId = String(revert?.unitId ?? "").trim();
+  if (!unitId) return;
+  if (revert.remove) {
+    await commit((list) => list.filter((u) => u.id !== unitId));
+    return;
+  }
+  await commit((list) =>
+    list.map((u) => {
+      if (u.id !== unitId) return u;
+      return {
+        ...u,
+        ...(Number.isFinite(revert.lng) && Number.isFinite(revert.lat) ? { lng: revert.lng, lat: revert.lat } : {}),
+        ...(revert.status ? { status: revert.status } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+    }));
+};
+
 export const deployUnit = async ({ type, strength, name, lng, lat }) => {
   if (!playerCode) await refresh();
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
-  const saved = await commit((list) => {
-    const unit = normalizeUnitEntry({
-      type,
-      strength,
-      name,
-      lng,
-      lat,
-      ownerCode: playerCode || "PLAYER",
-      source: "player",
-      status: "pending",
-    });
-    return unit ? [...list, unit] : list;
+  // Built outside the commit so the queued order can reference its id.
+  const unit = normalizeUnitEntry({
+    type,
+    strength,
+    name,
+    lng,
+    lat,
+    ownerCode: playerCode || "PLAYER",
+    source: "player",
+    status: "pending",
   });
+  if (!unit) return units;
+  const saved = await commit((list) => [...list, unit]);
   await queueOrder(
     `Deploy request: ${name || type} (${type}, strength ${strength}, owner ${playerCode || "PLAYER"}) at ` +
       `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
       `reposition it, or reject it as the front and logistics allow.`,
+    { unitId: unit.id, remove: true },
   );
   return saved;
 };
@@ -167,6 +194,7 @@ export const moveUnitTo = async (unitId, lng, lat) => {
         `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)} — about ${Math.round(distance)} km away, beyond a single ` +
         `${unit.type} move in this era (~${leash} km). Advance it realistically across turns given the era, terrain ` +
         `and transport available, or reject the order with an event explaining why it is infeasible.`,
+      { unitId: unit.id, status: unit.status },
     );
     return { resolved: false, distance, leash };
   }
@@ -180,6 +208,7 @@ export const moveUnitTo = async (unitId, lng, lat) => {
   );
   await queueOrder(
     `Move ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) to coordinates lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}.`,
+    { unitId: unit.id, lng: unit.lng, lat: unit.lat, status: unit.status },
   );
   return { resolved: true, distance, leash };
 };
@@ -205,6 +234,7 @@ export const attackWith = async (attackerId, targetId) => {
         `is ordered against ${defender.name} (id ${defender.id}, owner ${defender.ownerCode}) about ${Math.round(distance)} km away — ` +
         `beyond its ~${range} km engagement reach for this era. March/sail/fly it toward the target realistically across turns ` +
         `and resolve the clash when contact is actually possible, or reject the order with an event explaining why it is infeasible.`,
+      { unitId: attacker.id, status: attacker.status },
     );
     return { resolved: false, distance, range };
   }
