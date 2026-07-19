@@ -1,1157 +1,1157 @@
 {
   "Afghanistan": [
-    64,
-    160,
-    167
+    133,
+    154,
+    91
+  ],
+  "Akrotiri and Dhekelia": [
+    179,
+    66,
+    66
+  ],
+  "Aland Islands": [
+    70,
+    200,
+    108
   ],
   "Albania": [
-    149,
-    45,
-    102
+    159,
+    81,
+    214
+  ],
+  "Algeria": [
+    89,
+    166,
+    128
+  ],
+  "American Samoa": [
+    204,
+    193,
+    117
+  ],
+  "Andorra": [
+    56,
+    166,
+    188
+  ],
+  "Angola": [
+    209,
+    61,
+    141
+  ],
+  "Anguilla": [
+    123,
+    197,
+    99
+  ],
+  "Antigua and Barbuda": [
+    114,
+    110,
+    212
   ],
   "Argentina": [
-    145,
-    157,
-    236
+    128,
+    179,
+    219
   ],
   "Armenia": [
-    176,
-    102,
-    180
+    198,
+    97,
+    47
   ],
   "Australia": [
     204,
-    143,
-    60
-  ],
-  "Bahrain": [
-    230,
-    0,
-    0
-  ],
-  "Belarus": [
-    150,
-    96,
-    168
-  ],
-  "Belgium": [
-    193,
-    171,
-    8
-  ],
-  "Bolivia": [
-    204,
-    165,
-    108
-  ],
-  "Brazil": [
-    76,
-    145,
-    63
-  ],
-  "Brunei": [
-    230,
-    230,
-    0
-  ],
-  "Cambodia": [
-    153,
-    102,
-    51
-  ],
-  "Canada": [
-    233,
-    59,
-    59
-  ],
-  "Chile": [
-    155,
-    101,
-    107
-  ],
-  "China": [
-    245,
-    12,
-    55
-  ],
-  "Colombia": [
-    222,
-    187,
-    91
-  ],
-  "Costa Rica": [
-    255,
-    80,
-    80
-  ],
-  "Cuba": [
-    140,
-    65,
-    166
-  ],
-  "Czechia": [
-    54,
-    167,
-    156
-  ],
-  "Dominican Republic": [
-    152,
-    130,
-    191
-  ],
-  "Ecuador": [
-    249,
-    146,
-    98
-  ],
-  "Egypt": [
-    230,
-    230,
-    70
-  ],
-  "Estonia": [
-    50,
-    135,
-    175
-  ],
-  "Ethiopia": [
-    152,
-    130,
-    191
-  ],
-  "Finland": [
-    77,
-    121,
-    191
-  ],
-  "France": [
-    57,
-    113,
-    228
-  ],
-  "Georgia": [
-    255,
-    150,
-    150
-  ],
-  "Germany": [
-    102,
-    95,
-    86
-  ],
-  "Greenland": [
-    93,
-    181,
-    227
-  ],
-  "Hungary": [
-    249,
-    126,
-    98
-  ],
-  "Iceland": [
-    100,
-    125,
-    175
-  ],
-  "India": [
-    226,
-    135,
-    40
-  ],
-  "Iraq": [
-    178,
-    114,
-    99
-  ],
-  "Ireland": [
-    80,
     159,
-    90
-  ],
-  "Israel": [
-    152,
-    130,
-    191
-  ],
-  "Italy": [
-    67,
-    127,
-    63
-  ],
-  "Japan": [
-    255,
-    201,
-    178
-  ],
-  "Jordan": [
-    111,
-    55,
-    78
-  ],
-  "Kenya": [
-    145,
-    103,
-    14
-  ],
-  "Laos": [
-    176,
-    102,
-    136
-  ],
-  "Luxembourg": [
-    65,
-    175,
-    179
-  ],
-  "Mexico": [
-    104,
-    152,
-    83
-  ],
-  "Mongolia": [
-    108,
-    140,
-    42
-  ],
-  "Netherlands": [
-    203,
-    138,
-    74
-  ],
-  "New Zealand": [
-    152,
-    130,
-    191
-  ],
-  "Nicaragua": [
-    146,
-    179,
-    191
-  ],
-  "North Korea": [
-    122,
-    179,
-    97
-  ],
-  "Norway": [
-    111,
-    71,
-    71
-  ],
-  "Pakistan": [
-    0,
-    102,
-    0
-  ],
-  "Panama": [
-    152,
-    130,
-    191
-  ],
-  "Peru": [
-    71,
-    113,
-    97
-  ],
-  "Poland": [
-    214,
-    102,
-    139
-  ],
-  "Portugal": [
-    39,
-    116,
-    70
-  ],
-  "Republic of the Congo": [
-    152,
-    159,
-    209
-  ],
-  "Romania": [
-    215,
-    196,
-    72
-  ],
-  "Russia": [
-    47,
-    143,
-    79
-  ],
-  "Saudi Arabia": [
-    171,
-    190,
-    152
-  ],
-  "Slovenia": [
-    120,
-    150,
-    70
-  ],
-  "South Korea": [
-    255,
-    240,
-    195
-  ],
-  "Spain": [
-    242,
-    205,
-    94
-  ],
-  "Sweden": [
-    36,
-    132,
-    247
-  ],
-  "Syria": [
-    100,
-    100,
-    150
-  ],
-  "Turkey": [
-    171,
-    190,
-    152
-  ],
-  "Ukraine": [
-    0,
-    80,
-    230
-  ],
-  "United Kingdom": [
-    201,
-    56,
-    93
-  ],
-  "United States": [
-    20,
-    133,
-    237
-  ],
-  "Venezuela": [
-    171,
-    190,
-    152
-  ],
-  "Yemen": [
-    155,
-    101,
-    107
-  ],
-  "Fiji": [
-    64,
-    191,
-    142
-  ],
-  "United States Minor Outlying Islands": [
-    117,
-    64,
-    191
-  ],
-  "Wallis and Futuna": [
-    191,
-    64,
-    79
-  ],
-  "Tonga": [
-    125,
-    191,
-    64
-  ],
-  "Tokelau": [
-    191,
-    64,
-    138
-  ],
-  "Samoa": [
-    64,
-    113,
-    191
-  ],
-  "American Samoa": [
-    191,
-    64,
-    159
-  ],
-  "Cook Islands": [
-    191,
-    64,
-    168
-  ],
-  "French Polynesia": [
-    64,
-    191,
-    125
-  ],
-  "Guatemala": [
-    191,
-    64,
-    81
-  ],
-  "El Salvador": [
-    64,
-    191,
-    74
-  ],
-  "Belize": [
-    191,
-    64,
-    81
-  ],
-  "Honduras": [
-    191,
-    145,
-    64
-  ],
-  "Bahamas": [
-    64,
-    104,
-    191
-  ],
-  "Cayman Islands": [
-    113,
-    64,
-    191
-  ],
-  "Jamaica": [
-    64,
-    191,
-    77
-  ],
-  "Haiti": [
-    64,
-    87,
-    191
-  ],
-  "Turks and Caicos Islands": [
-    179,
-    191,
-    64
-  ],
-  "Puerto Rico": [
-    181,
-    64,
-    191
-  ],
-  "Bonaire, Sint Eustatius and Saba": [
-    64,
-    191,
-    81
-  ],
-  "Bermuda": [
-    191,
-    102,
-    64
-  ],
-  "Virgin Islands, U.S.": [
-    191,
-    130,
-    64
-  ],
-  "British Virgin Islands": [
-    191,
-    64,
-    164
-  ],
-  "Anguilla": [
-    191,
-    64,
-    79
-  ],
-  "Saint Barthelemy": [
-    191,
-    64,
-    108
-  ],
-  "Saint Kitts and Nevis": [
-    191,
-    145,
-    64
-  ],
-  "Antigua and Barbuda": [
-    191,
-    64,
-    106
-  ],
-  "Montserrat": [
-    191,
-    64,
-    123
-  ],
-  "Trinidad and Tobago": [
-    79,
-    64,
-    191
-  ],
-  "Paraguay": [
-    191,
-    64,
-    168
-  ],
-  "Guadeloupe": [
-    91,
-    191,
-    64
-  ],
-  "Dominica": [
-    64,
-    191,
-    64
-  ],
-  "Martinique": [
-    191,
-    68,
-    64
-  ],
-  "Saint Lucia": [
-    187,
-    64,
-    191
-  ],
-  "Saint Vincent and the Grenadines": [
-    64,
-    134,
-    191
-  ],
-  "Grenada": [
-    151,
-    64,
-    191
-  ],
-  "Guyana": [
-    191,
-    138,
-    64
-  ],
-  "Barbados": [
-    64,
-    191,
-    136
-  ],
-  "Suriname": [
-    191,
-    149,
-    64
-  ],
-  "Uruguay": [
-    157,
-    191,
-    64
-  ],
-  "Saint Pierre and Miquelon": [
-    64,
-    64,
-    191
-  ],
-  "French Guiana": [
-    191,
-    98,
-    64
-  ],
-  "Cabo Verde": [
-    191,
-    64,
-    79
-  ],
-  "Western Sahara": [
-    64,
-    162,
-    191
-  ],
-  "Mauritania": [
-    191,
-    64,
-    185
-  ],
-  "Senegal": [
-    106,
-    64,
-    191
-  ],
-  "Gambia": [
-    64,
-    191,
-    72
-  ],
-  "Guinea-Bissau": [
-    64,
-    191,
-    138
-  ],
-  "Guinea": [
-    191,
-    89,
-    64
-  ],
-  "Saint Helena, Ascension and Tris": [
-    191,
-    64,
-    79
-  ],
-  "Morocco": [
-    64,
-    191,
-    94
-  ],
-  "Sierra Leone": [
-    89,
-    191,
-    64
-  ],
-  "Mali": [
-    94,
-    191,
-    64
-  ],
-  "Liberia": [
-    157,
-    64,
-    191
-  ],
-  "Svalbard and Jan Mayen": [
-    191,
-    179,
-    64
-  ],
-  "Algeria": [
-    64,
-    191,
-    155
-  ],
-  "Cote d'Ivoire": [
-    64,
-    191,
-    98
-  ],
-  "Faroe Islands": [
-    191,
-    172,
-    64
-  ],
-  "Isle of Man": [
-    102,
-    64,
-    191
-  ],
-  "Burkina Faso": [
-    64,
-    191,
-    108
-  ],
-  "NA": [
-    191,
-    64,
-    142
-  ],
-  "Ghana": [
-    191,
-    64,
-    132
-  ],
-  "Guernsey": [
-    191,
-    64,
-    147
-  ],
-  "Jersey": [
-    110,
-    64,
-    191
-  ],
-  "Togo": [
-    64,
-    140,
-    191
-  ],
-  "Andorra": [
-    64,
-    191,
-    130
-  ],
-  "Niger": [
-    64,
-    191,
-    104
-  ],
-  "Benin": [
-    64,
-    191,
-    70
-  ],
-  "Nigeria": [
-    64,
-    183,
-    191
-  ],
-  "Equatorial Guinea": [
-    64,
-    191,
-    170
-  ],
-  "Switzerland": [
-    132,
-    191,
-    64
-  ],
-  "Sao Tome and Principe": [
-    191,
-    79,
-    64
-  ],
-  "Denmark": [
-    64,
-    191,
-    151
-  ],
-  "Tunisia": [
-    142,
-    64,
-    191
-  ],
-  "Liechtenstein": [
-    64,
-    191,
-    81
+    92
   ],
   "Austria": [
-    191,
-    115,
-    64
+    194,
+    142,
+    153
   ],
-  "Libya": [
-    172,
-    64,
-    191
+  "Azerbaijan": [
+    80,
+    190,
+    149
   ],
-  "Cameroon": [
-    98,
-    64,
-    191
+  "Bahamas": [
+    196,
+    90,
+    206
   ],
-  "Gabon": [
-    81,
-    191,
-    64
+  "Bahrain": [
+    195,
+    219,
+    102
   ],
-  "San Marino": [
-    64,
-    191,
-    132
+  "Bangladesh": [
+    66,
+    122,
+    179
   ],
-  "Angola": [
-    191,
-    64,
-    181
-  ],
-  "Democratic Republic of the Congo": [
-    191,
-    64,
-    183
-  ],
-  "Namibia": [
-    191,
-    85,
-    64
-  ],
-  "Croatia": [
-    64,
-    191,
-    191
-  ],
-  "Chad": [
-    172,
-    191,
-    64
-  ],
-  "Malta": [
+  "Barbados": [
+    200,
     70,
-    191,
-    64
+    97
   ],
-  "Central African Republic": [
-    64,
+  "Belarus": [
     81,
-    191
+    214,
+    93
   ],
-  "Slovakia": [
-    183,
-    191,
-    64
+  "Belgium": [
+    188,
+    176,
+    98
+  ],
+  "Belize": [
+    150,
+    117,
+    204
+  ],
+  "Benin": [
+    188,
+    145,
+    56
+  ],
+  "Bermuda": [
+    61,
+    209,
+    204
+  ],
+  "Bhutan": [
+    197,
+    99,
+    172
+  ],
+  "Bolivia": [
+    156,
+    212,
+    110
+  ],
+  "Bonaire, Sint Eustatius and Saba": [
+    47,
+    71,
+    198
   ],
   "Bosnia and Herzegovina": [
-    66,
-    64,
-    191
-  ],
-  "South Africa": [
-    191,
-    96,
-    64
-  ],
-  "Aland Islands": [
-    136,
-    191,
-    64
-  ],
-  "Serbia": [
-    172,
-    64,
-    191
-  ],
-  "Montenegro": [
-    64,
-    191,
-    157
-  ],
-  "Greece": [
-    149,
-    64,
-    191
-  ],
-  "Latvia": [
-    64,
-    191,
-    164
-  ],
-  "Lithuania": [
-    64,
-    191,
-    74
-  ],
-  "Kosovo": [
-    64,
-    123,
-    191
-  ],
-  "North Macedonia": [
-    170,
-    191,
-    64
+    190,
+    94,
+    80
   ],
   "Botswana": [
-    191,
-    64,
-    174
+    90,
+    206,
+    139
+  ],
+  "Brazil": [
+    81,
+    184,
+    107
+  ],
+  "British Virgin Islands": [
+    185,
+    102,
+    219
+  ],
+  "Brunei": [
+    178,
+    179,
+    66
   ],
   "Bulgaria": [
-    64,
-    172,
-    191
+    70,
+    162,
+    200
   ],
-  "Sudan": [
-    64,
-    87,
-    191
-  ],
-  "Zambia": [
-    191,
-    113,
-    64
-  ],
-  "South Sudan": [
-    191,
-    64,
-    140
-  ],
-  "Zimbabwe": [
-    191,
-    64,
-    115
-  ],
-  "Moldova": [
-    64,
-    128,
-    191
-  ],
-  "Lesotho": [
-    132,
-    191,
-    64
-  ],
-  "Rwanda": [
-    64,
-    140,
-    191
+  "Burkina Faso": [
+    214,
+    81,
+    136
   ],
   "Burundi": [
-    134,
-    191,
-    64
+    128,
+    204,
+    117
   ],
-  "Tanzania": [
-    191,
-    189,
-    64
+  "Cabo Verde": [
+    79,
+    56,
+    188
   ],
-  "Uganda": [
-    168,
-    191,
-    64
+  "Cambodia": [
+    209,
+    130,
+    61
   ],
-  "Mozambique": [
-    64,
-    115,
+  "Cameroon": [
+    99,
+    197,
+    173
+  ],
+  "Canada": [
+    206,
+    130,
+    140
+  ],
+  "Cayman Islands": [
+    212,
+    110,
+    207
+  ],
+  "Central African Republic": [
+    147,
+    198,
+    47
+  ],
+  "Chad": [
+    80,
+    121,
+    190
+  ],
+  "Chile": [
+    105,
+    142,
     191
   ],
-  "Swaziland": [
-    85,
-    191,
-    64
+  "China": [
+    203,
+    76,
+    72
+  ],
+  "Colombia": [
+    201,
+    184,
+    94
+  ],
+  "Comoros": [
+    206,
+    90,
+    99
+  ],
+  "Cook Islands": [
+    102,
+    219,
+    127
+  ],
+  "Costa Rica": [
+    123,
+    66,
+    179
+  ],
+  "Cote d'Ivoire": [
+    200,
+    174,
+    70
+  ],
+  "Croatia": [
+    81,
+    203,
+    214
+  ],
+  "Cuba": [
+    193,
+    112,
+    103
   ],
   "Cyprus": [
-    119,
-    64,
-    191
+    204,
+    117,
+    171
   ],
-  "Northern Cyprus": [
-    191,
-    181,
-    64
+  "Czechia": [
+    100,
+    188,
+    56
   ],
-  "Akrotiri and Dhekelia": [
-    87,
-    64,
-    191
+  "Democratic Republic of the Congo": [
+    61,
+    66,
+    209
   ],
-  "Malawi": [
-    134,
-    191,
-    64
-  ],
-  "Lebanon": [
-    149,
-    64,
-    191
-  ],
-  "Palestine": [
-    191,
-    64,
-    145
-  ],
-  "Eritrea": [
-    64,
-    191,
-    157
-  ],
-  "French Southern Territories": [
-    191,
-    64,
+  "Denmark": [
+    197,
+    99,
     108
   ],
   "Djibouti": [
+    197,
+    124,
+    99
+  ],
+  "Dominica": [
+    110,
+    212,
+    165
+  ],
+  "Dominican Republic": [
+    174,
+    47,
+    198
+  ],
+  "Ecuador": [
+    176,
+    190,
+    80
+  ],
+  "Egypt": [
+    204,
+    182,
+    123
+  ],
+  "El Salvador": [
+    90,
+    157,
+    206
+  ],
+  "Equatorial Guinea": [
+    219,
+    102,
+    136
+  ],
+  "Eritrea": [
+    66,
+    179,
+    67
+  ],
+  "Estonia": [
+    109,
+    70,
+    200
+  ],
+  "Ethiopia": [
+    125,
+    168,
+    87
+  ],
+  "Faroe Islands": [
+    214,
+    160,
+    81
+  ],
+  "Fiji": [
+    117,
+    204,
+    194
+  ],
+  "Finland": [
+    145,
+    185,
+    212
+  ],
+  "France": [
+    100,
+    128,
+    206
+  ],
+  "French Guiana": [
+    188,
+    56,
+    166
+  ],
+  "French Polynesia": [
+    140,
+    209,
+    61
+  ],
+  "French Southern Territories": [
+    99,
+    123,
+    197
+  ],
+  "Gabon": [
+    212,
+    115,
+    110
+  ],
+  "Gambia": [
+    47,
+    198,
+    98
+  ],
+  "Georgia": [
+    186,
+    109,
+    148
+  ],
+  "Germany": [
+    164,
+    133,
+    101
+  ],
+  "Ghana": [
+    150,
+    80,
+    190
+  ],
+  "Greece": [
+    90,
+    163,
+    206
+  ],
+  "Greenland": [
+    206,
+    197,
+    90
+  ],
+  "Grenada": [
+    102,
+    194,
+    219
+  ],
+  "Guadeloupe": [
+    179,
+    66,
+    121
+  ],
+  "Guam": [
+    96,
+    200,
+    70
+  ],
+  "Guatemala": [
+    94,
+    81,
+    214
+  ],
+  "Guernsey": [
+    204,
+    151,
+    117
+  ],
+  "Guinea": [
+    56,
+    188,
+    146
+  ],
+  "Guinea-Bissau": [
+    205,
+    61,
+    209
+  ],
+  "Guyana": [
+    172,
+    197,
+    99
+  ],
+  "Haiti": [
+    110,
+    155,
+    212
+  ],
+  "Honduras": [
+    198,
+    47,
+    70
+  ],
+  "Hungary": [
+    131,
+    171,
+    105
+  ],
+  "Iceland": [
+    80,
+    190,
+    95
+  ],
+  "India": [
+    221,
+    148,
+    75
+  ],
+  "Indonesia": [
+    197,
+    110,
+    89
+  ],
+  "Iran": [
+    148,
+    166,
+    89
+  ],
+  "Iraq": [
+    172,
+    143,
+    93
+  ],
+  "Ireland": [
+    93,
+    192,
+    107
+  ],
+  "Isle of Man": [
+    139,
+    90,
+    206
+  ],
+  "Israel": [
+    119,
+    154,
+    207
+  ],
+  "Italy": [
+    111,
+    184,
+    136
+  ],
+  "Jamaica": [
+    219,
+    186,
+    102
+  ],
+  "Japan": [
+    227,
+    130,
+    136
+  ],
+  "Jersey": [
+    66,
+    178,
+    179
+  ],
+  "Jordan": [
+    200,
+    70,
+    161
+  ],
+  "Kazakhstan": [
+    105,
+    166,
+    181
+  ],
+  "Kenya": [
+    189,
+    127,
+    86
+  ],
+  "Kosovo": [
+    136,
+    214,
+    81
+  ],
+  "Kuwait": [
+    117,
+    127,
+    204
+  ],
+  "Kyrgyzstan": [
+    188,
+    80,
+    56
+  ],
+  "Laos": [
+    61,
+    209,
+    130
+  ],
+  "Latvia": [
+    174,
+    99,
+    197
+  ],
+  "Lebanon": [
+    206,
+    212,
+    110
+  ],
+  "Lesotho": [
+    47,
+    146,
+    198
+  ],
+  "Liberia": [
+    190,
+    80,
+    120
+  ],
+  "Libya": [
+    110,
+    166,
+    119
+  ],
+  "Liechtenstein": [
+    98,
+    206,
+    90
+  ],
+  "Lithuania": [
+    128,
+    102,
+    219
+  ],
+  "Luxembourg": [
+    179,
+    124,
+    66
+  ],
+  "Madagascar": [
+    70,
+    200,
+    174
+  ],
+  "Malawi": [
+    214,
+    81,
+    202
+  ],
+  "Malaysia": [
+    84,
+    182,
+    169
+  ],
+  "Mali": [
+    170,
+    204,
+    117
+  ],
+  "Malta": [
+    56,
+    99,
+    188
+  ],
+  "Marshall Islands": [
+    209,
+    61,
+    65
+  ],
+  "Martinique": [
+    99,
+    197,
+    124
+  ],
+  "Mauritania": [
+    166,
+    110,
+    212
+  ],
+  "Mauritius": [
+    198,
+    175,
+    47
+  ],
+  "Mayotte": [
+    80,
+    175,
+    190
+  ],
+  "Mexico": [
+    135,
+    174,
+    91
+  ],
+  "Micronesia": [
+    206,
+    90,
+    156
+  ],
+  "Moldova": [
+    132,
+    118,
+    178
+  ],
+  "Mongolia": [
+    96,
+    133,
+    169
+  ],
+  "Montenegro": [
+    135,
+    219,
+    102
+  ],
+  "Montserrat": [
+    68,
+    66,
+    179
+  ],
+  "Morocco": [
+    184,
+    86,
+    71
+  ],
+  "Mozambique": [
+    200,
+    110,
+    70
+  ],
+  "Myanmar": [
+    81,
+    214,
+    161
+  ],
+  "NA": [
+    194,
+    117,
+    204
+  ],
+  "Namibia": [
+    165,
+    188,
+    56
+  ],
+  "Nauru": [
+    61,
+    139,
+    209
+  ],
+  "Nepal": [
+    197,
+    99,
+    122
+  ],
+  "Netherlands": [
+    223,
+    133,
+    73
+  ],
+  "New Caledonia": [
+    110,
+    212,
+    115
+  ],
+  "New Zealand": [
+    105,
+    181,
+    153
+  ],
+  "Nicaragua": [
+    99,
+    47,
+    198
+  ],
+  "Niger": [
+    190,
+    150,
+    80
+  ],
+  "Nigeria": [
+    102,
+    166,
+    78
+  ],
+  "North Korea": [
+    135,
+    91,
+    154
+  ],
+  "North Macedonia": [
+    90,
+    206,
+    198
+  ],
+  "Northern Cyprus": [
+    219,
+    102,
+    193
+  ],
+  "Northern Mariana Islands": [
+    121,
+    179,
+    66
+  ],
+  "Norway": [
+    88,
+    125,
+    187
+  ],
+  "Oman": [
+    70,
+    96,
+    200
+  ],
+  "Pakistan": [
+    67,
+    157,
+    115
+  ],
+  "Palau": [
+    214,
+    95,
+    81
+  ],
+  "Palestine": [
+    117,
+    204,
+    151
+  ],
+  "Panama": [
+    146,
+    56,
+    188
+  ],
+  "Papua New Guinea": [
+    209,
+    206,
+    61
+  ],
+  "Paraguay": [
+    99,
+    171,
+    197
+  ],
+  "Peru": [
     191,
-    138,
-    64
+    128,
+    105
+  ],
+  "Philippines": [
+    106,
+    175,
+    200
+  ],
+  "Poland": [
+    186,
+    120,
+    144
+  ],
+  "Portugal": [
+    76,
+    169,
+    144
+  ],
+  "Puerto Rico": [
+    212,
+    110,
+    155
+  ],
+  "Qatar": [
+    69,
+    198,
+    47
+  ],
+  "Republic of the Congo": [
+    96,
+    80,
+    190
+  ],
+  "Reunion": [
+    206,
+    140,
+    90
+  ],
+  "Romania": [
+    196,
+    179,
+    110
+  ],
+  "Russia": [
+    91,
+    154,
+    93
+  ],
+  "Rwanda": [
+    102,
+    219,
+    187
+  ],
+  "Saint Barthelemy": [
+    179,
+    66,
+    177
+  ],
+  "Saint Helena, Ascension and Tris": [
+    160,
+    200,
+    70
+  ],
+  "Saint Kitts and Nevis": [
+    81,
+    135,
+    214
+  ],
+  "Saint Lucia": [
+    204,
+    117,
+    127
+  ],
+  "Saint Pierre and Miquelon": [
+    56,
+    188,
+    81
+  ],
+  "Saint Vincent and the Grenadines": [
+    131,
+    61,
+    209
+  ],
+  "Samoa": [
+    197,
+    174,
+    99
+  ],
+  "San Marino": [
+    110,
+    206,
+    212
+  ],
+  "Sao Tome and Principe": [
+    198,
+    47,
+    145
+  ],
+  "Saudi Arabia": [
+    69,
+    146,
+    102
+  ],
+  "Senegal": [
+    119,
+    190,
+    80
+  ],
+  "Serbia": [
+    90,
+    98,
+    206
+  ],
+  "Seychelles": [
+    219,
+    129,
+    102
+  ],
+  "Sierra Leone": [
+    66,
+    179,
+    124
+  ],
+  "Singapore": [
+    175,
+    70,
+    200
+  ],
+  "Slovakia": [
+    201,
+    214,
+    81
+  ],
+  "Slovenia": [
+    117,
+    170,
+    204
+  ],
+  "Solomon Islands": [
+    188,
+    56,
+    98
   ],
   "Somalia": [
     64,
-    130,
+    209,
+    61
+  ],
+  "South Africa": [
+    179,
+    145,
+    77
+  ],
+  "South Korea": [
+    149,
+    125,
     191
   ],
-  "Comoros": [
-    191,
-    64,
-    164
+  "South Sudan": [
+    125,
+    99,
+    197
   ],
-  "Madagascar": [
-    64,
-    115,
-    191
-  ],
-  "Azerbaijan": [
-    64,
-    191,
-    157
-  ],
-  "Iran": [
-    191,
-    176,
-    64
-  ],
-  "Mayotte": [
-    64,
-    191,
-    149
-  ],
-  "Seychelles": [
-    64,
-    191,
-    125
-  ],
-  "Kazakhstan": [
-    191,
-    106,
-    64
-  ],
-  "Kuwait": [
-    191,
-    64,
-    115
-  ],
-  "Qatar": [
-    191,
-    106,
-    64
-  ],
-  "United Arab Emirates": [
-    140,
-    64,
-    191
-  ],
-  "Oman": [
-    115,
-    64,
-    191
-  ],
-  "Turkmenistan": [
-    191,
-    64,
-    136
-  ],
-  "Uzbekistan": [
-    191,
-    64,
-    189
-  ],
-  "Reunion": [
-    191,
-    119,
-    64
-  ],
-  "Mauritius": [
-    191,
-    138,
-    64
-  ],
-  "Tajikistan": [
-    176,
-    64,
-    191
-  ],
-  "Kyrgyzstan": [
-    64,
-    136,
-    191
-  ],
-  "Nepal": [
-    77,
-    191,
-    64
+  "Spain": [
+    214,
+    183,
+    81
   ],
   "Sri Lanka": [
-    64,
-    179,
-    191
+    212,
+    167,
+    110
   ],
-  "Bangladesh": [
-    64,
-    191,
-    181
+  "Sudan": [
+    47,
+    198,
+    176
   ],
-  "Bhutan": [
-    64,
-    89,
-    191
+  "Suriname": [
+    190,
+    80,
+    174
   ],
-  "Myanmar": [
-    64,
-    191,
-    119
+  "Svalbard and Jan Mayen": [
+    155,
+    206,
+    90
   ],
-  "Indonesia": [
-    191,
-    64,
-    108
+  "Swaziland": [
+    102,
+    134,
+    219
   ],
-  "Thailand": [
-    64,
-    104,
-    191
+  "Sweden": [
+    108,
+    161,
+    208
   ],
-  "Malaysia": [
-    64,
-    191,
-    147
+  "Switzerland": [
+    206,
+    100,
+    103
   ],
-  "Vietnam": [
-    64,
-    189,
-    191
-  ],
-  "Singapore": [
-    191,
-    64,
-    140
+  "Syria": [
+    173,
+    109,
+    82
   ],
   "Taiwan": [
-    191,
-    64,
-    108
+    115,
+    192,
+    201
   ],
-  "Philippines": [
-    191,
-    64,
-    89
+  "Tajikistan": [
+    179,
+    68,
+    66
+  ],
+  "Tanzania": [
+    70,
+    200,
+    111
+  ],
+  "Thailand": [
+    98,
+    176,
+    188
   ],
   "Timor-Leste": [
-    191,
-    70,
-    64
+    162,
+    81,
+    214
   ],
-  "Palau": [
-    64,
-    191,
-    70
+  "Togo": [
+    204,
+    195,
+    117
   ],
-  "Micronesia": [
-    149,
-    191,
-    64
+  "Tokelau": [
+    56,
+    164,
+    188
   ],
-  "Papua New Guinea": [
-    64,
-    191,
-    168
+  "Tonga": [
+    209,
+    61,
+    138
   ],
-  "Guam": [
-    191,
-    113,
-    64
+  "Trinidad and Tobago": [
+    121,
+    197,
+    99
   ],
-  "Northern Mariana Islands": [
-    64,
-    191,
-    181
+  "Tunisia": [
+    116,
+    110,
+    212
   ],
-  "Solomon Islands": [
-    96,
-    191,
-    64
+  "Turkey": [
+    187,
+    88,
+    105
   ],
-  "New Caledonia": [
-    168,
-    191,
-    64
+  "Turkmenistan": [
+    198,
+    100,
+    47
   ],
-  "Marshall Islands": [
-    191,
-    64,
-    96
-  ],
-  "Nauru": [
-    64,
-    181,
-    191
-  ],
-  "Vanuatu": [
-    191,
-    159,
-    64
+  "Turks and Caicos Islands": [
+    80,
+    190,
+    151
   ],
   "Tuvalu": [
-    159,
-    64,
-    191
+    198,
+    90,
+    206
+  ],
+  "Uganda": [
+    192,
+    219,
+    102
+  ],
+  "Ukraine": [
+    114,
+    155,
+    203
+  ],
+  "United Arab Emirates": [
+    66,
+    120,
+    179
+  ],
+  "United Kingdom": [
+    203,
+    114,
+    136
+  ],
+  "United States": [
+    81,
+    112,
+    184
+  ],
+  "United States Minor Outlying Islands": [
+    200,
+    70,
+    95
+  ],
+  "Uruguay": [
+    81,
+    214,
+    95
+  ],
+  "Uzbekistan": [
+    152,
+    117,
+    204
+  ],
+  "Vanuatu": [
+    188,
+    147,
+    56
+  ],
+  "Venezuela": [
+    195,
+    121,
+    134
+  ],
+  "Vietnam": [
+    173,
+    176,
+    79
+  ],
+  "Virgin Islands, U.S.": [
+    61,
+    209,
+    206
+  ],
+  "Wallis and Futuna": [
+    197,
+    99,
+    170
+  ],
+  "Western Sahara": [
+    187,
+    170,
+    129
+  ],
+  "Yemen": [
+    154,
+    212,
+    110
+  ],
+  "Zambia": [
+    47,
+    68,
+    198
+  ],
+  "Zimbabwe": [
+    190,
+    96,
+    80
   ]
 }
