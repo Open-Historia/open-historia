@@ -211,26 +211,85 @@ const maybeJsonParse = (value) => {
   }
 };
 
-const extractJsonPayload = (rawText) => {
-  const direct = maybeJsonParse(rawText);
+// Parse, and when that fails, repair the JSON slips small local models make
+// most: trailing commas before } or ], and curly "smart" quotes as string
+// delimiters. Repairs are only ever attempted AFTER a strict parse failed, so
+// well-formed output is never touched.
+const lenientJsonParse = (value) => {
+  const direct = maybeJsonParse(value);
+  if (direct) return direct;
+  const repaired = value
+    .replace(/[“”]/g, '"')
+    .replace(/,\s*([}\]])/g, "$1");
+  return maybeJsonParse(repaired);
+};
+
+// Every balanced top-level {...} or [...] block in the text, string-aware, in
+// order of appearance. A greedy first-{-to-last-} regex dies when the model
+// writes prose containing a brace after its JSON, or emits two objects; walking
+// candidates and parsing each one survives both.
+const balancedJsonCandidates = (text) => {
+  const candidates = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let opener = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (start === -1) {
+      if (ch === "{" || ch === "[") {
+        start = i;
+        depth = 1;
+        opener = ch;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+    } else if (ch === "\\") {
+      escaped = inString;
+    } else if (ch === '"') {
+      inString = !inString;
+    } else if (!inString) {
+      if (ch === "{" || ch === "[") depth += 1;
+      else if (ch === "}" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(text.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+  // Objects first: the payload is an object, and a stray inline array (e.g. in
+  // the model's commentary) must not shadow it.
+  return candidates.sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
+};
+
+export const extractJsonPayload = (rawText) => {
+  // Reasoning models (and several Ollama chat templates) prepend a think block
+  // the strict parser chokes on; the answer follows it.
+  const text = rawText
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^[\s\S]*?<\/think>/i, "")
+    .trim();
+
+  const direct = lenientJsonParse(text);
   if (direct) return direct;
 
-  const fencedMatch = rawText.match(/```json\s*([\s\S]*?)```/i);
-  if (fencedMatch?.[1]) {
-    const parsed = maybeJsonParse(fencedMatch[1].trim());
-    if (parsed) return parsed;
+  // Any fenced block, not just ```json — small models label fences ```JSON,
+  // ```javascript, or not at all.
+  for (const fence of text.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)) {
+    const parsed = fence[1] ? lenientJsonParse(fence[1].trim()) : null;
+    if (parsed && typeof parsed === "object") return parsed;
   }
 
-  const objectMatch = rawText.match(/\{[\s\S]*\}/);
-  if (objectMatch?.[0]) {
-    const parsed = maybeJsonParse(objectMatch[0]);
-    if (parsed) return parsed;
-  }
-
-  const arrayMatch = rawText.match(/\[[\s\S]*\]/);
-  if (arrayMatch?.[0]) {
-    const parsed = maybeJsonParse(arrayMatch[0]);
-    if (parsed) return parsed;
+  for (const candidate of balancedJsonCandidates(text)) {
+    const parsed = lenientJsonParse(candidate);
+    if (parsed && typeof parsed === "object") return parsed;
   }
 
   return null;
@@ -382,9 +441,16 @@ const runJsonTask = async (taskKey, {
           role: "model",
           parts: [{ text: rawText || JSON.stringify(parsed ?? null) }],
         });
+        // A model that answered with a tool call is told to call it again; one
+        // that answered in prose (local models without tool support) is told to
+        // answer in raw JSON — telling it to call a tool it cannot see wastes
+        // the one retry this task gets.
+        const retryInstruction = response?.toolInput
+          ? `Call ${tool?.name || "the required tool"} again with corrected input.`
+          : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
         history.push({
           role: "user",
-          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} Call ${tool?.name || "the required tool"} again with corrected input.` }],
+          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}` }],
         });
         continue;
       }
