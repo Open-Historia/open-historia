@@ -331,6 +331,62 @@ async function providerFetch(url, options = {}) {
     }
 }
 
+// Local inference servers (llama.cpp, LM Studio, Ollama) only notice a dead
+// connection when they next WRITE. A non-streaming request therefore keeps
+// generating after Cancel: the socket closes, but the server burns through the
+// entire completion before discovering nobody is listening — the reported
+// "cancel doesn't actually stop my local model". Streaming fixes it physically:
+// the very next token write fails and inference stops within a token or two.
+// Assembles the SSE deltas back into a normal chat-completions response object
+// so the existing extractors work unchanged. Cloud providers keep the simpler
+// buffered path — their compute is not the player's GPU.
+export async function readOpenAIStreamedResponse(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let content = "";
+    let toolName = "";
+    let toolArguments = "";
+    let finishReason = null;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+                if (!line.startsWith("data:")) continue;
+                const data = line.slice(5).trim();
+                if (!data || data === "[DONE]") continue;
+                let chunk;
+                try { chunk = JSON.parse(data); } catch { continue; }
+                const choice = chunk?.choices?.[0];
+                if (!choice) continue;
+                const delta = choice.delta ?? choice.message ?? {};
+                if (typeof delta.content === "string") content += delta.content;
+                const call = Array.isArray(delta.tool_calls) ? delta.tool_calls[0] : null;
+                if (call?.function?.name) toolName = call.function.name;
+                if (typeof call?.function?.arguments === "string") toolArguments += call.function.arguments;
+                if (choice.finish_reason) finishReason = choice.finish_reason;
+            }
+        }
+    } finally {
+        try { reader.releaseLock(); } catch { /* stream already closed */ }
+    }
+    return {
+        choices: [{
+            finish_reason: finishReason,
+            message: {
+                content,
+                ...(toolName || toolArguments
+                    ? { tool_calls: [{ type: "function", function: { name: toolName, arguments: toolArguments } }] }
+                    : {}),
+            },
+        }],
+    };
+}
+
 function toOpenAIMessages(systemPrompt, history) {
     const messages = [{ role: "system", content: systemPrompt }];
 
@@ -516,11 +572,15 @@ async function callOpenAIStyleChatCompletions({
         const requestSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
             : systemPrompt;
+        const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
             payload: {
                 model,
+                // Streaming is what makes Cancel PHYSICAL on a local server —
+                // see readOpenAIStreamedResponse. Local endpoints only.
+                ...(streamLocalEndpoint ? { stream: true } : {}),
                 messages: toOpenAIMessages(requestSystemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways; models that reject it surface a
@@ -601,7 +661,13 @@ async function callOpenAIStyleChatCompletions({
             throw new Error(extractErrorMessage(payload, `${providerLabel} request failed (${response.status})`));
         }
 
-        const data = await response.json();
+        // Local servers that honor stream:true answer as an event stream; ones
+        // that ignore it still answer plain JSON — branch on what actually came
+        // back, not on what was asked for.
+        const responseType = String(response.headers.get("content-type") || "");
+        const data = streamLocalEndpoint && responseType.includes("text/event-stream")
+            ? await readOpenAIStreamedResponse(response)
+            : await response.json();
         const text = extractOpenAIMessageText(data);
 
         if (tool) {
