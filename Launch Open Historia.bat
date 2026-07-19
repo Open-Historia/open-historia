@@ -53,8 +53,29 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM A broken ComSpec system variable breaks double-clicking .bat files
+REM ("Windows cannot find ...") and any child-shell command. Field-diagnosed:
+REM it is maddening to find by hand, so name it loudly and keep going.
+if not exist "%ComSpec%" (
+    echo [WARN] The ComSpec system variable on this computer is broken:
+    echo        ComSpec = "%ComSpec%"
+    echo It must point to cmd.exe. Fix it in System Properties ^> Environment
+    echo Variables ^> System variables ^> ComSpec ^> set the value to:
+    echo        %%SystemRoot%%\system32\cmd.exe
+    echo This is also why double-clicking .bat files can say "Windows cannot
+    echo find..." on this computer. Trying to continue anyway...
+    echo.
+)
+REM Capture the version WITHOUT a child shell: for /f ^('command'^) needs
+REM ComSpec, which is broken on some machines. A plain redirect runs node
+REM directly in this window instead.
 set "NODEVER="
-for /f "delims=" %%V in ('node --version 2^>nul') do set "NODEVER=%%V"
+set "OH_VERFILE=%TEMP%\oh-node-version.txt"
+call node --version >"%OH_VERFILE%" 2>nul
+if exist "%OH_VERFILE%" (
+    set /p NODEVER=<"%OH_VERFILE%"
+    del "%OH_VERFILE%" >nul 2>&1
+)
 REM "where" finding node does NOT guarantee it runs here: launched "as
 REM administrator", the window gets the ADMIN account's environment, and a
 REM Node.js installed only for the normal user account isn't on that PATH.
@@ -106,6 +127,7 @@ if not defined NODEOK (
 )
 set "NODEPATH="
 for /f "delims=" %%P in ('where node 2^>nul') do if not defined NODEPATH set "NODEPATH=%%P"
+if not defined NODEPATH set "NODEPATH=on PATH"
 echo [OK] Node.js !NODEVER! detected ^(!NODEPATH!^).
 echo.
 
