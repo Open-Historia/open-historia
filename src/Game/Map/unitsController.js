@@ -46,8 +46,17 @@ export const subscribeUnits = (fn) => {
   return () => listeners.delete(fn);
 };
 
-export const getUnits = () => units;
-export const getUnitById = (id) => units.find((unit) => unit.id === id) ?? null;
+// Visual override for the staged event reveal (see time.jsx): while a turn's
+// events are being revealed one by one, the map shows the units as of the last
+// revealed event rather than the final post-jump list. null = live state.
+let unitsOverride = null;
+export const setUnitsOverride = (list) => {
+  unitsOverride = Array.isArray(list) ? list : null;
+  emit();
+};
+
+export const getUnits = () => unitsOverride ?? units;
+export const getUnitById = (id) => (unitsOverride ?? units).find((unit) => unit.id === id) ?? null;
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;

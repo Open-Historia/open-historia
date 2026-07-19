@@ -162,12 +162,13 @@ export const validateTimelineDates = ({ candidate, mode, originDate, targetDate,
   for (let index = 0; index < normalizeArray(candidate?.events).length; index += 1) {
     const eventDate = normalizeString(candidate.events[index]?.date);
     if (!parseIsoDate(eventDate)) return `$.events[${index}].date must be a real date in YYYY-MM-DD format.`;
-    // A sub-day skip (6 hours) keeps the same date, so its events legitimately
-    // fall ON the origin date — demanding "after X and no later than X" was an
-    // impossible rule that pushed every same-day turn into the fallback.
-    const beforeWindow = requireAdvance ? eventDate <= originDate : eventDate < originDate;
-    if (beforeWindow || eventDate > stopDate) {
-      return `$.events[${index}].date must be ${requireAdvance ? "after" : "on or after"} ${originDate} and no later than ${stopDate}.`;
+    // Events dated ON the origin date are legitimate for every jump length: a
+    // sub-day skip stays on that date, and a 1-day jump's window used to be a
+    // single legal date ("after Jan 14 and no later than Jan 15") that models
+    // constantly missed by dating events "today" — burning the strict attempt
+    // (and the whole turn, when the retry ran out of road) over nothing.
+    if (eventDate < originDate || eventDate > stopDate) {
+      return `$.events[${index}].date must be on or after ${originDate} and no later than ${stopDate}.`;
     }
     if (eventDate < previousDate) return `$.events[${index}].date must not precede the previous event date.`;
     previousDate = eventDate;
@@ -185,7 +186,6 @@ export const validateTimelineDates = ({ candidate, mode, originDate, targetDate,
 // used to trash the whole turn exactly this way).
 export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) => {
   if (!parseIsoDate(originDate)) return; // textual/BCE scenarios use the lenient branch
-  const dayAfterOrigin = addIsoDays(originDate, 1) || targetDate;
   let stopDate = normalizeString(candidate?.stopDate);
   if (mode === "auto") {
     if (!parseIsoDate(stopDate) || stopDate <= originDate || stopDate > targetDate) stopDate = targetDate;
@@ -193,7 +193,9 @@ export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) 
     stopDate = targetDate;
   }
   candidate.stopDate = stopDate;
-  const floor = dayAfterOrigin > stopDate ? stopDate : dayAfterOrigin;
+  // Mirrors validation: on-or-after the origin is in-window for every jump
+  // length, so strays dated before the origin pull up to the origin itself.
+  const floor = originDate > stopDate ? stopDate : originDate;
   let previous = floor;
   for (const event of normalizeArray(candidate?.events)) {
     if (!event || typeof event !== "object") continue;
