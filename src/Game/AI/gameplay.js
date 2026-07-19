@@ -1772,13 +1772,13 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
     signal,
-    // The jump IS the game — let slow (local/reasoning) models finish instead
-    // of silently swapping in the canned fallback. Five minutes covers even a
-    // large reasoning model writing 37 events; the bound only exists so a
-    // genuinely hung request can't spin forever (Cancel works throughout).
-    // The settings toggle removes the bound entirely: 0 disables the deadline
-    // in runJsonTask, so only a real error (or Cancel) can end the wait.
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.noAiTimeLimit) ? 0 : 300000,
+    // The jump IS the game — by default generation waits as long as the model
+    // needs (0 disables the deadline in runJsonTask), so the canned fallback is
+    // only reachable through a real error, never a slow local/reasoning model.
+    // The "Limit AI generation" toggle opts back into a 5-minute bound for
+    // players who prefer a guaranteed turn over a guaranteed answer (Cancel
+    // works either way).
+    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
     userMessage:
       mode === "auto"
         ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
