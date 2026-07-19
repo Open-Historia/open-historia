@@ -122,7 +122,7 @@ const addIsoDays = (value, days) => {
   return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 };
 
-const validateTimelineDates = ({ candidate, mode, originDate, targetDate }) => {
+const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requireAdvance = false }) => {
   const stopDate = normalizeString(candidate?.stopDate);
   if (!parseIsoDate(originDate)) {
     const eventDates = normalizeArray(candidate?.events).map((event) => normalizeString(event?.date));
@@ -131,6 +131,12 @@ const validateTimelineDates = ({ candidate, mode, originDate, targetDate }) => {
     if (malformedIsoIndex >= 0) {
       const path = malformedIsoIndex === 0 ? "$.stopDate" : `$.events[${malformedIsoIndex - 1}].date`;
       return `${path} must be a real Gregorian date when using YYYY-MM-DD format.`;
+    }
+    // A whole-day advance was requested but the model kept the clock where it
+    // was — the stuck-save signature (it then re-simulates the past instead of
+    // the future). Reject on the strict attempt so the retry moves time forward.
+    if (requireAdvance && stopDate && stopDate === normalizeString(originDate)) {
+      return `$.stopDate must move time forward - it must not equal the current date ${originDate}.`;
     }
     if (parseIsoDate(stopDate)) {
       let previousDate = "";
@@ -1740,7 +1746,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
         return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
       }
-      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate });
+      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate, requireAdvance: dateStep >= 1 });
       if (dateError) {
         if (strict) return dateError;
         clampTimelineDates(candidate, { mode, originDate, targetDate });
