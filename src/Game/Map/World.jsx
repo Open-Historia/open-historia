@@ -9,6 +9,8 @@ import CountryInfoPanel from "../Selection/CountryPanel.jsx";
 import Cities from "./Cities";
 import Units from "./Units";
 import UnitPopup from "../Selection/Units";
+import MarkersLayer from "./MarkersLayer.jsx";
+import FeaturePopup from "../Selection/Features.jsx";
 import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
@@ -292,11 +294,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       >
         <Nations isGlobe={isGlobe} />
         <Cities />
+        <MarkersLayer />
         <Units />
         <GlobeEffects active={isGlobe} />
         <RegionPopup />
         <CountryInfoPanel />
         <UnitPopup />
+        <FeaturePopup />
       </Map>
       {isGlobe && (
         <canvas

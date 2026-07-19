@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
+import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
 import {
   getInteractionMode,
   clearInteractionMode,
@@ -526,11 +527,41 @@ const WorldMap = ({ isGlobe = false }) => {
     const unitHits = unitsAt();
     if (unitHits.length) {
       dismissRegionPopup();
+      dismissFeaturePopup();
       onUnitSelected({ id: unitHits[0].properties.id, lngLat: event.lngLat });
       return;
     }
 
     dismissUnitPopup();
+
+    // A city or built structure under the cursor wins over the region: point
+    // features are tiny targets, so a hit is always deliberate. Built structures
+    // (world.markers) outrank cities when the two overlap.
+    const featureLayers = ["markers-shapes", "cities-shapes", "cities-labels"]
+      .filter((id) => map.getLayer(id));
+    const featureHits = featureLayers.length
+      ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
+      : [];
+    if (featureHits.length) {
+      dismissRegionPopup();
+      const hit = featureHits.find((entry) => entry.layer.id === "markers-shapes") ?? featureHits[0];
+      const props = hit.properties ?? {};
+      const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
+      onFeatureSelected(hit.layer.id === "markers-shapes"
+        ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
+        : {
+          source: "city",
+          name: props.city || props.name || "",
+          population: props.population,
+          capital: props.capital,
+          tier: props.tier,
+          lng,
+          lat,
+        });
+      return;
+    }
+
+    dismissFeaturePopup();
     // Custom (editor) regions render on top of the stock regions. On a map with its
     // OWN drawn/generated geometry, query only the custom layers — a click on empty
     // sea must resolve to nothing, not the leftover Earth country underneath. On a

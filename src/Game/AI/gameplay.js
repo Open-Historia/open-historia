@@ -874,6 +874,25 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       if (!unitIds.has(unitId)) return `${operationPath}.unitId does not identify an existing unit.`;
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
     }
+
+    // Marker ops that would be silently dropped by normalization instead fail
+    // here, so the retry tells the model what was missing.
+    for (let index = 0; index < normalizeArray(impacts?.markerOps).length; index += 1) {
+      const operation = impacts.markerOps[index];
+      const operationPath = `${path}.markerOps[${index}]`;
+      const op = normalizeString(operation?.op).toLowerCase();
+      if (op === "build" || op === "found") {
+        const marker = operation.marker ?? operation;
+        if (!normalizeString(marker?.name)) return `${operationPath}.marker.name must not be blank.`;
+        if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
+          return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+        }
+      } else if (op === "remove" || op === "destroy") {
+        if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
+          return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+        }
+      }
+    }
   }
 
   // Unprompted outreach chats (top-level, not tied to an event) need real
