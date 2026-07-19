@@ -22,9 +22,9 @@ const saveAllChats = async (chats) => {
     } catch (err) { console.error("Failed to save chats:", err); }
 };
 
-const loadAllChats = async () => {
+const loadAllChats = async ({ force = false } = {}) => {
     try {
-        return await readChatsState();
+        return await readChatsState({ force });
     } catch { return []; }
 };
 
@@ -752,6 +752,40 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         };
     }, [isOpen]);
 
+    // Chats created OUTSIDE this panel — a jump's diplomatic invitations, the
+    // idle outreach drip — used to be invisible until a full page reload (the
+    // list loaded exactly once). Poll the stored list while the panel is open
+    // and merge additions/updates in; the active conversation object is left
+    // alone so an in-flight exchange is never clobbered mid-reply.
+    useEffect(() => {
+        if (!isOpen || !hasLoadedInitialData) return;
+
+        let cancelled = false;
+        const sync = () => loadAllChats({ force: true })
+        .then((saved) => {
+            if (cancelled || !Array.isArray(saved)) return;
+            setChats((prev) => {
+                const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
+                if (signature(saved) === signature(prev)) return prev;
+                setActiveChat((ac) => {
+                    if (!ac) return ac;
+                    const updated = saved.find((c) => c.id === ac.id);
+                    // Only adopt storage's copy when it has MORE messages (an
+                    // outreach note landed); otherwise the in-panel state wins.
+                    return updated && (updated.messages?.length ?? 0) > (ac.messages?.length ?? 0) ? updated : ac;
+                });
+                return saved;
+            });
+        })
+        .catch(() => {});
+
+        const iv = setInterval(sync, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(iv);
+        };
+    }, [isOpen, hasLoadedInitialData]);
+
     const availableCountries = useMemo(
         () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
                                        [countries, playerCountry]
@@ -852,10 +886,48 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
 const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
+    const [unseenCount, setUnseenCount] = useState(0);
+    // Message totals per chat as of the last time the panel was open — the
+    // baseline "seen" state for the unread badge.
+    const seenRef = useRef(null);
     const setChatOpen = () => { onToggle(); };
 
     useEffect(() => {
         if (isOpen) setHasOpened(true);
+    }, [isOpen]);
+
+    // Unread badge: countries now message the player unprompted (jump
+    // invitations, the idle outreach drip), so the toolbar button must say so.
+    // A cheap poll of the stored chat list counts open chats that gained
+    // messages (or appeared) since the panel was last open.
+    useEffect(() => {
+        let cancelled = false;
+        const check = () => loadAllChats({ force: true })
+        .then((saved) => {
+            if (cancelled || !Array.isArray(saved)) return;
+            const open = saved.filter((c) => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length > 0);
+            const totals = new Map(open.map((c) => [String(c.id), c.messages?.length ?? 0]));
+            if (isOpen || seenRef.current === null) {
+                // Panel open (or first look): everything currently there is seen.
+                seenRef.current = totals;
+                setUnseenCount(0);
+                return;
+            }
+            let fresh = 0;
+            for (const [id, count] of totals) {
+                const seen = seenRef.current.get(id);
+                if (seen === undefined || count > seen) fresh += 1;
+            }
+            setUnseenCount(fresh);
+        })
+        .catch(() => {});
+
+        check();
+        const iv = setInterval(check, 15000);
+        return () => {
+            cancelled = true;
+            clearInterval(iv);
+        };
     }, [isOpen]);
 
     useEffect(() => {
@@ -871,7 +943,16 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} />}
             <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-            onClick={() => setChatOpen(o => !o)}>💬</button>
+            onClick={() => setChatOpen(o => !o)}>
+            <span style={{ position: "relative", display: "inline-flex" }}>
+                💬
+                {unseenCount > 0 && !isOpen && (
+                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.2rem", borderRadius: "999px", background: "#dc2626", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.62rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
+                        {unseenCount > 9 ? "9+" : unseenCount}
+                    </span>
+                )}
+            </span>
+            </button>
             </>
         );
 };
