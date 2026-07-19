@@ -4,8 +4,8 @@ import { useMap } from "react-map-gl/maplibre";
 import {
   directionFromLngLat,
   globeTransitionOpacity,
-  normalizeLongitude,
   projectGlobeSun,
+  subsolarPoint,
   sunLimbBloom,
 } from "./globeSunMath.js";
 import {
@@ -20,14 +20,19 @@ import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
-const SUN_INITIAL_SKY_OFFSET_DEG = 10;
 const CELESTIAL_FRAME_MS = 1000 / 60;
 const LIGHTING_FRAME_MS = 1000 / 60;
+// The terminator creeps 0.25°/minute as the real Earth turns; refresh on this
+// cadence even when the map is fully idle (no render events fire then), so the
+// day/night line stays live without a per-frame cost.
+const LIVE_SUN_REFRESH_MS = 60 * 1000;
 
-// The sun, stars, and surface lighting share one static world frame. Moving
-// the camera therefore changes their perspective without sliding the light
-// independently across the countries.
-let sunWorldPosition = null;
+// The sun, stars, and surface lighting share one world frame: the REAL sun.
+// sunWorldPosition is the actual subsolar point for the current wall-clock
+// moment (seasonal declination + Earth's real rotation), so the day/night
+// shadow on the globe matches the planet outside the window; moving the camera
+// changes perspective without sliding the light across the countries.
+let sunWorldPosition = subsolarPoint();
 
 const GlobeEffects = ({ active }) => {
   const { current: map } = useMap();
@@ -36,16 +41,6 @@ const GlobeEffects = ({ active }) => {
   useEffect(() => {
     if (!active || !map) return undefined;
     const mapInstance = map.getMap?.() ?? map;
-
-    if (sunWorldPosition == null) {
-      const center = mapInstance.getCenter();
-      sunWorldPosition = {
-        // Start on the far celestial sphere near the globe's limb, not in a
-        // low orbit immediately above the surface.
-        lng: normalizeLongitude(center.lng + 150),
-        lat: Math.max(-60, Math.min(60, -center.lat + SUN_INITIAL_SKY_OFFSET_DEG)),
-      };
-    }
 
     let frameId = 0;
     let lastTick = performance.now();
@@ -79,6 +74,9 @@ const GlobeEffects = ({ active }) => {
 
     const syncVisuals = (forceLighting = false) => {
       if (disposed || contextLost || !mapInstance.style) return;
+      // Track the real sun every draw — a dozen trig ops, far cheaper than the
+      // canvas work below, and it keeps the terminator honest while rendering.
+      sunWorldPosition = subsolarPoint();
       const canvas = mapInstance.getCanvas();
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
@@ -208,10 +206,12 @@ const GlobeEffects = ({ active }) => {
     mapCanvas.addEventListener("webglcontextrestored", handleContextRestored);
     syncVisuals();
     frameId = requestAnimationFrame(tick);
+    const liveSunTimer = window.setInterval(() => syncVisuals(true), LIVE_SUN_REFRESH_MS);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(frameId);
+      clearInterval(liveSunTimer);
       clearTimeout(lightingTimer);
       mapInstance.off("render", handleRender);
       mapInstance.off("moveend", handleMovementEnd);

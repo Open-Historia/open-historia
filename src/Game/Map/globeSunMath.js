@@ -11,6 +11,35 @@ const smoothstep = (start, end, value) => {
 
 export const normalizeLongitude = (lng) => ((lng + 180) % 360 + 360) % 360 - 180;
 
+// The REAL subsolar point (where the sun is at zenith) for a moment in time —
+// the standard low-precision solar ephemeris (Astronomical Almanac), accurate
+// to a small fraction of a degree, which is far below what the eye can see on
+// the globe. Latitude is the solar declination (the seasons); longitude falls
+// out of right ascension minus Greenwich sidereal time (the Earth's actual
+// rotation, including the equation of time — the sun crosses Greenwich up to
+// ~16 minutes off 12:00 UTC depending on the date).
+export const subsolarPoint = (date = new Date()) => {
+  const julianDate = date.getTime() / 86400000 + 2440587.5;
+  const n = julianDate - 2451545.0; // days since J2000
+  const meanLongitude = 280.46 + 0.9856474 * n;
+  const meanAnomaly = (357.528 + 0.9856003 * n) * DEG_TO_RAD;
+  const eclipticLongitude = (meanLongitude
+    + 1.915 * Math.sin(meanAnomaly)
+    + 0.02 * Math.sin(2 * meanAnomaly)) * DEG_TO_RAD;
+  const obliquity = (23.439 - 0.0000004 * n) * DEG_TO_RAD;
+
+  const declination = Math.asin(Math.sin(obliquity) * Math.sin(eclipticLongitude));
+  const rightAscension = Math.atan2(
+    Math.cos(obliquity) * Math.sin(eclipticLongitude),
+    Math.cos(eclipticLongitude),
+  );
+  const siderealTime = 280.46061837 + 360.98564736629 * n; // GMST, degrees
+  return {
+    lat: declination / DEG_TO_RAD,
+    lng: normalizeLongitude(rightAscension / DEG_TO_RAD - siderealTime),
+  };
+};
+
 // Sphere geometry cannot follow MapLibre's high-zoom globe-to-Mercator morph.
 // Fade it while the map is still visually spherical instead of letting it drift.
 export const globeTransitionOpacity = (transition) => {
