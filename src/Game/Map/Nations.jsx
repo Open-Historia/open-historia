@@ -811,21 +811,12 @@ const WorldMap = ({ isGlobe = false }) => {
         // Disputed regions carry a stripe-tile id built from the current
         // administrator's color plus every claimant's — the layers below select
         // on _stripes and paint with fill-pattern instead of the solid fill.
-        // Claimants come from WORLD data first (regionClaimants — how the
-        // modern-world scenario declares its disputes, since its geometry is an
-        // immutable seed), then from the region feature's own claimants prop
-        // (editor-authored maps).
         let stripes = null;
-        const claimants = regionClaimants[id]?.length
-          ? regionClaimants[id]
-          : Array.isArray(props.claimants) && props.claimants.length > 0
-            ? props.claimants
-            : null;
-        if (claimants) {
+        if (Array.isArray(props.claimants) && props.claimants.length > 0) {
           const liveOwner = regionOwnershipOverrides[id] ?? props.owner ?? "";
           const seen = new Set();
           const stripeRgbs = [];
-          for (const name of (liveOwner ? [liveOwner, ...claimants] : claimants)) {
+          for (const name of (liveOwner ? [liveOwner, ...props.claimants] : props.claimants)) {
             const key = String(name ?? "").trim();
             if (!key || seen.has(key)) continue;
             seen.add(key);
@@ -841,7 +832,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }),
     };
-  }, [customRegionData, colorMap, regionOwnershipOverrides, regionClaimants]);
+  }, [customRegionData, colorMap, regionOwnershipOverrides]);
 
   // GADM disputed regions also paint the stock tiles (the crisp z>6.5 layer):
   // GID_1 -> stripe-tile id stops for the tile twin of the disputed layer.

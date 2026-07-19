@@ -66,7 +66,6 @@ export function useWorldState() {
     basemap: state?.basemap || null,
     background: state?.background ?? null,
     regionOwnershipOverrides: state?.regionOwnershipOverrides ?? {},
-    regionClaimants: state?.regionClaimants ?? {},
     polityOverrides: state?.polityOverrides ?? {},
   };
 
@@ -79,9 +78,6 @@ export function useWorldState() {
     prev.basemap === derived.basemap &&
     prev.background === derived.background &&
     areEqualShallow(prev.regionOwnershipOverrides, derived.regionOwnershipOverrides) &&
-    // Claimant values are ARRAYS (fresh objects every poll), so reference
-    // equality would churn every 5s — compare content. The map is tiny.
-    JSON.stringify(prev.regionClaimants) === JSON.stringify(derived.regionClaimants) &&
     areEqualShallow(prev.polityOverrides, derived.polityOverrides)
       ? prev
       : derived;
