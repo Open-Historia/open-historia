@@ -53,7 +53,27 @@ if errorlevel 1 (
     exit /b 1
 )
 
+set "NODEVER="
 for /f "delims=" %%V in ('node --version 2^>nul') do set "NODEVER=%%V"
+REM "where" finding node does NOT guarantee it runs here: launched "as
+REM administrator", the window gets the ADMIN account's environment, and a
+REM Node.js installed only for the normal user account isn't on that PATH.
+REM The old script parsed the resulting EMPTY output as version 0 and told
+REM players their brand-new Node was "too old". Say what actually happened.
+if not defined NODEVER (
+    echo [ERROR] Node.js was found but could not be started from this window.
+    echo Node.js installations found on this computer:
+    where node
+    echo.
+    echo This usually means the launcher was run AS ADMINISTRATOR while Node.js
+    echo is installed only for your user account. Run the launcher normally by
+    echo double-clicking it - it does NOT need administrator rights. If it still
+    echo fails, reinstall Node.js LTS from https://nodejs.org/ with the default
+    echo settings and run the launcher again in a NEW window.
+    echo.
+    pause
+    exit /b 1
+)
 REM The client build runs on Vite 7, which hard-refuses anything below Node
 REM 20.19 / 22.12 partway through setup with its own cryptic message. Enforce
 REM Vite's real floor HERE with a clear message instead: pass on 20.19+, 22.12+,

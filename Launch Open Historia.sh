@@ -68,6 +68,16 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 NODEVER="$(node --version 2>/dev/null)"
+# A node that resolves but produces no version output never ran (broken
+# install, wrong binary for this system). Parsing the empty string as
+# version 0 used to mislabel this "too old" — say what actually happened.
+if [ -z "$NODEVER" ]; then
+    echo "[ERROR] Node.js was found at $(command -v node) but could not be run."
+    echo "Reinstall Node.js LTS from https://nodejs.org/ then run this launcher"
+    echo "again in a NEW terminal."
+    echo ""
+    exit 1
+fi
 # The client build runs on Vite 7, which hard-refuses anything below Node
 # 20.19 / 22.12 partway through setup with its own cryptic message. Enforce
 # Vite's real floor HERE with a clear message instead: pass on 20.19+, 22.12+,
