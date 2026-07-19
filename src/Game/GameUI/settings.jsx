@@ -794,6 +794,7 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
+        noAiTimeLimit: getMapSetting(MAP_SETTING_KEYS.noAiTimeLimit),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -895,6 +896,18 @@ const SettingsMenu = ({
         />
         </div>
         <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
+
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>AI</div>
+        <Toggle
+        label="No time limit on AI generation"
+        enabled={mapSettings.noAiTimeLimit}
+        onToggle={() => updateMapSetting("noAiTimeLimit", MAP_SETTING_KEYS.noAiTimeLimit, !mapSettings.noAiTimeLimit)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        Time skips wait as long as the model needs — fallback events can never replace a slow generation. Off: 5-minute limit. Cancel works either way.
+        </div>
+        </div>
 
         {typeof onOpenCheats === "function" && (
             <button
