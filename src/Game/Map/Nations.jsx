@@ -392,6 +392,7 @@ const WorldMap = ({ isGlobe = false }) => {
     worldKnown,
     customRegions: customFlag,
     regionOwnershipOverrides,
+    regionClaimants,
     polityOverrides,
   } = useWorldState();
   const mapDisplaySettings = {
