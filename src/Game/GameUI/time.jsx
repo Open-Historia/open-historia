@@ -12,11 +12,14 @@ import {
 } from "../../runtime/assets.js";
 import { loadRollbackSnapshots, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import {
+    applyEventImpactsToWorld,
     normalizeActions,
     readEventsState,
     readGameData,
     readWorldState,
 } from "../../runtime/gameState.js";
+import { setWorldStateOverride } from "../Map/useWorldState.js";
+import { setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
@@ -1114,6 +1117,7 @@ const TimelineSkipPanel = ({
 const TimelineHistoryPanel = ({
     isOpen,
     onRevealNextEvent,
+    onRevealAll,
     lookups,
     onClose,
     record,
@@ -1183,6 +1187,7 @@ const TimelineHistoryPanel = ({
                 );
             })}
             {hasMoreEvents && (
+                <>
                 <button
                 type="button"
                 onClick={() => onRevealNextEvent()}
@@ -1195,6 +1200,21 @@ const TimelineHistoryPanel = ({
                 <ChevronDownIcon />
                 <span>Next event</span>
                 </button>
+                {/* The interrupt: fast-forwards the reveal (and the staged map)
+                    to the final state. Nothing is truncated — every event stays. */}
+                <button
+                type="button"
+                onClick={() => onRevealAll?.()}
+                style={{
+                    ...ghostButtonStyle,
+                    minHeight: "1.9rem",
+                    opacity: 0.75,
+                    width: "100%",
+                }}
+                >
+                <span>Skip to end ({totalEvents - visibleEvents.length} more)</span>
+                </button>
+                </>
             )}
             </div>
         )}
@@ -1499,6 +1519,92 @@ const DateWidget = ({
         });
     };
 
+    // Skip the remaining reveals: the map snaps to the final post-jump state.
+    // This is also the interrupt — non-destructive, every event stays in
+    // history; it only fast-forwards the presentation.
+    const revealAllEvents = () => {
+        if (totalVisibleEvents) {
+            setVisibleEventCount(totalVisibleEvents);
+        }
+    };
+
+    // ---- Staged event reveal (#368) -----------------------------------------
+    // world.json already holds the FINAL post-jump state when the panel opens
+    // (authoritative and crash-safe). The reveal replays the pre-jump world
+    // from the turn's rollback snapshot, applying only the revealed events'
+    // impacts, through a purely VISUAL override the map layers read (ownership
+    // recolors, units, markers). Finishing or skipping the reveal, closing the
+    // panel, a new record, or a missing snapshot all clear the override — the
+    // worst case is the old behavior: the final state all at once.
+    const [stagedBase, setStagedBase] = useState({ recordId: null, world: null });
+
+    // A new turn invalidates any staged base from the previous one.
+    useEffect(() => {
+        setStagedBase({ recordId: null, world: null });
+    }, [latestTurnRecord?.id]);
+
+    // Load the pre-jump world lazily, whenever the history panel is actually
+    // open and the base is missing — a one-shot load at record time raced the
+    // session boot (snapshots briefly read empty) and staging silently never
+    // engaged for that turn.
+    useEffect(() => {
+        const record = latestTurnRecord;
+        if (openPanel !== "history" || !record || !(record.events?.length > 0)) {
+            return undefined;
+        }
+        if (stagedBase.recordId === record.id && stagedBase.world) {
+            return undefined;
+        }
+        let cancelled = false;
+        loadRollbackSnapshots()
+            .then((snapshots) => {
+                if (cancelled) return;
+                const match = (snapshots || []).find(
+                    (snap) => snap?.fromDate === record.fromDate && snap?.toDate === record.toDate && snap?.state?.world,
+                );
+                if (match) setStagedBase({ recordId: record.id, world: match.state.world });
+            })
+            .catch(() => {
+                /* no snapshot — reveal without staging */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [latestTurnRecord?.id, openPanel, stagedBase.recordId]);
+
+    useEffect(() => {
+        const record = latestTurnRecord;
+        const stagingActive =
+            openPanel === "history" &&
+            record &&
+            stagedBase.recordId === record.id &&
+            stagedBase.world &&
+            totalVisibleEvents > 0 &&
+            visibleEventCount < totalVisibleEvents;
+        if (!stagingActive) {
+            setWorldStateOverride(null);
+            setUnitsOverride(null);
+            return;
+        }
+        const revealed = record.events.slice(0, Math.max(1, visibleEventCount));
+        const { world: stagedWorld } = applyEventImpactsToWorld({
+            colors: {},
+            events: revealed,
+            world: stagedBase.world,
+        });
+        setWorldStateOverride(stagedWorld);
+        setUnitsOverride(stagedWorld.units ?? []);
+    }, [latestTurnRecord, openPanel, stagedBase, totalVisibleEvents, visibleEventCount]);
+
+    // Never leave a stale override behind when this widget unmounts.
+    useEffect(
+        () => () => {
+            setWorldStateOverride(null);
+            setUnitsOverride(null);
+        },
+        [],
+    );
+
     return (
         <>
         <TimelineSkipPanel
@@ -1518,6 +1624,7 @@ const DateWidget = ({
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
         onRevealNextEvent={revealNextEvent}
+        onRevealAll={revealAllEvents}
         lookups={lookups}
         onClose={() => setPanel(null)}
         record={latestTurnRecord}

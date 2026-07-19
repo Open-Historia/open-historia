@@ -583,9 +583,15 @@ async function callOpenAIStyleChatCompletions({
                 ...(streamLocalEndpoint ? { stream: true } : {}),
                 messages: toOpenAIMessages(requestSystemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
-                // most OpenAI-compatible gateways; models that reject it surface a
-                // clear API error so the user knows to pick a reasoning model.
-                ...(getReasoningEnabled() && structuredMode !== "tool" ? { reasoning_effort: "medium" } : {}),
+                // most OpenAI-compatible gateways. Sent in EVERY mode, tool calls
+                // included: local backends (textgen/oobabooga, llama.cpp) map it onto
+                // the model's thinking mode, and omitting it in tool mode silently
+                // turned reasoning off for every turn once tool calls started
+                // succeeding (#367 — before the tool_choice fix those requests
+                // fell back to non-tool modes, which DID carry it). Providers that
+                // reject the tools+reasoning combination surface the documented
+                // error below and the call retries without it.
+                ...(getReasoningEnabled() && !disableToolReasoning ? { reasoning_effort: "medium" } : {}),
                 [tokenLimitField]: Math.max(8192, Number(maxTokens) || 0),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),

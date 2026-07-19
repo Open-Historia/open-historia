@@ -56,10 +56,13 @@ const chatMessageSchema = {
 
 const createdChatSchema = {
   type: "object",
-  description: "A diplomatic chat created as a consequence of an event.",
+  description:
+    "A diplomatic chat opened toward the player. The initiating polity ALWAYS "
+    + "speaks first: title and openingMessage are required - a blank, untitled "
+    + "chat tells the player nothing about why they were contacted.",
   properties: {
     id: textSchema("Optional stable chat identifier."),
-    title: textSchema("Short title for the chat."),
+    title: nonEmptyTextSchema("Short title naming the purpose of the chat (e.g. 'French mediation offer')."),
     countries: {
       type: "array",
       description: "Participating polities.",
@@ -71,13 +74,16 @@ const createdChatSchema = {
       description: "Messages with which the chat begins.",
       items: chatMessageSchema,
     },
-    openingMessage: textSchema("Convenience opening message when a messages array is not supplied."),
-    speaker: textSchema("Speaker of the convenience opening message."),
+    openingMessage: nonEmptyTextSchema(
+      "The initiating polity's first message, in its leader's voice - why it "
+      + "reached out and what it wants. Never written as the player.",
+    ),
+    speaker: nonEmptyTextSchema("Name of the polity sending the opening message. Never the player's polity."),
     linkedEventId: textSchema("Optional event identifier linking this chat to its cause."),
     source: textSchema("Optional source label."),
     status: textSchema("Optional chat status."),
   },
-  required: ["countries"],
+  required: ["countries", "title", "speaker", "openingMessage"],
   additionalProperties: false,
 };
 
