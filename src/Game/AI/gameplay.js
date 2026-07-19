@@ -1596,8 +1596,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
     signal,
     // The jump IS the game — let slow (local/reasoning) models finish instead
-    // of silently swapping in the canned fallback after a few seconds.
-    timeoutMs: 180000,
+    // of silently swapping in the canned fallback. Five minutes covers even a
+    // large reasoning model writing 37 events; the bound only exists so a
+    // genuinely hung request can't spin forever (Cancel works throughout).
+    timeoutMs: 300000,
     userMessage:
       mode === "auto"
         ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
