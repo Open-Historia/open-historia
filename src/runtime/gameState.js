@@ -874,6 +874,30 @@ export const normalizeWorldState = (world) => {
   };
 };
 
+// Recover a Gregorian date stored in a loose format back to strict YYYY-MM-DD.
+// Older builds wrote the model's stopDate verbatim, so real saves hold values
+// like "2016-12-31T00:00:00.000Z" or "December 31, 2016" — the header displays
+// them fine, but date math (addIsoDays) rejects them, so every jump silently
+// computes target == origin and the game clock freezes forever while the model
+// re-simulates the past. Deliberately non-Gregorian scenario dates ("1200 BCE")
+// don't parse and pass through untouched.
+const canonicalizeDateString = (value) => {
+  const text = normalizeOptionalString(value);
+  if (!text || /^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // An ISO date prefix (datetime forms) is authoritative — slicing it avoids
+  // the timezone day-shift of parsing "...T00:00:00Z" into local time.
+  const prefix = /^(\d{4}-\d{2}-\d{2})[T ]/.exec(text);
+  if (prefix) return prefix[1];
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    if (year >= 1 && year <= 9999) {
+      return `${String(year).padStart(4, "0")}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+    }
+  }
+  return text;
+};
+
 export const normalizeGameData = (game) => {
   const nextGame = game && typeof game === "object" ? game : {};
 
@@ -882,13 +906,13 @@ export const normalizeGameData = (game) => {
     ...nextGame,
     country: normalizeOptionalString(nextGame.country),
     difficulty: normalizeOptionalString(nextGame.difficulty) || GAME_DEFAULTS.difficulty,
-    gameDate: normalizeOptionalString(nextGame.gameDate),
+    gameDate: canonicalizeDateString(nextGame.gameDate),
     language: normalizeOptionalString(nextGame.language) || GAME_DEFAULTS.language,
     round:
       Number.isFinite(Number(nextGame.round)) && Number(nextGame.round) > 0
         ? Math.trunc(Number(nextGame.round))
         : GAME_DEFAULTS.round,
-    startDate: normalizeOptionalString(nextGame.startDate),
+    startDate: canonicalizeDateString(nextGame.startDate),
   };
 };
 
