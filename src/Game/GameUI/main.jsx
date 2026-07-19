@@ -306,6 +306,8 @@ const Main = ({
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
+        forcesOpen={isForcesOpen}
+        onToggleForces={() => setIsForcesOpen((v) => !v)}
       />
       <Other rightShift={rightShift} />
       <Search mapRef={mapRef} />
@@ -327,7 +329,7 @@ const Main = ({
       </Suspense>
       <Suspense fallback={null}>
         {shouldLoadCheats && (
-          <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
+          <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} />
         )}
       </Suspense>
       <SettingsButton
