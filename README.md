@@ -80,6 +80,32 @@ and opens the game. To update an existing install later, run the matching
 **`Update Open Historia`** script for your platform — it fetches the latest version
 while preserving your saves, scenarios, and map data.
 
+> [!TIP]
+> Run the launcher **normally** — it does not need (and works better without)
+> administrator rights: an elevated window gets the admin account's environment,
+> which can hide a Node.js that was installed for your own account.
+
+<details>
+<summary><b>Windows says "Windows cannot find …Launch Open Historia.bat"?</b></summary>
+
+The file exists — this is Windows' misleading message for a **blocked or broken
+double-click action** on batch files, usually one of:
+
+1. **Antivirus / SmartScreen blocking a downloaded .bat.** Before extracting,
+   right-click the downloaded ZIP → *Properties* → check **Unblock** → *OK*, then
+   extract to a simple folder like `C:\Games\Open-Historia` (not Downloads). If
+   you already extracted, do the same on `Launch Open Historia.bat` itself, and
+   check your antivirus' protection log / quarantine.
+2. **A broken .bat file association.** Open a *normal* Command Prompt, `cd` into
+   the folder and run `"Launch Open Historia.bat"` — if that works while
+   double-clicking doesn't, restore the association from an **administrator**
+   Command Prompt: `assoc .bat=batfile` and ensure the registry value
+   `HKEY_CLASSES_ROOT\batfile\shell\open\command` is exactly `"%1" %*`.
+
+Running "as administrator" sidesteps the block, but don't make that the routine —
+see the tip above.
+</details>
+
 #### Android app (thin APK)
 
 Easiest: download **`pax-historia.apk`** from the
