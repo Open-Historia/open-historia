@@ -91,12 +91,19 @@ while preserving your saves, scenarios, and map data.
 The file exists — this is Windows' misleading message for a **blocked or broken
 double-click action** on batch files, usually one of:
 
-1. **Antivirus / SmartScreen blocking a downloaded .bat.** Before extracting,
+1. **A broken `ComSpec` system variable** (the launcher also warns about this
+   when started from a terminal). In a Command Prompt run `echo %ComSpec%` —
+   it must print `C:\WINDOWS\system32\cmd.exe`. If it doesn't: System
+   Properties → *Environment Variables* → *System variables* → `ComSpec` → set
+   it to `%SystemRoot%\system32\cmd.exe`, then sign out and back in. Windows
+   needs `ComSpec` to launch any double-clicked batch file, so a broken value
+   produces exactly this error.
+2. **Antivirus / SmartScreen blocking a downloaded .bat.** Before extracting,
    right-click the downloaded ZIP → *Properties* → check **Unblock** → *OK*, then
    extract to a simple folder like `C:\Games\Open-Historia` (not Downloads). If
    you already extracted, do the same on `Launch Open Historia.bat` itself, and
    check your antivirus' protection log / quarantine.
-2. **A broken .bat file association.** Open a *normal* Command Prompt, `cd` into
+3. **A broken .bat file association.** Open a *normal* Command Prompt, `cd` into
    the folder and run `"Launch Open Historia.bat"` — if that works while
    double-clicking doesn't, restore the association from an **administrator**
    Command Prompt: `assoc .bat=batfile` and ensure the registry value
