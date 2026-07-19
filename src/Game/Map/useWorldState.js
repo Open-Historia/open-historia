@@ -9,13 +9,32 @@ let sharedState = null;
 let pollTimer = null;
 const subscribers = new Set();
 
+// Visual override for the staged event reveal (see time.jsx): while a turn's
+// events are revealed one by one, the map renders the world as of the last
+// revealed event instead of the final post-jump state. The poll keeps running
+// underneath — world.json stays authoritative — and clearing the override
+// (null) snaps consumers back to the live state.
+let overrideState = null;
+
+const effectiveState = () => overrideState ?? sharedState;
+
+// The state the map is currently rendering (override during a staged reveal,
+// else the live polled world). Read-only peer of unitsController.getUnits.
+export const getWorldStateSnapshot = () => effectiveState();
+
+export const setWorldStateOverride = (next) => {
+  overrideState = next && typeof next === "object" ? next : null;
+  const state = effectiveState();
+  if (state) for (const fn of subscribers) fn(state);
+};
+
 const poll = async () => {
   try {
     sharedState = await readJson(JSON_URLS.world, { defaultValue: {}, force: true });
   } catch {
     sharedState = {};
   }
-  for (const fn of subscribers) fn(sharedState);
+  for (const fn of subscribers) fn(effectiveState());
 };
 
 const startPolling = () => {
@@ -47,14 +66,14 @@ const areEqualShallow = (a, b) => {
 };
 
 export function useWorldState() {
-  const [state, setState] = useState(() => sharedState || {});
+  const [state, setState] = useState(() => effectiveState() || {});
   const prevRef = useRef(null);
 
   useEffect(() => {
     startPolling();
     const handler = (data) => setState(data);
     subscribers.add(handler);
-    if (sharedState) setState(sharedState);
+    if (effectiveState()) setState(effectiveState());
     return () => {
       subscribers.delete(handler);
       if (subscribers.size === 0) stopPolling();
