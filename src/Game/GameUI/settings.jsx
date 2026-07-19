@@ -153,53 +153,6 @@ const LanguageSelector = () => {
     );
 };
 
-// Placeholder for the union country-border pass; stays greyed out until it is
-// production-ready (it will read the country-borders-enabled localStorage key
-// that Nations.jsx already checks). Default is off.
-const ComingSoonToggle = ({ label, note }) => (
-    <div style={{ marginBottom: "1rem" }}>
-    <div
-    style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        opacity: 0.45,
-    }}
-    >
-    <span style={{ fontSize: "0.9rem" }}>{label}</span>
-    <button
-    type="button"
-    disabled
-    title={note}
-    style={{
-        width: "3.5rem",
-        height: "1.75rem",
-        borderRadius: "1rem",
-        border: "none",
-        cursor: "not-allowed",
-        position: "relative",
-        backgroundColor: "#4b5563",
-    }}
-    >
-    <div
-    style={{
-        position: "absolute",
-        top: "2px",
-        left: "2px",
-        width: "1.5rem",
-        height: "1.5rem",
-        backgroundColor: "white",
-        borderRadius: "50%",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
-        pointerEvents: "none",
-    }}
-    />
-    </button>
-    </div>
-    <div style={{ ...helperStyle, marginTop: "0.2rem" }}>{note}</div>
-    </div>
-);
-
 const Toggle = ({ label, enabled, onToggle }) => (
     <div
     style={{
@@ -895,7 +848,6 @@ const SettingsMenu = ({
         onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)}
         />
         </div>
-        <ComingSoonToggle label="Country borders" note="Not available yet — coming soon." />
 
         <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>AI</div>
