@@ -41,6 +41,7 @@ import {
   writeWorldState,
 } from "../../runtime/gameState.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
+import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -1599,7 +1600,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     // of silently swapping in the canned fallback. Five minutes covers even a
     // large reasoning model writing 37 events; the bound only exists so a
     // genuinely hung request can't spin forever (Cancel works throughout).
-    timeoutMs: 300000,
+    // The settings toggle removes the bound entirely: 0 disables the deadline
+    // in runJsonTask, so only a real error (or Cancel) can end the wait.
+    timeoutMs: getMapSetting(MAP_SETTING_KEYS.noAiTimeLimit) ? 0 : 300000,
     userMessage:
       mode === "auto"
         ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
