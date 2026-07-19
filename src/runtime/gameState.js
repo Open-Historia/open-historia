@@ -30,6 +30,12 @@ export const WORLD_DEFAULTS = {
   lastJumpTargetDate: "",
   notes: "",
   polityOverrides: {},
+  // Region id -> claimant polity names: the world-data way to mark a region
+  // DISPUTED (striped in the administrator's + claimants' colors). Same effect
+  // as a claimants list on the region's geojson feature, but declarable by a
+  // scenario whose geometry ships as an immutable seed (the modern world), and
+  // overridable per-world without touching geometry. Wins over feature props.
+  regionClaimants: {},
   regionOwnershipOverrides: {},
   simulationHistory: [],
   simulationRules: "",
@@ -710,6 +716,15 @@ export const normalizeWorldState = (world) => {
       .filter(([regionId, ownerCode]) => regionId && ownerCode),
   );
 
+  const regionClaimants = Object.fromEntries(
+    Object.entries(nextWorld.regionClaimants ?? {})
+      .map(([regionId, claimants]) => [
+        normalizeOptionalString(regionId),
+        normalizeArray(claimants).map((name) => normalizeOptionalString(name)).filter(Boolean).slice(0, 4),
+      ])
+      .filter(([regionId, claimants]) => regionId && claimants.length),
+  );
+
   const internationalReputation = Object.fromEntries(
     Object.entries(nextWorld.internationalReputation ?? {})
       .map(([polityCode, value]) => [normalizeOptionalString(polityCode), Number(value)])
@@ -742,6 +757,7 @@ export const normalizeWorldState = (world) => {
     lastJumpTargetDate: normalizeOptionalString(nextWorld.lastJumpTargetDate),
     notes: normalizeOptionalString(nextWorld.notes),
     polityOverrides,
+    regionClaimants,
     regionOwnershipOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
       .map((entry) => {
