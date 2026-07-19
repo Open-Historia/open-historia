@@ -535,7 +535,14 @@ async function callOpenAIStyleChatCompletions({
                         description: tool.description,
                         parameters: tool.schema,
                     } }],
-                    tool_choice: { type: "function", function: { name: tool.name } },
+                    // The string form, NOT OpenAI's {type:"function",function:{name}}
+                    // object: llama.cpp-based servers (LM Studio, Jan, local Qwen et
+                    // al.) only parse a string here — the object form logged
+                    // "Wrong type supplied for parameter 'tool_choice'" every jump
+                    // and silently fell back to "auto", losing the forcing. Exactly
+                    // one tool is ever sent, so "required" (accepted by OpenAI and
+                    // the compatible gateways alike) forces that same tool.
+                    tool_choice: "required",
                 } : {}),
                 ...(structuredMode === "json_schema" ? {
                     response_format: { type: "json_schema", json_schema: {
