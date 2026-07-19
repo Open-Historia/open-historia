@@ -126,6 +126,9 @@ const buildEditorState = (details) => {
     gameDate: game.gameDate ?? "",
     heroSubtitle: scenario.heroSubtitle ?? "",
     heroTitle: scenario.heroTitle ?? "",
+    labelFont: world.labelFont ?? "",
+    labelHaloColor: world.labelHaloColor ?? "",
+    labelTextColor: world.labelTextColor ?? "",
     language: game.language ?? world.language ?? "English",
     leaderPrompt: prompts.leader ?? "",
     name: scenario.name ?? "",
@@ -486,6 +489,42 @@ const ScenarioEditor = ({
     onChange={(event) => onChange("simulationRules", event.target.value)}
     />
     </div>
+    {/* Country-label styling. The font renders from each player's LOCAL fonts
+        (the map rasterizes glyphs client-side), so any installed family works —
+        the list only offers common ones. Empty font = the Impact default. */}
+    <div>
+    <label style={fieldLabelStyle}>Country Label Font</label>
+    <input
+    list="oh-label-font-options"
+    placeholder="Impact (default)"
+    style={inputStyle}
+    value={formState.labelFont}
+    onChange={(event) => onChange("labelFont", event.target.value)}
+    />
+    <datalist id="oh-label-font-options">
+    {["Impact", "Arial Black", "Arial", "Georgia", "Times New Roman", "Trebuchet MS", "Verdana", "Courier New", "Garamond", "Comic Sans MS"].map((font) => (
+      <option key={font} value={font} />
+    ))}
+    </datalist>
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Label Letter Color</label>
+    <input
+    type="color"
+    style={{ ...inputStyle, height: "2.4rem", padding: "0.2rem" }}
+    value={/^#[0-9a-fA-F]{6}$/.test(formState.labelTextColor) ? formState.labelTextColor : "#ffffff"}
+    onChange={(event) => onChange("labelTextColor", event.target.value)}
+    />
+    </div>
+    <div>
+    <label style={fieldLabelStyle}>Label Border Color</label>
+    <input
+    type="color"
+    style={{ ...inputStyle, height: "2.4rem", padding: "0.2rem" }}
+    value={/^#[0-9a-fA-F]{6}$/.test(formState.labelHaloColor) ? formState.labelHaloColor : "#000000"}
+    onChange={(event) => onChange("labelHaloColor", event.target.value)}
+    />
+    </div>
     </div>
     </div>
 
@@ -739,6 +778,9 @@ const ScenarioTopBar = () => {
                                          subtitle: editorState.subtitle,
                                          world: {
                                            ...currentWorld,
+                                           labelFont: editorState.labelFont,
+                                           labelHaloColor: editorState.labelHaloColor,
+                                           labelTextColor: editorState.labelTextColor,
                                            language: editorState.language,
                                            simulationRules: editorState.simulationRules,
                                            startingTimelineText: editorState.startingTimelineText,

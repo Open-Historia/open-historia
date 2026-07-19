@@ -395,6 +395,9 @@ const WorldMap = ({ isGlobe = false }) => {
     regionOwnershipOverrides,
     regionClaimants,
     polityOverrides,
+    labelFont,
+    labelHaloColor,
+    labelTextColor,
   } = useWorldState();
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
@@ -857,9 +860,19 @@ const WorldMap = ({ isGlobe = false }) => {
       : 0,
   };
 
+  // Scenario-authored label styling (world.labelFont/labelTextColor/
+  // labelHaloColor). The style has no glyphs endpoint, so MapLibre v5 draws
+  // every glyph locally with this stack as a CSS font-family — any font on the
+  // PLAYER's machine works, with the trailing names as fallbacks where the
+  // first is not installed.
+  const labelFontStack = useMemo(
+    () => [labelFont || "Impact", "Arial Black", "sans-serif"],
+    [labelFont],
+  );
+
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
-    "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+    "text-font": labelFontStack,
     "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
@@ -868,11 +881,11 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
-    "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+    "text-font": labelFontStack,
     "text-size": buildCountryTextSize(1, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
@@ -881,18 +894,18 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, mapDisplaySettings.hideCountryLabels]);
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
   const labelLayerPaint = useMemo(() => ({
-    "text-color": "#FFFFFF",
-    "text-halo-color": "rgba(0, 0, 0, 0.5)",
+    "text-color": labelTextColor || "#FFFFFF",
+    "text-halo-color": labelHaloColor || "rgba(0, 0, 0, 0.5)",
     "text-halo-width": 1,
     "text-opacity": [
       "interpolate", ["linear"], ["zoom"],
       5, 0.75,
       8, 0,
     ],
-  }), []);
+  }), [labelHaloColor, labelTextColor]);
 
   return (
     <>
