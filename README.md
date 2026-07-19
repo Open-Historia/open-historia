@@ -112,7 +112,7 @@ release APK — run it after changing `mobile/`.
 
 ### Manual
 
-Prerequisites: [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/en).
+Prerequisites: [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/en) 22 LTS or newer (minimum 20.19 / 22.12 — the client build runs on Vite 7, which requires it).
 
 ```bash
 git clone https://github.com/Open-Historia/open-historia.git

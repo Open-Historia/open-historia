@@ -68,18 +68,41 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 NODEVER="$(node --version 2>/dev/null)"
-# Require Node 18+. The map-fetch/build scripts are ES modules that ancient Node
-# (e.g. v6) can't parse, so an old version would otherwise fail later with a cryptic
-# "Unexpected token import". Parse the major number out of "vXX.Y.Z".
-NODEMAJOR="$(printf '%s' "$NODEVER" | sed -E 's/^v?([0-9]+).*/\1/')"
-case "$NODEMAJOR" in ''|*[!0-9]*) NODEMAJOR=0 ;; esac
-if [ "$NODEMAJOR" -lt 18 ]; then
-    echo "[ERROR] Node.js $NODEVER is too old - Open Historia needs Node 18 or newer."
-    echo "Update Node.js (LTS) from https://nodejs.org/ then run this launcher again."
+# A node that resolves but produces no version output never ran (broken
+# install, wrong binary for this system). Parsing the empty string as
+# version 0 used to mislabel this "too old" — say what actually happened.
+if [ -z "$NODEVER" ]; then
+    echo "[ERROR] Node.js was found at $(command -v node) but could not be run."
+    echo "Reinstall Node.js LTS from https://nodejs.org/ then run this launcher"
+    echo "again in a NEW terminal."
     echo ""
     exit 1
 fi
-echo "[OK] Node.js $NODEVER detected."
+# The client build runs on Vite 7, which hard-refuses anything below Node
+# 20.19 / 22.12 partway through setup with its own cryptic message. Enforce
+# Vite's real floor HERE with a clear message instead: pass on 20.19+, 22.12+,
+# or any 23+. Parse major.minor out of "vXX.YY.Z".
+NODEMAJOR="$(printf '%s' "$NODEVER" | sed -E 's/^v?([0-9]+).*/\1/')"
+NODEMINOR="$(printf '%s' "$NODEVER" | sed -E 's/^v?[0-9]+\.([0-9]+).*/\1/')"
+case "$NODEMAJOR" in ''|*[!0-9]*) NODEMAJOR=0 ;; esac
+case "$NODEMINOR" in ''|*[!0-9]*) NODEMINOR=0 ;; esac
+NODEOK=""
+if [ "$NODEMAJOR" -ge 23 ]; then NODEOK=1
+elif [ "$NODEMAJOR" -eq 22 ] && [ "$NODEMINOR" -ge 12 ]; then NODEOK=1
+elif [ "$NODEMAJOR" -eq 20 ] && [ "$NODEMINOR" -ge 19 ]; then NODEOK=1
+fi
+if [ -z "$NODEOK" ]; then
+    echo "[ERROR] Node.js $NODEVER (at $(command -v node)) is too old - Open Historia"
+    echo "needs Node 22.12 or newer (20.19+ also works). Install the current LTS from:"
+    echo "  https://nodejs.org/"
+    echo ""
+    echo "If you just installed a newer Node.js, open a NEW terminal (already-open ones"
+    echo "keep the old PATH), and check 'which -a node' for an older install shadowing"
+    echo "the new one."
+    echo ""
+    exit 1
+fi
+echo "[OK] Node.js $NODEVER detected ($(command -v node))."
 echo ""
 
 # ---- 2. Ensure world map data ----------------------------

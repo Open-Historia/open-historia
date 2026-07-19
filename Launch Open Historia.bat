@@ -53,21 +53,60 @@ if errorlevel 1 (
     exit /b 1
 )
 
+set "NODEVER="
 for /f "delims=" %%V in ('node --version 2^>nul') do set "NODEVER=%%V"
-REM Require Node 18+. The map-fetch/build scripts are ES modules that ancient Node
-REM (e.g. v6) can't parse, so an old version would otherwise fail later with a
-REM cryptic "Unexpected token import". Parse the major number out of "vXX.Y.Z".
-for /f "tokens=1 delims=." %%M in ("!NODEVER!") do set "NODEMAJOR=%%M"
-set "NODEMAJOR=!NODEMAJOR:v=!"
-set /a NODEMAJORNUM=NODEMAJOR 2>nul
-if !NODEMAJORNUM! LSS 18 (
-    echo [ERROR] Node.js !NODEVER! is too old - Open Historia needs Node 18 or newer.
-    echo Update Node.js ^(LTS^) from https://nodejs.org/ then run this launcher again.
+REM "where" finding node does NOT guarantee it runs here: launched "as
+REM administrator", the window gets the ADMIN account's environment, and a
+REM Node.js installed only for the normal user account isn't on that PATH.
+REM The old script parsed the resulting EMPTY output as version 0 and told
+REM players their brand-new Node was "too old". Say what actually happened.
+if not defined NODEVER (
+    echo [ERROR] Node.js was found but could not be started from this window.
+    echo Node.js installations found on this computer:
+    where node
+    echo.
+    echo This usually means the launcher was run AS ADMINISTRATOR while Node.js
+    echo is installed only for your user account. Run the launcher normally by
+    echo double-clicking it - it does NOT need administrator rights. If it still
+    echo fails, reinstall Node.js LTS from https://nodejs.org/ with the default
+    echo settings and run the launcher again in a NEW window.
     echo.
     pause
     exit /b 1
 )
-echo [OK] Node.js !NODEVER! detected.
+REM The client build runs on Vite 7, which hard-refuses anything below Node
+REM 20.19 / 22.12 partway through setup with its own cryptic message. Enforce
+REM Vite's real floor HERE with a clear message instead: pass on 20.19+, 22.12+,
+REM or any 23+. Parse major.minor out of "vXX.YY.Z".
+for /f "tokens=1,2 delims=." %%M in ("!NODEVER!") do (
+    set "NODEMAJOR=%%M"
+    set "NODEMINOR=%%N"
+)
+set "NODEMAJOR=!NODEMAJOR:v=!"
+set /a NODEMAJORNUM=NODEMAJOR 2>nul
+set /a NODEMINORNUM=NODEMINOR 2>nul
+set "NODEOK="
+if !NODEMAJORNUM! GEQ 23 set "NODEOK=1"
+if !NODEMAJORNUM! EQU 22 if !NODEMINORNUM! GEQ 12 set "NODEOK=1"
+if !NODEMAJORNUM! EQU 20 if !NODEMINORNUM! GEQ 19 set "NODEOK=1"
+if not defined NODEOK (
+    echo [ERROR] Node.js !NODEVER! is too old - Open Historia needs Node 22.12 or
+    echo newer ^(20.19+ also works^). Install the current LTS from: https://nodejs.org/
+    echo.
+    echo Node.js installations found on this computer:
+    where node
+    echo.
+    echo If you just installed a newer Node.js and an OLD version is listed first
+    echo above, close this window and run the launcher again - windows that were
+    echo already open keep the old PATH. If that doesn't help, uninstall the old
+    echo Node.js ^(or move the new one higher in PATH^) and retry.
+    echo.
+    pause
+    exit /b 1
+)
+set "NODEPATH="
+for /f "delims=" %%P in ('where node 2^>nul') do if not defined NODEPATH set "NODEPATH=%%P"
+echo [OK] Node.js !NODEVER! detected ^(!NODEPATH!^).
 echo.
 
 REM ---- 2. Ensure world map data ----------------------------
