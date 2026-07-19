@@ -201,6 +201,23 @@ const Main = ({
     if (!checkWebGL()) setShowWebGLWarning(true);
   }, []);
 
+  // Idle diplomacy drip: each real-world minute the game is open (and has a
+  // running game), there is a small chance a polity messages the player's
+  // inbox unprompted. Everything that could break it is guarded inside
+  // maybeSendIdleDiplomacy — it skips entirely while a time skip, game-master
+  // command, or catalyst stage is in flight, never overlaps itself, and stays
+  // silent on any failure. Hidden tabs don't roll the dice.
+  useEffect(() => {
+    if (showNoGameGate) return undefined;
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      import("../AI/gameplay.js")
+        .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
+        .catch(() => {});
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [showNoGameGate]);
+
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);

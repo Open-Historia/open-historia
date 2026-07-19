@@ -473,6 +473,19 @@ const mergePolityCatalog = (countryCatalog, world) => {
   return Array.from(merged.values());
 };
 
+// ---- Simulation busy lock ---------------------------------------------------
+// The idle diplomacy drip (maybeSendIdleDiplomacy below) must never run - and
+// above all never WRITE chat state - while a jump, game-master command, or
+// catalyst stage is in flight: those read the full state bundle at entry and
+// write it all back at the end, so a concurrent chat write would be silently
+// clobbered (or worse, interleave with the rollback snapshot). Every simulation
+// entry point wraps itself in beginSimulation/endSimulation; the drip checks
+// the counter before starting AND before writing, and simply skips its turn.
+let activeSimulations = 0;
+const beginSimulation = () => { activeSimulations += 1; };
+const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
+export const isSimulationBusy = () => activeSimulations > 0;
+
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
     ...mergePolityCatalog(await loadCountryNames(), world),
@@ -625,7 +638,7 @@ const buildGeneratedChat = async (chatLike, linkEventId, world) => {
             },
           ]
         : [],
-    source: "invitation",
+    source: normalizeString(chatLike?.source) || "invitation",
     status: "open",
     title: chatLike?.title || `Chat with ${countries.map((country) => country.name).join(", ")}`,
   });
@@ -827,6 +840,19 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       if (!unitId) return `${operationPath}.unitId must not be blank.`;
       if (!unitIds.has(unitId)) return `${operationPath}.unitId does not identify an existing unit.`;
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
+    }
+  }
+
+  // Unprompted outreach chats (top-level, not tied to an event) need real
+  // participants exactly like createdChats do.
+  for (let index = 0; index < normalizeArray(candidate?.diplomaticOutreach).length; index += 1) {
+    const countries = await resolveInvitees(
+      candidate.diplomaticOutreach[index]?.countries,
+      world,
+      generatedPolities,
+    );
+    if (countries.length === 0) {
+      return `$.diplomaticOutreach[${index}].countries must contain at least one known polity.`;
     }
   }
 
@@ -1059,6 +1085,14 @@ const applySimulationResult = async ({
       const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts);
       if (nextChat) nextChats.unshift(nextChat);
     }
+  }
+
+  // Unprompted outreach: polities reaching out on their own initiative during
+  // the simulated period, not tied to any event (treaty feelers, summit
+  // invitations). Same chat machinery, no linked event.
+  for (const chatLike of normalizeArray(result.outreach)) {
+    const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts);
+    if (nextChat) nextChats.unshift(nextChat);
   }
 
   if (result.mode === "jump" || result.mode === "auto") {
@@ -1380,6 +1414,8 @@ export const createCatalyst = async ({ force = true } = {}) => {
 };
 
 export const advanceActiveCatalyst = async (choiceText) => {
+  beginSimulation();
+  try {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
@@ -1497,6 +1533,9 @@ export const advanceActiveCatalyst = async (choiceText) => {
       generation: summaryGeneration,
     },
   });
+  } finally {
+    endSimulation();
+  }
 };
 
 // Event density per skip length (player-tuned): longer skips must return
@@ -1526,6 +1565,8 @@ const formatDurationLabel = (days) => {
 };
 
 export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
+  beginSimulation();
+  try {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
@@ -1582,6 +1623,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     clearActions: payload?.clearActions !== false,
     events: normalizeArray(payload?.events),
     mode,
+    outreach: normalizeArray(payload?.diplomaticOutreach),
     stopDate: normalizeString(payload?.stopDate) || targetDate,
     summary: normalizeString(payload?.summary),
     generation,
@@ -1596,12 +1638,17 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     baseWorld: bundle.world,
     result,
   });
+  } finally {
+    endSimulation();
+  }
 };
 
 export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
   simulateTimelineJump({ days, mode: "auto", signal });
 
 export const applyGameMasterCommand = async (requestText) => {
+  beginSimulation();
+  try {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
@@ -1655,4 +1702,73 @@ export const applyGameMasterCommand = async (requestText) => {
       generation,
     },
   });
+  } finally {
+    endSimulation();
+  }
+};
+
+// ---- Idle diplomacy drip ----------------------------------------------------
+// While the player sits between jumps, the world occasionally speaks first:
+// on each real-world-minute tick (the caller's cadence) there is a small chance
+// one polity sends a short note to the player's inbox. Hard-suspended while any
+// simulation is in flight (busy lock above), never stacked, and silent on any
+// failure — there is no canned fallback small talk.
+const IDLE_DIPLOMACY_CHANCE = 1 / 20;
+let idleDiplomacyInFlight = false;
+
+export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } = {}) => {
+  if (idleDiplomacyInFlight || isSimulationBusy()) return null;
+  if (Math.random() >= chance) return null;
+  idleDiplomacyInFlight = true;
+  try {
+    const bundle = await readGameStateBundle({ force: true });
+    if (!normalizeString(bundle.game?.country)) return null; // no active game
+    const variables = await buildTemplateVariables(bundle);
+    const { payload } = await runJsonTask("idleDiplomacy", {
+      timeoutMs: 60000,
+      userMessage:
+        "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now. Return JSON only.",
+      validatePayload: async (candidate) => {
+        if (candidate?.chat == null) return "";
+        const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
+        return countries.length > 0
+          ? ""
+          : "$.chat.countries must contain at least one known polity (or chat must be null).";
+      },
+      variables,
+    });
+    if (!payload?.chat) return null;
+    // A jump may have started while the model was thinking; its state bundle
+    // predates our write, so drop the note rather than race the save.
+    if (isSimulationBusy()) return null;
+    const built = await buildGeneratedChat({ ...payload.chat, source: "outreach" }, "", bundle.world);
+    if (!built) return null;
+    const chats = normalizeChats(await readChatsState({ force: true }));
+    // A note from a country the player already has an open 1:1 with lands in
+    // that thread; anything else (including group approaches) opens a new chat.
+    const single = built.countries.length === 1 ? regionKey(built.countries[0].name) : "";
+    const existing = single
+      ? chats.find((chat) => chat.status !== "closed"
+          && Array.isArray(chat.countries)
+          && chat.countries.length === 1
+          && regionKey(chat.countries[0]?.name) === single)
+      : null;
+    let nextChats;
+    if (existing) {
+      const note = built.messages[0];
+      if (!note) return null;
+      nextChats = chats.map((chat) => (chat === existing
+        ? { ...chat, messages: [...chat.messages, { ...note, time: normalizeString(bundle.game?.gameDate) }] }
+        : chat));
+    } else {
+      nextChats = [built, ...chats];
+    }
+    if (isSimulationBusy()) return null;
+    await writeChatsState(nextChats);
+    return built;
+  } catch {
+    return null; // silence is always the safe outcome
+  } finally {
+    idleDiplomacyInFlight = false;
+  }
 };
