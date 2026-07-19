@@ -122,7 +122,7 @@ const addIsoDays = (value, days) => {
   return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 };
 
-const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requireAdvance = false }) => {
+export const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requireAdvance = false }) => {
   const stopDate = normalizeString(candidate?.stopDate);
   if (!parseIsoDate(originDate)) {
     const eventDates = normalizeArray(candidate?.events).map((event) => normalizeString(event?.date));
@@ -162,8 +162,12 @@ const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requir
   for (let index = 0; index < normalizeArray(candidate?.events).length; index += 1) {
     const eventDate = normalizeString(candidate.events[index]?.date);
     if (!parseIsoDate(eventDate)) return `$.events[${index}].date must be a real date in YYYY-MM-DD format.`;
-    if (eventDate <= originDate || eventDate > stopDate) {
-      return `$.events[${index}].date must be after ${originDate} and no later than ${stopDate}.`;
+    // A sub-day skip (6 hours) keeps the same date, so its events legitimately
+    // fall ON the origin date — demanding "after X and no later than X" was an
+    // impossible rule that pushed every same-day turn into the fallback.
+    const beforeWindow = requireAdvance ? eventDate <= originDate : eventDate < originDate;
+    if (beforeWindow || eventDate > stopDate) {
+      return `$.events[${index}].date must be ${requireAdvance ? "after" : "on or after"} ${originDate} and no later than ${stopDate}.`;
     }
     if (eventDate < previousDate) return `$.events[${index}].date must not precede the previous event date.`;
     previousDate = eventDate;
@@ -720,24 +724,38 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
   };
 };
 
-const buildGeneratedChat = async (chatLike, linkEventId, world) => {
+export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
   const countries = await resolveInvitees(countriesInput, world);
   if (countries.length === 0) return null;
+
+  // The initiating polity speaks first — and it is never the player. When the
+  // model names no speaker (or names the player), attribute the opener to the
+  // first non-player participant.
+  const playerKey = normalizeString(playerName).toUpperCase();
+  const matchesPlayer = (country) =>
+    playerKey && (normalizeString(country.name).toUpperCase() === playerKey || normalizeString(country.code).toUpperCase() === playerKey);
+  const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
+  const initiator =
+    countries.find((country) =>
+      speakerKey && !matchesPlayer(country)
+      && (normalizeString(country.name).toUpperCase() === speakerKey || normalizeString(country.code).toUpperCase() === speakerKey))
+    ?? countries.find((country) => !matchesPlayer(country))
+    ?? countries[0];
 
   return normalizeChatEntry({
     countries,
     id: chatLike?.id,
     linkedEventId: linkEventId,
     messages:
-      chatLike?.messages && Array.isArray(chatLike.messages)
+      Array.isArray(chatLike?.messages) && chatLike.messages.length > 0
         ? chatLike.messages
         : chatLike?.openingMessage
         ? [
             {
-              code: countries.find((country) => country.name === chatLike.speaker)?.code || countries[0]?.code || "",
+              code: initiator?.code || "",
               role: "leader",
-              speaker: chatLike.speaker || countries[0]?.name || "",
+              speaker: initiator?.name || normalizeString(chatLike?.speaker),
               text: chatLike.openingMessage,
               time: "",
             },
@@ -745,7 +763,9 @@ const buildGeneratedChat = async (chatLike, linkEventId, world) => {
         : [],
     source: normalizeString(chatLike?.source) || "invitation",
     status: "open",
-    title: chatLike?.title || `Chat with ${countries.map((country) => country.name).join(", ")}`,
+    // A chat must say why it exists: the model's title, else the causing
+    // event's title, else at least the participants.
+    title: chatLike?.title || fallbackTitle || `Chat with ${countries.map((country) => country.name).join(", ")}`,
   });
 };
 
@@ -908,6 +928,20 @@ const buildTransferFeedback = (unresolved) => {
 // losing owner's real region list, so runJsonTask's retry gives the model the
 // vocabulary to fix its own answer. Callers set it on the FIRST attempt only —
 // the second answer must never be rejected into the canned fallback over a name.
+
+// An AI-opened chat must arrive with a reason and a first message — the
+// initiating polity speaks first. Empty string when the entry is fine.
+const validateChatOpener = (chatLike, path) => {
+  const hasMessages = Array.isArray(chatLike?.messages) && chatLike.messages.length > 0;
+  if (!normalizeString(chatLike?.title)) {
+    return `${path}.title must name the purpose of the chat.`;
+  }
+  if (!hasMessages && !normalizeString(chatLike?.openingMessage)) {
+    return `${path}.openingMessage must carry the initiating polity's first message - never open an empty chat.`;
+  }
+  return "";
+};
+
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
@@ -922,9 +956,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
   for (const { impacts, path } of containers) {
     generatedPolities.push(...normalizeArray(impacts?.polityChanges));
     for (let index = 0; index < normalizeArray(impacts?.createdChats).length; index += 1) {
-      const countries = await resolveInvitees(impacts.createdChats[index]?.countries, world, generatedPolities);
+      const createdChat = impacts.createdChats[index];
+      const countries = await resolveInvitees(createdChat?.countries, world, generatedPolities);
       if (countries.length === 0) {
         return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
+      }
+      // Strict attempt only (same contract as transfers): a blank, untitled
+      // chat tells the player nothing about why they were contacted — the
+      // retry demands the opener rather than dropping the turn to fallback.
+      if (strictTransfers) {
+        const chatError = validateChatOpener(createdChat, `${path}.createdChats[${index}]`);
+        if (chatError) return chatError;
       }
     }
 
@@ -977,6 +1019,10 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
     );
     if (countries.length === 0) {
       return `$.diplomaticOutreach[${index}].countries must contain at least one known polity.`;
+    }
+    if (strictTransfers) {
+      const chatError = validateChatOpener(candidate.diplomaticOutreach[index], `$.diplomaticOutreach[${index}]`);
+      if (chatError) return chatError;
     }
   }
 
@@ -1206,7 +1252,10 @@ const applySimulationResult = async ({
 
   for (const event of generatedEvents) {
     for (const createdChat of event.impacts.createdChats) {
-      const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts);
+      const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
+        fallbackTitle: event.title,
+        playerName: baseGame.country,
+      });
       if (nextChat) nextChats.unshift(nextChat);
     }
   }
@@ -1215,7 +1264,9 @@ const applySimulationResult = async ({
   // the simulated period, not tied to any event (treaty feelers, summit
   // invitations). Same chat machinery, no linked event.
   for (const chatLike of normalizeArray(result.outreach)) {
-    const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts);
+    const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
+      playerName: baseGame.country,
+    });
     if (nextChat) nextChats.unshift(nextChat);
   }
 
@@ -1879,7 +1930,9 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
     // A jump may have started while the model was thinking; its state bundle
     // predates our write, so drop the note rather than race the save.
     if (isSimulationBusy()) return null;
-    const built = await buildGeneratedChat({ ...payload.chat, source: "outreach" }, "", bundle.world);
+    const built = await buildGeneratedChat({ ...payload.chat, source: "outreach" }, "", bundle.world, {
+      playerName: bundle.game.country,
+    });
     if (!built) return null;
     const chats = normalizeChats(await readChatsState({ force: true }));
     // A note from a country the player already has an open 1:1 with lands in
