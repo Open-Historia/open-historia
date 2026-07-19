@@ -592,6 +592,13 @@ async function callOpenAIStyleChatCompletions({
                 // reject the tools+reasoning combination surface the documented
                 // error below and the call retries without it.
                 ...(getReasoningEnabled() && !disableToolReasoning ? { reasoning_effort: "medium" } : {}),
+                // Thinking-class local models (Qwen3, Seed-OSS) key on
+                // enable_thinking, not reasoning_effort — textgen/oobabooga
+                // honors it per-request, llama.cpp/LM Studio ignore unknown
+                // fields. Local endpoints only: strict cloud APIs reject
+                // unknown parameters. Sent only when the toggle is ON so a
+                // server-side --enable-thinking default is never overridden.
+                ...(streamLocalEndpoint && getReasoningEnabled() && !disableToolReasoning ? { enable_thinking: true } : {}),
                 [tokenLimitField]: Math.max(8192, Number(maxTokens) || 0),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
