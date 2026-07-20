@@ -95,6 +95,57 @@ const fallbackColorFromOwner = (owner = "") => {
   return `rgb(${r}, ${g}, ${b})`;
 };
 
+// "#c0507a" / "#c07" / "rgb(192, 80, 122)" -> [r,g,b]; null when unparseable.
+// world.polityOverrides stores colours as CSS strings while colors.json stores
+// RGB triplets, so the two namespaces need a bridge before they can be merged.
+const parseColorToRgb = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const hex = raw.replace(/^#/, "");
+  if (/^[0-9a-f]{6}$/i.test(hex)) {
+    const n = parseInt(hex, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  if (/^[0-9a-f]{3}$/i.test(hex)) {
+    return [
+      parseInt(`${hex[0]}${hex[0]}`, 16),
+      parseInt(`${hex[1]}${hex[1]}`, 16),
+      parseInt(`${hex[2]}${hex[2]}`, 16),
+    ];
+  }
+  const match = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(raw);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])].map((c) => Math.max(0, Math.min(255, c)));
+};
+
+// Palettes are owner -> [r,g,b]. Re-reading colors.json hands back a fresh object
+// every time; swapping identity for identical contents would rebuild every
+// MapLibre match expression on the map, so compare contents before accepting it.
+const shallowEqualColors = (a, b) => {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a);
+  if (keysA.length !== Object.keys(b).length) return false;
+  for (const key of keysA) {
+    const left = a[key];
+    const right = b[key];
+    if (left === right) continue;
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      if (left[i] !== right[i]) return false;
+    }
+  }
+  return true;
+};
+
+// Case/diacritic/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
+// and "COTE D'IVOIRE" all reach the same palette entry.
+const ownerFoldKey = (value) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
 // ---- Disputed-region stripes ------------------------------------------------
 // A region whose `claimants` list names the countries contesting it renders
 // striped in their colors (current administrator first). The stripe tile's
@@ -629,11 +680,74 @@ const WorldMap = ({ isGlobe = false }) => {
     return () => map.off("click", handleRegionClick);
   }, [handleRegionClick, map]);
 
+  // The palette is re-read whenever colors.json is written (every AI turn can mint
+  // or recolour a polity, and the main menu's faction creator writes the player's
+  // own colour over an already-mounted map). Fetching once on mount left any
+  // owner coloured after mount painting a procedural fallback for the rest of the
+  // session — healed only by a reload. `oh:colors-updated` is dispatched by the
+  // asset layer's write path; the epoch re-runs this effect.
+  const [colorsEpoch, setColorsEpoch] = useState(0);
   useEffect(() => {
-    getNationColors()
-      .then(setColorMap)
-      .catch((error) => console.error("Error loading colors:", error));
+    const bump = () => setColorsEpoch((n) => n + 1);
+    window.addEventListener("oh:colors-updated", bump);
+    return () => window.removeEventListener("oh:colors-updated", bump);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getNationColors()
+      .then((next) => {
+        if (cancelled) return;
+        // Only swap the object when the contents actually differ — a new identity
+        // rebuilds every MapLibre match expression below.
+        setColorMap((prev) => (shallowEqualColors(prev, next) ? prev : next));
+      })
+      .catch((error) => console.error("Error loading colors:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [colorsEpoch]);
+
+  // ONE owner -> rgb resolver for every paint path. colors.json and the live
+  // polity registry (world.polityOverrides) are two different namespaces: a
+  // polity can be correctly NAMED by the registry while colors.json has no key
+  // for it — shipped example: "British Empire" owns 426 regions in
+  // world-war-ii-1939-copy with its colour (#c0507a) only in polityOverrides.
+  // Resolving the name but not the colour painted those regions a muddy
+  // procedural fallback, which reads to a player as "the map didn't annex it".
+  const resolveOwnerRgb = useCallback(
+    (owner) => {
+      if (!owner) return null;
+      const exact = colorMap[owner];
+      if (exact) return exact;
+      const registry = parseColorToRgb(polityOverrides?.[owner]?.color);
+      if (registry) return registry;
+      const fold = ownerFoldKey(owner);
+      if (fold) {
+        for (const [key, rgb] of Object.entries(colorMap)) {
+          if (ownerFoldKey(key) === fold) return rgb;
+        }
+        for (const [key, entry] of Object.entries(polityOverrides ?? {})) {
+          const names = [key, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])];
+          if (!names.some((name) => ownerFoldKey(name) === fold)) continue;
+          const rgb = parseColorToRgb(entry?.color);
+          if (rgb) return rgb;
+          const palette = colorMap[key];
+          if (palette) return palette;
+        }
+      }
+      return fallbackRgbFromOwner(owner);
+    },
+    [colorMap, polityOverrides],
+  );
+
+  const ownerColorCss = useCallback(
+    (owner) => {
+      const rgb = resolveOwnerRgb(owner);
+      return rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : NEUTRAL_LAND_COLOR;
+    },
+    [resolveOwnerRgb],
+  );
 
 
   // Load custom region geometry once, only when the active map declares it. Stock
@@ -703,9 +817,7 @@ const WorldMap = ({ isGlobe = false }) => {
     const fallback = buildFallbackColorExpression();
     const regionOverrideStops = Object.entries(regionOwnershipOverrides).flatMap(([regionId, ownerCode]) => [
       regionId,
-      colorMap[ownerCode]
-        ? `rgb(${colorMap[ownerCode][0]}, ${colorMap[ownerCode][1]}, ${colorMap[ownerCode][2]})`
-        : fallbackColorFromOwner(ownerCode),
+      ownerColorCss(ownerCode),
     ]);
 
     return {
@@ -721,7 +833,7 @@ const WorldMap = ({ isGlobe = false }) => {
         : fallback,
       "fill-opacity": 0.66,
     };
-  }, [colorMap, regionOwnershipOverrides]);
+  }, [colorMap, regionOwnershipOverrides, ownerColorCss]);
 
   // Fill for custom (editor) regions: we pre-compute a _fillColor property onto
   // every feature so the MapLibre paint expression is just ["get", "_fillColor"]
@@ -731,19 +843,12 @@ const WorldMap = ({ isGlobe = false }) => {
   const enrichedCustomRegionData = useMemo(() => {
     if (!customRegionData?.features) return customRegionData;
 
-    const colorByOwner = {};
-    for (const [iso, rgb] of Object.entries(colorMap)) {
-      colorByOwner[iso] = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-    }
-
     const overrideColor = {};
     for (const [regionId, ownerCode] of Object.entries(regionOwnershipOverrides)) {
-      overrideColor[regionId] = colorMap[ownerCode]
-        ? `rgb(${colorMap[ownerCode][0]}, ${colorMap[ownerCode][1]}, ${colorMap[ownerCode][2]})`
-        : fallbackColorFromOwner(ownerCode);
+      overrideColor[regionId] = ownerColorCss(ownerCode);
     }
 
-    const rgbForOwner = (owner) => colorMap[owner] ?? fallbackRgbFromOwner(owner);
+    const rgbForOwner = (owner) => resolveOwnerRgb(owner) ?? fallbackRgbFromOwner(owner);
 
     return {
       ...customRegionData,
@@ -753,10 +858,8 @@ const WorldMap = ({ isGlobe = false }) => {
         let fillColor;
         if (overrideColor[id]) {
           fillColor = overrideColor[id];
-        } else if (props.owner && colorByOwner[props.owner]) {
-          fillColor = colorByOwner[props.owner];
         } else if (props.owner) {
-          fillColor = fallbackColorFromOwner(props.owner);
+          fillColor = ownerColorCss(props.owner);
         } else {
           fillColor = NEUTRAL_LAND_COLOR;
         }
@@ -793,7 +896,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }),
     };
-  }, [customRegionData, colorMap, regionOwnershipOverrides, regionClaimants]);
+  }, [customRegionData, colorMap, regionOwnershipOverrides, regionClaimants, ownerColorCss, resolveOwnerRgb]);
 
   // GADM disputed regions also paint the stock tiles (the crisp z>6.5 layer):
   // GID_1 -> stripe-tile id stops for the tile twin of the disputed layer.
@@ -835,14 +938,7 @@ const WorldMap = ({ isGlobe = false }) => {
     const stops = [];
     for (const [regionId, owner] of ownerByRegionId) {
       if (!regionId.includes(".")) continue; // drawn regions aren't in the tiles
-      stops.push(
-        regionId,
-        owner
-          ? colorMap[owner]
-            ? `rgb(${colorMap[owner][0]}, ${colorMap[owner][1]}, ${colorMap[owner][2]})`
-            : fallbackColorFromOwner(owner)
-          : NEUTRAL_LAND_COLOR,
-      );
+      stops.push(regionId, owner ? ownerColorCss(owner) : NEUTRAL_LAND_COLOR);
     }
     if (!stops.length) return { "fill-opacity": 0 };
     return {
@@ -850,7 +946,7 @@ const WorldMap = ({ isGlobe = false }) => {
       // Fades in as the seed-geometry far layer fades out.
       "fill-opacity": TILE_FILL_FADE,
     };
-  }, [customActive, ownerByRegionId, colorMap]);
+  }, [customActive, ownerByRegionId, colorMap, ownerColorCss]);
 
   // Stock country fills/borders render ONLY once the world is known to be a
   // stock world. Gating on the customRegions FLAG (not customActive, which
