@@ -10,6 +10,7 @@ import {
   deployUnit,
   moveUnitTo,
   attackWith,
+  attackFeature,
 } from "./unitsController.js";
 import {
   JSON_URLS,
@@ -506,6 +507,33 @@ const WorldMap = ({ isGlobe = false }) => {
         ? map.queryRenderedFeatures(event.point, { layers: ["units-fill"] })
         : [];
 
+    // A city or built structure under the cursor. Point features are tiny
+    // targets, so a hit is always deliberate; built structures (world.markers)
+    // outrank cities when the two overlap. Shared between normal selection and
+    // attack targeting, so anything clickable is also attackable.
+    const featureAt = () => {
+      const featureLayers = ["markers-shapes", "cities-shapes", "cities-labels"]
+        .filter((id) => map.getLayer(id));
+      const featureHits = featureLayers.length
+        ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
+        : [];
+      if (!featureHits.length) return null;
+      const hit = featureHits.find((entry) => entry.layer.id === "markers-shapes") ?? featureHits[0];
+      const props = hit.properties ?? {};
+      const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
+      return hit.layer.id === "markers-shapes"
+        ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
+        : {
+          source: "city",
+          name: props.city || props.name || "",
+          population: props.population,
+          capital: props.capital,
+          tier: props.tier,
+          lng,
+          lat,
+        };
+    };
+
     const mode = getInteractionMode();
 
     // Active troop command modes intercept the click as a target, not a selection.
@@ -520,8 +548,16 @@ const WorldMap = ({ isGlobe = false }) => {
       return;
     }
     if (mode.kind === "attack") {
+      // An enemy unit under the cursor is the target; otherwise a city or
+      // structure is — troops can be directed against objectives, not just
+      // other troops.
       const target = unitsAt();
-      if (target.length) attackWith(mode.unitId, target[0].properties.id);
+      const feature = target.length ? null : featureAt();
+      if (target.length) {
+        attackWith(mode.unitId, target[0].properties.id);
+      } else if (feature) {
+        attackFeature(mode.unitId, feature);
+      }
       clearInteractionMode();
       return;
     }
@@ -537,30 +573,10 @@ const WorldMap = ({ isGlobe = false }) => {
 
     dismissUnitPopup();
 
-    // A city or built structure under the cursor wins over the region: point
-    // features are tiny targets, so a hit is always deliberate. Built structures
-    // (world.markers) outrank cities when the two overlap.
-    const featureLayers = ["markers-shapes", "cities-shapes", "cities-labels"]
-      .filter((id) => map.getLayer(id));
-    const featureHits = featureLayers.length
-      ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
-      : [];
-    if (featureHits.length) {
+    const featureHit = featureAt();
+    if (featureHit) {
       dismissRegionPopup();
-      const hit = featureHits.find((entry) => entry.layer.id === "markers-shapes") ?? featureHits[0];
-      const props = hit.properties ?? {};
-      const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
-      onFeatureSelected(hit.layer.id === "markers-shapes"
-        ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
-        : {
-          source: "city",
-          name: props.city || props.name || "",
-          population: props.population,
-          capital: props.capital,
-          tier: props.tier,
-          lng,
-          lat,
-        });
+      onFeatureSelected(featureHit);
       return;
     }
 
