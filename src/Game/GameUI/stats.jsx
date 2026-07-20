@@ -72,12 +72,31 @@ const Bar = ({ value, color }) => (
     </div>
 );
 
+// The AI writes economic figures however it likes — "30000000000",
+// "$30,000,000,000", "2.1%", "1.2 trillion caps". Raw long numbers overflow
+// the card, so purely numeric values from a million up render compactly
+// (30000000000 → 30.0B) with any currency prefix preserved; everything else
+// (percentages, prose) passes through untouched.
+const compactEconomyValue = (value) => {
+    if (value === null || value === undefined) return value;
+    const text = String(value).trim();
+    const match = /^([^0-9-]{0,4})(-?\d[\d,]*)(?:\.(\d+))?$/.exec(text);
+    if (!match) return value;
+    const number = Number(`${match[2].replace(/,/g, "")}${match[3] ? `.${match[3]}` : ""}`);
+    if (!Number.isFinite(number) || Math.abs(number) < 1e6) return value;
+    const prefix = match[1] ?? "";
+    const abs = Math.abs(number);
+    const [divisor, suffix] = abs >= 1e12 ? [1e12, "T"] : abs >= 1e9 ? [1e9, "B"] : [1e6, "M"];
+    const compact = (number / divisor).toFixed(abs / divisor >= 100 ? 0 : 1);
+    return `${prefix}${compact}${suffix}`;
+};
+
 const EconomyCard = ({ label, value, sub, tone }) => (
     <div style={cardStyle}>
     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
     {label}
     </div>
-    <div data-no-translate style={{ color: tone, fontSize: "1.05rem", fontWeight: 800 }}>{value || "—"}</div>
+    <div data-no-translate style={{ color: tone, fontSize: "1.05rem", fontWeight: 800 }}>{compactEconomyValue(value) || "—"}</div>
     {sub && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", marginTop: "0.15rem" }}>{sub}</div>}
     </div>
 );

@@ -433,7 +433,7 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
   </div>
 );
 
-const CommunityPanel = ({ onImported }) => {
+const CommunityPanel = ({ fullPage = false, onImported }) => {
   const { scenarios } = useLibraryState();
   const [posts, setPosts] = useState(null);
   const [error, setError] = useState(null);
@@ -618,7 +618,9 @@ const CommunityPanel = ({ onImported }) => {
   };
 
   return (
-    <div style={{ color: "#fff", maxHeight: "calc(100vh - 11rem)", overflowY: "auto", paddingRight: "0.2rem" }}>
+    // As the main menu's Community tab (fullPage) the surrounding page owns
+    // scrolling; as a floating panel it caps its own height and scrolls itself.
+    <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: "calc(100vh - 11rem)", overflowY: "auto", paddingRight: "0.2rem" }) }}>
       {selectedPost ? (
         <ScenarioDetail
           post={selectedPost}

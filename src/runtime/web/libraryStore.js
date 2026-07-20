@@ -17,7 +17,7 @@ import {
   PMTILES_ASSET_KEYS, SCENARIO_GEOJSON_ASSET_KEYS, UPLOADABLE_SCENARIO_ASSET_KEYS, UPLOADABLE_GAME_ASSET_KEYS,
   JSON_ASSET_DEFAULTS, SCENARIO_BUNDLE_SCHEMA, ACCEPTED_BUNDLE_SCHEMAS, SCENARIO_BUNDLE_VERSION, SUPPORTED_IMAGE_CONTENT_TYPES,
   DEFAULT_SCENARIO_META, DEFAULT_GAME_META, canonicalizeWorldCountryRefs, canonicalizeGameCountry, canonicalizeColorKeys,
-  readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId,
+  readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId, normalizePlayCount,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
   normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
 } from "./models.js";
@@ -713,6 +713,7 @@ const createGame = async (body = {}) => {
   const order = resolveOrderedIds(manifest.order, await listGameIds(), DEFAULT_GAME_ID).filter((e) => e !== id);
   order.unshift(id);
   await saveGameManifest({ activeGameId: body.setActive ? id : manifest.activeGameId, order });
+  if (body.setActive) await recordGamePlayed(id);
   return getGameDetails(id);
 };
 
@@ -726,11 +727,40 @@ const updateGame = async (id, body = {}) => {
   return getGameDetails(id);
 };
 
+// Play stamps for the main menu's "Last Played"/"Most Played" rows — patches
+// record.meta directly (NOT writeGameMeta/writeScenarioMeta, which stamp
+// updatedAt and drop hubOrigin; server twin has the same rule).
+const recordGamePlayed = async (gameId) => {
+  try {
+    const record = await getGame(gameId);
+    if (!record) return;
+    record.meta = {
+      ...(record.meta ?? {}),
+      lastPlayedAt: nowIso(),
+      playCount: normalizePlayCount(record.meta?.playCount) + 1,
+    };
+    await putGame(record);
+
+    const scenarioId = String(record.meta?.scenarioId ?? "").trim();
+    const scenario = scenarioId ? await getScenario(scenarioId) : null;
+    if (scenario) {
+      scenario.meta = {
+        ...(scenario.meta ?? {}),
+        playCount: normalizePlayCount(scenario.meta?.playCount) + 1,
+      };
+      await putScenario(scenario);
+    }
+  } catch {
+    // Stamping is best-effort — never block activating a game over it.
+  }
+};
+
 const setActiveGame = async (gameId) => {
   const id = String(gameId ?? "").trim();
   if (!id || !(await getGame(id))) throw new Error(`Game not found: ${id}`);
   const manifest = await getGameManifest();
   await saveGameManifest({ activeGameId: id, order: [id, ...manifest.order.filter((e) => e !== id)] });
+  await recordGamePlayed(id);
   return getLibraryCatalog();
 };
 
