@@ -286,5 +286,63 @@ export const attackWith = async (attackerId, targetId) => {
   return { resolved: true, distance, range };
 };
 
+// Attack aimed at a map feature — a city or a built structure (world.markers) —
+// rather than another unit. There is no local clash to resolve against a
+// building, so the instant feedback is positional: in range the unit closes on
+// the objective and reads "engaged", and the queued order hands the assault to
+// the AI, which owns the outcome (a fallen city may mean a regionTransfer, a
+// stormed structure a markerOps remove/rebuild). Out of range it becomes an
+// approach order exactly like a long-range unit attack.
+export const attackFeature = async (attackerId, target) => {
+  const attacker = getUnitById(attackerId);
+  const point = { lng: Number(target?.lng), lat: Number(target?.lat) };
+  if (!attacker || !Number.isFinite(point.lng) || !Number.isFinite(point.lat)) return { resolved: false };
+  // Ordering troops against their own structure is a misclick, not an order.
+  if (target.source === "marker" && target.ownerCode && target.ownerCode === attacker.ownerCode) {
+    return { resolved: false, ownTarget: true };
+  }
+
+  const targetLabel = target.source === "marker"
+    ? `the ${target.kind ? `${target.kind} ` : ""}structure "${target.name || "unnamed"}"` +
+      `${target.ownerCode ? ` held by ${target.ownerCode}` : ""}${target.id ? ` (marker id ${target.id})` : ""}`
+    : `the city of ${target.name || "an unnamed city"}`;
+  const at = `lat ${point.lat.toFixed(2)}, lng ${point.lng.toFixed(2)}`;
+
+  const distance = distanceKm(attacker, point);
+  const range = engagementRangeKm(attacker.type, gameDate);
+  if (distance > range) {
+    await commit((list) =>
+      list.map((u) =>
+        u.id === attackerId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+      ),
+    );
+    await queueOrder(
+      `Attack order (approach required): ${attacker.name} (${attacker.type}, id ${attacker.id}, owner ${attacker.ownerCode}) ` +
+        `is ordered to assault ${targetLabel} at ${at}, about ${Math.round(distance)} km away — beyond its ~${range} km ` +
+        `engagement reach for this era. March/sail/fly it toward the objective realistically across turns and resolve the ` +
+        `assault when contact is actually possible, or reject the order with an event explaining why it is infeasible.`,
+      { unitId: attacker.id, status: attacker.status },
+    );
+    return { resolved: false, distance, range };
+  }
+
+  await commit((list) =>
+    list.map((u) =>
+      u.id === attackerId
+        ? { ...u, lng: point.lng, lat: point.lat, status: "engaged", updatedAt: new Date().toISOString() }
+        : u,
+    ),
+  );
+  await queueOrder(
+    `Assault order: ${attacker.name} (${attacker.type}, id ${attacker.id}, owner ${attacker.ownerCode}) attacks ` +
+      `${targetLabel} at ${at} and is now engaged at the objective. Resolve the assault on the next turn — decide the ` +
+      `defense it meets, the casualties, and the outcome. If the objective falls, reflect it: a captured city usually ` +
+      `implies a regionTransfer of its region, and a destroyed or seized structure should be reflected with markerOps ` +
+      `(remove it, or rebuild it under the new owner). If the assault is repelled, say so in an event and adjust the unit.`,
+    { unitId: attacker.id, lng: attacker.lng, lat: attacker.lat, status: attacker.status },
+  );
+  return { resolved: true, distance, range };
+};
+
 export const removeUnit = async (unitId) =>
   commit((list) => list.filter((u) => u.id !== unitId));
