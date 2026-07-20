@@ -95,7 +95,9 @@ export const openLibraryTab = (tab) => {
 // per-component state would reset to "open" mid game-start and the menu would
 // pop back over the freshly activated game. The app boots into the menu.
 let menuOpenDefault = true;
-const TOP_BAR_OFFSET = "4.75rem";
+// With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
+// widget, forces panel, editor drawer) starts at the screen edge.
+const TOP_BAR_OFFSET = "0.5rem";
 
 const surfaceStyle = {
   background:
@@ -1970,79 +1972,123 @@ const LibraryTopBar = () => {
 
   return (
     <>
-      {/* In-game top bar. The library tabs moved to the main menu — in-game it
-          identifies the session and offers the way back (Exit Game). */}
-      {!menuOpen && (
+      {/* In-game the full-width top bar is gone — the map gets the space. What
+          remains is a compact floating cluster beside the ⋮ settings button: a
+          small sleek pill with the session summary, plus Exit Game and ⏻.
+          Below the settings menu and date widget (z 9998/9999) so opening
+          either covers it instead of the other way around. */}
+      {!menuOpen && !isMobile && (
         <div
           style={{
-            ...surfaceStyle,
             alignItems: "center",
-            borderLeft: "none",
-            borderRadius: 0,
-            borderRight: "none",
-            borderTop: "none",
-            display: "grid",
-            gap: isMobile ? "0.4rem" : "0.9rem",
-            gridTemplateColumns: "minmax(0, 1fr) auto",
-            height: `${BAR_HEIGHT}px`,
-            left: 0,
-            padding: isMobile ? "0 0.5rem" : "0 1rem",
+            display: "flex",
+            fontFamily: "sans-serif",
+            gap: "0.45rem",
+            left: "5rem",
             position: "fixed",
-            right: 0,
-            top: 0,
-            zIndex: 10030,
+            top: "0.5rem",
+            zIndex: 9997,
           }}
         >
-          <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
-            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
-              <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
-            </div>
-            {/* Phones keep the logo only — the title/summary would crowd the buttons. */}
-            {!isMobile && (
-              <div style={{ minWidth: 0 }}>
-                <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-                  Open Historia
-                </div>
-                <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
-                  {summaryText}
-                </div>
-              </div>
-            )}
+          <div
+            style={{
+              ...surfaceStyle,
+              borderRadius: "999px",
+              color: "rgba(255,255,255,0.72)",
+              fontSize: "0.74rem",
+              fontWeight: 600,
+              // Shrinks to nothing before it can reach under the date widget
+              // on narrow desktop windows (the widget owns the top right).
+              maxWidth: "min(34rem, max(0rem, calc(100vw - 44rem)))",
+              overflow: "hidden",
+              padding: "0.5rem 0.85rem",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {summaryText}
           </div>
-
-          <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => setMenuOpen(true)}
+            title="Leave this game and return to the main menu"
+            type="button"
+            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "999px", fontSize: "0.74rem", minHeight: "0", padding: "0.5rem 0.85rem" }}
+          >
+            ⌂ Exit Game
+          </button>
+          {/* Shut the server down (phones/Termux have no terminal handy). Hidden
+              on the hosted website (web build) — there's no local server to stop
+              there, and the compile-time flag strips this from that bundle. */}
+          {!import.meta.env.VITE_OH_WEB && (
             <button
-              onClick={() => setMenuOpen(true)}
-              title="Leave this game and return to the main menu"
+              onClick={handleShutdownServer}
+              title="Exit: shut down the Open Historia server"
               type="button"
               style={{
                 ...actionButtonStyle,
-                padding: isMobile ? "0.55rem 0.7rem" : undefined,
+                ...surfaceStyle,
+                background: "rgba(220,70,70,0.14)",
+                borderColor: "rgba(248,113,113,0.35)",
+                borderRadius: "999px",
+                color: "#fca5a5",
+                fontSize: "0.74rem",
+                minHeight: "0",
+                minWidth: "0",
+                padding: "0.5rem 0.7rem",
               }}
             >
-              {isMobile ? "⌂" : "⌂ Exit Game"}
+              ⏻
             </button>
-            {/* Shut the server down (phones/Termux have no terminal handy). Hidden
-                on the hosted website (web build) — there's no local server to stop
-                there, and the compile-time flag strips this from that bundle. */}
-            {!import.meta.env.VITE_OH_WEB && (
-              <button
-                onClick={handleShutdownServer}
-                title="Exit: shut down the Open Historia server"
-                type="button"
-                style={{
-                  ...actionButtonStyle,
-                  background: "rgba(220,70,70,0.14)",
-                  borderColor: "rgba(248,113,113,0.35)",
-                  color: "#fca5a5",
-                  minWidth: "2.35rem",
-                  padding: isMobile ? "0.55rem 0.7rem" : undefined,
-                }}
-              >
-                ⏻
-              </button>
-            )}
-          </div>
+          )}
+        </div>
+      )}
+
+      {/* Phones: the date widget spans the whole top row, so Exit Game and ⏻
+          stack in the left gutter under the ⋮ settings button instead. */}
+      {!menuOpen && isMobile && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            fontFamily: "sans-serif",
+            gap: "0.45rem",
+            left: "0.5rem",
+            position: "fixed",
+            top: "5rem",
+            zIndex: 9997,
+          }}
+        >
+          <button
+            onClick={() => setMenuOpen(true)}
+            title="Leave this game and return to the main menu"
+            type="button"
+            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "12px", fontSize: "1rem", height: "2.6rem", minHeight: "0", minWidth: "0", padding: 0, width: "2.6rem" }}
+          >
+            ⌂
+          </button>
+          {!import.meta.env.VITE_OH_WEB && (
+            <button
+              onClick={handleShutdownServer}
+              title="Exit: shut down the Open Historia server"
+              type="button"
+              style={{
+                ...actionButtonStyle,
+                ...surfaceStyle,
+                background: "rgba(220,70,70,0.14)",
+                borderColor: "rgba(248,113,113,0.35)",
+                borderRadius: "12px",
+                color: "#fca5a5",
+                fontSize: "1rem",
+                height: "2.6rem",
+                minHeight: "0",
+                minWidth: "0",
+                padding: 0,
+                width: "2.6rem",
+              }}
+            >
+              ⏻
+            </button>
+          )}
         </div>
       )}
 
