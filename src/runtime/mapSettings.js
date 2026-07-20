@@ -10,10 +10,12 @@ export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
-    // Not a map setting, but the same localStorage-toggle mechanism: when on,
-    // timeline-jump generation has NO deadline — the canned fallback can only
-    // be reached through a real error, never a slow model (Cancel still works).
-    noAiTimeLimit: "ai_no_time_limit",
+    // Not a map setting, but the same localStorage-toggle mechanism: when ON,
+    // timeline-jump generation gets a 5-minute deadline and falls back to
+    // canned events past it. OFF (the default) waits as long as the model
+    // needs — the fallback is only reachable through a real error, never a
+    // slow model (Cancel still works either way).
+    limitAiGeneration: "ai_limit_generation",
 };
 
 export function getMapSetting(key) {
