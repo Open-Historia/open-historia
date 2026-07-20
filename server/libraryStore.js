@@ -1778,13 +1778,55 @@ const updateGame = (
 // of unlinking it, so an accidental delete (or, before the traversal fix, a
 // malicious one) is recoverable — the user can restore or empty .trash by hand.
 const TRASH_DIR = path.join(SERVER_DATA_DIR, ".trash");
+
+// Synchronous pause for the retry loops below — the delete handler is sync
+// end to end, and a rare delete briefly blocking the event loop is fine.
+const sleepMsSync = (ms) => {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // SharedArrayBuffer unavailable — skip the pause and just retry sooner.
+  }
+};
+
 const moveDirectoryToTrash = (sourceDir, kind, id) => {
   ensureDirectory(TRASH_DIR);
   const safeId = String(id).replace(/[^a-z0-9_-]+/gi, "_").slice(0, 60) || "item";
   let dest = path.join(TRASH_DIR, `${kind}-${safeId}`);
   let n = 2;
   while (fs.existsSync(dest)) dest = path.join(TRASH_DIR, `${kind}-${safeId}-${n++}`);
-  fs.renameSync(sourceDir, dest);
+
+  // Windows refuses to rename a directory while ANY process holds ANY file
+  // inside it open — a client poll reading world.json mid-request, the search
+  // indexer, OneDrive (the game often lives under Downloads). Those handles
+  // are usually gone in milliseconds, so retry the atomic rename briefly...
+  let renameError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      fs.renameSync(sourceDir, dest);
+      return;
+    } catch (error) {
+      if (!["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) throw error;
+      renameError = error;
+      if (attempt < 3) sleepMsSync(150);
+    }
+  }
+
+  // ...and when a handle outlives the retries, fall back to copy + per-file
+  // delete. Unlike the directory rename, deleting individual files succeeds
+  // alongside delete-sharing handles, and rmSync's own retries ride out the
+  // stragglers. The copy lands in .trash first, so the soft-delete contract
+  // (recoverable by hand) holds on this path too.
+  try {
+    fs.cpSync(sourceDir, dest, { recursive: true });
+    fs.rmSync(sourceDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+  } catch (error) {
+    throw new Error(
+      `Windows is blocking the delete of "${id}" — another program holds its files open ` +
+        `(an indexing/sync tool, or a request in flight). Close it or restart the server, ` +
+        `then delete again. (${error?.code || renameError?.code || "EPERM"})`,
+    );
+  }
 };
 
 const deleteScenario = (scenarioId) => {
