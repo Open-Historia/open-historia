@@ -428,6 +428,40 @@ export const JUMP_FORWARD_SCHEMA = {
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
 
+// Backstory events deliberately have NO impacts field: the scenario's world
+// state already reflects everything that happened before round one, so a
+// pre-game event is a record, never a change to apply.
+const pregameEventSchema = {
+  type: "object",
+  description: "One dated historical event from BEFORE the game's start date.",
+  properties: {
+    date: textSchema("Date the event occurred, strictly before the game start date."),
+    title: textSchema("Concise event headline."),
+    description: textSchema("Specific narrative description and its consequences."),
+    importance: textSchema("Importance label, normally minor or major."),
+    kind: textSchema("Event category, such as world, player, diplomacy, or military."),
+  },
+  required: ["date", "title", "description"],
+  additionalProperties: false,
+};
+
+export const PREGAME_HISTORY_SCHEMA = {
+  type: "object",
+  description: "The pre-game backstory: the events that led up to the start of the campaign.",
+  properties: {
+    events: {
+      type: "array",
+      description: "Chronological events from before round one, oldest first.",
+      minItems: 1,
+      maxItems: 12,
+      items: pregameEventSchema,
+    },
+    summary: textSchema("One-paragraph summary of the era leading into the start date."),
+  },
+  required: ["events", "summary"],
+  additionalProperties: false,
+};
+
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
 // may send a short note to their inbox. `chat: null` means nobody plausibly
 // would right now - silence is the common, correct answer.
@@ -597,6 +631,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   gameMaster: GAME_MASTER_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
+  pregameHistory: PREGAME_HISTORY_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -673,6 +708,12 @@ export const IDLE_DIPLOMACY_TOOL = makeTool(
   IDLE_DIPLOMACY_SCHEMA,
 );
 
+export const PREGAME_HISTORY_TOOL = makeTool(
+  "submit_pregame_history",
+  "Submit the pre-game backstory events that led up to the campaign's start date.",
+  PREGAME_HISTORY_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -686,6 +727,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   gameMaster: GAME_MASTER_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
+  pregameHistory: PREGAME_HISTORY_TOOL,
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
@@ -844,6 +886,20 @@ export const validateGameplayPayload = (taskKey, value) => {
     if (value.catalyst) {
       const catalystError = validateDistinctChoices(value.catalyst.choices, "$.catalyst.choices");
       if (catalystError) return { valid: false, error: catalystError };
+    }
+  }
+
+  if (taskKey === "pregameHistory") {
+    for (let index = 0; index < value.events.length; index += 1) {
+      const event = value.events[index];
+      for (const field of ["date", "title", "description"]) {
+        if (!event[field].trim()) {
+          return { valid: false, error: `$.events[${index}].${field} must not be empty.` };
+        }
+      }
+    }
+    if (!value.summary.trim()) {
+      return { valid: false, error: "$.summary must not be empty." };
     }
   }
 

@@ -10,7 +10,8 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { loadRollbackSnapshots, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
     normalizeActions,
@@ -1338,6 +1339,32 @@ const DateWidget = ({
             clearInterval(interval);
         };
     }, []);
+
+    // Pre-game history: a fresh game (round 1, no events, no turns) whose
+    // scenario wrote a "World Before Round One" briefing gets its backstory
+    // generated once, the first time the player actually enters it. Waits out
+    // the main menu (the poll re-runs this every 5s) so tokens are never spent
+    // on a game the player is only hovering past; every other guard — busy
+    // lock, still-the-same-game check, the done-marker — lives in
+    // maybeGeneratePregameHistory itself.
+    const pregameAttemptedRef = React.useRef(false);
+    useEffect(() => {
+        if (pregameAttemptedRef.current || !gameData || !worldState) {
+            return;
+        }
+        const fresh =
+            (Number(gameData.round) || 1) === 1 &&
+            (events?.length ?? 0) === 0 &&
+            (worldState.simulationHistory?.length ?? 0) === 0;
+        if (!fresh || !String(worldState.startingTimelineText ?? "").trim()) {
+            return;
+        }
+        if (isMainMenuOpen()) {
+            return;
+        }
+        pregameAttemptedRef.current = true;
+        maybeGeneratePregameHistory().catch(() => {});
+    }, [gameData, worldState, events]);
 
     function setPanel(panelName) {
         if (typeof onSetPanel === "function") {

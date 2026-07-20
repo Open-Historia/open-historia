@@ -30,6 +30,8 @@ import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
 import Translate from "ol/interaction/Translate";
 import Snap from "ol/interaction/Snap";
+import PointerInteraction from "ol/interaction/Pointer";
+import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
@@ -158,6 +160,12 @@ const OlMap = ({
   onReady,
   customBackground = null,
   onCustomBackgroundSave,
+  // Tracing aid: { dataUrl, aspect, opacity, visible } — session-only, never
+  // exported. referenceAdjust turns on the move/resize frame; bumping
+  // referencePlaceNonce re-centers the image on the current view.
+  referenceImage = null,
+  referenceAdjust = false,
+  referencePlaceNonce = 0,
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -169,6 +177,11 @@ const OlMap = ({
   const baseLayerRef = useRef(null);
   const onCustomBackgroundSaveRef = useRef(onCustomBackgroundSave);
   onCustomBackgroundSaveRef.current = onCustomBackgroundSave;
+  // Reference image (tracing aid): extent lives in a ref, not React state —
+  // it changes on every drag frame and nothing outside the map needs it.
+  const refImageLayerRef = useRef(null);
+  const refImageExtentRef = useRef(null);
+  const refImageFrameSourceRef = useRef(null);
   const interactionsRef = useRef([]);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
@@ -1065,6 +1078,169 @@ const OlMap = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customBackground]);
+
+  // ---- Reference image (tracing aid) ---------------------------------------
+  // A semi-transparent image ABOVE the region fills (z40) that the map-maker
+  // aligns a source map against and traces borders over. Never persisted,
+  // never exported — its extent is session state in a ref.
+  useEffect(() => {
+    const map = mapRef.current;
+    const dataUrl = referenceImage?.dataUrl;
+    if (!map || !dataUrl) {
+      refImageExtentRef.current = null;
+      return undefined;
+    }
+
+    // Place (or re-place, when the nonce bumps) at the view centre, spanning
+    // 60% of the visible width at the image's own aspect ratio.
+    if (!refImageExtentRef.current || referencePlaceNonce > 0) {
+      const view = map.getView();
+      const center = view.getCenter();
+      const resolution = view.getResolution();
+      const size = map.getSize() || [1024, 768];
+      const width = size[0] * resolution * 0.6;
+      const height = width / (referenceImage.aspect || 1.5);
+      refImageExtentRef.current = [
+        center[0] - width / 2,
+        center[1] - height / 2,
+        center[0] + width / 2,
+        center[1] + height / 2,
+      ];
+    }
+
+    const layer = new ImageLayer({
+      source: new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
+    });
+    layer.setZIndex(40);
+    layer.setOpacity(referenceImage.visible === false ? 0 : (referenceImage.opacity ?? 0.5));
+    map.addLayer(layer);
+    refImageLayerRef.current = layer;
+    return () => {
+      map.removeLayer(layer);
+      refImageLayerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [referenceImage?.dataUrl, referencePlaceNonce]);
+
+  useEffect(() => {
+    refImageLayerRef.current?.setOpacity(
+      referenceImage?.visible === false ? 0 : (referenceImage?.opacity ?? 0.5),
+    );
+  }, [referenceImage?.opacity, referenceImage?.visible]);
+
+  // The adjust frame: a dashed outline + corner handles, and a pointer
+  // interaction where dragging a corner resizes (opposite corner anchored,
+  // free aspect so a distorted source map can still be aligned) and dragging
+  // inside moves. Mounted only while the Reference panel is open, and added
+  // last so it wins the event race over the editing interactions.
+  useEffect(() => {
+    const map = mapRef.current;
+    const dataUrl = referenceImage?.dataUrl;
+    if (!map || !dataUrl || !referenceAdjust) return undefined;
+
+    const frameSource = new VectorSource();
+    refImageFrameSourceRef.current = frameSource;
+    const frameLayer = new VectorLayer({
+      source: frameSource,
+      style: (feature) =>
+        feature.getGeometry().getType() === "Point"
+          ? new Style({
+              image: new RegularShape({
+                points: 4,
+                radius: 7,
+                angle: Math.PI / 4,
+                fill: new Fill({ color: "#22d3ee" }),
+                stroke: new Stroke({ color: "#083344", width: 1.5 }),
+              }),
+            })
+          : new Style({ stroke: new Stroke({ color: "#22d3ee", width: 1.5, lineDash: [6, 6] }) }),
+    });
+    frameLayer.setZIndex(41);
+    map.addLayer(frameLayer);
+
+    const cornersOf = (extent) => [
+      [extent[0], extent[1]],
+      [extent[2], extent[1]],
+      [extent[2], extent[3]],
+      [extent[0], extent[3]],
+    ];
+    const redrawFrame = () => {
+      const extent = refImageExtentRef.current;
+      frameSource.clear();
+      if (!extent) return;
+      frameSource.addFeature(new Feature({ geometry: polygonFromExtent(extent) }));
+      for (const corner of cornersOf(extent)) {
+        frameSource.addFeature(new Feature({ geometry: new Point(corner) }));
+      }
+    };
+    const refreshImage = () => {
+      refImageLayerRef.current?.setSource(
+        new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
+      );
+    };
+    redrawFrame();
+
+    let drag = null; // { mode: "move", last } | { mode: "resize", anchor }
+    const interaction = new PointerInteraction({
+      handleDownEvent: (event) => {
+        const extent = refImageExtentRef.current;
+        if (!extent) return false;
+        const corners = cornersOf(extent);
+        for (let index = 0; index < corners.length; index += 1) {
+          const pixel = map.getPixelFromCoordinate(corners[index]);
+          const dx = pixel[0] - event.pixel[0];
+          const dy = pixel[1] - event.pixel[1];
+          if (Math.sqrt(dx * dx + dy * dy) <= 11) {
+            drag = { mode: "resize", anchor: corners[(index + 2) % 4] };
+            return true;
+          }
+        }
+        const [x, y] = event.coordinate;
+        if (x >= extent[0] && x <= extent[2] && y >= extent[1] && y <= extent[3]) {
+          drag = { mode: "move", last: event.coordinate };
+          return true;
+        }
+        return false;
+      },
+      handleDragEvent: (event) => {
+        const extent = refImageExtentRef.current;
+        if (!drag || !extent) return;
+        if (drag.mode === "move") {
+          const dx = event.coordinate[0] - drag.last[0];
+          const dy = event.coordinate[1] - drag.last[1];
+          drag.last = event.coordinate;
+          refImageExtentRef.current = [extent[0] + dx, extent[1] + dy, extent[2] + dx, extent[3] + dy];
+        } else {
+          const [ax, ay] = drag.anchor;
+          const [cx, cy] = event.coordinate;
+          // A collapsed extent breaks ImageStatic — enforce a minimum edge.
+          const minEdge = map.getView().getResolution() * 8;
+          const x1 = Math.min(ax, cx);
+          const y1 = Math.min(ay, cy);
+          refImageExtentRef.current = [
+            x1,
+            y1,
+            Math.max(Math.max(ax, cx), x1 + minEdge),
+            Math.max(Math.max(ay, cy), y1 + minEdge),
+          ];
+        }
+        redrawFrame();
+        refreshImage();
+      },
+      handleUpEvent: () => {
+        drag = null;
+        return false;
+      },
+    });
+    map.addInteraction(interaction);
+
+    return () => {
+      map.removeInteraction(interaction);
+      map.removeLayer(frameLayer);
+      refImageFrameSourceRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [referenceAdjust, referenceImage?.dataUrl]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

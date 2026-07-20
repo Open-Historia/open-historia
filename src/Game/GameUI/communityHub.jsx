@@ -79,6 +79,7 @@ const parsePost = (issue, importsById) => {
   const description = (descSection ? descSection[1] : body)
     .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
     .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
+    .replace(/^Flags-Count:.*$/gim, "")             // flag-pack tag (see communityFlags.js)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")            // images
     .replace(/<img[^>]*>/gi, "")
     .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
@@ -601,11 +602,19 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       if (coverBlob && coverDownloadName) saveBlobToDisk(coverBlob, coverDownloadName);
       // When the scenario carries a basemap, tag the post with the basemap hash so
       // the community Basemaps browser (which surfaces scenario-carried basemaps) can
-      // dedupe it against dedicated posts. Harmless if the scenario form has no such
-      // field — GitHub just ignores the unknown prefill param.
+      // dedupe it against dedicated posts. When it carries custom flags, tag the
+      // count so the flag picker's Community tab surfaces the post as an
+      // installable flag pack without downloading every bundle first. Harmless if
+      // the scenario form has no such field — GitHub ignores unknown prefills.
+      const customFlagCount = Object.values(bundle.assets?.flags?.data ?? {})
+        .filter((value) => typeof value === "string" && value.startsWith("data:")).length;
+      const technicalLines = [
+        ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),
+        ...(customFlagCount > 0 ? [`Flags-Count: ${customFlagCount}`] : []),
+      ];
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
-        (split ? `&technical=${encodeURIComponent(`Basemap-Hash: ${split.hash}\nBasemap-Kind: ${split.kind}`)}` : "");
+        (technicalLines.length ? `&technical=${encodeURIComponent(technicalLines.join("\n"))}` : "");
       window.open(scenarioUrl, "_blank", "noopener");
       setNotice(
         `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +

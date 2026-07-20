@@ -1935,6 +1935,121 @@ export const applyGameMasterCommand = async (requestText) => {
   }
 };
 
+// ---- Pre-game history -------------------------------------------------------
+// Pre-game backstory dates must sit strictly before round one. Strict/salvage
+// like the jump validators: attempt 1 returns corrective errors the model can
+// fix, attempt 2 drops what cannot be placed instead of rejecting the turn.
+// Non-Gregorian scenarios ("1200 BCE") skip date checks entirely — the model
+// is told to match the scenario's own dating style and we take it at its word.
+const validatePregameEvents = (candidate, { startDate, strict }) => {
+  const events = normalizeArray(candidate?.events);
+  if (events.length === 0) return "$.events must contain at least one pre-game event.";
+  if (!parseIsoDate(startDate)) return "";
+  if (strict) {
+    let previous = "";
+    for (let index = 0; index < events.length; index += 1) {
+      const date = normalizeString(events[index]?.date);
+      if (!parseIsoDate(date)) {
+        return `$.events[${index}].date must be a real YYYY-MM-DD date.`;
+      }
+      if (date >= startDate) {
+        return `$.events[${index}].date must be strictly before the game start date ${startDate} — these events are pre-game history.`;
+      }
+      if (previous && date < previous) {
+        return `$.events[${index}].date must not be earlier than the previous event — order the backstory chronologically.`;
+      }
+      previous = date;
+    }
+    return "";
+  }
+  candidate.events = events
+    .filter((event) => {
+      const date = normalizeString(event?.date);
+      return parseIsoDate(date) && date < startDate;
+    })
+    .sort((a, b) => normalizeString(a.date).localeCompare(normalizeString(b.date)));
+  return "";
+};
+
+// A fresh game whose scenario wrote a "World Before Round One" briefing gets
+// its backstory generated once, the first time the player opens it: the
+// briefing (plus rules and map) becomes real timeline events dated before the
+// start. Deliberately NOT applySimulationResult — the clock must stay at the
+// start date, round must stay 1, and backstory events carry no impacts (the
+// scenario's world already reflects them). The simulationHistory entry it
+// writes doubles as the done-marker, so it can never run twice.
+export const maybeGeneratePregameHistory = async () => {
+  if (isSimulationBusy()) return null;
+  const bundle = await readGameStateBundle({ force: true });
+  const briefing = normalizeString(bundle.world.startingTimelineText);
+  if (!briefing) return null;
+  if (normalizeEvents(bundle.events).length > 0) return null;
+  if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
+  const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
+  if (!startDate) return null;
+
+  beginSimulation();
+  try {
+    const variables = await buildTemplateVariables(bundle);
+    let validationAttempts = 0;
+    const { payload } = await runJsonTask("pregameHistory", {
+      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
+      userMessage: "Write the pre-game historical timeline as JSON only.",
+      validatePayload: (candidate) => {
+        validationAttempts += 1;
+        return validatePregameEvents(candidate, { startDate, strict: validationAttempts === 1 });
+      },
+      variables,
+    });
+
+    // The player may have switched games while this generated — the runtime
+    // endpoints follow the ACTIVE game, so re-verify the same fresh game is
+    // still there before writing anything.
+    const [eventsNow, worldNow, gameNow] = await Promise.all([
+      readEventsState({ force: true }),
+      readWorldState({ force: true }),
+      readGameData({ force: true }),
+    ]);
+    if (normalizeEvents(eventsNow).length > 0) return null;
+    const currentWorld = normalizeWorldState(worldNow);
+    if ((currentWorld.simulationHistory ?? []).length > 0) return null;
+    if (normalizeString(gameNow.startDate || gameNow.gameDate) !== startDate) return null;
+
+    const generatedEvents = normalizeArray(payload?.events)
+      .map((entry, index) =>
+        normalizeGeneratedEvent({ ...entry, impacts: undefined, source: "pregame" }, index))
+      .filter(Boolean);
+    if (generatedEvents.length === 0) return null;
+
+    const summary = normalizeString(payload?.summary);
+    currentWorld.simulationHistory = [
+      {
+        catalyst: null,
+        date: startDate,
+        eventIds: generatedEvents.map((event) => event.id),
+        fallbackReason: "",
+        fromDate: normalizeString(generatedEvents[0]?.date) || startDate,
+        mode: "pregame",
+        plannedActions: [],
+        round: 1,
+        summary,
+        source: "ai",
+        toDate: startDate,
+      },
+    ];
+    await Promise.all([
+      writeEventsState(generatedEvents),
+      writeWorldState(currentWorld),
+    ]);
+    return generatedEvents;
+  } catch {
+    // Silent: backstory is a bonus. The next open retries.
+    return null;
+  } finally {
+    endSimulation();
+  }
+};
+
 // ---- Idle diplomacy drip ----------------------------------------------------
 // While the player sits between jumps, the world occasionally speaks first:
 // on each real-world-minute tick (the caller's cadence) there is a small chance
