@@ -73,6 +73,11 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  // PMTiles range reads are cross-origin from the phone shell. Range is
+  // CORS-safelisted so 206s work, but pmtiles' recovery path for a very small
+  // archive reads Content-Range off a 416 — and a non-exposed header reads as
+  // absent, which it reports as a hard error.
+  res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
   // Chrome's Private Network Access preflights loopback/LAN targets and
   // requires this opt-in on top of regular CORS.
   res.setHeader("Access-Control-Allow-Private-Network", "true");
