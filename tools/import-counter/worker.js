@@ -1,15 +1,22 @@
 /**
  * Open Historia — scenario import counter (Cloudflare Worker + KV).
  *
- * Counts how many people imported each community scenario. Deduped SERVER-SIDE by
- * (scenario id, client IP): a person can't inflate a scenario's count by
- * re-importing / button-mashing / clearing localStorage. Genuine, distinct
- * installs still add up.
+ * Counts how many people imported each community scenario, deduped SERVER-SIDE so
+ * a person can't inflate a scenario's count by re-importing / button-mashing /
+ * clearing localStorage. Genuine, distinct installs still add up.
+ *
+ * Dedup axes per scenario id:
+ *   - Website (import forwarded by the registry Worker): per ACCOUNT *and* per IP.
+ *     A signed-in import marks both; a later hit is ignored if EITHER the account
+ *     OR the IP was already seen — so the same person counts once whether they
+ *     toggle sign-in or move networks, and a shared IP counts once.
+ *   - App / anonymous web: per IP only (there is no account).
  *
  * Web imports are forwarded by the registry Worker, so the real browser IP is
- * passed in X-OH-Client-IP and trusted ONLY when X-OH-Forward-Secret matches
- * FORWARD_SECRET — otherwise a Worker->Worker hop would collapse every web user
- * to the registry's single egress IP. Direct callers can only spend their own IP.
+ * passed in X-OH-Client-IP and the account token in X-OH-Account — both trusted
+ * ONLY when X-OH-Forward-Secret matches FORWARD_SECRET (otherwise a Worker->
+ * Worker hop would collapse every web user to the registry's single egress IP,
+ * and anyone could spoof an account). Direct callers can only spend their own IP.
  *
  * Routes:
  *   POST /hit          body {id, title?}  -> increment for `id` (once per IP)
@@ -48,15 +55,19 @@ function clientIp(request, env) {
   return request.headers.get("cf-connecting-ip") || "unknown";
 }
 
-// What a hit dedups on. A signed-in web account (an opaque token the trusted
-// registry Worker forwards with the shared secret) dedups per-ACCOUNT — so the
-// same person counts once for a scenario across devices/IPs. Everyone else dedups
-// per IP, exactly as before. Spoofing an account needs the FORWARD_SECRET.
-async function dedupKeyFor(request, env, id) {
+// The dedup markers a hit consumes for scenario `id`. Everyone gets an IP marker;
+// a signed-in web account (an opaque token the trusted registry Worker forwards
+// with the shared secret) adds an account marker too. The hit is counted only
+// when NONE of its markers already exist, so a website user is deduped by account
+// AND IP, and the app / anonymous web by IP alone. The key formats are unchanged
+// from the account-only / IP-only versions, so existing markers still dedup (an
+// account marker always carries ":a:", an IP hash never does — they can't collide).
+async function dedupMarkersFor(request, env, id) {
+  const markers = [`h:${id}:${await ipHash(clientIp(request, env), env)}`];
   const secretOk = env.FORWARD_SECRET && request.headers.get("x-oh-forward-secret") === env.FORWARD_SECRET;
   const acct = secretOk ? (request.headers.get("x-oh-account") || "").trim() : "";
-  if (acct) return `h:${id}:a:${acct.slice(0, 48)}`;
-  return `h:${id}:${await ipHash(clientIp(request, env), env)}`;
+  if (acct) markers.push(`h:${id}:a:${acct.slice(0, 48)}`);
+  return markers;
 }
 
 export default {
@@ -75,11 +86,15 @@ export default {
         const meta = existing.metadata || {};
         let count = Number(meta.count) || 0;
         const title = String(body.title ?? meta.title ?? "").slice(0, 200);
-        const dedupKey = await dedupKeyFor(request, env, id);
-        if (await env.IMPORTS.get(dedupKey)) {
-          return json({ id, count, deduped: true }); // already counted this account/IP
+        const markers = await dedupMarkersFor(request, env, id);
+        // Already counted if ANY axis (this account, or this IP) has been seen.
+        const seen = await Promise.all(markers.map((marker) => env.IMPORTS.get(marker)));
+        if (seen.some(Boolean)) {
+          return json({ id, count, deduped: true });
         }
-        await env.IMPORTS.put(dedupKey, "1", { expirationTtl: DEDUP_TTL });
+        await Promise.all(
+          markers.map((marker) => env.IMPORTS.put(marker, "1", { expirationTtl: DEDUP_TTL })),
+        );
         count += 1;
         await env.IMPORTS.put(countKey, "", { metadata: { count, title } });
         return json({ id, count });

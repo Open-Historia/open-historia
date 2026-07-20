@@ -6,6 +6,16 @@ scenario. The game server pings it once per install on a successful import (see
 for scenarios GitHub can't count (issue attachments), deduped so one person
 re-importing doesn't inflate the total.
 
+Dedup is server-side, per scenario:
+- **Website** (import forwarded by the registry Worker): once per **account _and_
+  IP** — a signed-in import marks both, and a later hit is skipped if either the
+  account or the IP was already seen for that scenario.
+- **App / anonymous web**: once per **IP** (there is no account).
+
+Raw IPs are never stored — they're hashed with `HASH_SALT`. The real browser IP
+and account token are trusted only when the caller proves it's the registry
+Worker via `FORWARD_SECRET`; direct callers can only spend their own IP.
+
 It runs on Cloudflare's free tier (Workers + KV) — no card required for the free
 plan, no server to keep alive.
 
