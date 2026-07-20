@@ -572,6 +572,11 @@ const normalizeHubOrigin = (raw) => {
   };
 };
 
+const normalizePlayCount = (raw) => {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+};
+
 const readScenarioMeta = (scenarioId) => {
   const raw = readJsonFile(getScenarioMetaPath(scenarioId), {});
   const name = String(raw?.name ?? "").trim() || DEFAULT_SCENARIO_META.name;
@@ -593,6 +598,7 @@ const readScenarioMeta = (scenarioId) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     id: scenarioId,
     name,
+    playCount: normalizePlayCount(raw?.playCount),
     subtitle,
     updatedAt: raw?.updatedAt ?? new Date().toISOString(),
   };
@@ -644,7 +650,9 @@ const readGameMeta = (gameId) => {
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
     id: gameId,
+    lastPlayedAt: String(raw?.lastPlayedAt ?? "").trim() || null,
     name,
+    playCount: normalizePlayCount(raw?.playCount),
     scenarioId: String(raw?.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID,
     subtitle,
     updatedAt: raw?.updatedAt ?? new Date().toISOString(),
@@ -1358,6 +1366,35 @@ const setSelectedScenario = (scenarioId) => {
   return getLibraryCatalog();
 };
 
+// Play stamps power the main menu's "Last Played"/"Most Played" rows. They
+// bypass writeGameMeta/writeScenarioMeta on purpose: those stamp updatedAt
+// (which would turn "Last Updated" into "Last Played") and writeScenarioMeta
+// drops hubOrigin on any write it isn't explicitly handed (which would fork a
+// hub scenario off update tracking just for playing it).
+const recordGamePlayed = (gameId) => {
+  try {
+    const metaPath = getGameMetaPath(gameId);
+    const current = readJsonFile(metaPath, {});
+    writeJsonFile(metaPath, {
+      ...current,
+      lastPlayedAt: new Date().toISOString(),
+      playCount: normalizePlayCount(current?.playCount) + 1,
+    });
+
+    const scenarioId = String(current?.scenarioId ?? "").trim();
+    if (scenarioId && fs.existsSync(getScenarioDirectory(scenarioId))) {
+      const scenarioMetaPath = getScenarioMetaPath(scenarioId);
+      const scenarioMeta = readJsonFile(scenarioMetaPath, {});
+      writeJsonFile(scenarioMetaPath, {
+        ...scenarioMeta,
+        playCount: normalizePlayCount(scenarioMeta?.playCount) + 1,
+      });
+    }
+  } catch {
+    // Stamping is best-effort — never block activating a game over it.
+  }
+};
+
 const setActiveGame = (gameId) => {
   ensureGameStore();
 
@@ -1372,6 +1409,7 @@ const setActiveGame = (gameId) => {
   );
   manifest.order.unshift(gameId);
   saveGameManifest(manifest);
+  recordGamePlayed(gameId);
   return getLibraryCatalog();
 };
 
@@ -1554,6 +1592,9 @@ const createGame = ({
     manifest.activeGameId = resolvedGameId;
   }
   saveGameManifest(manifest);
+  if (setActive) {
+    recordGamePlayed(resolvedGameId);
+  }
 
   return getGameDetails(resolvedGameId);
 };

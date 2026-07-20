@@ -83,11 +83,18 @@ const TECHNICAL_OWNER_CODES = new Set([
   "Z09",
 ]);
 
-// Set by the mounted LibraryTopBar; lets the no-game gate open a tab.
+// Set by the mounted LibraryTopBar; lets outside callers open the main menu
+// on a specific tab.
 let _openLibraryTab = null;
 export const openLibraryTab = (tab) => {
   _openLibraryTab?.(tab);
 };
+
+// Whether the main menu is showing. Lives at module scope because the whole UI
+// tree (this component included) remounts whenever the active game changes —
+// per-component state would reset to "open" mid game-start and the menu would
+// pop back over the freshly activated game. The app boots into the menu.
+let menuOpenDefault = true;
 const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
@@ -608,6 +615,52 @@ const GameCard = ({ active, game, onActivate, onClone, onEdit }) => {
   );
 };
 
+// A netflix-style shelf on the main menu: a titled row of horizontally
+// scrolling cards. Rows that can be legitimately empty pass emptyText.
+const MenuRow = ({ children, emptyText, title }) => (
+  <div style={{ marginBottom: "1.7rem" }}>
+    <div style={{ color: "rgba(255,255,255,0.88)", fontSize: "1.02rem", fontWeight: 800, letterSpacing: "-0.01em", marginBottom: "0.7rem" }}>
+      {title}
+    </div>
+    {React.Children.count(children) > 0 ? (
+      <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
+        {children}
+      </div>
+    ) : (
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.85rem", padding: "0.4rem 0 0.6rem" }}>
+        {emptyText || "Nothing here yet."}
+      </div>
+    )}
+  </div>
+);
+
+// First slot of "Your Scenarios": the big + that creates a blank scenario.
+const CreateScenarioTile = ({ busy, onCreate }) => (
+  <button
+    disabled={busy}
+    onClick={onCreate}
+    type="button"
+    style={{
+      alignItems: "center",
+      background: "rgba(255,255,255,0.03)",
+      border: "2px dashed rgba(255,255,255,0.24)",
+      borderRadius: "24px",
+      color: "rgba(255,255,255,0.78)",
+      cursor: busy ? "wait" : "pointer",
+      display: "flex",
+      flex: "0 0 21rem",
+      flexDirection: "column",
+      gap: "0.55rem",
+      justifyContent: "center",
+      minHeight: "15rem",
+      opacity: busy ? 0.6 : 1,
+    }}
+  >
+    <span aria-hidden="true" style={{ fontSize: "4.6rem", fontWeight: 300, lineHeight: 1 }}>+</span>
+    <span style={{ fontSize: "0.95rem", fontWeight: 700 }}>Create Scenario</span>
+  </button>
+);
+
 const SectionTabs = ({ currentSection, sections, setSection }) => (
   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
     {sections.map((sectionKey) => (
@@ -678,7 +731,9 @@ const EditorDrawer = ({
         right: "0.85rem",
         top: `calc(${TOP_BAR_OFFSET} + 3.5rem)`,
         width: "min(34rem, calc(100vw - 1.2rem))",
-        zIndex: 10031,
+        // Above the main menu (10046) — the menu's + tile and Edit buttons open
+        // this drawer, and it must land on top of the menu it came from.
+        zIndex: 10048,
       }}
     >
       <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
@@ -992,11 +1047,19 @@ const LibraryTopBar = () => {
     selectedScenarioId,
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
-  const [isPanelOpen, setIsPanelOpen] = useState(false);
-  // Bridge for outside callers (the no-game gate): open a library tab.
+  const [menuOpen, setMenuOpenState] = useState(menuOpenDefault);
+  // The module-level default is the ONLY value that survives the keyed UI
+  // remount a game activation triggers, so every open/close writes it first.
+  // Flows that activate a game flip it BEFORE awaiting the request — the
+  // remount happens mid-await, and the new instance must mount closed.
+  const setMenuOpen = (open) => {
+    menuOpenDefault = open;
+    setMenuOpenState(open);
+  };
+  // Bridge for outside callers: open the main menu on a library tab.
   _openLibraryTab = (tab) => {
     setActiveTab(tab);
-    setIsPanelOpen(true);
+    setMenuOpen(true);
   };
   const [editorKind, setEditorKind] = useState(null);
   const [editorDetails, setEditorDetails] = useState(null);
@@ -1066,6 +1129,9 @@ const LibraryTopBar = () => {
     setCustomRegionData(null);
     setEditorError(null);
     setIsBusy(true);
+    // Before the await: createGame({setActive}) remounts the UI mid-flight and
+    // the remounted menu must come up closed, over the new game.
+    setMenuOpen(false);
     try {
       const details = await createGame({
         name: `${scenario.name} Session`,
@@ -1080,6 +1146,7 @@ const LibraryTopBar = () => {
       }
       await openGameEditor(details.game.id);
     } catch (nextError) {
+      setMenuOpen(true);
       setEditorError(nextError.message);
     } finally {
       setIsBusy(false);
@@ -1094,6 +1161,7 @@ const LibraryTopBar = () => {
     setCustomRegionData(null);
     setEditorError(null);
     setIsBusy(true);
+    setMenuOpen(false);
     try {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
@@ -1148,6 +1216,7 @@ const LibraryTopBar = () => {
 
       await openGameEditor(gameId);
     } catch (nextError) {
+      setMenuOpen(true);
       setEditorError(nextError.message);
     } finally {
       setIsBusy(false);
@@ -1232,7 +1301,7 @@ const LibraryTopBar = () => {
   // buttons — offline behaves exactly as before.
   const [hubPostById, setHubPostById] = useState(null);
   useEffect(() => {
-    if (activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
+    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
     let cancelled = false;
     import("./communityHub.jsx")
       .then(({ fetchHubPosts }) => fetchHubPosts())
@@ -1246,7 +1315,7 @@ const LibraryTopBar = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, scenarios]);
+  }, [menuOpen, activeTab, scenarios]);
 
   const scenarioUpdateAvailable = (scenario) => Boolean(
     scenario.hubOrigin &&
@@ -1298,6 +1367,7 @@ const LibraryTopBar = () => {
   const handleGameClone = async (game) => {
     setEditorError(null);
     setIsBusy(true);
+    setMenuOpen(false);
 
     try {
       const details = await createGame({
@@ -1306,6 +1376,34 @@ const LibraryTopBar = () => {
         setActive: true,
       });
       await openGameEditor(details.game.id);
+    } catch (nextError) {
+      setMenuOpen(true);
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  // Play an existing game from the menu: close the menu (module flag first —
+  // the activation remounts the UI) and activate. Reopen only on failure.
+  const handleGameActivate = async (gameId) => {
+    setMenuOpen(false);
+    try {
+      await activateGame(gameId);
+    } catch (nextError) {
+      setMenuOpen(true);
+      setEditorError(nextError.message);
+    }
+  };
+
+  // Blank scenario from the menu's + tile: create (seeded server-side from the
+  // default scenario) and drop straight into its editor, above the menu.
+  const handleCreateScenario = async () => {
+    setEditorError(null);
+    setIsBusy(true);
+    try {
+      const details = await createScenario({ name: "New Scenario", setActive: true });
+      await openScenarioEditor(details.scenario.id);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -1591,7 +1689,7 @@ const LibraryTopBar = () => {
       }
       const details = await importScenarioBundle(bundle);
       setActiveTab("scenarios");
-      setIsPanelOpen(true);
+      setMenuOpen(true);
       await openScenarioEditor(details.scenario.id);
     } catch (nextError) {
       setEditorError(nextError.message);
@@ -1609,16 +1707,6 @@ const LibraryTopBar = () => {
 
     return "No active game";
   }, [activeGame, activeCountryName]);
-
-  const handleTabToggle = (tab) => {
-    if (activeTab === tab) {
-      setIsPanelOpen((open) => !open);
-      return;
-    }
-
-    setActiveTab(tab);
-    setIsPanelOpen(true);
-  };
 
   const isMobile = useIsMobile();
   // True once the user shut the server down from the ⏻ button — swaps the whole
@@ -1756,7 +1844,9 @@ const LibraryTopBar = () => {
 
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
-    // map) in place — this guarantees the new map is live.
+    // map) in place — this guarantees the new map is live. Menu flag first: the
+    // activation remounts the UI and the remount must come up menu-closed.
+    setMenuOpen(false);
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
@@ -1772,7 +1862,7 @@ const LibraryTopBar = () => {
     setMapEditorScenario(null);
     setMapEditorSeed(null);
     resetEditor();
-    setIsPanelOpen(false);
+    setMenuOpen(false);
 
     // Optional: let the player pick who they control on the new game — limited to
     // the factions this map actually contains.
@@ -1809,6 +1899,7 @@ const LibraryTopBar = () => {
     setCustomRegionData(null);
     setPlayGameId(null);
     if (!gid) return;
+    setMenuOpen(false);
     try {
       const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
@@ -1846,87 +1937,114 @@ const LibraryTopBar = () => {
     ? countryOptions.find((country) => country.code === difficultyPick.countryCode)
     : null;
 
+  // ---- Main-menu shelves ----------------------------------------------------
+  // The catalog's game order is already activation recency (activating unshifts),
+  // so games without a lastPlayedAt stamp (pre-feature saves) keep a sensible
+  // relative order behind the stamped ones.
+  const lastPlayedGames = useMemo(
+    () => [...games].sort((a, b) => String(b.lastPlayedAt ?? "").localeCompare(String(a.lastPlayedAt ?? ""))),
+    [games],
+  );
+  const mostPlayedGames = useMemo(
+    () => [...games].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.round ?? 0) - (a.round ?? 0)),
+    [games],
+  );
+  const mostPlayedScenarios = useMemo(
+    () => [...scenarios].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.gameCount ?? 0) - (a.gameCount ?? 0)),
+    [scenarios],
+  );
+  const lastUpdatedScenarios = useMemo(
+    () => [...scenarios].sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))),
+    [scenarios],
+  );
+  // "Your Scenarios": ones the player made or edited themselves. hubOrigin is
+  // null for locally created scenarios AND for hub imports edited locally (any
+  // local meta write clears it — see writeScenarioMeta). The stock built-in
+  // only counts once it has actually been touched.
+  const yourScenarios = useMemo(
+    () => scenarios.filter(
+      (scenario) => !scenario.hubOrigin && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
+    ),
+    [scenarios],
+  );
+
   return (
     <>
-      <div
-        style={{
-          ...surfaceStyle,
-          alignItems: "center",
-          borderLeft: "none",
-          borderRadius: 0,
-          borderRight: "none",
-          borderTop: "none",
-          display: "grid",
-          gap: isMobile ? "0.4rem" : "0.9rem",
-          gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-          height: `${BAR_HEIGHT}px`,
-          left: 0,
-          padding: isMobile ? "0 0.5rem" : "0 1rem",
-          position: "fixed",
-          right: 0,
-          top: 0,
-          zIndex: 10030,
-        }}
-      >
-        <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
-          <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
-            <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
-          </div>
-          {/* Phones keep the logo only — the title/summary would crowd out the tabs. */}
-          {!isMobile && (
-            <div style={{ minWidth: 0 }}>
-              <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
-                Open Historia
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
-                {summaryText}
-              </div>
+      {/* In-game top bar. The library tabs moved to the main menu — in-game it
+          identifies the session and offers the way back (Exit Game). */}
+      {!menuOpen && (
+        <div
+          style={{
+            ...surfaceStyle,
+            alignItems: "center",
+            borderLeft: "none",
+            borderRadius: 0,
+            borderRight: "none",
+            borderTop: "none",
+            display: "grid",
+            gap: isMobile ? "0.4rem" : "0.9rem",
+            gridTemplateColumns: "minmax(0, 1fr) auto",
+            height: `${BAR_HEIGHT}px`,
+            left: 0,
+            padding: isMobile ? "0 0.5rem" : "0 1rem",
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 10030,
+          }}
+        >
+          <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
+            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
+              <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
             </div>
-          )}
-        </div>
-
-        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center", justifySelf: "center" }}>
-          {["games", "scenarios", "community"].map((tab) => (
-            <button
-              key={tab}
-              onClick={() => handleTabToggle(tab)}
-              style={{
-                ...actionButtonStyle,
-                background: activeTab === tab ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.05)",
-                borderColor: activeTab === tab ? "rgba(124,58,237,0.38)" : "rgba(255,255,255,0.08)",
-                minWidth: isMobile ? "0" : "6.6rem",
-                padding: isMobile ? "0.55rem 0.7rem" : undefined,
-              }}
-              type="button"
-            >
-              {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : "Community"}
-            </button>
-          ))}
-        </div>
-
-        {/* Top-right: shut the server down (phones/Termux have no terminal handy).
-            Hidden on the hosted website (web build) — there's no local server to
-            stop there, and the compile-time flag strips this from that bundle. */}
-        {!import.meta.env.VITE_OH_WEB && (
-          <div style={{ alignItems: "center", display: "flex", justifyContent: "flex-end" }}>
-            <button
-              onClick={handleShutdownServer}
-              title="Exit: shut down the Open Historia server"
-              type="button"
-              style={{
-                ...actionButtonStyle,
-                background: "rgba(220,70,70,0.14)",
-                borderColor: "rgba(248,113,113,0.35)",
-                color: "#fca5a5",
-                minWidth: "2.35rem",
-                padding: isMobile ? "0.55rem 0.7rem" : undefined,
-              }}
-            >
-              ⏻
-            </button>
+            {/* Phones keep the logo only — the title/summary would crowd the buttons. */}
+            {!isMobile && (
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+                  Open Historia
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "min(28rem, 46vw)" }}>
+                  {summaryText}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+
+          <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "flex-end" }}>
+            <button
+              onClick={() => setMenuOpen(true)}
+              title="Leave this game and return to the main menu"
+              type="button"
+              style={{
+                ...actionButtonStyle,
+                padding: isMobile ? "0.55rem 0.7rem" : undefined,
+              }}
+            >
+              {isMobile ? "⌂" : "⌂ Exit Game"}
+            </button>
+            {/* Shut the server down (phones/Termux have no terminal handy). Hidden
+                on the hosted website (web build) — there's no local server to stop
+                there, and the compile-time flag strips this from that bundle. */}
+            {!import.meta.env.VITE_OH_WEB && (
+              <button
+                onClick={handleShutdownServer}
+                title="Exit: shut down the Open Historia server"
+                type="button"
+                style={{
+                  ...actionButtonStyle,
+                  background: "rgba(220,70,70,0.14)",
+                  borderColor: "rgba(248,113,113,0.35)",
+                  color: "#fca5a5",
+                  minWidth: "2.35rem",
+                  padding: isMobile ? "0.55rem 0.7rem" : undefined,
+                }}
+              >
+                ⏻
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {serverDown && (
         <div
@@ -2117,57 +2235,165 @@ const LibraryTopBar = () => {
         type="file"
       />
 
-      {isPanelOpen && (
+      {/* The Main Menu: a full page over everything in-game. Opens on app start
+          (module default) and via Exit Game; closes only by entering a game. */}
+      {menuOpen && (
         <div
           style={{
-            ...surfaceStyle,
-            borderRadius: "0 0 28px 28px",
-            left: "0.85rem",
-            maxWidth: "calc(100vw - 1.7rem)",
-            padding: "1rem",
+            background:
+              "radial-gradient(circle at 12% -4%, rgba(124,58,237,0.16), transparent 42%), " +
+              "radial-gradient(circle at 88% 110%, rgba(56,120,255,0.10), transparent 46%), " +
+              "linear-gradient(180deg, #0b1020 0%, #090d18 100%)",
+            color: "#fff",
+            display: "flex",
+            flexDirection: "column",
+            fontFamily: "sans-serif",
+            inset: 0,
             position: "fixed",
-            right: "0.85rem",
-            top: `${BAR_HEIGHT}px`,
-            zIndex: 10029,
+            zIndex: 10046,
           }}
         >
-          {activeTab !== "community" && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "flex-end", marginBottom: "0.9rem" }}>
-              <button onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})} style={actionButtonStyle} type="button">
-                Refresh
-              </button>
+          <div
+            style={{
+              alignItems: "center",
+              borderBottom: "1px solid rgba(255,255,255,0.08)",
+              display: "grid",
+              flexShrink: 0,
+              gap: isMobile ? "0.4rem" : "0.9rem",
+              gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+              height: `${BAR_HEIGHT}px`,
+              padding: isMobile ? "0 0.5rem" : "0 1rem",
+            }}
+          >
+            <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
+              <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
+                <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+              </div>
+              {!isMobile && (
+                <div style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+                  Open Historia
+                </div>
+              )}
+            </div>
+
+            <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center", justifySelf: "center" }}>
+              {["games", "scenarios", "community"].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  style={{
+                    ...actionButtonStyle,
+                    background: activeTab === tab ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.05)",
+                    borderColor: activeTab === tab ? "rgba(124,58,237,0.38)" : "rgba(255,255,255,0.08)",
+                    minWidth: isMobile ? "0" : "6.6rem",
+                    padding: isMobile ? "0.55rem 0.7rem" : undefined,
+                  }}
+                  type="button"
+                >
+                  {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : "Community"}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "flex-end" }}>
+              {activeTab !== "community" && (
+                <button onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})} style={actionButtonStyle} type="button">
+                  {isMobile ? "⟳" : "Refresh"}
+                </button>
+              )}
               {activeTab === "scenarios" && (
                 <button onClick={() => importScenarioInputRef.current?.click()} style={actionButtonStyle} type="button">
-                  Import JSON
+                  {isMobile ? "⬆" : "Import JSON"}
+                </button>
+              )}
+              {!import.meta.env.VITE_OH_WEB && (
+                <button
+                  onClick={handleShutdownServer}
+                  title="Exit: shut down the Open Historia server"
+                  type="button"
+                  style={{
+                    ...actionButtonStyle,
+                    background: "rgba(220,70,70,0.14)",
+                    borderColor: "rgba(248,113,113,0.35)",
+                    color: "#fca5a5",
+                    minWidth: "2.35rem",
+                    padding: isMobile ? "0.55rem 0.7rem" : undefined,
+                  }}
+                >
+                  ⏻
                 </button>
               )}
             </div>
-          )}
+          </div>
 
-          {activeTab === "community" ? (
-            <Suspense
-              fallback={
-                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
-                  Loading Community…
+          <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1.1rem 0.8rem 2.5rem" : "1.5rem 1.6rem 3rem" }}>
+            {activeTab === "community" ? (
+              <Suspense
+                fallback={
+                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
+                    Loading Community…
+                  </div>
+                }
+              >
+                <CommunityPanel fullPage onImported={() => setActiveTab("scenarios")} />
+              </Suspense>
+            ) : activeTab === "games" ? (
+              loaded && games.length === 0 ? (
+                <div style={{ alignItems: "center", display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "60vh", textAlign: "center" }}>
+                  <img alt="" src="/logo.png" style={{ height: "5rem", marginBottom: "1.2rem", opacity: 0.9, width: "5rem" }} />
+                  <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.02em" }}>No games yet</div>
+                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.95rem", lineHeight: 1.6, margin: "0.6rem 0 1.6rem", maxWidth: "26rem" }}>
+                    Start a new game from one of your scenarios, or grab new scenarios from the community first.
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "center" }}>
+                    <button
+                      type="button"
+                      style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(139,92,246,0.55)", minHeight: "2.8rem", padding: "0 1.4rem" }}
+                      onClick={() => setActiveTab("scenarios")}
+                    >
+                      Start from a scenario
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...actionButtonStyle, minHeight: "2.8rem", padding: "0 1.4rem" }}
+                      onClick={() => setActiveTab("community")}
+                    >
+                      Browse community scenarios
+                    </button>
+                  </div>
                 </div>
-              }
-            >
-              <CommunityPanel onImported={() => setActiveTab("scenarios")} />
-            </Suspense>
-          ) : (
-            <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.15rem", scrollbarWidth: "thin" }}>
-              {activeTab === "games"
-                ? games.map((game) => (
-                    <GameCard
-                      key={game.id}
-                      active={game.id === activeGameId}
-                      game={game}
-                      onActivate={activateGame}
-                      onClone={handleGameClone}
-                      onEdit={openGameEditor}
-                    />
-                  ))
-                : scenarios.map((scenario) => (
+              ) : (
+                <>
+                  <MenuRow title="🕐 Last Played">
+                    {lastPlayedGames.map((game) => (
+                      <GameCard
+                        key={game.id}
+                        active={game.id === activeGameId}
+                        game={game}
+                        onActivate={handleGameActivate}
+                        onClone={handleGameClone}
+                        onEdit={openGameEditor}
+                      />
+                    ))}
+                  </MenuRow>
+                  <MenuRow title="🔥 Most Played">
+                    {mostPlayedGames.map((game) => (
+                      <GameCard
+                        key={game.id}
+                        active={game.id === activeGameId}
+                        game={game}
+                        onActivate={handleGameActivate}
+                        onClone={handleGameClone}
+                        onEdit={openGameEditor}
+                      />
+                    ))}
+                  </MenuRow>
+                </>
+              )
+            ) : (
+              <>
+                <MenuRow title="🔥 Most Played" emptyText="No scenarios yet.">
+                  {mostPlayedScenarios.map((scenario) => (
                     <ScenarioCard
                       key={scenario.id}
                       onClone={handleScenarioClone}
@@ -2180,8 +2406,41 @@ const LibraryTopBar = () => {
                       updateAvailable={scenarioUpdateAvailable(scenario)}
                     />
                   ))}
-            </div>
-          )}
+                </MenuRow>
+                <MenuRow title="🕐 Last Updated" emptyText="No scenarios yet.">
+                  {lastUpdatedScenarios.map((scenario) => (
+                    <ScenarioCard
+                      key={scenario.id}
+                      onClone={handleScenarioClone}
+                      onEdit={openScenarioEditor}
+                      onPlay={handleScenarioPlay}
+                      onSelect={selectScenario}
+                      onUpdate={handleScenarioUpdate}
+                      scenario={scenario}
+                      selected={scenario.id === selectedScenarioId}
+                      updateAvailable={scenarioUpdateAvailable(scenario)}
+                    />
+                  ))}
+                </MenuRow>
+                <MenuRow title="✦ Your Scenarios">
+                  <CreateScenarioTile busy={isBusy} onCreate={handleCreateScenario} />
+                  {yourScenarios.map((scenario) => (
+                    <ScenarioCard
+                      key={scenario.id}
+                      onClone={handleScenarioClone}
+                      onEdit={openScenarioEditor}
+                      onPlay={handleScenarioPlay}
+                      onSelect={selectScenario}
+                      onUpdate={handleScenarioUpdate}
+                      scenario={scenario}
+                      selected={scenario.id === selectedScenarioId}
+                      updateAvailable={scenarioUpdateAvailable(scenario)}
+                    />
+                  ))}
+                </MenuRow>
+              </>
+            )}
+          </div>
         </div>
       )}
 

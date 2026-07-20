@@ -190,6 +190,11 @@ export const normalizeHubOrigin = (raw) => {
   };
 };
 
+export const normalizePlayCount = (raw) => {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+};
+
 export const readScenarioMeta = (scenarioId, raw = {}) => {
   const name = String(raw?.name ?? "").trim() || DEFAULT_SCENARIO_META.name;
   const subtitle = String(raw?.subtitle ?? "").trim() || DEFAULT_SCENARIO_META.subtitle;
@@ -206,6 +211,7 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     id: scenarioId,
     name,
+    playCount: normalizePlayCount(raw?.playCount),
     subtitle,
     updatedAt: raw?.updatedAt ?? nowIso(),
   };
@@ -224,7 +230,9 @@ export const readGameMeta = (gameId, raw = {}) => {
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
     id: gameId,
+    lastPlayedAt: String(raw?.lastPlayedAt ?? "").trim() || null,
     name,
+    playCount: normalizePlayCount(raw?.playCount),
     scenarioId: String(raw?.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID,
     subtitle,
     updatedAt: raw?.updatedAt ?? nowIso(),
