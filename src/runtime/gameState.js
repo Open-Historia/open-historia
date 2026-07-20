@@ -24,6 +24,13 @@ export const WORLD_DEFAULTS = {
   // tags.json holds the map-maker's STARTING tags; this holds every change since,
   // and wins where present (see resolveCountryTags).
   countryTags: {},
+  // Country-label styling, set in the scenario settings. Empty = the defaults
+  // (Impact, white letters, half-black outline). The font renders from the
+  // PLAYER's local fonts — the style has no glyphs endpoint, so MapLibre v5
+  // rasterizes every glyph client-side using the stack as a CSS font-family.
+  labelFont: "",
+  labelHaloColor: "",
+  labelTextColor: "",
   language: "English",
   lastJumpMode: "",
   lastJumpSummary: "",
@@ -854,6 +861,9 @@ export const normalizeWorldState = (world) => {
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     internationalReputation,
+    labelFont: normalizeOptionalString(nextWorld.labelFont),
+    labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
+    labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),
     language: normalizeOptionalString(nextWorld.language) || WORLD_DEFAULTS.language,
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
