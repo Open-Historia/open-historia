@@ -17,6 +17,7 @@ import {
   communityFlagsHubUrl,
   fetchCommunityFlags,
   loadCommunityFlagDataUrl,
+  loadCommunityFlagPack,
   openFlagPublishForm,
 } from "../runtime/communityFlags.js";
 import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
@@ -175,6 +176,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
   const [community, setCommunity] = useState([]);
   const [communityLoading, setCommunityLoading] = useState(false);
   const [communityError, setCommunityError] = useState("");
+  const [communityNotice, setCommunityNotice] = useState("");
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
   // "My flags": saved to the library, so an upload is reusable on every map —
@@ -256,6 +258,38 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
       pick(await loadCommunityFlagDataUrl(post));
     } catch (e) {
       setCommunityError(e?.message || "Could not download that flag.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // A scenario flag pack installs into "My flags" wholesale — the library
+  // dedupes by content hash, so re-installing the same pack is harmless. The
+  // picker stays open on the Community tab; the flags land under "In the game".
+  const handleInstallPack = async (post) => {
+    setBusyId(post.id);
+    setCommunityError("");
+    setCommunityNotice("");
+    try {
+      const flags = await loadCommunityFlagPack(post);
+      let saved = 0;
+      for (const flag of flags) {
+        try {
+          await saveFlag({
+            name: flag.code || post.title,
+            code: flag.code || "",
+            author: post.author || "",
+            dataUrl: flag.dataUrl,
+          });
+          saved += 1;
+        } catch { /* one bad flag must not sink the whole pack */ }
+      }
+      refreshMine();
+      setCommunityNotice(
+        `Added ${saved} flag${saved === 1 ? "" : "s"} from “${post.title}” to My flags — they're in the “In the game” tab now.`,
+      );
+    } catch (e) {
+      setCommunityError(e?.message || "Could not install that flag pack.");
     } finally {
       setBusyId(null);
     }
@@ -391,6 +425,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
               </div>
 
               {communityError && <div style={{ ...dim, color: "#fecaca" }}>{communityError}</div>}
+              {communityNotice && <div style={{ ...dim, color: "#86efac" }}>{communityNotice}</div>}
               {communityLoading ? (
                 <div style={dim}>Loading community flags…</div>
               ) : filteredCommunity.length === 0 ? (
@@ -403,8 +438,17 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                 <div style={grid}>
                   {filteredCommunity.map((post) => (
                     <div key={post.id} style={{ ...cardSurface, cursor: "default" }}>
-                      <div style={{ aspectRatio: "3 / 2", background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <img src={post.imageUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                      <div style={{ aspectRatio: "3 / 2", background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                        {post.imageUrl ? (
+                          <img src={post.imageUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        ) : (
+                          <span style={{ fontSize: "2rem", opacity: 0.6 }}>🚩</span>
+                        )}
+                        {post.fromScenario && (
+                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(124,58,237,0.85)", borderRadius: 6, color: "#fff", fontSize: "0.62rem", fontWeight: 700, padding: "0.15rem 0.35rem" }}>
+                            {post.flagCount} flag{post.flagCount === 1 ? "" : "s"} · scenario
+                          </span>
+                        )}
                       </div>
                       <div style={{ padding: "0.4rem 0.5rem" }}>
                         <div style={{ fontSize: "0.78rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -415,10 +459,15 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                         <button
                           type="button"
                           disabled={busyId === post.id}
-                          onClick={() => handleInstall(post)}
+                          onClick={() => (post.fromScenario ? handleInstallPack(post) : handleInstall(post))}
                           style={{ ...tabBtn(false), marginTop: "0.35rem", width: "100%" }}
+                          title={post.fromScenario ? "Save this scenario's custom flags into My flags" : undefined}
                         >
-                          {busyId === post.id ? "Applying…" : "Use this flag"}
+                          {busyId === post.id
+                            ? (post.fromScenario ? "Adding…" : "Applying…")
+                            : post.fromScenario
+                              ? `⬇ Add ${post.flagCount} flag${post.flagCount === 1 ? "" : "s"}`
+                              : "Use this flag"}
                         </button>
                       </div>
                     </div>
