@@ -201,6 +201,9 @@ const buildScenarioEditorState = (details) => {
     language: game.language ?? world.language ?? "English",
     name: scenario.name ?? "",
     prompts,
+    labelFont: world.labelFont ?? "",
+    labelHaloColor: world.labelHaloColor ?? "",
+    labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: scenario.subtitle ?? "",
@@ -224,6 +227,9 @@ const buildGameEditorState = (details) => {
     language: game.language ?? world.language ?? "English",
     name: gameMeta.name ?? "",
     prompts,
+    labelFont: world.labelFont ?? "",
+    labelHaloColor: world.labelHaloColor ?? "",
+    labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: gameMeta.subtitle ?? "",
@@ -788,6 +794,42 @@ const EditorDrawer = ({
               <label style={fieldLabelStyle}>Simulation Rules</label>
               <textarea style={{ ...textareaStyle, minHeight: "8rem" }} value={formState.simulationRules} onChange={(event) => onChange("simulationRules", event.target.value)} />
             </div>
+            {/* Country-label styling. Labels rasterize from each player's LOCAL
+                fonts (the map has no glyph server), so any installed family
+                works — the list only suggests safe common ones. Empty = Impact. */}
+            <div>
+              <label style={fieldLabelStyle}>Country Label Font</label>
+              <input
+                list="oh-label-font-options"
+                placeholder="Impact (default)"
+                style={inputStyle}
+                value={formState.labelFont}
+                onChange={(event) => onChange("labelFont", event.target.value)}
+              />
+              <datalist id="oh-label-font-options">
+                {["Impact", "Arial Black", "Arial", "Georgia", "Times New Roman", "Trebuchet MS", "Verdana", "Courier New", "Garamond", "Comic Sans MS"].map((font) => (
+                  <option key={font} value={font} />
+                ))}
+              </datalist>
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Label Letter Color</label>
+              <input
+                type="color"
+                style={{ ...inputStyle, height: "2.4rem", padding: "0.2rem" }}
+                value={/^#[0-9a-fA-F]{6}$/.test(formState.labelTextColor) ? formState.labelTextColor : "#ffffff"}
+                onChange={(event) => onChange("labelTextColor", event.target.value)}
+              />
+            </div>
+            <div>
+              <label style={fieldLabelStyle}>Label Border Color</label>
+              <input
+                type="color"
+                style={{ ...inputStyle, height: "2.4rem", padding: "0.2rem" }}
+                value={/^#[0-9a-fA-F]{6}$/.test(formState.labelHaloColor) ? formState.labelHaloColor : "#000000"}
+                onChange={(event) => onChange("labelHaloColor", event.target.value)}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1344,6 +1386,9 @@ const LibraryTopBar = () => {
             allowedUnitTypes: Array.isArray(editorState.allowedUnitTypes)
               ? editorState.allowedUnitTypes
               : [...UNIT_TYPES],
+            labelFont: editorState.labelFont,
+            labelHaloColor: editorState.labelHaloColor,
+            labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
             startingTimelineText: editorState.startingTimelineText,
@@ -1371,6 +1416,9 @@ const LibraryTopBar = () => {
           subtitle: editorState.subtitle,
           world: {
             ...currentWorld,
+            labelFont: editorState.labelFont,
+            labelHaloColor: editorState.labelHaloColor,
+            labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
             startingTimelineText: editorState.startingTimelineText,
