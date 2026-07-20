@@ -95,6 +95,9 @@ export const openLibraryTab = (tab) => {
 // per-component state would reset to "open" mid game-start and the menu would
 // pop back over the freshly activated game. The app boots into the menu.
 let menuOpenDefault = true;
+// For background work that should not run for a game the player hasn't
+// actually entered (e.g. pre-game history generation while browsing the menu).
+export const isMainMenuOpen = () => menuOpenDefault;
 const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
