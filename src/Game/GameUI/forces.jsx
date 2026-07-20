@@ -32,7 +32,7 @@ const TYPE_GLYPH = {
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
   move: "Click a destination to move the unit",
-  attack: "Click an enemy unit to attack",
+  attack: "Click an enemy unit, a city, or a structure to attack",
 };
 
 const surface = {
