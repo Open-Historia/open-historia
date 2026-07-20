@@ -944,88 +944,125 @@ const validateChatOpener = (chatLike, path) => {
   return "";
 };
 
+// Strict/salvage discipline, the same contract clampTimelineDates follows:
+// the FIRST attempt returns corrective errors so the model can fix its own
+// answer; the SECOND attempt never rejects a finished generation — invalid
+// ops are DROPPED in place instead ("$.events[4].impacts.unitOps[0].unitId
+// does not identify an existing unit" used to trash whole good turns to the
+// canned fallback over one stale id).
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
+  const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{ impacts: candidate?.impacts, path: "$.impacts" }];
   const unresolvedTransfers = await resolveRegionTransfers(containers, world);
-  if (strictTransfers && unresolvedTransfers.length > 0) {
+  if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
   }
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
+  for (const { impacts } of containers) generatedPolities.push(...normalizeArray(impacts?.polityChanges));
 
   for (const { impacts, path } of containers) {
-    generatedPolities.push(...normalizeArray(impacts?.polityChanges));
+    const keptChats = [];
     for (let index = 0; index < normalizeArray(impacts?.createdChats).length; index += 1) {
       const createdChat = impacts.createdChats[index];
       const countries = await resolveInvitees(createdChat?.countries, world, generatedPolities);
       if (countries.length === 0) {
-        return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
+        if (strict) return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
+        continue; // salvage: drop the unresolvable chat, keep the turn
       }
-      // Strict attempt only (same contract as transfers): a blank, untitled
-      // chat tells the player nothing about why they were contacted — the
-      // retry demands the opener rather than dropping the turn to fallback.
-      if (strictTransfers) {
+      if (strict) {
         const chatError = validateChatOpener(createdChat, `${path}.createdChats[${index}]`);
         if (chatError) return chatError;
       }
+      keptChats.push(createdChat);
     }
+    if (impacts && Array.isArray(impacts.createdChats)) impacts.createdChats = keptChats;
 
+    const keptUnitOps = [];
     for (let index = 0; index < normalizeArray(impacts?.unitOps).length; index += 1) {
       const operation = impacts.unitOps[index];
       const operationPath = `${path}.unitOps[${index}]`;
       if (operation.op === "spawn") {
         if (!normalizeString(operation.unit?.name) || !normalizeString(operation.unit?.ownerCode)) {
-          return `${operationPath}.unit must have nonblank name and ownerCode values.`;
+          if (strict) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
+          continue;
         }
         const spawnedId = normalizeString(operation.unit?.id);
-        if (spawnedId && unitIds.has(spawnedId)) return `${operationPath}.unit.id duplicates an existing unit.`;
-        if (spawnedId) unitIds.add(spawnedId);
+        if (spawnedId && unitIds.has(spawnedId)) {
+          if (strict) return `${operationPath}.unit.id duplicates an existing unit.`;
+          delete operation.unit.id; // salvage: let normalization mint a fresh id
+        } else if (spawnedId) {
+          unitIds.add(spawnedId);
+        }
+        keptUnitOps.push(operation);
         continue;
       }
 
       const unitId = normalizeString(operation.unitId);
-      if (!unitId) return `${operationPath}.unitId must not be blank.`;
-      if (!unitIds.has(unitId)) return `${operationPath}.unitId does not identify an existing unit.`;
+      if (!unitId) {
+        if (strict) return `${operationPath}.unitId must not be blank.`;
+        continue;
+      }
+      if (!unitIds.has(unitId)) {
+        if (strict) return `${operationPath}.unitId does not identify an existing unit.`;
+        continue; // salvage: drop the op aimed at a unit that no longer exists
+      }
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
+      keptUnitOps.push(operation);
     }
+    if (impacts && Array.isArray(impacts.unitOps)) impacts.unitOps = keptUnitOps;
 
     // Marker ops that would be silently dropped by normalization instead fail
-    // here, so the retry tells the model what was missing.
+    // the strict attempt, so the retry tells the model what was missing.
+    const keptMarkerOps = [];
     for (let index = 0; index < normalizeArray(impacts?.markerOps).length; index += 1) {
       const operation = impacts.markerOps[index];
       const operationPath = `${path}.markerOps[${index}]`;
       const op = normalizeString(operation?.op).toLowerCase();
       if (op === "build" || op === "found") {
         const marker = operation.marker ?? operation;
-        if (!normalizeString(marker?.name)) return `${operationPath}.marker.name must not be blank.`;
+        if (!normalizeString(marker?.name)) {
+          if (strict) return `${operationPath}.marker.name must not be blank.`;
+          continue;
+        }
         if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
-          return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+          if (strict) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+          continue;
         }
       } else if (op === "remove" || op === "destroy") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
-          return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+          if (strict) return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+          continue;
         }
       }
+      keptMarkerOps.push(operation);
     }
+    if (impacts && Array.isArray(impacts.markerOps)) impacts.markerOps = keptMarkerOps;
   }
 
   // Unprompted outreach chats (top-level, not tied to an event) need real
   // participants exactly like createdChats do.
-  for (let index = 0; index < normalizeArray(candidate?.diplomaticOutreach).length; index += 1) {
-    const countries = await resolveInvitees(
-      candidate.diplomaticOutreach[index]?.countries,
-      world,
-      generatedPolities,
-    );
-    if (countries.length === 0) {
-      return `$.diplomaticOutreach[${index}].countries must contain at least one known polity.`;
+  if (Array.isArray(candidate?.diplomaticOutreach)) {
+    const keptOutreach = [];
+    for (let index = 0; index < candidate.diplomaticOutreach.length; index += 1) {
+      const countries = await resolveInvitees(
+        candidate.diplomaticOutreach[index]?.countries,
+        world,
+        generatedPolities,
+      );
+      if (countries.length === 0) {
+        if (strict) return `$.diplomaticOutreach[${index}].countries must contain at least one known polity.`;
+        continue;
+      }
+      if (strict) {
+        const chatError = validateChatOpener(candidate.diplomaticOutreach[index], `$.diplomaticOutreach[${index}]`);
+        if (chatError) return chatError;
+      }
+      keptOutreach.push(candidate.diplomaticOutreach[index]);
     }
-    if (strictTransfers) {
-      const chatError = validateChatOpener(candidate.diplomaticOutreach[index], `$.diplomaticOutreach[${index}]`);
-      if (chatError) return chatError;
-    }
+    candidate.diplomaticOutreach = keptOutreach;
   }
 
   return "";

@@ -1,7 +1,7 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { SettingsButton, SettingsMenu } from "./settings";
-import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab } from "./libraryBar";
+import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
 import { DateWidget } from "./time";
 import { Other } from "./other";
@@ -100,70 +100,6 @@ const WebGLWarningPopup = () => (
   </div>
 );
 
-// Fullscreen gate shown when the library has NO games: the map and HUD stay
-// hidden behind it, and the player is walked into starting a game from a
-// scenario (or grabbing new scenarios from the Community tab) instead of
-// staring at a spectator world they aren't playing in. The top bar and its
-// panels render above the gate, so the normal New Game flow works on top.
-const NoGameGate = () => {
-  useEffect(() => {
-    // Land the player straight in the scenario list.
-    openLibraryTab("scenarios");
-  }, []);
-
-  const gateButtonStyle = {
-    alignItems: "center",
-    background: "rgba(124,58,237,0.3)",
-    border: "1px solid rgba(139,92,246,0.55)",
-    borderRadius: "12px",
-    color: "white",
-    cursor: "pointer",
-    display: "flex",
-    fontSize: "0.95rem",
-    fontWeight: 700,
-    gap: "0.5rem",
-    justifyContent: "center",
-    padding: "0.85rem 1.4rem",
-  };
-
-  return (
-    <div
-      style={{
-        alignItems: "center",
-        background: "#0b1020",
-        color: "white",
-        display: "flex",
-        flexDirection: "column",
-        fontFamily: "sans-serif",
-        inset: 0,
-        justifyContent: "center",
-        position: "fixed",
-        textAlign: "center",
-        zIndex: 10010,
-      }}
-    >
-      <img alt="" src="/logo.png" style={{ height: "5rem", marginBottom: "1.2rem", opacity: 0.9, width: "5rem" }} />
-      <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.02em" }}>No game yet</div>
-      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.95rem", lineHeight: 1.6, margin: "0.6rem 0 1.6rem", maxWidth: "26rem", padding: "0 1rem" }}>
-        Start a new game from one of your scenarios, or grab new scenarios
-        from the community first.
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "center", padding: "0 1rem" }}>
-        <button type="button" style={gateButtonStyle} onClick={() => openLibraryTab("scenarios")}>
-          Start from a scenario
-        </button>
-        <button
-          type="button"
-          style={{ ...gateButtonStyle, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.16)" }}
-          onClick={() => openLibraryTab("community")}
-        >
-          Browse community scenarios
-        </button>
-      </div>
-    </div>
-  );
-};
-
 const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
   <button onClick={onToggle} style={{
     ...baseStyle,
@@ -194,8 +130,8 @@ const Main = ({
   const [apiProvider, setApiProvider] = useState(() => getStoredProvider());
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettingsFormState());
   const { games, loaded } = useLibraryState();
-  // No games -> the map is hidden behind a start gate (see NoGameGate).
-  const showNoGameGate = loaded && (games?.length ?? 0) === 0;
+  // No games -> nothing to simulate (the main menu covers the empty world).
+  const hasNoGames = loaded && (games?.length ?? 0) === 0;
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -208,7 +144,7 @@ const Main = ({
   // command, or catalyst stage is in flight, never overlaps itself, and stays
   // silent on any failure. Hidden tabs don't roll the dice.
   useEffect(() => {
-    if (showNoGameGate) return undefined;
+    if (hasNoGames) return undefined;
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
@@ -216,7 +152,7 @@ const Main = ({
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [showNoGameGate]);
+  }, [hasNoGames]);
 
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
@@ -292,7 +228,6 @@ const Main = ({
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
-      {showNoGameGate && <NoGameGate />}
       <LibraryTopBar />
       <DateWidget
         activePanel={activeBottomPanel}
