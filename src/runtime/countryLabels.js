@@ -632,6 +632,20 @@ export const loadCountryLabelCollections = async ({ force = false, ownedCodes = 
     }
 
     const built = await buildCountryLabelCollections(tileData, ownedCodes);
+
+    // An empty result is almost always a degraded z0 read (a missing or garbled
+    // tile resolves to undefined rather than throwing), not a genuinely
+    // label-less world. Persisting it is unrecoverable: the payload validator
+    // accepts an empty FeatureCollection, so every later boot serves the empty
+    // cache and the country labels stay gone across reloads. Serve it once,
+    // memoize nothing, and let the next call rebuild.
+    const isEmpty =
+      !built?.pointLabelData?.features?.length && !built?.curvedLabelData?.features?.length;
+    if (isEmpty) {
+      console.warn("Country labels came back empty — not caching, will rebuild.");
+      return built;
+    }
+
     countryLabelsValue = built;
     countryLabelsValueKey = cacheKey;
 

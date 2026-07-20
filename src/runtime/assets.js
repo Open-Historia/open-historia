@@ -140,6 +140,24 @@ const binaryRequestCache = new Map();
 const pmtilesArchives = new Map();
 const pmtilesCache = new SharedPromiseCache(256);
 
+// Which URLs have ever produced a genuinely-parsed payload. Cheap boolean
+// bookkeeping that survives when the VALUE is deliberately not retained, so
+// "did the custom geometry resolve?" stays answerable (see loadRegionCatalog).
+const jsonLoadedUrls = new Set();
+
+// The scenario geometry is never worth retaining: its only long-lived reader
+// keeps it in React state (Nations.jsx / Cities.jsx, both force:true), so the
+// value-cache copy is a second parsed FeatureCollection — ~190 MB on a 55 MB
+// regions.geojson — held for nobody.
+//
+// MUST be evaluated synchronously at call time. JSON_URLS.* are reassigned on
+// every token change and the cache sweep runs BEFORE that reassignment, so
+// deciding this after an await would compare the old URL against the new value,
+// judge it cacheable, and pin a copy under a URL nothing can reach or sweep
+// again — resurrecting the exact leak, on the scenario-switch path.
+const isNoStoreJsonUrl = (url) =>
+  url === JSON_URLS.regionsGeojson || url === JSON_URLS.citiesGeojson;
+
 const pmtilesProtocol = new Protocol();
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
@@ -160,6 +178,12 @@ const invalidateDerivedCachesForWrite = (url) => {
   if (url && url === JSON_URLS.colors) {
     nationColorsPromise = null;
     nationColorsPromiseKey = "";
+    // Dropping the memo only helps the NEXT caller. The map reads the palette
+    // once per mount, so without a nudge an owner coloured mid-session keeps
+    // painting a procedural fallback until a reload. Consumers listen for this.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    }
   }
   if (url && url === JSON_URLS.flags) {
     nationFlagsPromise = null;
@@ -178,7 +202,60 @@ let mapRuntimeConfigured = false;
 let vectorTileModulesPromise = null;
 
 export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
-  runtimeAssetToken = String(token ?? "").trim();
+  const nextToken = String(token ?? "").trim();
+
+  // Every JSON_URL carries ?v=<token>, and the value caches are keyed by that
+  // full URL with no eviction, no cap and no TTL anywhere. When the token changes
+  // — a library mutation: creating/selecting/saving a scenario or game, or an
+  // asset upload — the previous generation's entries become unreachable BY
+  // CONSTRUCTION (nothing can rebuild those URL strings) yet stay strongly
+  // referenced from module scope forever. On a scenario whose regions.geojson is
+  // ~55 MB that strands ~190 MB of parsed GeoJSON per switch, which is the
+  // unbounded growth that eventually OOMs the tab.
+  //
+  // Sweep BEFORE the URLs are rebuilt below — the old strings are the only
+  // handles to those entries.
+  if (nextToken !== runtimeAssetToken) {
+    for (const url of Object.values(JSON_URLS)) {
+      if (!url) continue;
+      jsonValueCache.delete(url);
+      jsonRequestCache.delete(url);
+      // Must rotate with the URLs: a stale entry would claim the NEXT
+      // generation's geometry had already resolved.
+      jsonLoadedUrls.delete(url);
+    }
+
+    // PMTILES_ARCHIVES rotate too — buildAbsoluteUrl runs the path through
+    // withRuntimeToken, so these URLs also carry ?v=<token>. Left unswept they
+    // stranded the warmed archive buffers (regions ~101 MB + countries ~60 MB +
+    // cities ~1.5 MB) once per token generation, unreachable and permanent.
+    //
+    // It is also a correctness fix: /api/runtime/pmtiles/:key resolves to the
+    // ACTIVE scenario's override when it has one, so the same path can serve
+    // different bytes after a switch. A header/directory cached against the old
+    // archive would then be applied to the new one's bytes — offsets landing in
+    // the wrong place, which surfaces as decompression errors or silently
+    // garbled geometry rather than a clean failure.
+    for (const url of Object.values(PMTILES_ARCHIVES)) {
+      if (!url) continue;
+      binaryValueCache.delete(url);
+      binaryRequestCache.delete(url);
+      pmtilesArchives.delete(url);
+      // Protocol keys its registry by source.getKey(), which is the URL.
+      // Guarded: `tiles` is internal to the pmtiles package.
+      pmtilesProtocol?.tiles?.delete?.(url);
+      // Header entry; directory entries age out of the LRU on their own.
+      pmtilesCache?.cache?.delete?.(url);
+    }
+    // Keyed by asset key ("world", "events", ...) rather than by URL, so these
+    // entries do not rotate with the token — meaning they would otherwise serve
+    // the PREVIOUS game's state after a switch. Clearing is a correctness fix as
+    // much as a memory one.
+    runtimeJsonValueCache.clear();
+    runtimeJsonRequestCache.clear();
+  }
+
+  runtimeAssetToken = nextToken;
 
   JSON_URLS.advisor = withRuntimeToken("/api/runtime/json/advisor");
   JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
@@ -464,7 +541,15 @@ export const ensureBasemapProtocol = () => {
   }
 };
 
-export const readJson = async (url, { defaultValue, force = false, signal } = {}) => {
+export const readJson = async (url, { cache, defaultValue, force = false, signal } = {}) => {
+  // Snapshot the decision NOW, never inside the request closure — see
+  // isNoStoreJsonUrl for why an post-await evaluation strands an entry.
+  const store = cache === undefined ? !isNoStoreJsonUrl(url) : cache !== false;
+  // Never let a stale entry outlive the opt-out: without this, an entry pinned
+  // before the URL joined the no-store set would keep being served forever by
+  // the unforced read below (and stay pinned, defeating the point).
+  if (!store) jsonValueCache.delete(url);
+
   if (!force && jsonValueCache.has(url)) {
     return cloneJson(jsonValueCache.get(url));
   }
@@ -479,7 +564,13 @@ export const readJson = async (url, { defaultValue, force = false, signal } = {}
   const request = (async () => {
     const { response } = await fetchWithPersistence(url, { signal });
     const data = await response.json();
-    jsonValueCache.set(url, data);
+    // Recorded INSIDE the try, before the catch below: a failed read must leave
+    // this false so loadRegionCatalog retries instead of pinning a stock-only
+    // catalog. "Did we get a value?" is not a usable substitute — an originator
+    // carrying a defaultValue resolves the SHARED batched promise to that
+    // default on failure, so every awaiter sees a value either way.
+    jsonLoadedUrls.add(url);
+    if (store) jsonValueCache.set(url, data);
     return data;
   })()
     .catch((error) => {
@@ -508,10 +599,19 @@ export const warmJson = async (url, options = {}) => {
   };
 };
 
-export const primeJson = (url, data) => {
+export const primeJson = (url, data, { cache } = {}) => {
+  const store = cache === undefined ? !isNoStoreJsonUrl(url) : cache !== false;
+  jsonLoadedUrls.add(url);
+  jsonRequestCache.delete(url);
+  if (!store) {
+    // DELETE rather than merely skip: leaving an older entry behind would let
+    // the unforced read path serve the pre-write document for the rest of the
+    // session (stale region names) AND keep the copy pinned.
+    jsonValueCache.delete(url);
+    return data;
+  }
   const snapshot = cloneJson(data);
   jsonValueCache.set(url, snapshot);
-  jsonRequestCache.delete(url);
   return cloneJson(snapshot);
 };
 
@@ -982,16 +1082,23 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       // Regions the stock tiles don't know — shapes DRAWN in the map editor
       // (reg_* ids) and seed-only regions — get their names from the active
       // scenario's own geometry, so the AI can talk about them by name instead
-      // of raw ids. Usually already in the JSON cache (the map fetched it).
+      // of raw ids.
       let customRegionsResolved = true;
       try {
         const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null });
-        // readJson returns the default WITHOUT caching on a transient failure,
-        // but DOES cache a genuine "no custom geometry" result. That lets us
-        // tell a dropped fetch (retry) apart from a scenario that simply has no
-        // custom regions (stock names are correct) — so one failed request on a
-        // custom map can't pin a blank political map for the whole session.
-        customRegionsResolved = jsonValueCache.has(JSON_URLS.regionsGeojson);
+        // readJson RECORDS a genuine parse (it deliberately does not retain this
+        // document — see isNoStoreJsonUrl) and records nothing on a transient
+        // failure. That lets us tell a dropped fetch (retry) apart from a
+        // scenario that simply has no custom regions (stock names are correct),
+        // so one failed request on a custom map can't pin a blank political map
+        // for the whole session.
+        //
+        // Do NOT "simplify" this to a test on `custom` itself: the server
+        // answers a geometry-less scenario with a 200 empty FeatureCollection,
+        // and dropping `defaultValue` above doesn't work either — when a
+        // concurrent forced reader is the batched originator, its own default
+        // resolves this promise too, so a failure arrives as a value with no throw.
+        customRegionsResolved = jsonLoadedUrls.has(JSON_URLS.regionsGeojson);
         for (const feature of custom?.features ?? []) {
           const props = feature?.properties ?? {};
           const id = props.id != null ? String(props.id) : "";
