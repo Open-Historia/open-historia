@@ -115,6 +115,20 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description:
+      "Runs once when a new game with a World Before Round One briefing first opens: writes the backstory events that led up to the start date.",
+    helpers: [
+      "PLAYER_POLITY",
+      "WORLD_BEFORE_ROUND_ONE_TEXT",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION_NO_CITY",
+      "STARTING_ROUND_DATE",
+    ],
+    key: "pregameHistory",
+    label: "Pre-Game History",
+    type: "task",
+  },
+  {
     description: "Convert raw freeform text into a structured game action.",
     helpers: [
       "PLAYER_POLITY",
