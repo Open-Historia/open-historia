@@ -160,6 +160,12 @@ const invalidateDerivedCachesForWrite = (url) => {
   if (url && url === JSON_URLS.colors) {
     nationColorsPromise = null;
     nationColorsPromiseKey = "";
+    // Dropping the memo only helps the NEXT caller. The map reads the palette
+    // once per mount, so without a nudge an owner coloured mid-session keeps
+    // painting a procedural fallback until a reload. Consumers listen for this.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    }
   }
   if (url && url === JSON_URLS.flags) {
     nationFlagsPromise = null;
@@ -178,7 +184,35 @@ let mapRuntimeConfigured = false;
 let vectorTileModulesPromise = null;
 
 export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
-  runtimeAssetToken = String(token ?? "").trim();
+  const nextToken = String(token ?? "").trim();
+
+  // Every JSON_URL carries ?v=<token>, and the value caches are keyed by that
+  // full URL with no eviction, no cap and no TTL anywhere. When the token changes
+  // — a library mutation: creating/selecting/saving a scenario or game, or an
+  // asset upload — the previous generation's entries become unreachable BY
+  // CONSTRUCTION (nothing can rebuild those URL strings) yet stay strongly
+  // referenced from module scope forever. On a scenario whose regions.geojson is
+  // ~55 MB that strands ~190 MB of parsed GeoJSON per switch, which is the
+  // unbounded growth that eventually OOMs the tab.
+  //
+  // Sweep BEFORE the URLs are rebuilt below — the old strings are the only
+  // handles to those entries. PMTILES_ARCHIVES deliberately carry no token, so
+  // their warmed buffers are keyed stably and are NOT swept here.
+  if (nextToken !== runtimeAssetToken) {
+    for (const url of Object.values(JSON_URLS)) {
+      if (!url) continue;
+      jsonValueCache.delete(url);
+      jsonRequestCache.delete(url);
+    }
+    // Keyed by asset key ("world", "events", ...) rather than by URL, so these
+    // entries do not rotate with the token — meaning they would otherwise serve
+    // the PREVIOUS game's state after a switch. Clearing is a correctness fix as
+    // much as a memory one.
+    runtimeJsonValueCache.clear();
+    runtimeJsonRequestCache.clear();
+  }
+
+  runtimeAssetToken = nextToken;
 
   JSON_URLS.advisor = withRuntimeToken("/api/runtime/json/advisor");
   JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
