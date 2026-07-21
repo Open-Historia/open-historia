@@ -9,7 +9,6 @@ import {
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
 import {
-    AUTO_LANGUAGE,
     getLanguageOptions,
     getStoredChatLanguage,
     getStoredLanguage,
@@ -101,9 +100,7 @@ function groupProviders(options) {
     return groups;
 }
 
-// leadingOption is prepended and survives filtering, so the chat picker's
-// "Same as interface" can always be gone back to.
-const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, leadingOption }) => {
+const LanguagePicker = ({ label, current, onSelect, saving = false, helperText }) => {
     const [query, setQuery] = useState("");
     const options = getLanguageOptions();
     const normalizedQuery = query.trim().toLowerCase();
@@ -111,7 +108,7 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
         ? options.filter((option) =>
             `${option.name} ${option.native} ${option.code}`.toLowerCase().includes(normalizedQuery))
         : options;
-    const listed = filtered.some((option) => option.code === current) || leadingOption?.value === current;
+    const listed = filtered.some((option) => option.code === current);
 
     return (
         <div style={fieldGroupStyle}>
@@ -132,11 +129,6 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
         {!listed && (
             <option value="" disabled>
             {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
-            </option>
-        )}
-        {leadingOption && (
-            <option value={leadingOption.value} style={{ color: "black" }}>
-            {leadingOption.label}
             </option>
         )}
         {filtered.map((option) => (
@@ -194,8 +186,7 @@ const ChatLanguageSelector = () => {
         label="AI chat language"
         current={current}
         onSelect={applyLanguage}
-        helperText="What the advisor and diplomatic chats reply in."
-        leadingOption={{ value: AUTO_LANGUAGE, label: "Same as interface" }}
+        helperText="What the advisor and diplomatic chats reply in. Defaults to your interface language."
         />
     );
 };

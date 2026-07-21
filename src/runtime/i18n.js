@@ -8,10 +8,10 @@ const STORAGE_KEY = "ui_language";
 export const DEFAULT_LANGUAGE = "en";
 
 // What the advisor and diplomatic chats reply in, so the interface can be read
-// in one language and the chats held in another. "auto" follows the UI
-// language, as the game did before. Device-local: it only steers prompts.
+// in one language and the chats held in another. Defaults to the UI language —
+// an unset value follows it — and a player can pick a different chat language.
+// Device-local: it only steers prompts.
 const CHAT_STORAGE_KEY = "ai_chat_language";
-export const AUTO_LANGUAGE = "auto";
 
 // The 50 most spoken languages, hand-curated: recognizable English name
 // first, endonym after. A full ISO dump read like random letters here.
@@ -139,15 +139,16 @@ export const syncLanguageFromServer = async () => {
 export const getStoredChatLanguage = () => {
   try {
     const stored = localStorage.getItem(CHAT_STORAGE_KEY);
-    return stored && stored.trim() ? stored.trim() : AUTO_LANGUAGE;
+    // No explicit choice ⇒ follow the UI language.
+    return stored && stored.trim() ? stored.trim() : getStoredLanguage();
   } catch {
-    return AUTO_LANGUAGE;
+    return getStoredLanguage();
   }
 };
 
 export const setStoredChatLanguage = (code) => {
   try {
-    if (!code || code === AUTO_LANGUAGE) {
+    if (!code) {
       localStorage.removeItem(CHAT_STORAGE_KEY);
     } else {
       localStorage.setItem(CHAT_STORAGE_KEY, code);
@@ -157,10 +158,9 @@ export const setStoredChatLanguage = (code) => {
   }
 };
 
-export const resolveChatLanguage = () => {
-  const stored = getStoredChatLanguage();
-  return stored === AUTO_LANGUAGE ? getStoredLanguage() : stored;
-};
+// getStoredChatLanguage already falls back to the UI language when unset, so
+// this is just the stored (or inherited) code — no "auto" sentinel any more.
+export const resolveChatLanguage = () => getStoredChatLanguage();
 
 export const chatLanguageDiffersFromUi = () => resolveChatLanguage() !== getStoredLanguage();
 
@@ -182,12 +182,17 @@ export const languageDirective = (code = getStoredLanguage(), { force = false } 
   );
 };
 
-// force: English is the authored language, so it goes unstated by default —
-// but a chat deliberately held in it against a non-English interface must say
-// so, and must override the language of earlier replies.
+// A chat ALWAYS pins its language — force: true, even for English. English is
+// unstated elsewhere (it is the authored default), but a chat is different: the
+// player is conversing with a specific counterpart, and when that counterpart is
+// e.g. China — or the scenario is thick with non-English context — the model
+// drifts into that language with nothing to pull it back, so an English player
+// gets Chinese replies. Forcing the directive (plus the "regardless of earlier
+// messages" clause, which also stops a conversation drifting once one reply
+// slips) makes the chat-language setting actually hold, English included.
 export const chatLanguageDirective = () => {
   const code = resolveChatLanguage();
-  const directive = languageDirective(code, { force: chatLanguageDiffersFromUi() });
+  const directive = languageDirective(code, { force: true });
   if (!directive) {
     return "";
   }
