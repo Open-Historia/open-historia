@@ -62,7 +62,7 @@ const deleteLocal = async (blobId) => {
 };
 
 // Pull server changes newer than what we last synced.
-const pull = async (versions) => {
+const pull = async (versions, onWork) => {
   // syncManifest() is intentionally outside the try — an auth/network failure
   // there is a real, whole-sync error. A single BAD BLOB (e.g. one that won't
   // decrypt) is caught per-item so it can't red-line the whole sync.
@@ -70,6 +70,8 @@ const pull = async (versions) => {
     try {
       const known = versions[s.blob_id];
       if (known && s.version <= known.version) continue;
+      // A newer server version to apply — real work, so the widget may show it.
+      onWork?.();
       if (s.deleted) {
         await deleteLocal(s.blob_id);
         versions[s.blob_id] = { version: s.version, deleted: true };
@@ -84,7 +86,7 @@ const pull = async (versions) => {
 };
 
 // Push local changes; last-writer-wins on conflict (take the server copy).
-const push = async (versions) => {
+const push = async (versions, onWork) => {
   const local = await collectLocal();
   // upserts (new or locally-changed records) — each isolated so one bad record
   // (unserializable, too large, a decrypt conflict) can't fail the whole sync.
@@ -92,6 +94,8 @@ const push = async (versions) => {
     try {
       const known = versions[blobId];
       if (known && !known.deleted && known.sha === sha) continue;
+      // This record's syncable content actually changed — a real upload.
+      onWork?.();
       const { ciphertext, sha256 } = await encryptRecord(rec);
       const res = await syncPutBlob(blobId, ciphertext, sha256, known?.version || 0);
       if (res.status === 200) versions[blobId] = { version: res.version, sha: sha256 };
@@ -109,6 +113,7 @@ const push = async (versions) => {
   for (const [blobId, known] of Object.entries(versions)) {
     if (known.deleted || local.has(blobId) || blobId.startsWith("kv:")) continue;
     try {
+      onWork?.();
       const res = await syncDeleteBlob(blobId, known.version);
       if (res.status === 200) versions[blobId] = { version: res.version, deleted: true };
       else if (res.status === 409 && res.current) {
@@ -123,11 +128,20 @@ let running = false;
 export const syncNow = async () => {
   if (running || !accountConfigured() || !(await isSignedIn()) || !(await getDek())) return;
   running = true;
-  window.dispatchEvent(new CustomEvent("oh:sync", { detail: { state: "syncing" } }));
+  // Show "Syncing…" only once a real transfer starts. The engine polls every 20s
+  // (and on tab hide) to reconcile — an empty pass with nothing to move must not
+  // flash the widget as if it were uploading, which reads as "why is it syncing
+  // when I did nothing".
+  let announcedWork = false;
+  const onWork = () => {
+    if (announcedWork) return;
+    announcedWork = true;
+    window.dispatchEvent(new CustomEvent("oh:sync", { detail: { state: "syncing" } }));
+  };
   try {
     const versions = await kvGet(VERSIONS_KEY, {});
-    await pull(versions);
-    await push(versions);
+    await pull(versions, onWork);
+    await push(versions, onWork);
     await kvPut(VERSIONS_KEY, versions);
     window.dispatchEvent(new CustomEvent("oh:sync", { detail: { state: "ok", at: Date.now() } }));
   } catch (error) {
