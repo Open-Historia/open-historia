@@ -1,7 +1,7 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
-import { readGameData, readWorldState } from "../../runtime/gameState.js";
+import { isPolityLandless, readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -110,6 +110,10 @@ const StatsPane = ({ active }) => {
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
+    // Is the PLAYER stateless (holds no territory)? A landless player's code may
+    // still resolve to a real country, but they are not it — so their own row
+    // must show the neutral initials, never that country's flag.
+    const [playerLandless, setPlayerLandless] = useState(false);
     // Author-set flags from the scenario (flags.json). Memoized in assets.js, so
     // this is one fetch per scenario; {} for every scenario that sets none.
     const [customFlags, setCustomFlags] = useState({});
@@ -212,8 +216,11 @@ const StatsPane = ({ active }) => {
         setFlagFailed(false);
         loadSheet();
         readWorldState({ force: false })
-            .then((world) => setPolity(world?.polityOverrides?.[targetCountry] ?? null))
-            .catch(() => setPolity(null));
+            .then((world) => {
+                setPolity(world?.polityOverrides?.[targetCountry] ?? null);
+                setPlayerLandless(isPolityLandless(world, player.code));
+            })
+            .catch(() => { setPolity(null); setPlayerLandless(false); });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [active, targetCountry, player.date]);
 
@@ -221,7 +228,11 @@ const StatsPane = ({ active }) => {
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
     // custom era polity shows the flag its map-maker drew instead of initials.
-    const flagUrl = customFlags[targetCountry] || polity?.flag || flagImageUrlFromGid(targetCountry);
+    // But a landless PLAYER never borrows the code-derived country flag (a
+    // stateless actor is not the country its code resolves to) — their own row
+    // falls through to the neutral initials unless they set a flag of their own.
+    const suppressDerivedFlag = isPlayer && playerLandless;
+    const flagUrl = customFlags[targetCountry] || polity?.flag || (suppressDerivedFlag ? "" : flagImageUrlFromGid(targetCountry));
     const initials = String(targetCountry).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
 
     const breakdown = useMemo(() => {

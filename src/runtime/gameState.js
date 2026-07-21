@@ -904,6 +904,31 @@ export const normalizeWorldState = (world) => {
   };
 };
 
+// Does a polity currently hold no territory? A stateless actor — a
+// government-in-exile, a movement, or a person with no country of their own.
+// Single source of truth for "landless", used by both the AI prompt
+// (buildPlayerPolityRegionsText) and the UI flag resolvers: a landless polity
+// with no flag of its own must NOT borrow the code-derived country flag (a
+// "stateless person in Japan" is not Japan), so the flag shows neutral instead.
+//
+// The distinction that matters: owning a region via an override = has land; but
+// a scenario that ships NO override list at all means the polity owns its country
+// through the base map tiles (a stock modern map), which is NOT landless.
+export const isPolityLandless = (world, code) => {
+  const polityCode = normalizeString(code);
+  if (!polityCode) return false;
+  const normalized = normalizeWorldState(world);
+  const entries = Object.entries(normalized.regionOwnershipOverrides);
+  const owns = entries.some(
+    ([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === polityCode.toLowerCase(),
+  );
+  if (owns) return false;
+  const isKnownPolity = Boolean(normalized.polityOverrides?.[polityCode]);
+  // No override list AND not a declared polity = stock map, owns via base tiles.
+  if (entries.length === 0 && !isKnownPolity) return false;
+  return true;
+};
+
 // Recover a Gregorian date stored in a loose format back to strict YYYY-MM-DD.
 // Older builds wrote the model's stopDate verbatim, so real saves hold values
 // like "2016-12-31T00:00:00.000Z" or "December 31, 2016" — the header displays
