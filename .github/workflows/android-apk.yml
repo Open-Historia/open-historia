@@ -30,11 +30,23 @@ jobs:
           java-version: "21"
 
       - name: Stamp the build number
-        # The connect screen compares this against "Build: N" in the release
-        # notes on every launch — that's the APK self-update check.
+        # The boot screen compares this against "Build: N" in the release notes
+        # on every launch — that's the APK self-update check.
         run: sed -i "s/__APP_BUILD__/${{ github.run_number }}/" mobile/www/index.html
 
+      - name: Build the game + assemble the embedded server
+        # The app now runs the real server in-process (nodejs-mobile), so the
+        # build needs the game bundle (dist) and the assembled Node project
+        # (mobile/nodejs-project) BEFORE cap sync copies it into the native app.
+        run: |
+          npm ci
+          npm run build
+          node scripts/build-mobile-server.mjs
+
       - name: Build the APK
+        # NOTE: this requires the nodejs-mobile-cordova plugin to be installed in
+        # mobile/ (npm i nodejs-mobile-cordova) and the android project regenerated.
+        # See mobile/README-embedded-server.md.
         run: |
           cd mobile
           npm ci
@@ -55,7 +67,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Thin Android client — connects to your Open Historia server (Termux on the same phone, or any host on your network). Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). On first launch it finds a Termux server on the same phone automatically, and the app updates itself when a newer build is published here.
+          NOTES="Open Historia for Android — runs its own server on the phone, no Termux or separate machine needed. Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). On first launch it starts the built-in server and downloads the world map (~200 MB); after that it's instant. You can still point it at a Termux/desktop/LAN server if you prefer. The app updates itself when a newer build is published here.
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
