@@ -9,8 +9,11 @@ import {
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
 import {
+    AUTO_LANGUAGE,
     getLanguageOptions,
+    getStoredChatLanguage,
     getStoredLanguage,
+    setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import {
@@ -98,16 +101,62 @@ function groupProviders(options) {
     return groups;
 }
 
-const LanguageSelector = () => {
+// leadingOption is prepended and survives filtering, so the chat picker's
+// "Same as interface" can always be gone back to.
+const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, leadingOption }) => {
     const [query, setQuery] = useState("");
-    const [saving, setSaving] = useState(false);
-    const current = getStoredLanguage();
     const options = getLanguageOptions();
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = normalizedQuery
         ? options.filter((option) =>
             `${option.name} ${option.native} ${option.code}`.toLowerCase().includes(normalizedQuery))
         : options;
+    const listed = filtered.some((option) => option.code === current) || leadingOption?.value === current;
+
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>{label}</label>
+        <input
+        style={{ ...inputStyle, marginBottom: "0.4rem" }}
+        type="text"
+        value={query}
+        placeholder="Search languages..."
+        onChange={(event) => setQuery(event.target.value)}
+        />
+        <select
+        data-no-translate
+        value={listed ? current : ""}
+        onChange={(event) => onSelect(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
+        >
+        {!listed && (
+            <option value="" disabled>
+            {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
+            </option>
+        )}
+        {leadingOption && (
+            <option value={leadingOption.value} style={{ color: "black" }}>
+            {leadingOption.label}
+            </option>
+        )}
+        {filtered.map((option) => (
+            <option key={option.code} value={option.code} style={{ color: "black" }}>
+            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
+            </option>
+        ))}
+        </select>
+        {helperText && (
+            <div style={helperStyle}>
+            {helperText}
+            </div>
+        )}
+        </div>
+    );
+};
+
+const LanguageSelector = () => {
+    const [saving, setSaving] = useState(false);
+    const current = getStoredLanguage();
 
     const applyLanguage = async (code) => {
         if (!code || code === current || saving) {
@@ -123,33 +172,31 @@ const LanguageSelector = () => {
     };
 
     return (
-        <div style={fieldGroupStyle}>
-        <label style={labelStyle}>Language</label>
-        <input
-        style={{ ...inputStyle, marginBottom: "0.4rem" }}
-        type="text"
-        value={query}
-        placeholder="Search languages..."
-        onChange={(event) => setQuery(event.target.value)}
+        <LanguagePicker label="Language" current={current} onSelect={applyLanguage} saving={saving} />
+    );
+};
+
+// Steers prompts only, so no reload — the next message picks it up.
+const ChatLanguageSelector = () => {
+    const [current, setCurrent] = useState(getStoredChatLanguage);
+
+    const applyLanguage = (code) => {
+        if (!code || code === current) {
+            return;
+        }
+
+        setStoredChatLanguage(code);
+        setCurrent(code);
+    };
+
+    return (
+        <LanguagePicker
+        label="AI chat language"
+        current={current}
+        onSelect={applyLanguage}
+        helperText="What the advisor and diplomatic chats reply in."
+        leadingOption={{ value: AUTO_LANGUAGE, label: "Same as interface" }}
         />
-        <select
-        data-no-translate
-        value={filtered.some((option) => option.code === current) ? current : ""}
-        onChange={(event) => applyLanguage(event.target.value)}
-        style={{ ...inputStyle, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
-        >
-        {!filtered.some((option) => option.code === current) && (
-            <option value="" disabled>
-            {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
-            </option>
-        )}
-        {filtered.map((option) => (
-            <option key={option.code} value={option.code} style={{ color: "black" }}>
-            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
-            </option>
-        ))}
-        </select>
-        </div>
     );
 };
 
@@ -798,6 +845,7 @@ const SettingsMenu = ({
         />
 
         <LanguageSelector />
+        <ChatLanguageSelector />
 
         <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
         <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
