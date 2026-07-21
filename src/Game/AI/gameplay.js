@@ -766,7 +766,7 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
     ?? countries.find((country) => !matchesPlayer(country))
     ?? countries[0];
 
-  return normalizeChatEntry({
+  const entry = normalizeChatEntry({
     countries,
     id: chatLike?.id,
     linkedEventId: linkEventId,
@@ -790,6 +790,15 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
     // event's title, else at least the participants.
     title: chatLike?.title || fallbackTitle || `Chat with ${countries.map((country) => country.name).join(", ")}`,
   });
+  // The initiating polity always speaks first. If no first message survives
+  // normalization (the model gave no openingMessage, or only blank text), this
+  // would be a titled-but-empty "mystery chat" the player can't make sense of
+  // ("no clue why talks started"). Drop it instead of opening an empty thread —
+  // such chats otherwise slipped through on the salvage/final AI attempt (where
+  // validateChatOpener is no longer enforced) and as opener-less idle-diplomacy
+  // notes. Every caller already treats a null return as "no chat".
+  if (!entry || entry.messages.length === 0) return null;
+  return entry;
 };
 
 // Region ownership is keyed by the map's own region id (GID_1, e.g. "DEU.2_1"),
@@ -2088,12 +2097,17 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       timeoutMs: 60000,
       userMessage:
         "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now. Return JSON only.",
-      validatePayload: async (candidate) => {
+      validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
-        return countries.length > 0
-          ? ""
-          : "$.chat.countries must contain at least one known polity (or chat must be null).";
+        if (countries.length === 0) {
+          return "$.chat.countries must contain at least one known polity (or chat must be null).";
+        }
+        // Strict on attempt 1: make the model give the note a title AND a first
+        // line, so the player can see why the polity reached out. Salvage on the
+        // final attempt — buildGeneratedChat drops an opener-less note rather
+        // than posting an empty "mystery" thread.
+        return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
       },
       variables,
     });
