@@ -3,6 +3,7 @@ import { JSON_URLS, getNationTags, loadRegionCatalog, readJson } from "../../run
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import {
   buildActionDisplayText,
+  isPolityLandless,
   normalizeActionEntry,
   normalizeActions,
   normalizeChats,
@@ -298,12 +299,11 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null)
   // Zero regions AND the polity exists = deliberately landless. Distinguish that
   // from a scenario that simply ships no override list (a stock modern map, where
   // the player owns their country through the base tiles, not an override).
+  // isPolityLandless is the shared source of truth for that line (see gameState).
   if (!owns) {
-    const isKnownPolity = Boolean(normalizeWorldState(bundle.world).polityOverrides?.[playerCode]);
-    if (entries.length === 0 && !isKnownPolity) {
-      return "No explicit player region override list is currently recorded.";
-    }
-    return LANDLESS_PLAYER_TEXT;
+    return isPolityLandless(world, playerCode)
+      ? LANDLESS_PLAYER_TEXT
+      : "No explicit player region override list is currently recorded.";
   }
   const regions = regionCatalog ?? await loadRegions();
   const lookup = new Map(regions.map((region) => [region.id, region]));

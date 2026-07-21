@@ -131,9 +131,27 @@ const decodeRecord = (str) => JSON.parse(str, (_key, value) => {
   return value;
 });
 
-// Stable content hash of a record (over the same encoding encryptRecord signs),
-// so the sync engine can cheaply tell whether a record changed since last push.
-export const recordFingerprint = (obj) => sha256Hex(encodeRecord(obj));
+// Play-tracking stats live inside the game/scenario records for the main menu's
+// "Last Played"/"Most Played" rows, but they must NOT drive sync: merely OPENING
+// a game bumps lastPlayedAt + playCount (on the game AND its scenario), and since
+// the fingerprint is over the whole record, that would re-upload both blobs —
+// including a scenario's heavy map assets — for a stat tick nobody edited. Hash a
+// view WITHOUT these fields so only real content edits change the fingerprint.
+// The ciphertext below still encodes the FULL record, so the stats round-trip and
+// ride along on the next genuine edit.
+const VOLATILE_META_FIELDS = ["lastPlayedAt", "playCount"];
+const syncHashView = (obj) => {
+  if (!obj || typeof obj !== "object" || !obj.meta || typeof obj.meta !== "object") return obj;
+  if (!VOLATILE_META_FIELDS.some((field) => field in obj.meta)) return obj;
+  const meta = { ...obj.meta };
+  for (const field of VOLATILE_META_FIELDS) delete meta[field];
+  return { ...obj, meta };
+};
+
+// Stable content hash of a record, so the sync engine can cheaply tell whether a
+// record's SYNCABLE content changed since last push. Computed over syncHashView
+// (play-stats excluded) — encryptRecord's sha256 must use the same view.
+export const recordFingerprint = (obj) => sha256Hex(encodeRecord(syncHashView(obj)));
 
 // --- AES-256-GCM: encrypt a record to base64(iv||ciphertext); decrypt back. ---
 const aesKey = async () => {
@@ -147,7 +165,9 @@ export const encryptRecord = async (obj) => {
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await aesKey(), plaintext));
   const out = new Uint8Array(iv.length + ct.length);
   out.set(iv); out.set(ct, iv.length);
-  return { ciphertext: bytesToBase64(out), sha256: await sha256Hex(encodeRecord(obj)) };
+  // sha256 (change-detection metadata) is over the play-stat-free view so it
+  // agrees with recordFingerprint; the ciphertext above is the FULL record.
+  return { ciphertext: bytesToBase64(out), sha256: await sha256Hex(encodeRecord(syncHashView(obj))) };
 };
 export const decryptRecord = async (ciphertextB64) => {
   const all = base64ToBytes(ciphertextB64);
