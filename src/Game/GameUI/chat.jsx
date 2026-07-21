@@ -12,6 +12,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -164,6 +165,9 @@ const GearIcon = () => (
 const MessageBubble = ({ msg }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
+    // See advisor.jsx: errors are UI strings, so only a leader's own words are
+    // held back from the translator.
+    const asWritten = !isPlayer && !isError && chatLanguageDiffersFromUi();
     const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
     const reactions = Object.entries(msg.reactions ?? {});
     const reactionFlags = useCountryFlags(reactions.map(([name, { code }]) => ({ name, code })));
@@ -195,7 +199,7 @@ const MessageBubble = ({ msg }) => {
         )}
 
         {/* Player-typed text stays verbatim under UI translation. */}
-        <div data-no-translate={isPlayer ? "" : undefined} style={{
+        <div data-no-translate={isPlayer || asWritten ? "" : undefined} dir={asWritten && isRtlLanguage(resolveChatLanguage()) ? "rtl" : undefined} style={{
             padding: "0.6rem 0.85rem",
             borderRadius: isPlayer ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
             backgroundColor: isPlayer
