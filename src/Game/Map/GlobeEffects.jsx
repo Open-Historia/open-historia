@@ -20,8 +20,21 @@ import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
-const CELESTIAL_FRAME_MS = 1000 / 60;
-const LIGHTING_FRAME_MS = 1000 / 60;
+// While the user is actively dragging/zooming, redraw the sun/lighting every
+// frame so it tracks the camera precisely. While idle (including during
+// auto-rotate), the same visual result is indistinguishable at a much lower
+// rate, so throttle down hard — this is the single biggest lever on
+// sustained CPU/GPU load, since idle auto-rotate used to force a full
+// MapLibre re-render plus a from-scratch lighting repaint 60 times a second,
+// forever, even with the phone just sitting on a table.
+const CELESTIAL_FRAME_MS_ACTIVE = 1000 / 60;
+const CELESTIAL_FRAME_MS_IDLE = 1000 / 15;
+const LIGHTING_FRAME_MS_ACTIVE = 1000 / 60;
+const LIGHTING_FRAME_MS_IDLE = 1000 / 15;
+// Idle auto-rotation itself doesn't need a fresh jumpTo() every animation
+// frame either — updating the camera 15x/sec still reads as smooth rotation
+// but avoids tripling MapLibre's re-render work compared to 60x/sec.
+const IDLE_ROTATE_FRAME_MS = 1000 / 15;
 // The terminator creeps 0.25°/minute as the real Earth turns; refresh on this
 // cadence even when the map is fully idle (no render events fire then), so the
 // day/night line stays live without a per-frame cost.
@@ -87,8 +100,15 @@ const GlobeEffects = ({ active }) => {
           ?.getProjectionDataForCustomLayer?.(true)
           ?.projectionTransition,
       );
+      // Only active dragging/zooming needs full 60fps precision. Idle —
+      // whether that's auto-rotating or just sitting still — settles for
+      // 15fps, which looks identical but is a fraction of the CPU/GPU cost.
+      const isIdle = autoRotationActive
+        || (!mapInstance.isMoving() && now - lastInteraction > INTERACTION_GRACE_MS);
+      const celestialFrameMs = isIdle ? CELESTIAL_FRAME_MS_IDLE : CELESTIAL_FRAME_MS_ACTIVE;
+      const lightingFrameMs = isIdle ? LIGHTING_FRAME_MS_IDLE : LIGHTING_FRAME_MS_ACTIVE;
       if (projectionTransition > 0
-        && (forceLighting || now - lastCelestialDraw >= CELESTIAL_FRAME_MS)) {
+        && (forceLighting || now - lastCelestialDraw >= celestialFrameMs)) {
         lastCelestialDraw = now;
         starsVisible = true;
         drawCelestialStars({
@@ -134,7 +154,7 @@ const GlobeEffects = ({ active }) => {
       }
 
       if (projectionTransition > 0) {
-        const lightingDelay = LIGHTING_FRAME_MS - (now - lastLightingDraw);
+        const lightingDelay = lightingFrameMs - (now - lastLightingDraw);
         if (forceLighting || lightingDelay <= 0) {
           if (lightingTimer) clearTimeout(lightingTimer);
           lightingTimer = 0;
@@ -164,15 +184,26 @@ const GlobeEffects = ({ active }) => {
       }
     };
 
+    let lastRotateTick = performance.now();
     const tick = (now) => {
       if (disposed || contextLost || !mapInstance.style) return;
-      const dt = now - lastTick;
       lastTick = now;
       const idle = now - lastInteraction > INTERACTION_GRACE_MS;
       autoRotationActive = idle && !autoRotateDisabled && !mapInstance.isMoving();
       if (autoRotationActive) {
-        const center = mapInstance.getCenter();
-        mapInstance.jumpTo({ center: [center.lng - ROTATION_DEG_PER_MS * dt, center.lat] });
+        // Advancing the camera on every animation frame forces MapLibre to
+        // fully re-render 60x/sec forever while idle. Stepping at ~15fps
+        // instead (using the real elapsed time so the rotation *speed* is
+        // unaffected) looks identical but cuts that sustained render load
+        // roughly 4x — the main thing that was cooking phones on this screen.
+        const rotateDt = now - lastRotateTick;
+        if (rotateDt >= IDLE_ROTATE_FRAME_MS) {
+          lastRotateTick = now;
+          const center = mapInstance.getCenter();
+          mapInstance.jumpTo({ center: [center.lng - ROTATION_DEG_PER_MS * rotateDt, center.lat] });
+        }
+      } else {
+        lastRotateTick = now;
       }
       frameId = requestAnimationFrame(tick);
     };
