@@ -285,7 +285,10 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
             // INVALID CSS (a min() can't be negated like that), so the closed
             // position was silently dropped and the drawer never slid away.
             transform: isAdvisorOpen ? "translateX(0)" : "translateX(calc(100% + 2rem))",
-            width: ADVISOR_PANEL_WIDTH, height: "calc(100vh - 64px)",
+            // Full height now the in-game top bar is gone — it used to stop 64px
+            // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
+            // above, so height: 100vh reaches the top edge.
+            width: ADVISOR_PANEL_WIDTH, height: "100vh",
             backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
             // Above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the open drawer on
