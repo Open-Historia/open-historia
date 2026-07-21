@@ -402,6 +402,17 @@ const runJsonTask = async (taskKey, {
     // Without game data the task still runs at its default temperament.
   }
 
+  // Player agency: jumps must never sign the player up for landmark decisions.
+  // Appended here (not only in defaultPrompts.json) because every game carries
+  // its own frozen copy of the task prompts — a directive added at call time is
+  // the only way the rule reaches campaigns that already exist. Field report:
+  // "the AI just makes events saying that you form a treaty with another
+  // country ... it just doesn't give you a choice and makes it an event."
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
+    systemPrompt = `${systemPrompt}\n\n[Player Agency]\n${playerName} is controlled by a human player. Never commit ${playerName} to a major decision the player did not actually make: do not sign treaties, alliances, ceasefires, surrenders, trade pacts, unions, or other binding agreements on the player's behalf, do not accept or reject offers for them, and do not have ${playerName} take landmark unilateral action (declaring war, ceding territory, changing government) unless it directly executes one of the player's planned actions, chat replies, or explicit requests. When another polity seeks such an agreement or decision from the player, present it as something the player can answer: a diplomaticOutreach entry or an impacts.createdChats chat where the counterpart speaks first and makes the proposal, or an event describing the offer as OPEN and awaiting the player's response. Events remain free to narrate what other polities do among themselves and to resolve the player's own queued actions exactly as ordered.`;
+  }
+
   // Reputation context: how the world currently regards the player, and how the
   // model should let it bias behaviour and evolve it via polityChanges.
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
@@ -439,7 +450,17 @@ const runJsonTask = async (taskKey, {
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
       if (validation.valid && validatePayload) {
-        const taskError = normalizeString(await validatePayload(parsed));
+        // finalAttempt tells the validator this is the last chance: callers use
+        // it to switch from strict (return a corrective error for the retry) to
+        // salvage (repair the payload in place). It MUST come from here, not
+        // from counting validator invocations — when attempt 1 dies at the
+        // schema/parse level this validator never runs, so an invocation
+        // counter would treat attempt 2 as "first", return strict feedback
+        // meant for the model, and hand the player a fallback whose reason
+        // reads "Resend the same response with ..." (a real field report).
+        const taskError = normalizeString(
+          await validatePayload(parsed, { attempt: outputAttempt, finalAttempt: outputAttempt === 2 }),
+        );
         if (taskError) validation = { valid: false, error: taskError };
       }
 
@@ -928,8 +949,9 @@ const buildTransferFeedback = (unresolved) => {
 //
 // strictTransfers: when set, an unresolvable transfer FAILS validation with the
 // losing owner's real region list, so runJsonTask's retry gives the model the
-// vocabulary to fix its own answer. Callers set it on the FIRST attempt only —
-// the second answer must never be rejected into the canned fallback over a name.
+// vocabulary to fix its own answer. Callers set it on every attempt EXCEPT the
+// last (runJsonTask passes finalAttempt to validatePayload) — the final answer
+// must never be rejected into the canned fallback over a name.
 
 // An AI-opened chat must arrive with a reason and a first message — the
 // initiating polity speaks first. Empty string when the entry is fine.
@@ -1805,7 +1827,6 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     minEvents = Math.min(plannedActionCount, 37);
     maxEvents = Math.max(maxEvents, minEvents + 3);
   }
-  let validationAttempts = 0;
   const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
     signal,
@@ -1824,14 +1845,16 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
         : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
           `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
            `spread across the skipped period.`,
-    validatePayload: async (candidate) => {
-      validationAttempts += 1;
-      // Shape-of-story problems (event count, stray dates) are STRICT on the
-      // first attempt — the model gets the exact error and usually fixes its
-      // own answer — and SALVAGED on the second: a finished generation must
-      // never lose to the canned fallback over its date stamps or an extra
-      // event. Only real errors reach the fallback now.
-      const strict = validationAttempts === 1;
+    validatePayload: async (candidate, { finalAttempt } = {}) => {
+      // Shape-of-story problems (event count, stray dates) are STRICT while a
+      // retry remains — the model gets the exact error and usually fixes its
+      // own answer — and SALVAGED on the final attempt: a finished generation
+      // must never lose to the canned fallback over its date stamps, an extra
+      // event, or an invented region name. finalAttempt comes from runJsonTask
+      // itself (never from counting our own invocations — a schema failure on
+      // attempt 1 skips this validator entirely, which used to make attempt 2
+      // look "first" and leak strict feedback out as the fallback reason).
+      const strict = !finalAttempt;
       const eventCount = normalizeArray(candidate?.events).length;
       if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
         return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
@@ -1880,7 +1903,6 @@ export const applyGameMasterCommand = async (requestText) => {
   const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
-  let gmValidationAttempts = 0;
   const { generation, payload } = await runJsonTask("gameMaster", {
     fallback: () => ({
       impacts: {
@@ -1890,10 +1912,8 @@ export const applyGameMasterCommand = async (requestText) => {
       summary: "No deterministic GM fallback changes were inferred from the request.",
     }),
     userMessage: "Apply the GM request as JSON only.",
-    validatePayload: (candidate) => {
-      gmValidationAttempts += 1;
-      return validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: gmValidationAttempts === 1 });
-    },
+    validatePayload: (candidate, { finalAttempt } = {}) =>
+      validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: !finalAttempt }),
     variables,
   });
 
@@ -1991,14 +2011,11 @@ export const maybeGeneratePregameHistory = async () => {
   beginSimulation();
   try {
     const variables = await buildTemplateVariables(bundle);
-    let validationAttempts = 0;
     const { payload } = await runJsonTask("pregameHistory", {
       timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
       userMessage: "Write the pre-game historical timeline as JSON only.",
-      validatePayload: (candidate) => {
-        validationAttempts += 1;
-        return validatePregameEvents(candidate, { startDate, strict: validationAttempts === 1 });
-      },
+      validatePayload: (candidate, { finalAttempt } = {}) =>
+        validatePregameEvents(candidate, { startDate, strict: !finalAttempt }),
       variables,
     });
 
