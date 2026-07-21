@@ -172,7 +172,7 @@ const LanguageSelector = () => {
     };
 
     return (
-        <LanguagePicker label="Language" current={current} onSelect={applyLanguage} saving={saving} />
+        <LanguagePicker label="UI language" current={current} onSelect={applyLanguage} saving={saving} />
     );
 };
 
