@@ -7,6 +7,12 @@
 const STORAGE_KEY = "ui_language";
 export const DEFAULT_LANGUAGE = "en";
 
+// What the advisor and diplomatic chats reply in, so the interface can be read
+// in one language and the chats held in another. "auto" follows the UI
+// language, as the game did before. Device-local: it only steers prompts.
+const CHAT_STORAGE_KEY = "ai_chat_language";
+export const AUTO_LANGUAGE = "auto";
+
 // The 50 most spoken languages, hand-curated: recognizable English name
 // first, endonym after. A full ISO dump read like random letters here.
 export const LANGUAGES = [
@@ -130,20 +136,61 @@ export const syncLanguageFromServer = async () => {
   return false;
 };
 
+export const getStoredChatLanguage = () => {
+  try {
+    const stored = localStorage.getItem(CHAT_STORAGE_KEY);
+    return stored && stored.trim() ? stored.trim() : AUTO_LANGUAGE;
+  } catch {
+    return AUTO_LANGUAGE;
+  }
+};
+
+export const setStoredChatLanguage = (code) => {
+  try {
+    if (!code || code === AUTO_LANGUAGE) {
+      localStorage.removeItem(CHAT_STORAGE_KEY);
+    } else {
+      localStorage.setItem(CHAT_STORAGE_KEY, code);
+    }
+  } catch {
+    // Private-mode storage failures just leave the chats on the UI language.
+  }
+};
+
+export const resolveChatLanguage = () => {
+  const stored = getStoredChatLanguage();
+  return stored === AUTO_LANGUAGE ? getStoredLanguage() : stored;
+};
+
+export const chatLanguageDiffersFromUi = () => resolveChatLanguage() !== getStoredLanguage();
+
 export const isRtlLanguage = (code) => RTL_LANGUAGES.has(code);
 
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
-export const languageDirective = (code = getStoredLanguage()) => {
-  if (code === DEFAULT_LANGUAGE) {
+export const languageDirective = (code = getStoredLanguage(), { force = false } = {}) => {
+  if (code === DEFAULT_LANGUAGE && !force) {
     return "";
   }
 
   const name = languageDisplayName(code);
   return (
-    `LANGUAGE: The player's interface language is ${name} (${code}). ` +
+    `LANGUAGE: The player reads ${name} (${code}). ` +
     `Write ALL natural-language text in ${name} — prose replies, titles, descriptions, summaries, and suggestions. ` +
     `If the response must be JSON, keep the JSON structure, keys, ISO codes, and date formats exactly as specified, ` +
     `but write every human-readable string value in ${name}.`
   );
+};
+
+// force: English is the authored language, so it goes unstated by default —
+// but a chat deliberately held in it against a non-English interface must say
+// so, and must override the language of earlier replies.
+export const chatLanguageDirective = () => {
+  const code = resolveChatLanguage();
+  const directive = languageDirective(code, { force: chatLanguageDiffersFromUi() });
+  if (!directive) {
+    return "";
+  }
+
+  return `${directive} Reply in ${languageDisplayName(code)} regardless of the language of earlier messages.`;
 };

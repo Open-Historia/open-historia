@@ -7,7 +7,7 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
-import { languageDirective } from "../../runtime/i18n.js";
+import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
@@ -943,7 +943,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // Non-English players get replies in their language at the source —
     // native answers beat post-translating them (see runtime/i18n.js).
     const { languageMode = "ui", ...providerOpts } = opts;
-    const directive = languageMode === "none" ? "" : languageDirective();
+    const directive = languageMode === "none" ? ""
+        : languageMode === "chat" ? chatLanguageDirective()
+        : languageDirective();
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
@@ -1088,7 +1090,7 @@ export async function sendMessage(userMessage, opts) {
     advisorHistory = compactConversationHistory(advisorHistory);
 
     try {
-        const reply = await callAI(systemPrompt, advisorHistory, opts);
+        const reply = await callAI(systemPrompt, advisorHistory, { ...opts, languageMode: "chat" });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         return reply;
     } catch (err) {
@@ -1150,7 +1152,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     ];
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, opts);
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat" });
         const { reply, reaction } = parseReaction(raw);
         diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
         return { reply, reaction };
