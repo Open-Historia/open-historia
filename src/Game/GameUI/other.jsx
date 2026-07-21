@@ -1,6 +1,7 @@
 /*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -46,15 +47,36 @@ const FallbackBadge = ({ label }) => (
 
 const Other = memo(function Other({ rightShift = "0.5rem" }) {
     const [country, setCountry] = useState(null);
+    // A LANDLESS player is a stateless actor (a person, a movement, a
+    // government-in-exile) whose game.country may still resolve to a real ISO
+    // code — but they are NOT that country, so the badge must not borrow its
+    // flag. Neutral placeholder instead. Refreshed on the same 5s cadence as the
+    // stats pane so gaining/losing all territory flips the badge within a poll.
+    const [landless, setLandless] = useState(false);
     const [imageFailed, setImageFailed] = useState(false);
     const isMobile = useIsMobile();
     // The player sees the FULL country name in the tooltip, never the code.
     const displayName = useCountryDisplayName(country);
 
     useEffect(() => {
-        readJson(JSON_URLS.game, { defaultValue: {} })
-        .then((data) => setCountry(data.country))
-        .catch((err) => console.error("Failed to load game.json:", err));
+        let cancelled = false;
+        const refresh = async () => {
+            try {
+                const data = await readJson(JSON_URLS.game, { defaultValue: {} });
+                if (cancelled) return;
+                const code = data.country;
+                setCountry(code);
+                // force:false rides the memoized world read (cheap; a real jump
+                // invalidates the cache, so this still sees territory changes).
+                const world = await readWorldState({ force: false });
+                if (!cancelled) setLandless(isPolityLandless(world, code));
+            } catch (err) {
+                if (!cancelled) console.error("Failed to load game.json:", err);
+            }
+        };
+        refresh();
+        const intervalId = window.setInterval(refresh, 5000);
+        return () => { cancelled = true; window.clearInterval(intervalId); };
     }, []);
 
     useEffect(() => {
@@ -65,8 +87,10 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
     // badge and the date widget would overlap on a portrait screen.
     if (isMobile || !country) return null;
 
-    const flagUrl = flagImageUrlFromGid(country);
-    const flagEmoji = flagEmojiFromGid(country);
+    // Landless → never borrow the code-derived country flag; fall through to the
+    // neutral FallbackBadge (both null makes the render pick it).
+    const flagUrl = landless ? null : flagImageUrlFromGid(country);
+    const flagEmoji = landless ? null : flagEmojiFromGid(country);
 
     return (
         <div
