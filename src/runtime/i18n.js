@@ -134,8 +134,7 @@ export const isRtlLanguage = (code) => RTL_LANGUAGES.has(code);
 
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
-export const languageDirective = () => {
-  const code = getStoredLanguage();
+export const languageDirective = (code = getStoredLanguage()) => {
   if (code === DEFAULT_LANGUAGE) {
     return "";
   }

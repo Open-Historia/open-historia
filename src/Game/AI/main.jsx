@@ -939,26 +939,27 @@ async function callAnthropicCompatible(systemPrompt, history, {
     }
 }
 
-export async function callAI(systemPrompt, history, opts) {
+export async function callAI(systemPrompt, history, opts = {}) {
     // Non-English players get replies in their language at the source —
     // native answers beat post-translating them (see runtime/i18n.js).
-    const directive = languageDirective();
+    const { languageMode = "ui", ...providerOpts } = opts;
+    const directive = languageMode === "none" ? "" : languageDirective();
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
 
     switch (getStoredProvider()) {
     case "openai":
-        return callOpenAI(systemPrompt, history, opts);
+        return callOpenAI(systemPrompt, history, providerOpts);
     case "anthropic":
-        return callAnthropic(systemPrompt, history, opts);
+        return callAnthropic(systemPrompt, history, providerOpts);
     case "anthropic-compatible":
-        return callAnthropicCompatible(systemPrompt, history, opts);
+        return callAnthropicCompatible(systemPrompt, history, providerOpts);
     case "openai-compatible":
-        return callOpenAICompatible(systemPrompt, history, opts);
+        return callOpenAICompatible(systemPrompt, history, providerOpts);
     case "gemini":
     default:
-        return callGemini(systemPrompt, history, opts);
+        return callGemini(systemPrompt, history, providerOpts);
     }
 }
 
