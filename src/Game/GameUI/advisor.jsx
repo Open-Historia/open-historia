@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -192,6 +193,10 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [activeTab, setActiveTab] = useState("advisor");
     const inputRef = useRef(null);
+    // A reply already in the chat language must skip the UI translator, which
+    // would render it back into the interface language.
+    const chatDiffers = chatLanguageDiffersFromUi();
+    const chatDir = chatDiffers && isRtlLanguage(resolveChatLanguage()) ? "rtl" : undefined;
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);
@@ -340,6 +345,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
             const { text, chartConfig } = msg.role === "advisor"
             ? parseMessage(msg.text)
             : { text: msg.text, chartConfig: null };
+            const asWritten = msg.role === "advisor" && chatDiffers;
             return (
                 <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
                 {msg.role !== "user" && (
@@ -348,7 +354,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
                     </span>
                 )}
                 {/* Player-typed text stays verbatim under UI translation. */}
-                <div data-no-translate={msg.role === "user" ? "" : undefined} style={{
+                <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
                     maxWidth: "90%", width: chartConfig ? "90%" : undefined,
                     padding: "0.6rem 0.85rem",
                     borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",

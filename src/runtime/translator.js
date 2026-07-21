@@ -320,7 +320,7 @@ const translateBatch = async (strings) => {
 
   const raw = await callAI(systemPrompt, [
     { role: "user", parts: [{ text: JSON.stringify(strings) }] },
-  ]);
+  ], { languageMode: "none" });
   const translations = extractJsonArray(raw);
 
   if (!translations) {
