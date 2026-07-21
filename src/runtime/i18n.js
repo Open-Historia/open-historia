@@ -182,12 +182,17 @@ export const languageDirective = (code = getStoredLanguage(), { force = false } 
   );
 };
 
-// force: English is the authored language, so it goes unstated by default —
-// but a chat deliberately held in it against a non-English interface must say
-// so, and must override the language of earlier replies.
+// A chat ALWAYS pins its language — force: true, even for English. English is
+// unstated elsewhere (it is the authored default), but a chat is different: the
+// player is conversing with a specific counterpart, and when that counterpart is
+// e.g. China — or the scenario is thick with non-English context — the model
+// drifts into that language with nothing to pull it back, so an English player
+// gets Chinese replies. Forcing the directive (plus the "regardless of earlier
+// messages" clause, which also stops a conversation drifting once one reply
+// slips) makes the chat-language setting actually hold, English included.
 export const chatLanguageDirective = () => {
   const code = resolveChatLanguage();
-  const directive = languageDirective(code, { force: chatLanguageDiffersFromUi() });
+  const directive = languageDirective(code, { force: true });
   if (!directive) {
     return "";
   }
