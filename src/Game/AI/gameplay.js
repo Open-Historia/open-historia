@@ -866,7 +866,17 @@ const resolveRegionTransfers = async (containers, world) => {
     const key = regionKey(token);
     return ownerAlias.get(key) ?? key;
   };
-  const ownerKeyOf = (regionId) => canonicalOwnerKey(owners[regionId] ?? "");
+  const ownerKeyOf = (regionId) => {
+    const override = normalizeString(owners[regionId]);
+    if (override) return canonicalOwnerKey(override);
+    // No override yet (e.g. the FIRST invasion of a war): the region is still held by
+    // its base owner, which the catalog carries. Fall back to it — otherwise
+    // regionsOwnedBy() is empty for any not-yet-overridden owner, so disambiguation,
+    // the containment near-miss, AND buildTransferFeedback's candidate list all fail
+    // exactly when the model most needs them (the transfer that STARTS a conflict).
+    const region = byId.get(regionId);
+    return canonicalOwnerKey(region?.countryCode || region?.country || "");
+  };
   const regionsOwnedBy = (ownerToken) => {
     const key = canonicalOwnerKey(ownerToken);
     if (!key) return [];
@@ -2122,7 +2132,12 @@ export const maybeGeneratePregameHistory = async () => {
 // one polity sends a short note to the player's inbox. Hard-suspended while any
 // simulation is in flight (busy lock above), never stacked, and silent on any
 // failure — there is no canned fallback small talk.
-const IDLE_DIPLOMACY_CHANCE = 1 / 20;
+// Raised from 1/20: at 1/20 (with a 60s visible-tab-only roll) a player waited ~20
+// idle minutes just to CONSULT the model, and most consulted rolls still returned
+// null — so AI-initiated chats felt almost nonexistent. 1/8 keeps a parked tab from
+// filling the inbox while making an idle approach actually plausible; the jump-path
+// cap (see defaultPrompts.json) remains the primary source of diplomacy.
+const IDLE_DIPLOMACY_CHANCE = 1 / 8;
 let idleDiplomacyInFlight = false;
 
 export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } = {}) => {
