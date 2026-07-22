@@ -10,6 +10,7 @@ import {
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
+import { buildRegionOwnershipText } from "./regionVocab.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -321,7 +322,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   const territoryEntries = Object.entries(world.regionOwnershipOverrides);
   const territorySummary = territoryEntries.length === 0
     ? "No territorial overrides from the base scenario are currently recorded."
-    : territoryEntries.slice(0, 24).map(([regionId, ownerCode]) => {
+    : territoryEntries.slice(0, 60).map(([regionId, ownerCode]) => {
       const region = regionLookup.get(regionId);
       return `- ${region?.name || regionId}${region?.country ? ` (${region.country})` : ""} -> ${ownerCode}`;
     }).join("\n");
@@ -350,6 +351,28 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
       + (taggedCodes.length > 40 ? `\n(+${taggedCodes.length - 40} more tagged countries not listed)` : "");
   const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
 
+  // The region vocabulary the jump prompt promises ("every ... region ... separated
+  // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
+  // so on a stock map the model saw ZERO region names and invented ones that then
+  // failed resolveRegionTransfers and got silently dropped — a narrated capture that
+  // never moved the map. List every region as `name (id)` grouped by its current
+  // owner (override ?? base country), prioritising the active theatre (the player,
+  // any re-owned or tagged power) so fromCode/toCode and the region id resolve.
+  const playerCode = normalizeString(bundle.game.country);
+  const overrideOwnerCodes = [...new Set(
+    territoryEntries.map(([, ownerCode]) => normalizeString(ownerCode)).filter(Boolean),
+  )];
+  const priorityCodes = [playerCode, ...overrideOwnerCodes, ...taggedCodes].filter(Boolean);
+  const polityNames = Object.fromEntries(
+    polities
+      .filter((entry) => entry?.code)
+      .map((entry) => [String(entry.code).toLowerCase(), entry.name || entry.code]),
+  );
+  const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
+    priorityCodes,
+    polityNames,
+  });
+
   return [
     `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
     `Current round: ${bundle.game.round || 1}`,
@@ -361,6 +384,13 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
     "",
     "Territorial changes from the base scenario:",
     territorySummary,
+    "",
+    "Full ownership map — every region as `name (id)`, grouped by the code of its "
+      + "CURRENT owner. THIS is the comma-separated region list referenced above. To "
+      + "move territory in a regionTransfer, copy a region's EXACT name or id from here "
+      + "(never invent or translate a region name — an unlisted name will not resolve "
+      + "and the map will not change) and use the owner codes shown for fromCode/toCode:",
+    regionOwnershipCatalog,
     "",
     "Dynamic polity overrides:",
     politySummary,
