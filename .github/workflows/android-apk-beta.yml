@@ -61,6 +61,13 @@ jobs:
           # module (that's where the 'www folder' check throws), so stage it there too.
           mkdir -p android/capacitor-cordova-android-plugins/src/main/assets/www
           cp -r nodejs-project android/capacitor-cordova-android-plugins/src/main/assets/www/nodejs-project
+          # :app's externalNativeBuild points cmake.path at app/libs/cdvnodejsmobile,
+          # but cap sync generated the plugin's native CMake files in the cordova-plugins
+          # module. Bridge them into app/libs so configureCMakeDebug finds CMakeLists.txt.
+          if [ -d android/capacitor-cordova-android-plugins/src/main/libs/cdvnodejsmobile ]; then
+            mkdir -p android/app/libs
+            cp -r android/capacitor-cordova-android-plugins/src/main/libs/cdvnodejsmobile android/app/libs/cdvnodejsmobile
+          fi
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
