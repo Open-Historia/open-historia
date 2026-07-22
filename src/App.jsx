@@ -7,6 +7,7 @@ import UI from "./Game/GameUI/main.jsx";
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
+import AppUpdateBanner from "./runtime/AppUpdateBanner.jsx";
 import {
   STARTUP_TIME_BUDGET_MS,
   createInitialStartupState,
@@ -209,9 +210,12 @@ function App() {
   // screen instead of unmounting to a blank page. Wrapping <GameApp/> at this level
   // (rather than inside GameApp's return) also catches GameApp's own render throws.
   return (
-    <ErrorBoundary>
-      <GameApp />
-    </ErrorBoundary>
+    <>
+      <AppUpdateBanner />
+      <ErrorBoundary>
+        <GameApp />
+      </ErrorBoundary>
+    </>
   );
 }
 

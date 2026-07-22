@@ -262,6 +262,49 @@ app.get("/api/library", (_req, res) => {
   }
 });
 
+// Native-app update check. The app polls THIS instead of hitting GitHub directly:
+// the game runs at the embedded-server origin, so a client-side fetch to a GitHub
+// release asset is CORS-blocked — and doing it here lets us cache the lookup so
+// thousands of clients polling don't each hit GitHub. We read the tiny latest.json
+// release asset (a CDN download, not the rate-limited REST API) for the app's track.
+const APP_UPDATE_MANIFESTS = {
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
+};
+const APP_UPDATE_TTL_MS = 3 * 60 * 1000;
+const appUpdateCache = new Map(); // track -> { at, data }
+
+app.get("/api/app-update", async (req, res) => {
+  const track = String(req.query.track || "stable");
+  const manifestUrl = APP_UPDATE_MANIFESTS[track];
+  if (!manifestUrl) {
+    res.json({}); // unknown track -> no update info, never an error
+    return;
+  }
+  const cached = appUpdateCache.get(track);
+  if (cached && Date.now() - cached.at < APP_UPDATE_TTL_MS) {
+    res.json(cached.data);
+    return;
+  }
+  try {
+    const response = await fetch(manifestUrl, { signal: AbortSignal.timeout(6000) });
+    if (!response.ok) {
+      res.json(cached ? cached.data : {}); // stale-if-error, else empty
+      return;
+    }
+    const raw = await response.json();
+    const data = {
+      build: Number(raw && raw.build) || 0,
+      apk: typeof (raw && raw.apk) === "string" ? raw.apk : "",
+      notes: typeof (raw && raw.notes) === "string" ? raw.notes : "",
+    };
+    appUpdateCache.set(track, { at: Date.now(), data });
+    res.json(data);
+  } catch {
+    res.json(cached ? cached.data : {}); // offline / timeout -> fail-open
+  }
+});
+
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));

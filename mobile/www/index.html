@@ -84,27 +84,16 @@
       <button class="ghost" id="cancel">Change server</button>
     </div>
 
-    <div class="card" id="update" style="display: none">
-      <h1>Update available</h1>
-      <p id="updateInfo">
-        A newer version of the app is available. Tap below to download
-        <b>pax-historia.apk</b>, then open the finished download to install it
-        and reopen the app.
-      </p>
-      <button id="downloadUpdate">Download update</button>
-      <button class="ghost" id="skipUpdate">Continue without updating</button>
-    </div>
+    <!-- The update prompt now lives INSIDE the app as a top banner
+         (src/runtime/AppUpdateBanner.jsx, backed by the on-device server's
+         /api/app-update), so this boot screen no longer gates on updates. -->
+
 
     <script>
       const KEY = "pax-server-url";
       // Stamped with the CI run number at build time; hand-built ("dev")
       // copies skip the update check entirely.
       const APP_BUILD = "__APP_BUILD__";
-      // Self-update polls the organisation repository's rolling "android"
-      // release (the android-apk.yml workflow publishes there) — the asset
-      // name pax-historia.apk must never change (installed apps look for
-      // exactly that name).
-      const RELEASE_API = "https://api.github.com/repos/Open-Historia/open-historia/releases/tags/android";
       const setup = document.getElementById("setup");
       const connecting = document.getElementById("connecting");
       const input = document.getElementById("server");
@@ -197,46 +186,13 @@
         }
       };
 
-      // APK self-update: every launch compares this build against the rolling
-      // "android" release; a newer one auto-downloads (the native download
-      // listener hands the APK to the system browser). Only the app does this
-      // — the regular web version never ships this page.
-      const checkForUpdate = async () => {
-        if (!/^\d+$/.test(APP_BUILD)) return null; // dev build
-        try {
-          const response = await fetch(RELEASE_API, {
-            headers: { Accept: "application/vnd.github+json" },
-            signal: AbortSignal.timeout(4000),
-          });
-          if (!response.ok) return null;
-          const release = await response.json();
-          const remote = String(release.body || "").match(/Build:\s*(\d+)/i);
-          if (!remote || Number(remote[1]) <= Number(APP_BUILD)) return null;
-          const asset = (release.assets || []).find((a) => a.name === "pax-historia.apk");
-          return asset ? { build: remote[1], url: asset.browser_download_url } : null;
-        } catch {
-          return null; // offline / rate-limited — just play
-        }
-      };
-
-      checkForUpdate().then((update) => {
-        if (!update) {
-          startNormalFlow();
-          return;
-        }
-        setup.style.display = "none";
-        connecting.style.display = "none";
-        document.getElementById("update").style.display = "flex";
-        // Explicit button — the reliable path. (The download is handed to the
-        // system browser by the native download listener.)
-        document.getElementById("downloadUpdate").addEventListener("click", () => {
-          window.location.href = update.url;
-        });
-        document.getElementById("skipUpdate").addEventListener("click", () => {
-          document.getElementById("update").style.display = "none";
-          startNormalFlow();
-        });
-      });
+      // Update checking moved INTO the app (a top banner backed by /api/app-update,
+      // which the on-device server answers and caches). The boot screen no longer
+      // polls the GitHub REST API on every launch: that call is rate-limited at 60/hr
+      // per IP, and many players share one carrier IP (CGNAT), so at scale the check
+      // began failing for whole carriers. The in-app banner reads a tiny release
+      // ASSET via the server instead, which is a CDN download with no such limit.
+      startNormalFlow();
 
       // Which build is this? Shown in the corner so bug reports can say.
       const badge = document.createElement("div");
