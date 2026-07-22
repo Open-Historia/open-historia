@@ -51,6 +51,12 @@ jobs:
           cd mobile
           npm ci
           npx cap sync android
+          # nodejs-mobile-cordova is a Cordova plugin: its gradle looks for the node
+          # project under the Cordova www assets folder (assets/www/nodejs-project),
+          # which Capacitor never creates — it copies webDir to assets/public. Drop
+          # the assembled server there so the plugin can bundle it into the APK.
+          mkdir -p android/app/src/main/assets/www
+          cp -r nodejs-project android/app/src/main/assets/www/nodejs-project
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
