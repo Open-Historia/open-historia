@@ -250,18 +250,40 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
         setMessages(prev => [...prev, userMessage]);
         setIsLoading(true);
 
+        // Streaming: the ThinkingDots show until the first token, then a live
+        // advisor bubble fills as tokens arrive. It carries a `streaming` flag so
+        // it can be found and finalised; intermediate text is NOT persisted.
+        const showStreaming = (fullText) => setMessages(prev => {
+            const next = prev.slice();
+            const last = next[next.length - 1];
+            if (last && last.role === "advisor" && last.streaming) {
+                next[next.length - 1] = { ...last, text: fullText };
+            } else {
+                next.push({ role: "advisor", text: fullText, time: gameDate, streaming: true });
+            }
+            return next;
+        });
+
         try {
-            const reply = await sendMessage(text);  // uses advisor prompt automatically
-            const advisorMessage = { role: "advisor", text: reply, time: gameDate };
+            const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full) });
             setMessages(prev => {
-                const updated = [...prev, advisorMessage];
-                saveMessages(updated);
-                return updated;
+                const next = prev.slice();
+                const last = next[next.length - 1];
+                // Finalise the streaming bubble, or append the full reply if the
+                // provider never streamed a chunk.
+                if (last && last.role === "advisor" && last.streaming) {
+                    next[next.length - 1] = { role: "advisor", text: reply, time: gameDate };
+                } else {
+                    next.push({ role: "advisor", text: reply, time: gameDate });
+                }
+                saveMessages(next);
+                return next;
             });
         } catch (err) {
-            const errorMessage = { role: "error", text: err.message, time: gameDate };
             setMessages(prev => {
-                const updated = [...prev, errorMessage];
+                const last = prev[prev.length - 1];
+                const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
+                const updated = [...base, { role: "error", text: err.message, time: gameDate }];
                 saveMessages(updated);
                 return updated;
             });
@@ -377,7 +399,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
             );
         })}
 
-        {isLoading && (
+        {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
             <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
             <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>

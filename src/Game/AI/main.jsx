@@ -20,7 +20,7 @@ import {
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
 // Usage: import { sendMessage, sendDiplomaticMessage, startChat, startDiplomaticChat, loadHistory, loadDiplomaticHistory, buildDiplomaticSystemPrompt } from './main.jsx'
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash-lite";
 const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
@@ -387,6 +387,52 @@ export async function readOpenAIStreamedResponse(response) {
     };
 }
 
+// Generic SSE text streamer for the CHAT path (the advisor). Reads `data:` lines,
+// pulls each provider's incremental text via extractDelta, forwards it to
+// onChunk(delta, fullSoFar), and returns the full accumulated text. Used ONLY
+// for non-tool calls that pass an onChunk callback; tool/JSON tasks keep the
+// buffered path so the whole structured object is still parsed at once. The
+// onChunk call is wrapped so a throwing UI callback can never break the stream.
+async function streamTextSSE(response, extractDelta, onChunk) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+                if (!line.startsWith("data:")) continue;
+                const payload = line.slice(5).trim();
+                if (!payload || payload === "[DONE]") continue;
+                let json;
+                try { json = JSON.parse(payload); } catch { continue; }
+                const delta = extractDelta(json);
+                if (delta) { full += delta; try { onChunk(delta, full); } catch { /* UI callback must not break the stream */ } }
+            }
+        }
+    } finally {
+        try { reader.releaseLock(); } catch { /* already closed */ }
+    }
+    return full;
+}
+
+// One incremental text chunk per provider's stream event. NOTE: joinGeminiParts
+// trims, which would swallow the leading space of each chunk and run words
+// together — so join the streamed parts WITHOUT trimming.
+const geminiStreamDelta = (json) =>
+    (json?.candidates?.[0]?.content?.parts ?? []).map((part) => part?.text ?? "").join("");
+const openaiStreamDelta = (json) => {
+    const delta = json?.choices?.[0]?.delta;
+    return typeof delta?.content === "string" ? delta.content : "";
+};
+const anthropicStreamDelta = (json) =>
+    json?.type === "content_block_delta" && json?.delta?.type === "text_delta" ? (json.delta.text || "") : "";
+
 function toOpenAIMessages(systemPrompt, history) {
     const messages = [{ role: "system", content: systemPrompt }];
 
@@ -459,6 +505,8 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
 
 async function callGemini(systemPrompt, history, {
     deadline,
+    maxTokens = 8192,
+    onChunk,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -478,6 +526,35 @@ async function callGemini(systemPrompt, history, {
     });
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
+
+    // Advisor/chat streaming: with an onChunk callback (and no tool), use the
+    // streaming endpoint so the reply appears token-by-token. maxOutputTokens
+    // caps this reply at the requested budget — the buffered jump path below
+    // deliberately sends NO cap so long simulations are never truncated.
+    if (onChunk && !tool) {
+        const streamUrl = getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
+        const response = await fetch(streamUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                system_instruction: { parts: [{ text: systemPrompt }] },
+                contents: history,
+                generationConfig: {
+                    maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
+                    ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+                },
+                ...customParams,
+            }),
+            signal,
+        });
+        if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+        }
+        const streamed = await streamTextSSE(response, geminiStreamDelta, onChunk);
+        if (!streamed) throw new Error("Gemini response did not contain text.");
+        return streamed;
+    }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         const response = await fetch(getGeminiUrl(model, apiKey), {
@@ -556,6 +633,7 @@ async function callOpenAIStyleChatCompletions({
     deadline,
     signal,
     tool,
+    onChunk,
     allowJsonSchemaFallback = false,
     maxTokens = 8192,
     tokenLimitField = "max_tokens",
@@ -579,8 +657,9 @@ async function callOpenAIStyleChatCompletions({
             payload: {
                 model,
                 // Streaming is what makes Cancel PHYSICAL on a local server —
-                // see readOpenAIStreamedResponse. Local endpoints only.
-                ...(streamLocalEndpoint ? { stream: true } : {}),
+                // see readOpenAIStreamedResponse. Local endpoints, and the
+                // advisor/chat path (onChunk) which streams tokens to the UI.
+                ...(streamLocalEndpoint || (onChunk && !tool) ? { stream: true } : {}),
                 messages: toOpenAIMessages(requestSystemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways. Sent in EVERY mode, tool calls
@@ -672,6 +751,15 @@ async function callOpenAIStyleChatCompletions({
         if (!response.ok) {
             const payload = await readErrorPayload(response);
             throw new Error(extractErrorMessage(payload, `${providerLabel} request failed (${response.status})`));
+        }
+
+        // Advisor/chat streaming: forward tokens to the UI as they arrive. Guard
+        // on the actual content-type so a gateway that ignored stream:true (plain
+        // JSON) safely falls through to the buffered path below.
+        if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
+            const streamed = await streamTextSSE(response, openaiStreamDelta, onChunk);
+            if (!streamed) throw new Error(`${providerLabel} response did not contain text.`);
+            return streamed;
         }
 
         // Local servers that honor stream:true answer as an event stream; ones
@@ -770,6 +858,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
 async function callAnthropic(systemPrompt, history, {
     deadline,
     maxTokens = 8192,
+    onChunk,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -809,6 +898,8 @@ async function callAnthropic(systemPrompt, history, {
             system: systemPrompt,
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            // Advisor/chat streaming: SSE tokens to the UI.
+            ...(onChunk && !tool ? { stream: true } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
@@ -839,6 +930,12 @@ async function callAnthropic(systemPrompt, history, {
             throw new Error(extractErrorMessage(payload, `Anthropic request failed (${response.status})`));
         }
 
+        if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
+            const streamed = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (!streamed) throw new Error("Anthropic response did not contain text.");
+            return streamed;
+        }
+
         const data = await response.json();
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
@@ -858,6 +955,7 @@ async function callAnthropic(systemPrompt, history, {
 async function callAnthropicCompatible(systemPrompt, history, {
     deadline,
     maxTokens = 8192,
+    onChunk,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -898,6 +996,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             system: systemPrompt,
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...(onChunk && !tool ? { stream: true } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
@@ -921,6 +1020,12 @@ async function callAnthropicCompatible(systemPrompt, history, {
         if (!response.ok) {
             const payload = await readErrorPayload(response);
             throw new Error(extractErrorMessage(payload, `Anthropic-compatible request failed (${response.status})`));
+        }
+
+        if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
+            const streamed = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (!streamed) throw new Error("Anthropic-compatible response did not contain text.");
+            return streamed;
         }
 
         const data = await response.json();
@@ -1090,7 +1195,10 @@ export async function sendMessage(userMessage, opts) {
     advisorHistory = compactConversationHistory(advisorHistory);
 
     try {
-        const reply = await callAI(systemPrompt, advisorHistory, { ...opts, languageMode: "chat" });
+        // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
+        // it token-by-token. Providers that can't stream still return the full reply
+        // here, so the advisor works either way.
+        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat" });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         return reply;
     } catch (err) {
