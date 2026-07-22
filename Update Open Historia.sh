@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Open Historia — Linux/Termux updater © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — UNIX updater © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 
 # ============================================================
 #  Open Historia - one-click updater (Linux / macOS)
@@ -248,12 +248,26 @@ finish() {
     fi
     echo ""
     echo "==================================================="
-    echo "  Update complete."
-    echo "  Run \"Launch Open Historia.sh\" to play - it will"
-    echo "  reinstall dependencies and rebuild automatically."
+    echo "  Update complete.                                 "
+    echo "  Run \"Launch Open Historia.sh\" to play or press "
+    echo "  1 to auto-launch.                                "
+    echo "  It will reinstall dependencies and rebuild       "
+    echo "  automatically.                                   "
     echo "==================================================="
     echo ""
-    exit 0
+    printf "Press 1 to start, or press any other key to exit the updater."
+    read -n 1 autoplaykey
+    echo
+    if [ "$autoplaykey" = "1" ]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            exec bash "Launch Open Historia.command"
+        else
+            Exec bash "Launch Open Historia.sh"
+        fi
+    else
+        echo "Exiting updater..."
+        exit 0
+fi
 }
 
 main "$@"

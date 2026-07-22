@@ -236,10 +236,15 @@ if exist "dist" rmdir /s /q "dist"
 echo.
 echo ===================================================
 echo   Update complete.
-echo   Run "Launch Open Historia.bat" to play - it will
-echo   reinstall dependencies and rebuild automatically.
+echo   Run "Launch Open Historia.bat" to play - or press
+echo   1 to auto-launch.                                
+echo   It will reinstall dependencies and rebuild       
+echo   automatically.                                   
 echo ===================================================
 echo.
+choice /C 10 /N /M "Press 1 to start, or press any other key to exit the updater."
+if errorlevel 2 exit
+if errorlevel 1 call "Launch Open Historia.bat"
 pause
 exit /b 0
 
