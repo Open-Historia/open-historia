@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "nodejs-mobile-cordova": "^0.4.3"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
