@@ -7,7 +7,7 @@ import { accountConfigured, isSignedIn, getEmail, signOut, signInWithGoogle, goo
 import { syncNow, startSync, stopSync } from "./sync.js";
 
 const css = `
-.oh-acct{position:fixed;top:10px;right:10px;z-index:99998;font:13px/1.4 system-ui,sans-serif}
+.oh-acct{position:fixed;top:4.25rem;right:10px;z-index:9997;font:13px/1.4 system-ui,sans-serif}
 .oh-acct-btn{display:flex;align-items:center;gap:6px;background:rgba(15,17,23,.82);color:#e6e8ee;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:5px 11px;cursor:pointer;backdrop-filter:blur(6px);max-width:220px}
 .oh-acct-btn:hover{border-color:rgba(255,255,255,.3)}
 .oh-acct-dot{width:8px;height:8px;border-radius:50%;background:#6b7280;flex:0 0 auto}
