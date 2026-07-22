@@ -2,6 +2,7 @@
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
+import { dedupeEventLog } from "./eventDedup.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -639,7 +640,10 @@ export const applyUnitOps = (units, ops) => {
   let next = normalizeUnits(units);
   for (const op of normalizeArray(ops)) {
     if (op.op === "spawn") {
-      next.push(op.unit);
+      // Idempotent: skip a spawn whose unit id is already present, so a re-applied
+      // op batch can't duplicate a unit (mirrors the event-restatement de-dup).
+      const spawnId = op.unit?.id;
+      if (!spawnId || !next.some((unit) => unit.id === spawnId)) next.push(op.unit);
     } else if (op.op === "move") {
       next = next.map((unit) =>
         unit.id === op.unitId
@@ -1010,7 +1014,9 @@ export const readEventsState = async ({ force = false } = {}) =>
   normalizeEvents(await readJson(JSON_URLS.events, { defaultValue: [], force }));
 
 export const writeEventsState = async (events, options = {}) => {
-  const normalized = normalizeEvents(events);
+  // Choke-point safety net: no writer can persist a log that already contains
+  // exact-duplicate events (the AI restating its own timeline). See eventDedup.js.
+  const normalized = dedupeEventLog(normalizeEvents(events));
   // New/edited event text follows the UI language immediately (see above).
   enqueueContentStrings(normalized);
   return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
