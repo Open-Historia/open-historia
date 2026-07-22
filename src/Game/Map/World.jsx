@@ -304,6 +304,16 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         collectResourceTiming={false}
         crossSourceCollisions={false}
         renderWorldCopies
+        // Cap MapLibre's per-source out-of-view tile-retention cache. Left unset it
+        // sizes dynamically to ~(ceil(w/tileSize)+1)*(ceil(h/tileSize)+1)*5 tiles PER
+        // source — ~270 at 1080p but ~800 at a 3840x2160 desktop viewport, and
+        // renderWorldCopies feeds successive wrapped world-copy tiles into it as you
+        // pan E/W, so retained GPU textures climb until the tab OOMs. 256 caps the 4K
+        // case ~3x while barely trimming 1080p, and is a no-op on phone-sized viewports
+        // (dynamic size there is well under 256). In-view tiles live in a separate
+        // structure and are never evicted by this, so it never re-fetches what's on
+        // screen. Orthogonal to applyDynamicPixelRatio (which bounds framebuffer pixels).
+        maxTileCacheSize={256}
         projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}

@@ -6,6 +6,7 @@ import UI from "./Game/GameUI/main.jsx";
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
+import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
 import {
   STARTUP_TIME_BUDGET_MS,
   createInitialStartupState,
@@ -203,7 +204,15 @@ function App() {
       </Suspense>
     );
   }
-  return <GameApp />;
+  // Wrap the game view (not the editor route, which has its own Suspense fallback)
+  // so a render/lifecycle throw in the map, UI or panels shows a recoverable Reload
+  // screen instead of unmounting to a blank page. Wrapping <GameApp/> at this level
+  // (rather than inside GameApp's return) also catches GameApp's own render throws.
+  return (
+    <ErrorBoundary>
+      <GameApp />
+    </ErrorBoundary>
+  );
 }
 
 export default App;
