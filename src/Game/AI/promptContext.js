@@ -355,21 +355,32 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
   // so on a stock map the model saw ZERO region names and invented ones that then
   // failed resolveRegionTransfers and got silently dropped — a narrated capture that
-  // never moved the map. List every region as `name (id)` grouped by its current
-  // owner (override ?? base country), prioritising the active theatre (the player,
-  // any re-owned or tagged power) so fromCode/toCode and the region id resolve.
+  // never moved the map. buildRegionOwnershipText is TIERED so we hand names where
+  // they are needed without dumping all ~3000 provinces every jump: FULL `name (id)`
+  // lists only for the powers IN PLAY (the "focus" set below), and codes-only for
+  // everyone else (the model names their regions on demand and the retry resolves
+  // them). Focus = the player, anyone already re-owned, scenario-defined actors, and
+  // the player's active chat partners — the likely belligerents.
   const playerCode = normalizeString(bundle.game.country);
   const overrideOwnerCodes = [...new Set(
     territoryEntries.map(([, ownerCode]) => normalizeString(ownerCode)).filter(Boolean),
   )];
-  const priorityCodes = [playerCode, ...overrideOwnerCodes, ...taggedCodes].filter(Boolean);
-  const polityNames = Object.fromEntries(
-    polities
-      .filter((entry) => entry?.code)
-      .map((entry) => [String(entry.code).toLowerCase(), entry.name || entry.code]),
-  );
+  const actorCodes = polities.map((entry) => normalizeString(entry?.code)).filter(Boolean);
+  const chatCodes = normalizeArray(bundle.chats).flatMap((chat) =>
+    normalizeArray(chat?.countries).map((country) => normalizeString(country?.code)).filter(Boolean));
+  const focusCodes = [playerCode, ...overrideOwnerCodes, ...actorCodes, ...chatCodes].filter(Boolean);
+  // Owner code -> display name for both sections: base country names from the catalog,
+  // with dynamic polity overrides layered on top (a re-owned/renamed power wins).
+  const polityNames = {};
+  for (const region of regions) {
+    const code = String(region.countryCode || region.country || "").toLowerCase();
+    if (code && !polityNames[code]) polityNames[code] = region.country || region.countryCode;
+  }
+  for (const entry of polities) {
+    if (entry?.code) polityNames[String(entry.code).toLowerCase()] = entry.name || entry.code;
+  }
   const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
-    priorityCodes,
+    focusCodes,
     polityNames,
   });
 
@@ -385,11 +396,8 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
     "Territorial changes from the base scenario:",
     territorySummary,
     "",
-    "Full ownership map — every region as `name (id)`, grouped by the code of its "
-      + "CURRENT owner. THIS is the comma-separated region list referenced above. To "
-      + "move territory in a regionTransfer, copy a region's EXACT name or id from here "
-      + "(never invent or translate a region name — an unlisted name will not resolve "
-      + "and the map will not change) and use the owner codes shown for fromCode/toCode:",
+    "Map ownership (this IS the comma-separated region list referenced above — the "
+      + "region vocabulary for regionTransfers):",
     regionOwnershipCatalog,
     "",
     "Dynamic polity overrides:",
