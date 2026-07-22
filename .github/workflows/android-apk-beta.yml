@@ -57,6 +57,10 @@ jobs:
           # the assembled server there so the plugin can bundle it into the APK.
           mkdir -p android/app/src/main/assets/www
           cp -r nodejs-project android/app/src/main/assets/www/nodejs-project
+          # The plugin's gradle actually evaluates in the :capacitor-cordova-android-plugins
+          # module (that's where the 'www folder' check throws), so stage it there too.
+          mkdir -p android/capacitor-cordova-android-plugins/src/main/assets/www
+          cp -r nodejs-project android/capacitor-cordova-android-plugins/src/main/assets/www/nodejs-project
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
