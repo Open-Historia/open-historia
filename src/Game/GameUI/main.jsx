@@ -15,7 +15,22 @@ import {
   persistProviderSetting,
 } from "../AI/providerConfig.js";
 
-const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
+// The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
+// Width is kept in px so the drag maps 1:1 to the pointer, persisted in
+// localStorage, and clamped to a readable min and the current viewport.
+const ADVISOR_MIN_WIDTH = 280;
+const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
+const clampAdvisorWidth = (px) => {
+  const max = (typeof window !== "undefined" ? window.innerWidth : 1280) - 16;
+  return Math.round(Math.min(Math.max(px, Math.min(ADVISOR_MIN_WIDTH, max)), max));
+};
+const readAdvisorWidth = () => {
+  try {
+    const saved = Number(localStorage.getItem("oh-advisor-width"));
+    if (Number.isFinite(saved) && saved > 0) return clampAdvisorWidth(saved);
+  } catch { /* private-mode storage — fall through to default */ }
+  return clampAdvisorWidth(ADVISOR_DEFAULT_WIDTH);
+};
 const baseStyle = {
   position: "fixed",
   backgroundColor: "rgba(17, 24, 39, 0.9)",
@@ -121,6 +136,7 @@ const Main = ({
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
@@ -218,7 +234,23 @@ const Main = ({
     setIsAdvisorOpen(true);
   }, []);
 
-  const rightShift = isAdvisorOpen ? `calc(${ADVISOR_PANEL_WIDTH} + 0.5rem)` : "0.5rem";
+  // Called on every pointermove while the user drags the advisor's edge.
+  const handleAdvisorResize = useCallback((px) => {
+    setAdvisorWidth(() => {
+      const w = clampAdvisorWidth(px);
+      try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
+      return w;
+    });
+  }, []);
+
+  // Keep the saved width valid if the window shrinks below it.
+  useEffect(() => {
+    const onResize = () => setAdvisorWidth((w) => clampAdvisorWidth(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const rightShift = isAdvisorOpen ? `calc(${advisorWidth}px + 0.5rem)` : "0.5rem";
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -257,7 +289,7 @@ const Main = ({
       />
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
-          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} />
+          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} width={advisorWidth} onResize={handleAdvisorResize} />
         )}
       </Suspense>
       <Suspense fallback={null}>

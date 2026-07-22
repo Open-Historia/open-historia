@@ -184,7 +184,7 @@ const TabButton = ({ icon, label, active, onClick }) => (
     </button>
 );
 
-const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
+const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -193,6 +193,30 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [activeTab, setActiveTab] = useState("advisor");
     const inputRef = useRef(null);
+    const [isResizing, setIsResizing] = useState(false);
+    const [handleHover, setHandleHover] = useState(false);
+
+    // Drag the drawer's left edge to resize it. The panel is docked right, so the
+    // new width is simply (viewport width − pointer x); the parent (main.jsx) clamps
+    // and persists it. Pointer capture keeps the drag alive if the cursor leaves the
+    // 10px handle. Works for mouse, touch and pen.
+    const handleResizeStart = React.useCallback((e) => {
+        if (typeof onResize !== "function") return;
+        e.preventDefault();
+        const target = e.currentTarget;
+        try { target.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+        setIsResizing(true);
+        const onMove = (ev) => onResize(window.innerWidth - ev.clientX);
+        const onUp = () => {
+            setIsResizing(false);
+            target.removeEventListener("pointermove", onMove);
+            target.removeEventListener("pointerup", onUp);
+            target.removeEventListener("pointercancel", onUp);
+        };
+        target.addEventListener("pointermove", onMove);
+        target.addEventListener("pointerup", onUp);
+        target.addEventListener("pointercancel", onUp);
+    }, [onResize]);
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();
@@ -315,7 +339,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
             // Full height now the in-game top bar is gone — it used to stop 64px
             // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
             // above, so height: 100vh reaches the top edge.
-            width: ADVISOR_PANEL_WIDTH, height: "100vh",
+            width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH, height: "100vh",
             backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
             // Above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the open drawer on
@@ -326,6 +350,28 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose }) => {
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>
+        {/* Drag the left edge to resize the drawer (main.jsx clamps + persists). */}
+        {typeof onResize === "function" && (
+            <div
+                onPointerDown={handleResizeStart}
+                onPointerEnter={() => setHandleHover(true)}
+                onPointerLeave={() => setHandleHover(false)}
+                title="Drag to resize"
+                style={{
+                    position: "absolute", left: 0, top: 0, bottom: 0, width: "10px",
+                    cursor: "ew-resize", zIndex: 30, touchAction: "none",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+            >
+                <div style={{
+                    width: "3px", height: "42px", borderRadius: "2px",
+                    backgroundColor: isResizing
+                        ? "rgba(96,165,250,0.95)"
+                        : handleHover ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.22)",
+                    transition: "background-color 0.15s",
+                }} />
+            </div>
+        )}
         {/* Header: tabs to flip between the advisor chat and national stats. */}
         <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
         <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
