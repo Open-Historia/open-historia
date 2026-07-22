@@ -452,7 +452,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.geminiModel ?? ""}
             onChange={(value) => onSettingChange("geminiModel", value)}
-            placeholder="gemini-3.1-flash-lite-preview"
+            placeholder="gemini-3.6-flash-lite"
             helperText="Leave blank to use the built-in Gemini default."
             />
             <SettingsInput

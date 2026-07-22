@@ -42,7 +42,7 @@ export const PROVIDER_OPTIONS = [
 const PROVIDER_SETTINGS = {
     gemini: {
         apiKey: { storageKey: "gemini_api_key", defaultValue: "" },
-        model: { storageKey: "gemini_model", defaultValue: "gemini-3.1-flash-lite-preview" },
+        model: { storageKey: "gemini_model", defaultValue: "gemini-3.6-flash-lite" },
         customParams: { storageKey: "gemini_custom_params", defaultValue: "" },
     },
     openai: {
