@@ -411,6 +411,13 @@ const runJsonTask = async (taskKey, {
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     const playerName = normalizeString(variables.playerPolity) || "the player's polity";
     systemPrompt = `${systemPrompt}\n\n[Player Agency]\n${playerName} is controlled by a human player. Never commit ${playerName} to a major decision the player did not actually make: do not sign treaties, alliances, ceasefires, surrenders, trade pacts, unions, or other binding agreements on the player's behalf, do not accept or reject offers for them, and do not have ${playerName} take landmark unilateral action (declaring war, ceding territory, changing government) unless it directly executes one of the player's planned actions, chat replies, or explicit requests. When another polity seeks such an agreement or decision from the player, present it as something the player can answer: a diplomaticOutreach entry or an impacts.createdChats chat where the counterpart speaks first and makes the proposal, or an event describing the offer as OPEN and awaiting the player's response. Events remain free to narrate what other polities do among themselves and to resolve the player's own queued actions exactly as ordered.`;
+    // Map truth: the recurring field report is the OPPOSITE failure — invasions
+    // narrated turn after turn with zero regionTransfers, so the map never moves.
+    // Appended at call time for the same reason as [Player Agency]: existing
+    // campaigns carry frozen prompts, so a defaultPrompts.json rule never
+    // reaches them. This also disarms an over-cautious reading of the agency
+    // rule above ("don't act for the player") as "don't move the map".
+    systemPrompt = `${systemPrompt}\n\n[Map Truth]\nTerritorial narration and the map must never disagree. If an event's title or description says territory was captured, seized, occupied, annexed, ceded, liberated, retaken, or otherwise changed hands, that SAME event MUST carry impacts.regionTransfers entries covering every region it names or implies — a capture claim with no regionTransfers is invalid output that breaks the map. When you do not know a region's exact id, put its plain name in regionId and the engine will resolve it; emit one entry per affected region. Resolving ${playerName}'s own ordered military operations into their territorial outcomes is REQUIRED and is never a player-agency violation: the agency rule restricts unprompted decisions, not the map consequences of offensives the player actually ordered. In an active war, sustained successful offensives normally transfer regions every jump. If nothing genuinely changed hands this period, keep capture language out of the event text.`;
   }
 
   // Reputation context: how the world currently regards the player, and how the
@@ -440,7 +447,12 @@ const runJsonTask = async (taskKey, {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
       const response = await callAI(systemPrompt, history, {
         deadline,
-        maxTokens: taskKey === "jumpForward" || taskKey === "autoJumpForward" ? 16384 : 8192,
+        // One request budget for every task. This is only a per-response output
+        // ceiling for providers that take one (OpenAI-compatible/Anthropic
+        // floor it at 8192 in main.jsx; Gemini sends no cap at all and ignores
+        // this value entirely) — jump tasks used to request 16384, which only
+        // raised that ceiling on capped providers.
+        maxTokens: 8192,
         signal: controller.signal,
         tool,
       });
@@ -975,6 +987,12 @@ const validateChatOpener = (chatLike, path) => {
   return "";
 };
 
+// Event text that claims territory changed hands. Word-boundary anchored so
+// "preoccupied" or "occupational" never match; deliberately narrow (capture
+// verbs, not war verbs) so a defensive battle that moved no borders — a
+// legitimate zero-transfer turn — never trips the reluctance guard below.
+const CAPTURE_LANGUAGE = /\b(captur\w*|seiz\w*|annex\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|cedes?|ceded|ceding|cession|fell to|falls? to)\b/i;
+
 // Strict/salvage discipline, the same contract clampTimelineDates follows:
 // the FIRST attempt returns corrective errors so the model can fix its own
 // answer; the SECOND attempt never rejects a finished generation — invalid
@@ -989,6 +1007,28 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
   const unresolvedTransfers = await resolveRegionTransfers(containers, world);
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
+  }
+  // Reluctance guard (strict attempt only): events that NARRATE a capture while
+  // the whole payload ships ZERO regionTransfers are the recurring field report
+  // — "two turns of invasions and not a single province transferred". One
+  // corrective retry asks the model to reconcile narration with the map (or to
+  // strip the capture language if genuinely nothing changed hands). English
+  // verb heuristic only — a non-English game just never gets this extra nudge —
+  // and the final attempt always passes through salvage, so it can never cost a
+  // finished turn. Only for event-shaped payloads: a $.impacts container has no
+  // narration to check.
+  if (strict && Array.isArray(candidate?.events)) {
+    const totalTransfers = containers.reduce(
+      (sum, { impacts }) => sum + normalizeArray(impacts?.regionTransfers).length,
+      0,
+    );
+    if (totalTransfers === 0) {
+      const captureEvent = candidate.events.find((event) =>
+        CAPTURE_LANGUAGE.test(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`));
+      if (captureEvent) {
+        return `Your events describe territory changing hands (e.g. "${normalizeString(captureEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Territorial narration and the map must never disagree: add impacts.regionTransfers entries ({"regionId": exact id or the region's plain name, "toCode": the new owner}) to EVERY event whose text says a region was captured, seized, occupied, annexed, ceded, liberated, or retaken, covering each region it names or implies. If nothing genuinely changed hands in this period, remove the capture language from those events instead, and resend.`;
+      }
+    }
   }
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
