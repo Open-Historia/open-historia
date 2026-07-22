@@ -20,7 +20,7 @@ import {
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
 // Usage: import { sendMessage, sendDiplomaticMessage, startChat, startDiplomaticChat, loadHistory, loadDiplomaticHistory, buildDiplomaticSystemPrompt } from './main.jsx'
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash-lite";
 const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
