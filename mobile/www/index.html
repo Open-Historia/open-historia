@@ -89,16 +89,7 @@
       <div class="error" id="error"></div>
     </div>
 
-    <div class="card" id="update" style="display: none">
-      <h1>Update available</h1>
-      <p id="updateInfo">
-        A newer version of the app is available. Tap below to download
-        <b>pax-historia.apk</b>, then open the finished download to install it
-        and reopen the app.
-      </p>
-      <button id="downloadUpdate">Download update</button>
-      <button class="ghost" id="skipUpdate">Continue without updating</button>
-    </div>
+    <!-- Update prompt now lives INSIDE the app as a top banner (AppUpdateBanner.jsx). -->
 
     <script>
       const KEY = "pax-server-url";
@@ -106,7 +97,6 @@
       // mobile/nodejs-project/main.js (process.env.PORT default).
       const EMBEDDED_URL = "http://127.0.0.1:3000";
       const APP_BUILD = "__APP_BUILD__";
-      const RELEASE_API = "https://api.github.com/repos/Open-Historia/open-historia/releases/tags/android";
 
       const booting = document.getElementById("booting");
       const setup = document.getElementById("setup");
@@ -228,26 +218,13 @@
         startEmbeddedServer(false);
       };
 
-      // ── Self-update (unchanged) ───────────────────────────────────────────────
-      const checkForUpdate = async () => {
-        if (!/^\d+$/.test(APP_BUILD)) return null; // dev build
-        try {
-          const response = await fetch(RELEASE_API, { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(4000) });
-          if (!response.ok) return null;
-          const release = await response.json();
-          const remote = String(release.body || "").match(/Build:\s*(\d+)/i);
-          if (!remote || Number(remote[1]) <= Number(APP_BUILD)) return null;
-          const asset = (release.assets || []).find((a) => a.name === "pax-historia.apk");
-          return asset ? { build: remote[1], url: asset.browser_download_url } : null;
-        } catch { return null; }
-      };
-
-      checkForUpdate().then((update) => {
-        if (!update) { startNormalFlow(); return; }
-        show("update");
-        document.getElementById("downloadUpdate").addEventListener("click", () => { window.location.href = update.url; });
-        document.getElementById("skipUpdate").addEventListener("click", () => { startNormalFlow(); });
-      });
+      // Update checking moved INTO the app (a top banner backed by /api/app-update,
+      // which the on-device server answers and caches). The boot screen no longer
+      // polls the GitHub REST API on every launch: that call is rate-limited at 60/hr
+      // per IP, and many players share one carrier IP (CGNAT), so at scale the check
+      // began failing for whole carriers. The in-app banner reads a tiny release
+      // ASSET via the server instead, which is a CDN download with no such limit.
+      startNormalFlow();
 
       const badge = document.createElement("div");
       badge.textContent = "build " + (/^\d+$/.test(APP_BUILD) ? APP_BUILD : "dev");
