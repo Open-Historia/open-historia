@@ -40,6 +40,7 @@ import {
   writeGameData,
   writeWorldState,
 } from "../../runtime/gameState.js";
+import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 
@@ -418,6 +419,14 @@ const runJsonTask = async (taskKey, {
     // reaches them. This also disarms an over-cautious reading of the agency
     // rule above ("don't act for the player") as "don't move the map".
     systemPrompt = `${systemPrompt}\n\n[Map Truth]\nTerritorial narration and the map must never disagree. If an event's title or description says territory was captured, seized, occupied, annexed, ceded, liberated, retaken, or otherwise changed hands, that SAME event MUST carry impacts.regionTransfers entries covering every region it names or implies — a capture claim with no regionTransfers is invalid output that breaks the map. When you do not know a region's exact id, put its plain name in regionId and the engine will resolve it; emit one entry per affected region. Resolving ${playerName}'s own ordered military operations into their territorial outcomes is REQUIRED and is never a player-agency violation: the agency rule restricts unprompted decisions, not the map consequences of offensives the player actually ordered. In an active war, sustained successful offensives normally transfer regions every jump. If nothing genuinely changed hands this period, keep capture language out of the event text.`;
+    // No restating: the model is shown the recent timeline as context and, left
+    // unchecked, re-narrates events it already reported — each restatement gets a
+    // fresh id, so the same event stacks up and shows turn after turn. A content-key
+    // de-dup on the write path (dedupeGeneratedEvents) drops exact/same-date
+    // restatements; this directive stops the "rolling-date" ones (the same situation
+    // re-narrated under each new turn's date) that a de-dup can't catch. Appended at
+    // call time so existing frozen-prompt campaigns get it too.
+    systemPrompt = `${systemPrompt}\n\n[New Developments Only]\nThe events shown to you above have ALREADY happened and appear only as context. Do NOT restate, rephrase, re-report, or re-narrate them. Emit ONLY genuinely NEW developments that occur during THIS period. If an ongoing situation (a war, a crisis, an occupation) has no new development this period, do not emit an event for it.`;
   }
 
   // Reputation context: how the world currently regards the player, and how the
@@ -1327,7 +1336,14 @@ const applySimulationResult = async ({
       source: entry?.source || result.generation?.source || "ai",
     }, index))
     .filter(Boolean);
-  const nextEvents = [...normalizeEvents(baseEvents), ...generatedEvents];
+  // The model is shown the running timeline as context and tends to restate events
+  // it already reported; each restatement gets a fresh random id, so only a
+  // content-key de-dup catches it. Drop restatements BEFORE they persist, apply
+  // impacts, or land in this turn's record (also see the [New Developments Only]
+  // directive in buildTemplateVariables).
+  const priorEvents = normalizeEvents(baseEvents);
+  const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
+  const nextEvents = [...priorEvents, ...freshEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -1342,7 +1358,7 @@ const applySimulationResult = async ({
 
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
-    events: generatedEvents,
+    events: freshEvents,
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
@@ -1354,7 +1370,7 @@ const applySimulationResult = async ({
         {
           catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
-          eventIds: generatedEvents.map((event) => event.id),
+          eventIds: freshEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
@@ -1370,7 +1386,7 @@ const applySimulationResult = async ({
   });
   let nextWorld = worldWithImpacts;
 
-  for (const event of generatedEvents) {
+  for (const event of freshEvents) {
     for (const createdChat of event.impacts.createdChats) {
       const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
         fallbackTitle: event.title,
