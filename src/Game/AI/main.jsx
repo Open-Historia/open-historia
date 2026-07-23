@@ -635,7 +635,7 @@ async function callOpenAIStyleChatCompletions({
     tool,
     onChunk,
     allowJsonSchemaFallback = false,
-    maxTokens = 8192,
+    maxTokens,
     tokenLimitField = "max_tokens",
 }) {
     let structuredMode = tool ? "tool" : "text";
@@ -678,7 +678,9 @@ async function callOpenAIStyleChatCompletions({
                 // unknown parameters. Sent only when the toggle is ON so a
                 // server-side --enable-thinking default is never overridden.
                 ...(streamLocalEndpoint && getReasoningEnabled() && !disableToolReasoning ? { enable_thinking: true } : {}),
-                [tokenLimitField]: Math.max(8192, Number(maxTokens) || 0),
+                // No cap unless a caller asked for a specific budget: omit the field so
+                // the provider uses the model's own maximum (long turns aren't truncated).
+                ...(Number(maxTokens) > 0 ? { [tokenLimitField]: Number(maxTokens) } : {}),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -855,9 +857,17 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
     });
 }
 
+// Anthropic REQUIRES max_tokens and 400s if it exceeds the model's ceiling (the error
+// states that ceiling). Since the output cap was removed on purpose, request the model's
+// maximum: start high, and on that 400 learn + cache the model's real ceiling so later
+// calls use it directly (no repeated 400s). A high start lets capable models use their
+// full range while low-ceiling models self-correct on the first call.
+const ANTHROPIC_MAX_OUTPUT = 64000;
+const anthropicModelMax = new Map(); // model -> learned output ceiling
+
 async function callAnthropic(systemPrompt, history, {
     deadline,
-    maxTokens = 8192,
+    maxTokens,
     onChunk,
     retries = 3,
     retryDelay = 15000,
@@ -889,7 +899,10 @@ async function callAnthropic(systemPrompt, history, {
     // by extractAnthropicText, which only reads text blocks.
     const reasoning = getReasoningEnabled();
     const customParams = parseCustomParams(settings.customParams, "Anthropic");
-    const requestedMaxTokens = Math.max(8192, Number(maxTokens) || 0, Number(customParams.max_tokens) || 0);
+    // Uncapped by default -> the model's own maximum (learned from a prior 400).
+    let requestedMaxTokens = Number(maxTokens) > 0
+        ? Number(maxTokens)
+        : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -927,7 +940,17 @@ async function callAnthropic(systemPrompt, history, {
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Anthropic request failed (${response.status})`));
+            const message = extractErrorMessage(payload, `Anthropic request failed (${response.status})`);
+            // The cap was removed on purpose; honor the MODEL's own ceiling. Anthropic 400s
+            // "max_tokens: <sent> > <max>, ..." — learn <max>, cache it, and retry at it.
+            const capMatch = /max_tokens:\s*\d+\s*>\s*(\d+)/i.exec(message);
+            if (response.status === 400 && capMatch && Number(capMatch[1]) > 0
+                && Number(capMatch[1]) < requestedMaxTokens && attempt < retries) {
+                anthropicModelMax.set(model, Number(capMatch[1]));
+                requestedMaxTokens = Number(capMatch[1]);
+                continue;
+            }
+            throw new Error(message);
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
@@ -954,7 +977,7 @@ async function callAnthropic(systemPrompt, history, {
 
 async function callAnthropicCompatible(systemPrompt, history, {
     deadline,
-    maxTokens = 8192,
+    maxTokens,
     onChunk,
     retries = 3,
     retryDelay = 15000,
@@ -987,7 +1010,10 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
     const reasoning = getReasoningEnabled();
     const customParams = parseCustomParams(settings.customParams, "Anthropic Compatible");
-    const requestedMaxTokens = Math.max(8192, Number(maxTokens) || 0, Number(customParams.max_tokens) || 0);
+    // Uncapped by default -> the model's own maximum (learned from a prior 400).
+    let requestedMaxTokens = Number(maxTokens) > 0
+        ? Number(maxTokens)
+        : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -1019,7 +1045,16 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Anthropic-compatible request failed (${response.status})`));
+            const message = extractErrorMessage(payload, `Anthropic-compatible request failed (${response.status})`);
+            // Honor the model's own max_tokens ceiling (the cap was removed on purpose).
+            const capMatch = /max_tokens:\s*\d+\s*>\s*(\d+)/i.exec(message);
+            if (response.status === 400 && capMatch && Number(capMatch[1]) > 0
+                && Number(capMatch[1]) < requestedMaxTokens && attempt < retries) {
+                anthropicModelMax.set(model, Number(capMatch[1]));
+                requestedMaxTokens = Number(capMatch[1]);
+                continue;
+            }
+            throw new Error(message);
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
