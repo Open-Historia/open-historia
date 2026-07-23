@@ -128,15 +128,6 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       maxzoom: 5,
       tileSize: 256,
     },
-    "hillshade-source": {
-      type: "raster-dem",
-      tiles: [
-        TERRAIN_TILE_TEMPLATE,
-      ],
-      encoding: "terrarium",
-      maxzoom: 5,
-      tileSize: 256,
-    },
   },
   layers: [
     {
@@ -154,7 +145,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
     {
       id: "hills",
       type: "hillshade",
-      source: "hillshade-source",
+      source: "terrain-source",
       paint: {
         "hillshade-exaggeration": 0.1,
         "hillshade-shadow-color": "#000",

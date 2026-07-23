@@ -25,6 +25,22 @@ const blobIdParts = (blobId) => {
   return { kind: blobId.slice(0, i), id: blobId.slice(i + 1) };
 };
 
+// Fingerprinting a record base64-encodes and SHA-256s its ENTIRE content (world,
+// events, snapshots, any embedded assets) on the main thread — expensive. The full
+// scan runs every ~20s, so re-hashing records that have NOT changed is the dominant
+// sync cost and the "menu lags much more when logged in" symptom. Every content write
+// bumps meta.updatedAt (writeGameMeta/writeScenarioMeta in libraryStore), so memoize
+// the hash on it: an unchanged record reuses its last hash and skips the re-encode.
+const fingerprintCache = new Map(); // blobId -> { updatedAt, sha }
+const cachedFingerprint = async (blobId, rec) => {
+  const updatedAt = rec?.meta?.updatedAt;
+  const hit = fingerprintCache.get(blobId);
+  if (hit && updatedAt != null && hit.updatedAt === updatedAt) return hit.sha;
+  const sha = await recordFingerprint(rec);
+  fingerprintCache.set(blobId, { updatedAt: updatedAt ?? null, sha });
+  return sha;
+};
+
 // Read every syncable local record as blob_id → { rec, sha }.
 const collectLocal = async () => {
   const local = new Map();
@@ -32,7 +48,7 @@ const collectLocal = async () => {
     for (const rec of await idbGetAll(store)) {
       // Skip (don't abort the whole sync over) a record that can't be
       // fingerprinted, e.g. one holding a value JSON can't serialize.
-      try { local.set(prefix + rec.id, { rec, sha: await recordFingerprint(rec) }); }
+      try { local.set(prefix + rec.id, { rec, sha: await cachedFingerprint(prefix + rec.id, rec) }); }
       catch (e) { console.warn(`[sync] skip local ${prefix}${rec.id}: ${e.message}`); }
     }
   }
