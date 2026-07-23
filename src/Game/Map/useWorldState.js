@@ -91,6 +91,7 @@ export function useWorldState() {
     regionClaimants: state?.regionClaimants ?? {},
     polityOverrides: state?.polityOverrides ?? {},
     markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+    cityRenames: state?.cityRenames ?? {},
     labelFont: state?.labelFont ?? "",
     labelHaloColor: state?.labelHaloColor ?? "",
     labelTextColor: state?.labelTextColor ?? "",
@@ -113,6 +114,7 @@ export function useWorldState() {
     JSON.stringify(prev.regionClaimants) === JSON.stringify(derived.regionClaimants) &&
     // Markers are an array of small objects; same content-compare reasoning.
     JSON.stringify(prev.markers) === JSON.stringify(derived.markers) &&
+    JSON.stringify(prev.cityRenames) === JSON.stringify(derived.cityRenames) &&
     areEqualShallow(prev.polityOverrides, derived.polityOverrides)
       ? prev
       : derived;

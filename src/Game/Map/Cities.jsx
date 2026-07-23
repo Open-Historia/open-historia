@@ -43,7 +43,19 @@ const customTierFilter = [
 
 const customSortKey = ["-", ["+", ["*", ["get", "tier"], 1000000000], ["get", "population"]]];
 
-const StockCities = () => (
+// Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
+// AI renames (world.cityRenames) are applied as a client-side match override so a
+// renamed city shows its new name without touching the tiles.
+const cityLabelExpr = (renames) => {
+    const pairs = Object.entries(renames || {});
+    if (!pairs.length) return ["get", "city"];
+    const expr = ["match", ["downcase", ["get", "city"]]];
+    for (const [from, to] of pairs) expr.push(from, to);
+    expr.push(["get", "city"]);
+    return expr;
+};
+
+const StockCities = ({ label }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
     id="cities-shapes"
@@ -95,7 +107,7 @@ const StockCities = () => (
     filter={populationFilter}
     layout={{
         "symbol-sort-key": ["-", ["get", "population"]],
-        "text-field": ["get", "city"],
+        "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
         "text-padding": 5,
         "text-radial-offset": 0.7,
@@ -117,7 +129,7 @@ const StockCities = () => (
 
 // Same visual language as the stock layers (★/◆/■ markers, haloed labels), but
 // fed from the scenario's cities.geojson and gated by the authored tier.
-const CustomCities = ({ data }) => (
+const CustomCities = ({ data, label }) => (
     <Source id="cities-source" type="geojson" data={data}>
     <Layer
     id="cities-shapes"
@@ -154,7 +166,7 @@ const CustomCities = ({ data }) => (
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
-        "text-field": ["get", "city"],
+        "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
         "text-padding": 5,
         "text-radial-offset": 0.7,
@@ -178,9 +190,10 @@ const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
     // so the map doesn't fire its own independent 5s poll.
-    const { customCities: customFlag } = useWorldState();
+    const { customCities: customFlag, cityRenames } = useWorldState();
     const [customData, setCustomData] = useState(null);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
+    const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
 
     // The city set itself is static per scenario — fetched once when the flag (or
     // the runtime token behind the URL) changes.
@@ -207,9 +220,9 @@ const Cities = () => {
     // the custom set is still loading, show nothing rather than flash modern names.
     if (customFlag) {
         if (!customData || !customData.features.length) return null;
-        return <CustomCities data={customData} />;
+        return <CustomCities data={customData} label={label} />;
     }
-    return <StockCities />;
+    return <StockCities label={label} />;
 };
 
 export default Cities;
