@@ -160,11 +160,11 @@ const ensureUniqueId = async (requested, kind) => {
 };
 
 // --- Catalog composition (mirror getScenarioCatalog/getGameCatalog/getLibraryCatalog) ---
-const getScenarioCatalog = async () => {
+const getScenarioCatalog = async (scenarioRecords, gameRecords) => {
   const manifest = await getScenarioManifest();
-  const records = await idbGetAll(STORES.scenarios);
+  const records = scenarioRecords ?? await idbGetAll(STORES.scenarios);
   const byId = new Map(records.map((r) => [r.id, r]));
-  const usage = await getScenarioUsageCounts();
+  const usage = await getScenarioUsageCounts(gameRecords);
   const orderedIds = resolveOrderedIds(manifest.order, new Set(byId.keys()), DEFAULT_SCENARIO_ID);
 
   const scenarios = orderedIds.map((id) => {
@@ -191,20 +191,20 @@ const getScenarioCatalog = async () => {
   return { activeScenarioId: selectedScenarioId, scenarios, selectedScenarioId };
 };
 
-const getScenarioUsageCounts = async () => {
+const getScenarioUsageCounts = async (gameRecords) => {
   const counts = new Map();
-  for (const game of await idbGetAll(STORES.games)) {
+  for (const game of gameRecords ?? await idbGetAll(STORES.games)) {
     const scenarioId = readGameMeta(game.id, game.meta ?? {}).scenarioId;
     counts.set(scenarioId, (counts.get(scenarioId) ?? 0) + 1);
   }
   return counts;
 };
 
-const getGameCatalog = async () => {
-  const scenarioCatalog = await getScenarioCatalog();
-  const scenarioLookup = new Map(scenarioCatalog.scenarios.map((s) => [s.id, s]));
+const getGameCatalog = async (scenarioCatalog, gameRecords) => {
+  const catalog = scenarioCatalog ?? await getScenarioCatalog();
+  const scenarioLookup = new Map(catalog.scenarios.map((s) => [s.id, s]));
   const manifest = await getGameManifest();
-  const records = await idbGetAll(STORES.games);
+  const records = gameRecords ?? await idbGetAll(STORES.games);
   const byId = new Map(records.map((r) => [r.id, r]));
   const orderedIds = resolveOrderedIds(manifest.order, new Set(byId.keys()), DEFAULT_GAME_ID);
 
@@ -243,8 +243,13 @@ const getGameCatalog = async () => {
 };
 
 const getLibraryCatalog = async () => {
-  const scenarioCatalog = await getScenarioCatalog();
-  const gameCatalog = await getGameCatalog();
+  // Read each heavy store ONCE and thread the rows through — otherwise
+  // getScenarioCatalog() + getGameCatalog() each re-read them (scenarios x2, games x3),
+  // deserializing every full record (incl. any embedded assets) 2-3x per menu build.
+  const scenarioRecords = await idbGetAll(STORES.scenarios);
+  const gameRecords = await idbGetAll(STORES.games);
+  const scenarioCatalog = await getScenarioCatalog(scenarioRecords, gameRecords);
+  const gameCatalog = await getGameCatalog(scenarioCatalog, gameRecords);
   const selectedScenario = scenarioCatalog.scenarios.find((s) => s.id === scenarioCatalog.selectedScenarioId) ?? scenarioCatalog.scenarios[0] ?? null;
   const activeGame = gameCatalog.games.find((g) => g.id === gameCatalog.activeGameId) ?? gameCatalog.games[0] ?? null;
   const runtimeScenario = activeGame && activeGame.scenarioId
