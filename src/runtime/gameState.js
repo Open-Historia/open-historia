@@ -21,6 +21,10 @@ export const WORLD_DEFAULTS = {
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
   internationalReputation: {},
+  // Persisted per-country stat sheets (code -> the full sheet), seeded on first view
+  // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
+  // stop regenerating/drifting every date change.
+  countryStats: {},
   // Per-country tags the AI has changed: owner code -> string[]. The scenario's
   // tags.json holds the map-maker's STARTING tags; this holds every change since,
   // and wins where present (see resolveCountryTags).
@@ -462,6 +466,12 @@ const normalizePolityChange = (entry) => {
     ? normalizeTagList(entry.tags || entry.countryTags)
     : null;
 
+  // Persistent stat-sheet update: keep the partial object as-is (the merge + the Stats
+  // pane tolerate missing/extra fields); null means "no stat change this period".
+  const stats = entry.stats && typeof entry.stats === "object" && !Array.isArray(entry.stats)
+    ? entry.stats
+    : null;
+
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -469,6 +479,7 @@ const normalizePolityChange = (entry) => {
     name: normalizeOptionalString(entry.name || entry.newName),
     note: normalizeOptionalString(entry.note || entry.reason),
     reputation,
+    stats,
     tags,
   };
 };
@@ -857,10 +868,18 @@ export const normalizeWorldState = (world) => {
       .filter(([country, list]) => country && list.length),
   );
 
+  // Persisted per-country stat sheets: keep each code -> sheet-object entry as-is (the
+  // Stats pane tolerates missing fields). Explicit, not via the spread — new-field trap.
+  const countryStats = Object.fromEntries(
+    Object.entries(nextWorld.countryStats ?? {})
+      .filter(([code, sheet]) => normalizeOptionalString(code) && sheet && typeof sheet === "object"),
+  );
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
     countryTags,
+    countryStats,
     actionSuggestions: normalizeActionSuggestions(nextWorld.actionSuggestions),
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
@@ -1086,6 +1105,34 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // Reputation the AI set this turn becomes the polity's authoritative value.
       if (Number.isFinite(change.reputation)) {
         nextWorld.internationalReputation[change.code] = change.reputation;
+        // Keep the persisted sheet's reputation index in sync with the authoritative value.
+        if (nextWorld.countryStats?.[change.code]?.indices) {
+          nextWorld.countryStats[change.code] = {
+            ...nextWorld.countryStats[change.code],
+            indices: { ...nextWorld.countryStats[change.code].indices, internationalReputation: change.reputation },
+          };
+        }
+      }
+
+      // Persistent stat sheet: merge the AI's changed fields into the stored sheet so a
+      // country's stats change ONLY when the AI changes them (not every date). Deep-merge
+      // the nested groups and mirror the reputation index into the authoritative store.
+      if (change.stats && typeof change.stats === "object") {
+        if (!nextWorld.countryStats || typeof nextWorld.countryStats !== "object") nextWorld.countryStats = {};
+        const prev = nextWorld.countryStats[change.code] && typeof nextWorld.countryStats[change.code] === "object"
+          ? nextWorld.countryStats[change.code]
+          : {};
+        const merged = { ...prev, ...change.stats };
+        for (const group of ["indices", "economy", "gdpBreakdown"]) {
+          if (change.stats[group] && typeof change.stats[group] === "object") {
+            merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
+          }
+        }
+        nextWorld.countryStats[change.code] = merged;
+        const rep = Number(merged.indices?.internationalReputation);
+        if (Number.isFinite(rep)) {
+          nextWorld.internationalReputation[change.code] = Math.max(0, Math.min(100, Math.round(rep)));
+        }
       }
 
       // Tags the AI set this turn replace the scenario's starting tags for this

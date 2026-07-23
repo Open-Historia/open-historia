@@ -104,6 +104,63 @@ const regionTransferSchema = {
   additionalProperties: false,
 };
 
+// AI-authored updates to a country's PERSISTENT stat sheet (world.countryStats[code]).
+// Only fields that CHANGED this period are sent; everything else persists. Absolute
+// values, not deltas. Kept self-contained (no percentageSchema dep, which is defined
+// later). LIVE via the tool schema, so it reaches existing frozen-prompt games.
+const statPct = (description) => ({ type: "integer", minimum: 0, maximum: 100, description });
+const statsUpdateSchema = {
+  type: "object",
+  description:
+    "Updated national statistics for this polity. Include ONLY the fields that changed this period "
+    + "(a coup changes leader/government/stability; a war changes reputation/economy) — every field you "
+    + "omit keeps its previous value. Values are absolute, not deltas.",
+  properties: {
+    capital: textSchema("Capital, only when it changes."),
+    continent: textSchema("Continent / broad region, only when it changes."),
+    government: textSchema("Government system and ideology, only when it changes."),
+    leader: textSchema("Head of state or government, only when it changes."),
+    stability: statPct("National stability 0-100."),
+    indices: {
+      type: "object",
+      properties: {
+        sovereignty: statPct("Practical political sovereignty."),
+        foodAutonomy: statPct("Domestic food autonomy."),
+        energyAutonomy: statPct("Domestic energy autonomy."),
+        economicIndependence: statPct("Economic independence."),
+        internalSecurity: statPct("Internal security."),
+        internationalReputation: statPct("International reputation / standing."),
+      },
+      additionalProperties: false,
+    },
+    economy: {
+      type: "object",
+      properties: {
+        gdp: textSchema("GDP estimate."),
+        gdpGrowth: textSchema("Annual GDP growth estimate."),
+        gdpPerCapita: textSchema("GDP per capita estimate."),
+        currency: textSchema("Currency."),
+        inflation: textSchema("Inflation estimate."),
+        unemployment: textSchema("Unemployment estimate."),
+        publicDebt: textSchema("Public debt estimate."),
+        budgetBalance: textSchema("Budget balance estimate."),
+      },
+      additionalProperties: false,
+    },
+    gdpBreakdown: {
+      type: "object",
+      description: "Agriculture/industry/services shares — send all three together so they still sum to ~100.",
+      properties: {
+        agriculture: statPct("Agriculture share of GDP."),
+        industry: statPct("Industry share of GDP."),
+        services: statPct("Services share of GDP."),
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+};
+
 const polityChangeSchema = {
   type: "object",
   description: "A creation, rename, recolor, or metadata change for a polity.",
@@ -128,6 +185,7 @@ const polityChangeSchema = {
       + "rewrite these.",
     ),
     note: textSchema("Brief reason for the change."),
+    stats: statsUpdateSchema,
   },
   required: ["code"],
   additionalProperties: false,
