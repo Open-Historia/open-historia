@@ -8,11 +8,11 @@
 
 import { lazy, Suspense, useState } from "react";
 import { createPortal } from "react-dom";
-import CountryPickerMap from "./CountryPickerMap.jsx";
 
 // The editor's flag picker drops in unchanged — it is prop-driven and pulls in no
 // editor stores. It returns a flag STRING (a flagcdn URL or a PNG data URL) or
 // null via onPick.
+const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 const FlagPicker = lazy(() => import("../../Editor/FlagPicker.jsx"));
 
 const label = { color: "rgba(255,255,255,0.7)", fontSize: "0.78rem", fontWeight: 700, margin: "0.1rem 0 0.3rem" };

@@ -34,7 +34,6 @@ import {
   needsMigration as needsOwnerMigration,
   rekeyOwnerMap,
 } from "../../../server/ownerMigration.js";
-import DEFAULT_SEED from "./generated/defaultScenario.js";
 
 const SCENARIO_MANIFEST_KEY = "scenario-manifest";
 const GAME_MANIFEST_KEY = "game-manifest";
@@ -579,7 +578,7 @@ const seedScenarioJsonFromScenario = (targetRecord, sourceRecord, baseRecord) =>
   }
   // Reseed a dirty source from the LIVE default scenario's clean data (server
   // reads the default's on-disk files, which reflect any edits).
-  const base = baseRecord ?? defaultScenarioSeedRecord();
+  const base = baseRecord;
   targetRecord.json = {
     actions: cloneJson(base.json.actions), advisor: cloneJson(base.json.advisor),
     chat: cloneJson(base.json.chat), events: cloneJson(base.json.events),
@@ -606,7 +605,7 @@ const seedGameJsonFromScenario = (targetRecord, sourceScenario, baseRecord) => {
     for (const key of JSON_ASSET_KEYS) targetRecord.json[key] = cloneJson(sourceScenario.json?.[key] ?? JSON_ASSET_DEFAULTS[key]);
     return;
   }
-  const base = baseRecord ?? defaultScenarioSeedRecord();
+  const base = baseRecord;
   targetRecord.json = {
     actions: cloneJson(base.json.actions), advisor: cloneJson(base.json.advisor),
     chat: cloneJson(base.json.chat), events: cloneJson(base.json.events),
@@ -621,7 +620,7 @@ const createScenario = async (body = {}) => {
   const record = emptyScenarioRecord(id);
   const sourceRecord = body.seedScenarioId ? await getScenario(body.seedScenarioId) : null;
   const sourceSummary = sourceRecord ? await getScenarioSummary(body.seedScenarioId) : null;
-  const baseRecord = (await getScenario(DEFAULT_SCENARIO_ID)) ?? defaultScenarioSeedRecord();
+  const baseRecord = (await getScenario(DEFAULT_SCENARIO_ID)) ?? await defaultScenarioSeedRecord();
   if (sourceRecord) {
     // Seed from another scenario: json + optional assets (+ snapshot handling).
     seedScenarioJsonFromScenario(record, sourceRecord, baseRecord);
@@ -734,7 +733,7 @@ const deleteScenario = async (id) => {
 const createGame = async (body = {}) => {
   const id = await ensureUniqueId(body.id || body.name || "game", "game");
   const record = emptyGameRecord(id);
-  const baseRecord = (await getScenario(DEFAULT_SCENARIO_ID)) ?? defaultScenarioSeedRecord();
+  const baseRecord = (await getScenario(DEFAULT_SCENARIO_ID)) ?? await defaultScenarioSeedRecord();
   let sourceScenarioSummary = null;
   let sourceGameSummary = null;
 
@@ -1069,7 +1068,13 @@ export const getScenarioPmtilesOverride = async (key, rangeHeader) => {
 };
 
 // --- Seeding --------------------------------------------------------------
-const defaultScenarioSeedRecord = () => {
+// The 871 KB default-scenario seed is only needed on a first-ever boot (ensureSeeded)
+// or when creating from a missing default. Load it on demand so returning users never
+// pay for it in the eager web bundle; the promise memoizes the one-time cost.
+let _defaultSeedPromise = null;
+const loadDefaultSeed = () => (_defaultSeedPromise ??= import("./generated/defaultScenario.js").then((m) => m.default));
+const defaultScenarioSeedRecord = async () => {
+  const DEFAULT_SEED = await loadDefaultSeed();
   const record = emptyScenarioRecord(DEFAULT_SCENARIO_ID);
   record.meta = { ...DEFAULT_SCENARIO_META, ...(DEFAULT_SEED.meta ?? {}), countryNameOverrides: {}, createdAt: nowIso(), updatedAt: nowIso() };
   record.json = {
@@ -1086,7 +1091,7 @@ const defaultScenarioSeedRecord = () => {
 export const ensureSeeded = async () => {
   if (await kvGet("seeded", false)) return;
   if (!(await getScenario(DEFAULT_SCENARIO_ID))) {
-    await putScenario(defaultScenarioSeedRecord());
+    await putScenario(await defaultScenarioSeedRecord());
     const manifest = await getScenarioManifest();
     if (!manifest.order.includes(DEFAULT_SCENARIO_ID)) manifest.order.unshift(DEFAULT_SCENARIO_ID);
     await saveScenarioManifest({ order: manifest.order, selectedScenarioId: manifest.selectedScenarioId || DEFAULT_SCENARIO_ID });
