@@ -312,7 +312,7 @@ const markerSchema = {
 };
 
 const markerOpSchema = {
-  description: "A structure mutation. Use op build or remove and fill the fields that op needs.",
+  description: "A structure/place mutation. Use op build, remove, or rename and fill the fields that op needs.",
   anyOf: [
     {
       type: "object",
@@ -332,6 +332,18 @@ const markerOpSchema = {
         note: textSchema("Brief explanation of the removal."),
       },
       required: ["op", "name"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["rename"] },
+        markerId: textSchema("Existing marker identifier, when known."),
+        name: nonEmptyTextSchema("Current name of the structure or city to rename."),
+        newName: nonEmptyTextSchema("New display name."),
+        note: textSchema("Brief explanation of the rename."),
+      },
+      required: ["op", "name", "newName"],
       additionalProperties: false,
     },
   ],
