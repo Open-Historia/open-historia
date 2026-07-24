@@ -185,8 +185,20 @@ const StatsPane = ({ active }) => {
         if (!code) return;
         const cacheKey = `${player.gameKey}:${code}`;
         if (!force) {
+            // The persisted, AI-maintained sheet in world state wins and SURVIVES date
+            // changes — it changes only when the AI changes it (polityChanges.stats).
+            try {
+                const world = await readWorldState({ force: false });
+                const persisted = world?.countryStats?.[code];
+                if (persisted && isValidStatSheet(persisted)) {
+                    memoryCache.set(cacheKey, { date: player.date, sheet: persisted });
+                    setState({ status: "ready", sheet: persisted, error: "" });
+                    return;
+                }
+            } catch { /* fall through to the device cache / regenerate */ }
+            // Device-cache fallback — no longer date-gated, so it persists across dates.
             const cached = memoryCache.get(cacheKey) ?? readStoredSheets()[cacheKey];
-            if (cached && cached.date === player.date && isValidStatSheet(cached.sheet)) {
+            if (cached && isValidStatSheet(cached.sheet)) {
                 memoryCache.set(cacheKey, cached);
                 setState({ status: "ready", sheet: cached.sheet, error: "" });
                 return;
