@@ -236,6 +236,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [isImproving, setIsImproving] = React.useState(false);
     const [isSuggesting, setIsSuggesting] = React.useState(false);
     const inputRef = React.useRef(null);
+    const lastRoundRef = React.useRef(null);
 
     React.useEffect(() => {
         if (!isOpen) {
@@ -266,6 +267,19 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
                 if (data.gameDate) {
                     setGameDate(dayjs(data.gameDate).format("MMMM Do, YYYY"));
+                }
+
+                // After a jump, applySimulationResult re-marks last round's actions
+                // "resolved" (submittedActions filters those out) — but this panel never
+                // re-read the store, so they lingered. Reload when the round advances so
+                // the previous turn's actions clear automatically. First tick just seeds
+                // the ref (no spurious reload); a freshly queued next-turn action is
+                // already persisted, so the reload keeps it.
+                if (typeof data.round === "number") {
+                    if (lastRoundRef.current !== null && data.round !== lastRoundRef.current) {
+                        loadActions().then((saved) => { if (!cancelled) setActions(saved); });
+                    }
+                    lastRoundRef.current = data.round;
                 }
             })
             .catch(() => {});
