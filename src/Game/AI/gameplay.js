@@ -440,6 +440,14 @@ const runJsonTask = async (taskKey, {
 
   // Reputation context: how the world currently regards the player, and how the
   // model should let it bias behaviour and evolve it via polityChanges.
+  // Territory is owned by REGIONS, but the model kept naming CITIES in regionTransfers
+  // (e.g. "Toulouse"), which match no region and are silently dropped — the map never
+  // moves though the event narrates a capture. Force region names, and teach the
+  // take-the-whole-region (default) vs capture-only-the-city (markerOps) distinction.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    systemPrompt = `${systemPrompt}\n\n[Region and City Capture]\nOn this map, territory is owned by REGIONS, and impacts.regionTransfers MUST name a region exactly as it appears in the [Game Map Description] above — never a city, town, port, or landmark. Cities such as Toulouse or Narbonne are only markers that sit INSIDE a region; a regionTransfer whose regionId is a city name matches no region and is silently discarded, so the border never moves even though the event says it did. To capture a place and the ground around it, transfer the REGION that contains it, and set fromCode to that region\u2019s current owner.\nTaking a region takes everything inside it, cities included — that is the normal case, so a city changing hands usually means transferring its whole region. To capture ONLY a city while its region stays with its current owner (a besieged holdout, an occupied port, an enclave), do NOT name it in regionTransfers; instead emit an impacts.markerOps build for it — {\"op\":\"build\",\"marker\":{\"name\":\"<city>\",\"kind\":\"city\",\"ownerCode\":\"<new holder>\",\"lng\":<lng>,\"lat\":<lat>}} — using that city\u2019s coordinates from [City Coordinates]. That places the city under the new owner without moving the region border.`;
+  }
+
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
