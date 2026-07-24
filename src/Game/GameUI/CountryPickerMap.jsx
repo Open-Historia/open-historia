@@ -215,7 +215,10 @@ const CountryPickerMap = ({
       }
     });
 
-    return () => olMap.setTarget(null);
+    return () => {
+      sourceRef.current?.clear();
+      olMap.setTarget(null);
+    };
   }, []);
 
   // Load or reload region features when GeoJSON source changes
