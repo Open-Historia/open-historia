@@ -470,13 +470,12 @@ const runJsonTask = async (taskKey, {
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
       const response = await callAI(systemPrompt, history, {
+        // No output-token cap. A long/action-heavy turn's JSON must not be truncated
+        // mid-response — a cut-off response won't parse, so runJsonTask fell back to
+        // canned events that carry NO regionTransfers and NO diplomacy, which is why
+        // the map never changed and no chats opened. main.jsx now lets each provider
+        // use its own model maximum when no maxTokens is passed.
         deadline,
-        // One request budget for every task. This is only a per-response output
-        // ceiling for providers that take one (OpenAI-compatible/Anthropic
-        // floor it at 8192 in main.jsx; Gemini sends no cap at all and ignores
-        // this value entirely) — jump tasks used to request 16384, which only
-        // raised that ceiling on capped providers.
-        maxTokens: 8192,
         signal: controller.signal,
         tool,
       });
