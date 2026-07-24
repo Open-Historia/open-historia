@@ -1629,6 +1629,19 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
     ].filter(Boolean).join("\n\n"),
     variables,
   });
+  // Persist into world state so the sheet SURVIVES date changes and the AI can mutate
+  // it via polityChanges.stats (see applyEventImpactsToWorld) — "stats persist and only
+  // change when the AI changes them". Re-read the world first to avoid clobbering a
+  // concurrent jump's write.
+  const statCode = normalizeString(code);
+  if (statCode && payload && typeof payload === "object") {
+    try {
+      const world = normalizeWorldState(await readWorldState({ force: true }));
+      await writeWorldState({ ...world, countryStats: { ...world.countryStats, [statCode]: payload } });
+    } catch (error) {
+      console.warn("[ai] failed to persist country stats:", error);
+    }
+  }
   return payload;
 };
 
