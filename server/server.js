@@ -61,8 +61,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const distDir = path.join(__dirname, "../dist");
 
-const jsonParser = express.json({ limit: "64mb" });
-const largeJsonParser = express.json({ limit: "2048mb" });
+const jsonParser = express.json({ limit: "1mb" });
+const largeJsonParser = express.json({ limit: "10mb" });
 const uploadParser = express.raw({ type: () => true, limit: "2048mb" });
 
 // The Android app's connect screen lives on the WebView's own origin, so its
@@ -184,8 +184,9 @@ const shippedLangDir = fs.existsSync(path.join(distDir, "lang"))
 const savedLangDir = path.join(DATA_DIR, "lang");
 
 const readLangPack = (dir, code) => {
+  if (!isLangCode(code)) return {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, `${code}.json`), "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(path.format({ dir, base: `${code}.json` }), "utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -225,7 +226,7 @@ app.put("/api/lang/:code", largeJsonParser, (req, res) => {
     }
     if (added > 0) {
       fs.mkdirSync(savedLangDir, { recursive: true });
-      fs.writeFileSync(path.join(savedLangDir, `${code}.json`), JSON.stringify(saved));
+      fs.writeFileSync(path.format({ dir: savedLangDir, base: `${code}.json` }), JSON.stringify(saved));
     }
     res.json({ saved: added, total: Object.keys(saved).length });
   } catch (error) {
@@ -517,7 +518,7 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
     const asset = readRuntimeJsonAsset(req.params.assetKey);
     res.setHeader("Cache-Control", "no-store");
     res.type("application/json");
-    res.send(JSON.stringify(asset.data));
+    res.json(asset.data);
   } catch (error) {
     sendError(res, 404, error);
   }
@@ -527,8 +528,7 @@ app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
   try {
     const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body ?? {});
     res.setHeader("Cache-Control", "no-store");
-    res.type("application/json");
-    res.send(JSON.stringify(asset.data));
+    res.json(asset.data);
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -615,7 +615,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     completed = true;
     res.status(upstream.status);
     res.type(upstream.headers.get("content-type") || "application/json");
-    res.send(text);
+    res.type("text/plain").send(text);
   } catch (error) {
     if (!controller.signal.aborted && !res.headersSent) {
       sendError(res, 502, error);
@@ -639,7 +639,7 @@ app.post("/api/server/shutdown", (_req, res) => {
 const HUB_CACHE_DIR = path.join(DATA_DIR, "hub-cache");
 const hubCachePaths = (fileUrl) => {
   const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
-  return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
+  return { body: path.format({ dir: HUB_CACHE_DIR, base: `${hash}.body` }), type: path.format({ dir: HUB_CACHE_DIR, base: `${hash}.type` }) };
 };
 
 app.get("/api/hub/file", async (req, res) => {
@@ -708,7 +708,7 @@ app.get("/api/hub/file", async (req, res) => {
     // via response.json() (which ignores the header), while binary bundles (.zip)
     // and raw basemap images (.png/.jpg) arrive byte-for-byte.
     res.setHeader("Content-Type", contentType);
-    res.send(buffer);
+    res.type("application/octet-stream").send(buffer);
   } catch (error) {
     sendError(res, 502, error);
   }
@@ -738,7 +738,7 @@ app.post("/api/hub/import-log", jsonParser, (req, res) => {
       // atomically (wx: fails if it already exists) so even racing requests
       // can't both slip a ping through.
       const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
-      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
+      const marker = path.format({ dir: IMPORT_PING_DIR, base: crypto.createHash("sha256").update(markerKey).digest("hex") });
       fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
       try {
         fs.writeFileSync(marker, markerKey, { flag: "wx" });
