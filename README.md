@@ -131,6 +131,22 @@ node server/server.js              # Start the server
 
 Then open **http://localhost:3000** in your browser.
 
+> [!TIP]
+> **Running the server only — Termux/Android, a headless box, a NAS?** Skip the
+> desktop-app tooling:
+>
+> ```bash
+> npm install --omit=dev --omit=optional
+> ```
+>
+> That drops Electron and its build chain (783 packages → 286) while keeping
+> everything the client build and the server actually need. On Android it is the
+> difference between working and not: Electron publishes no Android build, so its
+> install script exits with *"Electron builds are not available on platform:
+> android"*. A plain `npm install` still succeeds there — Electron is an
+> `optionalDependency`, so npm reports the failure and carries on — but there is no
+> reason to download it in the first place.
+
 > **Note:** the large map binaries (`*.pmtiles`, `public/assets/*-seed.*`, and
 > `server/data/scenarios/default/regions.geojson`) are **not** in the repo — they are
 > hosted as [GitHub Release assets](https://github.com/Open-Historia/open-historia/releases/tag/map-data)

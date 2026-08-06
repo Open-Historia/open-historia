@@ -23,6 +23,8 @@
   },
   "dependencies": {
     "@noble/ed25519": "^2.3.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "babel-plugin-react-compiler": "^1.0.0",
     "@turf/area": "^7.3.5",
     "@turf/boolean-point-in-polygon": "^7.3.5",
     "@turf/centroid": "^7.3.5",
@@ -56,8 +58,6 @@
     "vite": "^7.3.2"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^5.1.4",
-    "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9.39.3",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.26",
@@ -68,7 +68,9 @@
     "react-map-gl": "^8.1.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^7.3.2",
+    "vite": "^7.3.2"
+  },
+  "optionalDependencies": {
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },

@@ -12,6 +12,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const net = require("node:net");
 const { spawn } = require("node:child_process");
 
 // Everything the app writes lives under Electron's per-user data directory.
@@ -137,11 +138,44 @@ const createMainWindow = () => {
 
 // --- boot -------------------------------------------------------------------
 
+// Find a port nothing else holds, starting at `start`. requestSingleInstanceLock
+// already stops US from double-binding, but it cannot help when something else
+// owns the port — Docker publishing 3000, another dev server, Grafana. Then
+// server.js's app.listen() fails and the failure reaches the main process as an
+// uncaught exception: the raw "A JavaScript error occurred in the main process"
+// dialog, with no hint that a port is the problem. server.js DOES have a friendly
+// EADDRINUSE handler, but it attaches to the returned server on the line AFTER
+// listen(), which is too late if listen() throws synchronously rather than
+// emitting. Probing first sidesteps the whole question: by the time server.js
+// runs, the port it is about to take is known free.
+const findFreePort = (start, attempts = 20) =>
+  new Promise((resolve, reject) => {
+    if (attempts <= 0) {
+      reject(new Error(`No free port found in ${start - 20}-${start}.`));
+      return;
+    }
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", () => resolve(findFreePort(start + 1, attempts - 1)));
+    probe.once("listening", () => probe.close(() => resolve(start)));
+    // Bind the wildcard, not 127.0.0.1: server.js listens on every interface, so
+    // a loopback-only probe would call a port free that a 0.0.0.0 publisher
+    // (Docker's default) already owns — exactly the case this exists for.
+    probe.listen(start);
+  });
+
 // Starting the server is importing it: server.js calls app.listen() at module
-// scope. It reads OH_DATA_DIR / OH_ASSETS_DIR, both already set above.
+// scope. It reads OH_DATA_DIR / OH_ASSETS_DIR / PORT, all set before the import.
 const startServer = async () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(ASSETS_DIR, { recursive: true });
+  const requested = Number(process.env.PORT) || 3000;
+  const port = await findFreePort(requested);
+  if (port !== requested) {
+    console.log(`Port ${requested} is in use — starting Open Historia on ${port} instead.`);
+  }
+  // Both server.js and the loadURL below read this, so they cannot disagree.
+  process.env.PORT = String(port);
   await import(`file://${path.join(APP_ROOT, "server", "server.js").replace(/\\/g, "/")}`);
 };
 
