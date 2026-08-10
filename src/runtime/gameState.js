@@ -837,6 +837,11 @@ const normalizeConsolidatedHistory = (value) => normalizeArray(value)
     const summary = normalizeTextLike(entry.summary);
     if (!summary) return null;
     return {
+      // Ids of the resolved player orders folded into this summary. Without it the
+      // same orders would be re-summarised every consolidation, and — because this
+      // object is a fixed whitelist — an actionIds written by the consolidator
+      // would be dropped on the next read and the tracking would never stick.
+      actionIds: normalizeActionParticipants(entry.actionIds),
       chatIds: normalizeActionParticipants(entry.chatIds),
       createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
       source: normalizeOptionalString(entry.source) || "ai",
