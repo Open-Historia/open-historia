@@ -2319,6 +2319,24 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
 
+  // Shape guard. The storage assets are arrays and everything else is an object.
+  // The SEED path already enforces this (normalizeBaseSaveSeedAsset), but this
+  // runtime path did not — so a PUT whose body never parsed, which express.json()
+  // hands us as {}, could overwrite a game's entire event log with {}. That is not
+  // hypothetical: a game in the wild has `storage/events.json` containing `{ }`,
+  // and because normalizeEvents({}) yields [] the events list then reads empty
+  // forever, which looks exactly like "my game saved nothing". Refusing is safe —
+  // writeJson throws on a non-ok response, so the caller sees a real failure
+  // instead of silently corrupting a save.
+  const expectsArray = assetKey in STORAGE_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES;
+  const shapeOk = expectsArray
+    ? Array.isArray(value)
+    : Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (!shapeOk) {
+    const got = value === null ? "null" : Array.isArray(value) ? "an array" : typeof value;
+    throw new Error(`Refusing to write ${assetKey}: expected ${expectsArray ? "an array" : "an object"}, received ${got}.`);
+  }
+
   let activeGameId = getActiveGameId();
   if (!activeGameId) {
     // With every game deleted, the map still renders (reads fall back to the
