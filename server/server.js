@@ -530,7 +530,14 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
 
 app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
   try {
-    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body ?? {});
+    // express.json() hands us {} when the body was absent or unparseable, which is
+    // indistinguishable from a genuine {} — and for an object-shaped asset like
+    // world or game, writing that blanks the save. A real PUT always carries a
+    // body, so require one rather than letting `?? {}` erase a game.
+    if (!Number(req.headers["content-length"])) {
+      return sendError(res, 400, new Error(`Refusing to write ${req.params.assetKey}: the request had no body.`));
+    }
+    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body);
     res.setHeader("Cache-Control", "no-store");
     res.type("application/json");
     res.send(JSON.stringify(asset.data));
