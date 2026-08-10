@@ -439,6 +439,17 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
   }
 
+  // The consolidator's summary REPLACES what it covers, so anything it leaves out
+  // is gone from the campaign for good. Existing games carry frozen prompts, so
+  // both the instruction and the order list have to arrive at call time.
+  if (taskKey === "eventConsolidator") {
+    systemPrompt = `${systemPrompt}\n\n[Durable Canon]\nThis summary REPLACES the material it covers: once consolidated, those events, conversations and player orders are never sent to the simulation again, so whatever you omit is lost permanently. Carry forward explicitly, as standing facts rather than narration:\n1. How this world has DIVERGED from real history — states that never formed, wars that never happened, rulers who never fell, borders that never moved. Name them. A later model that sees only a gap fills it from real history and invents powers this campaign does not contain.\n2. The lasting CONSEQUENCES of the player's own orders, not the orders themselves.\n3. Commitments still in force: treaties, alliances, occupations, debts, standing grievances.\nBrevity matters, but never at the cost of a divergence or a commitment that is still true.`;
+    const resolvedOrders = normalizeString(variables?.actionsToConsolidate);
+    if (resolvedOrders && !resolvedOrders.startsWith("No ")) {
+      systemPrompt = `${systemPrompt}\n\n[Player Orders Being Consolidated]\nThese are the player's own resolved orders for the period covered by this summary. Record what they CHANGED about the world; the order text itself is being discarded.\n${resolvedOrders}`;
+    }
+  }
+
   // Reputation context: how the world currently regards the player, and how the
   // model should let it bias behaviour and evolve it via polityChanges.
   // Territory is owned by REGIONS, but the model kept naming CITIES in regionTransfers
@@ -587,8 +598,18 @@ const CONSOLIDATION_RETAIN_EVENTS = 24;
 const CONSOLIDATION_SIZE_THRESHOLD = 48;
 const CONSOLIDATION_BATCH_SIZE = 60;
 
-const consolidateHistoryBatch = async (bundle, events, chats) => {
+const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
   const variables = await buildTemplateVariables(bundle, {
+    // Resolved orders are consolidated alongside the events they caused. Capping
+    // the history that gets SENT each turn is not enough on its own: drop the old
+    // orders without recording what they did and the model loses the campaign's
+    // divergences from real history, then refills the gap from real history. A
+    // player hit exactly that — a 1920s Europe with no WW1 and a surviving Tsar
+    // started growing a Soviet Union that never existed.
+    actionsToConsolidate: buildActionHistoryText(actions, {
+      includeResolved: true,
+      limit: actions.length || 1,
+    }),
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
   });
@@ -597,6 +618,7 @@ const consolidateHistoryBatch = async (bundle, events, chats) => {
       summary: [
         events.map((event) => `${event.date || "undated"} ${event.title}: ${event.description}`).join("; "),
         buildChatSummaryText(chats, { limit: chats.length || 1 }),
+        actions.length ? `Player orders resolved: ${actions.map((action) => action.title).join("; ")}` : "",
       ].filter(Boolean).join("\n"),
     }),
     timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
@@ -622,7 +644,20 @@ const compactHistoryIfNeeded = async (bundle) => {
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
 
-  const { generation, summary } = await consolidateHistoryBatch(bundle, eventsToConsolidate, closedChats);
+  // Ride along with a consolidation that is happening anyway — no extra AI call,
+  // which matters when the point of the exercise is to shrink cost. Orders already
+  // folded into an earlier summary are skipped.
+  const priorActionIds = new Set(world.consolidatedHistory.flatMap((entry) => entry.actionIds));
+  const actionsToConsolidate = normalizeActions(bundle.actions)
+    .filter((action) => action.status !== "planned" && action.id && !priorActionIds.has(action.id))
+    .slice(0, CONSOLIDATION_BATCH_SIZE);
+
+  const { generation, summary } = await consolidateHistoryBatch(
+    bundle,
+    eventsToConsolidate,
+    closedChats,
+    actionsToConsolidate,
+  );
   if (!summary) return world;
   const throughEvent = eventsToConsolidate.at(-1);
 
@@ -631,6 +666,7 @@ const compactHistoryIfNeeded = async (bundle) => {
     consolidatedHistory: [
       ...world.consolidatedHistory,
       {
+        actionIds: actionsToConsolidate.map((action) => action.id),
         chatIds: closedChats.map((chat) => chat.id),
         createdAt: new Date().toISOString(),
         source: generation.source,
