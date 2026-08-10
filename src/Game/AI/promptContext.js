@@ -139,20 +139,44 @@ export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
     : "No advisor messages are currently recorded.";
 };
 
-export const buildActionHistoryText = (actions, { includeResolved = false } = {}) => {
-  const normalizedActions = normalizeActions(actions);
-  const filteredActions = includeResolved
-    ? normalizedActions
-    : normalizedActions.filter((action) => action.status === "planned");
-  if (filteredActions.length === 0) {
-    return includeResolved ? "No actions have been recorded yet." : "No planned actions are currently queued.";
-  }
+// Resolved actions accumulate for the whole campaign, and every one of them used
+// to be re-sent on every turn. On a long save that is the bulk of the prompt — a
+// player measured 700k of their 803k characters as nothing but old resolved
+// actions — and because this history is interpolated into the prompt more than
+// once, it was pasted in repeatedly. Events were always capped (eventLimit /
+// longEventLimit); actions simply never were. Matching longEventLimit here.
+export const ACTION_HISTORY_LIMIT = 24;
 
-  return filteredActions.map((action) => {
+export const buildActionHistoryText = (actions, { includeResolved = false, limit = ACTION_HISTORY_LIMIT } = {}) => {
+  const normalizedActions = normalizeActions(actions);
+  const renderAction = (action) => {
     const kindLabel = action.kind === "chat" ? "chat" : "action";
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
     return `- (${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
-  }).join("\n");
+  };
+
+  if (!includeResolved) {
+    const planned = normalizedActions.filter((action) => action.status === "planned");
+    if (planned.length === 0) return "No planned actions are currently queued.";
+    return planned.map(renderAction).join("\n");
+  }
+
+  if (normalizedActions.length === 0) return "No actions have been recorded yet.";
+
+  // Every PLANNED action survives — those are live orders the model must act on —
+  // while only the most recent `limit` finished ones are quoted. The number of
+  // dropped entries is stated so the model knows the campaign runs deeper than
+  // the excerpt, rather than reading it as a short history.
+  const past = normalizedActions.filter((action) => action.status !== "planned");
+  const kept = new Set(limit > 0 ? past.slice(-limit) : []);
+  const omitted = past.length - kept.size;
+  const lines = normalizedActions
+    .filter((action) => action.status === "planned" || kept.has(action))
+    .map(renderAction);
+  if (omitted > 0) {
+    lines.unshift(`- (${omitted} earlier resolved action${omitted === 1 ? "" : "s"} omitted from this excerpt)`);
+  }
+  return lines.join("\n");
 };
 
 export const formatActionsForPrompt = (actions) => normalizeArray(actions)
