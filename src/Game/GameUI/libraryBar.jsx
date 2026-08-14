@@ -1131,7 +1131,7 @@ const LibraryTopBar = () => {
   // the player chose in the two-step picker, then open its editor.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
-    setCustomRegionData(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null);
     setEditorError(null);
     setIsBusy(true);
     // Before the await: createGame({setActive}) remounts the UI mid-flight and
@@ -1163,7 +1163,7 @@ const LibraryTopBar = () => {
   // scenario only for what it doesn't set, so the scenario is never touched.
   const startGameForFaction = async (scenario, faction, difficulty) => {
     setCountryPicker(null);
-    setCustomRegionData(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null);
     setEditorError(null);
     setIsBusy(true);
     setMenuOpen(false);
@@ -1276,7 +1276,7 @@ const LibraryTopBar = () => {
   const handleScenarioPlay = (scenario) => {
     setCountryQuery("");
     setCountryOptions([]);
-    setCustomRegionData(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null);
     setPlayGameId(null);
     setPickerTab("country");
     setCountryPicker(scenario);
@@ -1287,6 +1287,10 @@ const LibraryTopBar = () => {
           [...getBaseCountryOptions(), ...allCountries],
           scenario.countryNameOverrides,
         ));
+        // Needed whether or not the scenario has geometry of its own: with it the
+        // stock seed is repainted in this scenario's owners, without it the picker
+        // shows modern countries the scenario does not contain.
+        setPickerOwnerOverrides(details?.data?.world?.regionOwnershipOverrides ?? null);
         // Load custom region geometry so the map renders the scenario's actual
         // boundaries instead of the stock world seed.
         if (details?.data?.world?.customRegions) {
@@ -1736,6 +1740,11 @@ const LibraryTopBar = () => {
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
   const [customRegionData, setCustomRegionData] = useState(null);
+  // The picked scenario's region-id -> owner map. Scenarios that reassign stock
+  // geometry ship no regionsGeojson, so without this the picker draws the modern
+  // world seed with its GADM owners — present-day Europe inside a scenario that
+  // has none of it. See applyOwnerOverrides in CountryPickerMap.
+  const [pickerOwnerOverrides, setPickerOwnerOverrides] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // Which tab of the new-game dialog: pick an existing country, or invent one.
   const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction"
@@ -1878,7 +1887,7 @@ const LibraryTopBar = () => {
     setPlayGameId(newGameId);
     setCountryQuery("");
     setCountryOptions([]);
-    setCustomRegionData(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null);
     setCountryPicker(scenario);
     loadCountryNames().catch(() => [])
       .then((allCountries) => {
@@ -1887,13 +1896,20 @@ const LibraryTopBar = () => {
           [...getBaseCountryOptions(), ...allCountries],
           scenario.countryNameOverrides,
         ));
+        setPickerOwnerOverrides(seedWorld.regionOwnershipOverrides ?? null);
         // The map editor just saved custom region geometry — load it so the
         // country picker renders the scenario's actual map, not the stock seed.
         downloadScenarioJsonAsset(scenario.id, "regionsGeojson")
           .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
           .catch(() => {});
       })
-      .catch(() => setCountryOptions(getBaseCountryOptions()));
+      // Falling back to every real-world country here was the same bug by another
+      // route: a scenario picker listing Germany and France because a name lookup
+      // failed. The scenario's own world is already in hand — build from it.
+      .catch(() => {
+        setCountryOptions(buildScenarioCountryOptions(seedWorld, [], scenario.countryNameOverrides));
+        setPickerOwnerOverrides(seedWorld.regionOwnershipOverrides ?? null);
+      });
   };
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
@@ -1901,7 +1917,7 @@ const LibraryTopBar = () => {
   const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
-    setCustomRegionData(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null);
     setPlayGameId(null);
     if (!gid) return;
     setMenuOpen(false);
@@ -2148,7 +2164,7 @@ const LibraryTopBar = () => {
 
       {countryPicker && (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); setPickerOwnerOverrides(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
@@ -2241,7 +2257,7 @@ const LibraryTopBar = () => {
                     regionsGeojson={customRegionData}
                     busy={isBusy}
                     onCreate={(faction) => pickFaction(faction)}
-                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); }}
+                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); setPickerOwnerOverrides(null); }}
                   />
                 ) : (
                   <>
@@ -2262,10 +2278,11 @@ const LibraryTopBar = () => {
                       <CountryPickerMap
                         countryOptions={countryOptions}
                         regionsGeojson={customRegionData}
+                        ownerOverrides={pickerOwnerOverrides}
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
                       {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
