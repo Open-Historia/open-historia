@@ -2315,6 +2315,50 @@ const readRuntimeJsonAsset = (assetKey) => {
 const writeRuntimeJsonAsset = (assetKey, value) => {
   ensureGameStore();
 
+  // Custom region/city geometry is scenario-scoped, and readRuntimeJsonAsset
+  // already resolves it that way. The write path did not, so GET
+  // /api/runtime/json/citiesGeojson served the layer while PUT to the SAME key
+  // answered "Unsupported JSON asset key" — the in-game Add/Edit Map Feature
+  // tool placed a city, failed to save it, and lost the edit. Mirror the read.
+  //
+  // Going through writeScenarioMeta is not incidental: the scenario catalog's
+  // cache token is `${scenarioId}-${meta.updatedAt}`, so bumping updatedAt (and
+  // the catalog invalidation writeJsonFile does) changes the asset URL the
+  // client polls. That is what makes a newly placed city appear without a
+  // reload, rather than sitting in the data invisibly until restart.
+  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
+    // Same shape guard as the storage assets below, for the same reason: an
+    // unparseable body reaches us as {} (express.json hands a route that), and
+    // writing it here would replace a scenario's entire map geometry with an
+    // empty object. The two geometry keys are checked as real FeatureCollections
+    // rather than merely "an object", because {} IS an object and that is exactly
+    // the value this needs to reject. backgroundData is a free-form descriptor,
+    // so it only has to be an object.
+    const isPlainObject = Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const needsFeatureCollection = assetKey === "regionsGeojson" || assetKey === "citiesGeojson";
+    const shapeOk = isPlainObject
+      && (!needsFeatureCollection || (value.type === "FeatureCollection" && Array.isArray(value.features)));
+    if (!shapeOk) {
+      throw new Error(
+        `Refusing to write ${assetKey}: expected ${needsFeatureCollection ? "a GeoJSON FeatureCollection" : "an object"}.`,
+      );
+    }
+
+    const scenario = getActiveRuntimeScenarioSummary();
+    if (!scenario?.id) {
+      throw new Error("No active scenario — start a game from a scenario first.");
+    }
+    const targetPath = getScenarioUploadPath(scenario.id, assetKey);
+    ensureDirectory(path.dirname(targetPath));
+    fs.writeFileSync(targetPath, JSON.stringify(value), "utf-8");
+    writeScenarioMeta(scenario.id, {});
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: value,
+      sourcePath: targetPath,
+    };
+  }
+
   if (!(assetKey in JSON_ASSET_FILES) && !(assetKey in OPTIONAL_JSON_ASSET_FILES) && !(assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
