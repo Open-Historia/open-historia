@@ -1,4 +1,5 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
 import { callAI } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
@@ -1491,8 +1492,20 @@ const applySimulationResult = async ({
   // impacts, or land in this turn's record (also see the [New Developments Only]
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
-  const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
-  const nextEvents = [...priorEvents, ...freshEvents];
+const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
+
+// run the curator BEFORE impacts, chats, history, and persistence.
+// revolutionary concept: decide whether an event exists before fucking saving it.
+const curatedEvents = await curateGeneratedEvents({
+  events: freshEvents,
+  priorEvents,
+  game: baseGame,
+  world: baseWorld,
+  actions: baseActions,
+  mode: result.mode,
+});
+
+const nextEvents = [...priorEvents, ...curatedEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -1512,7 +1525,7 @@ const applySimulationResult = async ({
 
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
-    events: freshEvents,
+    events: curatedEvents,
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
@@ -1524,7 +1537,7 @@ const applySimulationResult = async ({
         {
           catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
-          eventIds: freshEvents.map((event) => event.id),
+          eventIds: curatedEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
@@ -1540,7 +1553,7 @@ const applySimulationResult = async ({
   });
   let nextWorld = worldWithImpacts;
 
-  for (const event of freshEvents) {
+  for (const event of curatedEvents) {
     for (const createdChat of event.impacts.createdChats) {
       const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
         fallbackTitle: event.title,
