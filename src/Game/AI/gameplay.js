@@ -1503,6 +1503,47 @@ const curatedEvents = await curateGeneratedEvents({
   world: baseWorld,
   actions: baseActions,
   mode: result.mode,
+
+  // use the game's own ai task runner instead of stealing gemini's transport
+  // out of the browser like some sort of fucking catalytic converter.
+  analyzeBatch: ({ candidates, priorHistory }) =>
+    runJsonTask("timelineCurator", {
+      fallback: () => ({
+        judgments: candidates.map((event, index) => ({
+          index,
+          verdict: "KEEP",
+          confidence: 0,
+          materialStateChange:
+            "Semantic curator unavailable; event preserved by fail-open fallback.",
+          matchedPriorIndexes: [],
+          materiallyNewDimensions: ["unknown"],
+          recurrenceMatters: false,
+          newTriggerAfterPriorPosture: "none",
+          worthwhile: true,
+          substantive: true,
+          personalityTexture: false,
+          storyline: normalizeString(event?.title) || `event-${index}`,
+          qualitativeAdvance: true,
+          incrementalProcess: false,
+          processFramePresent: false,
+          observableOutcomeEvidence: "",
+          pureProcessFiller: false,
+          reason: "Curator AI failed; fail-open KEEP.",
+        })),
+
+        recentHistoryMechanical: false,
+        storylineSaturation: [],
+        underrepresentedDomains: [],
+      }),
+
+      userMessage:
+        "Analyze every supplied native timeline candidate with the required curator tool. Return exactly one judgment for every candidate index.",
+
+      variables: {
+        curatorPriorHistory: JSON.stringify(priorHistory, null, 2),
+        curatorCandidates: JSON.stringify(candidates, null, 2),
+      },
+    }),
 });
 
 const nextEvents = [...priorEvents, ...curatedEvents];

@@ -717,8 +717,213 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
   required: ["capital", "continent", "government", "leader", "stability", "indices", "economy", "gdpBreakdown"],
   additionalProperties: false,
 };
+// ---- native timeline curator -----------------------------------------------
+// yes, this is a separate ai task. no, we are not making the main world model
+// judge its own homework and hoping for the fucking best.
 
+const curatorJudgmentSchema = {
+  type: "object",
+  description: "One conservative judgment of a newly generated timeline event.",
+  properties: {
+    index: {
+      type: "integer",
+      description: "Zero-based index of the candidate event.",
+      minimum: 0,
+    },
+
+    verdict: {
+      type: "string",
+      description: "Semantic classification of the candidate.",
+      enum: ["KEEP", "REDUNDANT", "UNSUPPORTED_REVERSAL"],
+    },
+
+    confidence: {
+      type: "number",
+      description: "Confidence in the judgment from 0 to 1.",
+      minimum: 0,
+      maximum: 1,
+    },
+
+    materialStateChange: textSchema(
+      "Short description of the concrete state or fact established by the event.",
+    ),
+
+    matchedPriorIndexes: {
+      type: "array",
+      description: "Indexes of specific prior canonical events supporting the judgment.",
+      items: {
+        type: "integer",
+        minimum: 0,
+      },
+    },
+
+    materiallyNewDimensions: stringArraySchema(
+      "Materially new dimensions introduced by this event.",
+    ),
+
+    recurrenceMatters: {
+      type: "boolean",
+      description: "Whether repetition itself creates meaningful pressure or consequence.",
+    },
+
+    newTriggerAfterPriorPosture: textSchema(
+      "New trigger explaining an apparent reversal, or 'none'.",
+    ),
+
+    worthwhile: {
+      type: "boolean",
+      description: "Whether this event deserves space in the persistent timeline.",
+    },
+
+    substantive: {
+      type: "boolean",
+      description: "Whether the event establishes a concrete fact or result.",
+    },
+
+    personalityTexture: {
+      type: "boolean",
+      description: "Whether the event adds useful human, social, or cultural texture.",
+    },
+
+    storyline: textSchema(
+      "Short stable label for the broad recurring storyline.",
+    ),
+
+    qualitativeAdvance: {
+      type: "boolean",
+      description: "Whether the storyline changes in kind rather than merely degree or paperwork.",
+    },
+
+    incrementalProcess: {
+      type: "boolean",
+      description: "Whether this is mainly another routine step inside an established process.",
+    },
+
+    processFramePresent: {
+      type: "boolean",
+      description: "Whether the event is principally framed as a meeting, review, inspection, consultation, or similar process.",
+    },
+
+    observableOutcomeEvidence: textSchema(
+      "Exact short clause from the candidate proving a completed observable outcome, or empty.",
+    ),
+
+    pureProcessFiller: {
+      type: "boolean",
+      description: "Whether the event is process without a completed observable outcome.",
+    },
+
+    reason: textSchema(
+      "Short explanation of the judgment.",
+    ),
+  },
+
+  required: [
+    "index",
+    "verdict",
+    "confidence",
+    "materialStateChange",
+    "matchedPriorIndexes",
+    "materiallyNewDimensions",
+    "recurrenceMatters",
+    "newTriggerAfterPriorPosture",
+    "worthwhile",
+    "substantive",
+    "personalityTexture",
+    "storyline",
+    "qualitativeAdvance",
+    "incrementalProcess",
+    "processFramePresent",
+    "observableOutcomeEvidence",
+    "pureProcessFiller",
+    "reason",
+  ],
+
+  additionalProperties: false,
+};
+
+const curatorSaturationSchema = {
+  type: "object",
+  description: "Recent saturation state for one broad storyline.",
+  properties: {
+    storyline: nonEmptyTextSchema(
+      "Stable storyline label.",
+    ),
+
+    count: {
+      type: "integer",
+      minimum: 0,
+      description: "Number of relevant recent canonical events.",
+    },
+
+    priorIndexes: {
+      type: "array",
+      items: {
+        type: "integer",
+        minimum: 0,
+      },
+    },
+
+    saturation: {
+      type: "string",
+      enum: ["low", "busy", "saturated"],
+    },
+
+    description: textSchema(
+      "Short explanation of the saturation assessment.",
+    ),
+  },
+
+  required: [
+    "storyline",
+    "count",
+    "priorIndexes",
+    "saturation",
+    "description",
+  ],
+
+  additionalProperties: false,
+};
+
+export const TIMELINE_CURATOR_SCHEMA = {
+  type: "object",
+  description:
+    "Conservative semantic analysis of newly generated timeline events.",
+
+  properties: {
+    judgments: {
+      type: "array",
+      description: "One judgment for every supplied candidate event.",
+      items: curatorJudgmentSchema,
+    },
+
+    recentHistoryMechanical: {
+      type: "boolean",
+      description: "Whether recent history is dominated by mechanical or administrative progression.",
+    },
+
+    storylineSaturation: {
+      type: "array",
+      description: "Broad recurring storylines detected in recent canonical history.",
+      items: curatorSaturationSchema,
+    },
+
+    underrepresentedDomains: stringArraySchema(
+      "Broad historical domains currently underrepresented in recent events.",
+    ),
+  },
+
+  required: [
+    "judgments",
+    "recentHistoryMechanical",
+    "storylineSaturation",
+    "underrepresentedDomains",
+  ],
+
+  additionalProperties: false,
+};
 export const GAMEPLAY_SCHEMAS = Object.freeze({
+  timelineCurator: TIMELINE_CURATOR_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -735,6 +940,12 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
+
+export const TIMELINE_CURATOR_TOOL = makeTool(
+  "submit_timeline_curator",
+  "Submit conservative semantic judgments for newly generated timeline events.",
+  TIMELINE_CURATOR_SCHEMA,
+);
 
 export const ACTIONS_TOOL = makeTool(
   "submit_actions",
@@ -815,6 +1026,7 @@ export const PREGAME_HISTORY_TOOL = makeTool(
 );
 
 export const GAMEPLAY_TOOLS = Object.freeze({
+  timelineCurator: TIMELINE_CURATOR_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
