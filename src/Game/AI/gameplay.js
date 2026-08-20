@@ -1,5 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
+import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { callAI } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
@@ -387,7 +388,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per affected map region. Shape: {\"regionId\":\"<exact id/name when known; otherwise the exact city/historical-area wording from the event>\",\"regionName\":\"\",\"fromCode\":\"<current losing polity>\",\"toCode\":\"<new owner polity>\"}. ALWAYS set fromCode for a partial transfer when you know the losing polity: the native geography resolver uses that polity\'s actual current regions to turn historical names, translated names, and city references into real region ids without guessing across the whole world. Prefer exact map region names when available; do not invent a modern province name just to satisfy the field. An event whose text says land changed hands but carries no regionTransfers is invalid output and breaks the map.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, or rename a named structure or city. Three ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per affected map region. Shape: {\"regionId\":\"<exact id/name when known; otherwise the exact city/historical-area wording from the event>\",\"regionName\":\"\",\"fromCode\":\"<current losing polity>\",\"toCode\":\"<new owner polity>\"}. ALWAYS set fromCode for a partial transfer when you know the losing polity: the native geography resolver uses that polity\'s actual current regions to turn historical names, translated names, and city references into real region ids without guessing across the whole world. Prefer exact map region names when available; do not invent a modern province name just to satisfy the field. An event whose text says land changed hands but carries no regionTransfers is invalid output and breaks the map.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won, pair the operational advance with the appropriate regionTransfers entry so the map and troops do not contradict each other.\n\n• markerOps — Place, remove, or rename a named structure or city. Three ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
 const runJsonTask = async (taskKey, {
   fallback,
@@ -487,6 +488,12 @@ const runJsonTask = async (taskKey, {
   // list of levers the model can pull (reaches existing games too — see ACTIONS_REFERENCE).
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
+  }
+
+  if (taskKey === "unitDirector") {
+    const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
+    const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
+    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. Existing armies should move, attack, weaken, retreat through later moves, and persist across turns.\n2. MOVE a current unit when the event says that formation/army advances, withdraws, redeploys, mobilizes toward a front, or otherwise changes position.\n3. ATTACK only when two supplied opposing units actually make contact AND the event does not already declare a decisive winner/territorial transfer. Use op=attack with attacker and defender ids. Do NOT guess casualties with strength; javascript resolves the clash deterministically.\n4. SPAWN only when the event genuinely creates a new formation/mobilization/reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again.\n5. strength is only for explicit NON-COMBAT reinforcement, attrition, disease, desertion, refit or demobilization. remove only for explicit destruction/disbandment.\n6. Do not invent military activity for diplomatic, political or economic events. It is valid to return no ops for an event.\n7. Never change territory. The territory/control layer is separate.\n8. Use only supplied existing unit ids. Keep movement local/plausible for the era; a move may precede an attack in the same event when needed to bring formations into contact.\n\nReturn exactly the required tool payload.`;
   }
 
   const controller = new AbortController();
@@ -1654,6 +1661,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
         if (strict) return `${operationPath}.unitId does not identify an existing unit.`;
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
+      if (operation.op === "attack") {
+        const targetUnitId = normalizeString(operation.targetUnitId);
+        if (!targetUnitId || targetUnitId === unitId || !unitIds.has(targetUnitId)) {
+          if (strict) return `${operationPath}.targetUnitId must identify a different existing enemy unit.`;
+          continue;
+        }
+      }
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
       keptUnitOps.push(operation);
     }
@@ -1951,7 +1965,28 @@ const curatedEvents = await curateGeneratedEvents({
     }),
 });
 
-const nextEvents = [...priorEvents, ...curatedEvents];
+// The curator decides WHICH events survive. The unit director then makes the
+// surviving military events actually use the persistent order of battle instead
+// of spawning a counter and forgetting it exists for the rest of the century.
+const directedEvents = await directGeneratedUnitOps({
+  events: curatedEvents,
+  game: baseGame,
+  world: baseWorld,
+  analyzeBatch: ({ candidates, units }) =>
+    runJsonTask("unitDirector", {
+      fallback: () => ({ eventOrders: [], summary: "Unit director unavailable; existing simulator unitOps preserved." }),
+      userMessage:
+        "Advance the supplied military events through the existing persistent units. Return one eventOrders entry only where a real unit operation is warranted; leaving an event untouched is valid.",
+      variables: {
+        unitDirectorCandidates: JSON.stringify(candidates, null, 2),
+        unitDirectorUnits: JSON.stringify(units, null, 2),
+        unitDirectorGameDate: normalizeString(baseGame.gameDate),
+        unitDirectorRound: String(baseGame.round || 1),
+      },
+    }),
+});
+
+const nextEvents = [...priorEvents, ...directedEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -1971,7 +2006,8 @@ const nextEvents = [...priorEvents, ...curatedEvents];
 
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
-    events: curatedEvents,
+    events: directedEvents,
+    game: nextGame,
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
@@ -1983,7 +2019,7 @@ const nextEvents = [...priorEvents, ...curatedEvents];
         {
           catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
-          eventIds: curatedEvents.map((event) => event.id),
+          eventIds: directedEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
@@ -1999,7 +2035,7 @@ const nextEvents = [...priorEvents, ...curatedEvents];
   });
   let nextWorld = worldWithImpacts;
 
-  for (const event of curatedEvents) {
+  for (const event of directedEvents) {
     for (const createdChat of event.impacts.createdChats) {
       const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
         fallbackTitle: event.title,

@@ -265,7 +265,7 @@ const unitSchema = {
 };
 
 const unitOpSchema = {
-  description: "A unit mutation. Use op spawn, move, strength, or remove and fill the fields that op needs.",
+  description: "A unit mutation. Use op spawn, move, attack, strength, or remove and fill the fields that op needs.",
   anyOf: [
     {
       type: "object",
@@ -287,6 +287,17 @@ const unitOpSchema = {
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "toLng", "toLat"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["attack"] },
+        unitId: nonEmptyTextSchema("Existing attacking unit identifier."),
+        targetUnitId: nonEmptyTextSchema("Existing enemy unit identifier."),
+        note: textSchema("Brief explanation of why these units engage."),
+      },
+      required: ["op", "unitId", "targetUnitId"],
       additionalProperties: false,
     },
     {
@@ -1008,9 +1019,40 @@ export const TIMELINE_CURATOR_SCHEMA = {
 
   additionalProperties: false,
 };
+
+const UNIT_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation military orchestration pass. It reuses persistent units, "
+    + "moves them when events require it, and requests deterministic unit-vs-unit attacks rather than inventing casualties.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "Unit operations to attach to military events, keyed by the supplied eventIndex.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          unitOps: {
+            type: "array",
+            items: unitOpSchema,
+          },
+          reason: textSchema("Short reason these operations are needed for map/state continuity."),
+        },
+        required: ["eventIndex", "unitOps"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of how the existing order of battle was advanced this turn."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
+  unitDirector: UNIT_DIRECTOR_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -1039,6 +1081,12 @@ export const TIMELINE_CURATOR_TOOL = makeTool(
   "submit_timeline_curator",
   "Submit conservative semantic judgments for newly generated timeline events.",
   TIMELINE_CURATOR_SCHEMA,
+);
+
+export const UNIT_DIRECTOR_TOOL = makeTool(
+  "submit_unit_director",
+  "Submit conservative persistent-unit operations for supplied military events.",
+  UNIT_DIRECTOR_SCHEMA,
 );
 
 export const ACTIONS_TOOL = makeTool(
@@ -1122,6 +1170,7 @@ export const PREGAME_HISTORY_TOOL = makeTool(
 export const GAMEPLAY_TOOLS = Object.freeze({
   geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
+  unitDirector: UNIT_DIRECTOR_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,

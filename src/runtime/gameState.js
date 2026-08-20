@@ -5,6 +5,7 @@ import { normalizeTagList } from "./countryTags.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { toCountryName } from "./ownerNames.js";
 import { isStockPolityName, resolvePolityIdentity, resolveTerritorialPolityIdentity } from "./polityIdentity.js";
+import { distanceKm, engagementRangeKm, resolveClash } from "../Game/Map/unitCombat.js";
 
 
 export const GAME_DEFAULTS = {
@@ -674,13 +675,13 @@ export const applyMarkerOps = (markers, ops) => {
   return next;
 };
 
-// One AI-authored mutation to the unit list: spawn | move | strength | remove.
+// One AI-authored mutation to the unit list: spawn | move | attack | strength | remove.
 // Why normalizeUnitOp refused an entry, in words a player can paste into a bug
 // report. Mirrors the checks below — keep the two in step.
 const describeUnitOpRejection = (entry) => {
   if (!entry || typeof entry !== "object") return "not an object";
   const op = normalizeOptionalString(entry.op).toLowerCase();
-  if (!op) return "no op (expected spawn, move, strength or remove)";
+  if (!op) return "no op (expected spawn, move, attack, strength or remove)";
   if (op === "spawn") {
     const unit = entry.unit ?? entry;
     if (!unit || typeof unit !== "object") return "spawn without a unit";
@@ -701,6 +702,9 @@ const describeUnitOpRejection = (entry) => {
     const toLat = finiteOrNull(entry.toLat ?? entry.lat);
     if (toLng === null || toLat === null) return `move has unusable destination (toLng=${JSON.stringify(entry.toLng)}, toLat=${JSON.stringify(entry.toLat)})`;
     if (toLng === 0 && toLat === 0) return "move to 0,0 — the output template's placeholder, not a real position";
+  }
+  if (op === "attack" && !normalizeOptionalString(entry.targetUnitId || entry.targetId)) {
+    return "attack without a targetUnitId";
   }
   return `unknown op "${op}"`;
 };
@@ -738,6 +742,12 @@ const normalizeUnitOp = (entry) => {
     };
   }
 
+  if (op === "attack") {
+    const targetUnitId = normalizeOptionalString(entry.targetUnitId || entry.targetId);
+    if (!targetUnitId || targetUnitId === unitId) return null;
+    return { op, unitId, targetUnitId, note: normalizeOptionalString(entry.note) };
+  }
+
   if (op === "strength") {
     return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), note: normalizeOptionalString(entry.note) };
   }
@@ -751,15 +761,20 @@ const normalizeUnitOp = (entry) => {
 
 // Apply a batch of unit ops to a unit list (pure). Ops referencing unknown ids
 // are silently ignored; units reduced to <=0 strength are dropped.
-export const applyUnitOps = (units, ops) => {
+export const applyUnitOps = (units, ops, { gameDate = "", combatSeed = "event" } = {}) => {
   let next = normalizeUnits(units);
+  let attackSequence = 0;
+
   for (const op of normalizeArray(ops)) {
     if (op.op === "spawn") {
       // Idempotent: skip a spawn whose unit id is already present, so a re-applied
       // op batch can't duplicate a unit (mirrors the event-restatement de-dup).
       const spawnId = op.unit?.id;
       if (!spawnId || !next.some((unit) => unit.id === spawnId)) next.push(op.unit);
-    } else if (op.op === "move") {
+      continue;
+    }
+
+    if (op.op === "move") {
       next = next.map((unit) =>
         unit.id === op.unitId
           ? {
@@ -772,16 +787,93 @@ export const applyUnitOps = (units, ops) => {
             }
           : unit,
       );
-    } else if (op.op === "strength") {
+      continue;
+    }
+
+    if (op.op === "attack") {
+      const attacker = next.find((unit) => unit.id === op.unitId);
+      const defender = next.find((unit) => unit.id === op.targetUnitId);
+
+      if (!attacker || !defender || attacker.id === defender.id) {
+        console.warn("[unit combat] attack ignored because attacker/defender could not be resolved.", op);
+        continue;
+      }
+      if (attacker.ownerCode === defender.ownerCode) {
+        console.warn("[unit combat] friendly-fire attack ignored.", op);
+        continue;
+      }
+
+      const distance = distanceKm(attacker, defender);
+      const range = engagementRangeKm(attacker.type, gameDate);
+      if (distance > range) {
+        console.warn(
+          `[unit combat] ${attacker.name} cannot engage ${defender.name}: ${Math.round(distance)} km away, ` +
+          `beyond ~${range} km ${attacker.type} engagement range.`,
+        );
+        continue;
+      }
+
+      // resolveClash only needs a deterministic seed token in its third argument.
+      // include event + sequence so two real clashes between the same pair in one
+      // round do not reuse the exact same random roll forever.
+      attackSequence += 1;
+      const clashSeed = `${combatSeed}:${attackSequence}`;
+      const result = resolveClash(attacker, defender, clashSeed);
+      const timestamp = new Date().toISOString();
+
+      next = next
+        .map((unit) => {
+          if (unit.id === attacker.id) {
+            const survives = result.attackerStrength > 0;
+            return {
+              ...unit,
+              strength: result.attackerStrength,
+              status: survives ? "engaged" : "defeated",
+              lng: survives && result.captured ? defender.lng : unit.lng,
+              lat: survives && result.captured ? defender.lat : unit.lat,
+              regionId: survives && result.captured ? (defender.regionId || unit.regionId) : unit.regionId,
+              updatedAt: timestamp,
+            };
+          }
+          if (unit.id === defender.id) {
+            return {
+              ...unit,
+              strength: result.defenderStrength,
+              status: result.defenderStrength > 0 ? "engaged" : "defeated",
+              updatedAt: timestamp,
+            };
+          }
+          return unit;
+        })
+        .filter((unit) => unit.strength > 0 && unit.status !== "defeated");
+
+      console.info(
+        `[unit combat] ${attacker.name} vs ${defender.name}: ` +
+        `${attacker.strength}->${result.attackerStrength}, ${defender.strength}->${result.defenderStrength}` +
+        `${result.captured ? "; attacker holds the field" : ""}.`,
+      );
+      continue;
+    }
+
+    if (op.op === "strength") {
       next = next.map((unit) =>
         unit.id === op.unitId
-          ? { ...unit, strength: op.strength, status: op.strength <= 0 ? "defeated" : unit.status, updatedAt: new Date().toISOString() }
+          ? {
+              ...unit,
+              strength: op.strength,
+              status: op.strength <= 0 ? "defeated" : unit.status,
+              updatedAt: new Date().toISOString(),
+            }
           : unit,
       );
-    } else if (op.op === "remove") {
+      continue;
+    }
+
+    if (op.op === "remove") {
       next = next.filter((unit) => unit.id !== op.unitId);
     }
   }
+
   return next.filter((unit) => unit.strength > 0 && unit.status !== "defeated");
 };
 
@@ -1618,7 +1710,7 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
   return target.resolved;
 };
 
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) => {
+export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, world }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
 
@@ -1675,7 +1767,10 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
     }
 
     if (event.impacts.unitOps?.length) {
-      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps);
+      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps, {
+        gameDate: event.date || game.gameDate || game.startDate || "",
+        combatSeed: event.id || event.title || event.date || "event",
+      });
     }
 
     if (event.impacts.markerOps?.length) {
