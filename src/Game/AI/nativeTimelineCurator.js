@@ -122,6 +122,22 @@ const hasNativeProcessFrameCue = (event) => {
 // the analyst is allowed to quote a result, but we're checking that the quote
 // is really in the native event and isn't just "plans to do x eventually".
 
+// ---- vague process progress -------------------------------------------------
+// "we made progress" is not a fucking historical state transition.
+// it may be true, but without a concrete agreement/decision/result it does not
+// rescue an otherwise process-only event.
+
+const isVagueProcessOutcomeEvidence = (evidence) => {
+  const text = normalizeText(evidence);
+
+  if (!text) return false;
+
+  return /\b(?:make|makes|made|making)\s+(?:tangible\s+|significant\s+|substantial\s+|meaningful\s+)?progress\b|\b(?:talks?|discussions?|negotiations?)\s+(?:advance|advances|advanced|progress|progresses|progressed|continue|continues|continued)\b|\b(?:advance|advances|advanced)\s+(?:the\s+)?(?:talks?|discussions?|negotiations?)\b|\b(?:narrow|narrows|narrowed)\s+(?:the\s+)?(?:gap|gaps|difference|differences)\b|\bconstructive\s+(?:talks?|discussions?|negotiations?)\b|\bcautious\s+optimism\b|\bpositive\s+(?:step|movement|progress)\b|\bmove(?:s|d)?\s+closer\s+to\s+(?:agreement|accord|settlement)\b/.test(
+    text,
+  );
+};
+
+
 const isProspectiveOutcomeEvidence = (event, evidence) => {
   const prose = normalizeText(eventText(event));
   const quote = normalizeText(evidence);
@@ -611,6 +627,40 @@ const evaluateCandidate = ({
     moderateCount >=
       CONFIG.groundedModerateCount;
 
+// the analyst may cite one mediocre prior event while javascript is sitting
+// here staring at five much better matches. use our own retrieval evidence
+// for saturated-churn detection instead of pretending that makes sense.
+const retrievalStrongCount =
+  priorMatches.filter(
+    (match) =>
+      match.similarity >=
+      CONFIG.groundedStrongSimilarity,
+  ).length;
+
+const retrievalModerateCount =
+  priorMatches.filter(
+    (match) =>
+      match.similarity >=
+      CONFIG.groundedModerateSimilarity,
+  ).length;
+
+const retrievalEvidencePass =
+  retrievalStrongCount >= 1 ||
+  retrievalModerateCount >=
+    CONFIG.groundedModerateCount;
+
+    // sometimes the analyst correctly points at one prior event, but that single
+// match lands just under our similarity threshold while the retriever finds
+// several other strong related matches. in that case the evidence isn't
+// magically bullshit just because one number missed 0.40 by a hair.
+const retrievalAssistedRedundancyPass =
+  model.confidence >= 0.95 &&
+  groundedPriorEvidence.length >= 1 &&
+  retrievalEvidencePass &&
+  /^none$/i.test(
+    model.newTriggerAfterPriorPosture,
+  );
+
   const saturation =
     saturationByStoryline.get(
       storylineKey(model.storyline),
@@ -647,15 +697,22 @@ const evaluateCandidate = ({
       model.observableOutcomeEvidence,
     );
 
-  const nativeObservableOutcomeGrounded =
-    !nativeProcessEvidenceRequired ||
-    (
-      normalizedOutcomeEvidence.length >= 6 &&
-      normalizedEventProse.includes(
-        normalizedOutcomeEvidence,
-      ) &&
-      !nativeOutcomeEvidenceProspective
-    );
+  const nativeOutcomeEvidenceVague =
+    nativeProcessEvidenceRequired &&
+    normalizedOutcomeEvidence.length >= 6 &&
+    isVagueProcessOutcomeEvidence(
+    model.observableOutcomeEvidence,
+  );    
+const nativeObservableOutcomeGrounded =
+  !nativeProcessEvidenceRequired ||
+  (
+    normalizedOutcomeEvidence.length >= 6 &&
+    normalizedEventProse.includes(
+      normalizedOutcomeEvidence,
+    ) &&
+    !nativeOutcomeEvidenceProspective &&
+    !nativeOutcomeEvidenceVague
+  );
 
   const nativePureProcessFiller =
     model.pureProcessFiller === true ||
@@ -745,18 +802,34 @@ const evaluateCandidate = ({
       model.personalityTexture === false;
 
     if (
-      confidencePass &&
-      groundedEvidencePass &&
-      noNewDimensions &&
-      semanticPass
-    ) {
-      wouldAction = "DROP";
-      route = "EVIDENCED_REDUNDANCY";
+  confidencePass &&
+  groundedEvidencePass &&
+  noNewDimensions &&
+  semanticPass
+) {
+  wouldAction = "DROP";
+  route = "EVIDENCED_REDUNDANCY";
 
-      enforcementReason =
-        "grounded redundancy: specific prior evidence + no material novelty + recurrence immaterial";
-    } else {
-      route = "REDUNDANCY_FAIL_OPEN";
+  enforcementReason =
+    "grounded redundancy: specific prior evidence + no material novelty + recurrence immaterial";
+}
+
+else if (
+  retrievalAssistedRedundancyPass &&
+  noNewDimensions &&
+  semanticPass &&
+  model.qualitativeAdvance === false
+) {
+  wouldAction = "DROP";
+  route =
+    "RETRIEVAL_ASSISTED_REDUNDANCY";
+
+  enforcementReason =
+    "high-confidence redundancy: analyst cited retrieved prior history + deterministic retrieval independently found sufficient supporting evidence + no new trigger/material novelty";
+}
+
+else {
+  route = "REDUNDANCY_FAIL_OPEN";
 
       const failures = [];
 
@@ -842,6 +915,7 @@ const evaluateCandidate = ({
     model.confidence >=
       CONFIG.nativeProcessFillerConfidenceFloor &&
     nativePureProcessFiller &&
+    model.materiallyNewDimensions.length === 0 &&
     model.incrementalProcess === true &&
     model.qualitativeAdvance === false &&
     effectiveRecurrenceMatters === false &&
@@ -880,10 +954,10 @@ const evaluateCandidate = ({
     wouldAction === "KEEP" &&
     impacts.length === 0 &&
     storylineSaturated &&
-    model.confidence >=
+      model.confidence >=
       CONFIG.saturatedIncrementalConfidenceFloor &&
-    groundedEvidencePass &&
-    model.incrementalProcess === true &&
+      retrievalEvidencePass &&
+      model.incrementalProcess === true &&
     model.qualitativeAdvance === false &&
     effectiveRecurrenceMatters === false &&
     model.personalityTexture === false
@@ -932,9 +1006,13 @@ const evaluateCandidate = ({
       }),
     ),
 
-    groundedPriorEvidence,
-    ignoredPriorIndexes,
-    groundedEvidencePass,
+      groundedPriorEvidence,
+      ignoredPriorIndexes,
+      groundedEvidencePass,
+      retrievalStrongCount,
+      retrievalModerateCount,
+      retrievalEvidencePass,
+      retrievalAssistedRedundancyPass,
 
     deterministicDuplicate,
 
@@ -948,11 +1026,11 @@ const evaluateCandidate = ({
 
     deterministicNativeProcessCue,
     nativeProcessEvidenceRequired,
+    nativeOutcomeEvidenceVague,
     nativeOutcomeEvidenceProspective,
     nativeObservableOutcomeGrounded,
     nativePureProcessFiller,
-
-    materialRecurrenceCue,
+materialRecurrenceCue,
     routineProcessRecurrenceOverride,
     effectiveRecurrenceMatters,
     establishedLowValueIncremental,

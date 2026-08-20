@@ -491,6 +491,114 @@ const runJsonTask = async (taskKey, {
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
+ 
+// ---- timeline curator calibration ------------------------------------------
+// the analyst has a bad habit of calling routine paperwork "worthwhile" and
+// claiming recurrence matters because, apparently, another fucking timetable
+// is now a historic recurring crisis.
+
+if (taskKey === "timelineCurator") {
+  systemPrompt = `${systemPrompt}
+
+[Strict Curator Calibration]
+
+Be conservative about DELETING history, but do NOT be conservative about CLASSIFYING low-value material accurately. JavaScript applies independent safety gates after your judgment.
+
+RECURRENCE:
+Set recurrenceMatters=true ONLY when repetition itself creates meaningful historical pressure or consequence.
+
+Examples that normally justify recurrenceMatters=true:
+- renewed clashes or combat
+- casualties
+- strikes, protests, riots or unrest
+- arrests or repression
+- sanctions, embargoes or blockades
+- shortages or economic disruption
+- mutiny, sabotage, breakdown, failure or withdrawal
+- repeated incidents whose accumulation materially changes the situation
+
+Routine continuation does NOT make recurrence meaningful.
+
+Normally set recurrenceMatters=false for repeated:
+- meetings or conferences
+- negotiations without a new settlement
+- planning cycles
+- operational timetables
+- mobilization schedules
+- technical protocols
+- reviews or inspections
+- budget negotiations
+- funding tranches
+- administrative implementation
+- reports, studies or committees
+- ordinary military preparations without a new operational consequence
+
+Do not use recurrenceMatters merely as a reason to protect an otherwise incremental event.
+
+WORTHWHILE:
+substantive=true does NOT imply worthwhile=true.
+
+Set worthwhile=false when an event establishes a real but minor fact that does not deserve its own permanent timeline entry because an already-established storyline merely advanced another routine step.
+
+Examples:
+- another timetable in an already established military plan
+- another implementation protocol after the policy already exists
+- another round of budget bargaining with no decisive legislative outcome
+- another committee, review, inspection or consultation
+- another technical refinement to an already functioning program
+
+QUALITATIVE ADVANCE:
+A new detail is not automatically a materially new dimension.
+
+Things such as another timetable, quota, funding allocation, review result, logistics arrangement, protocol refinement, procedural step, or administrative package normally remain incrementalProcess=true and qualitativeAdvance=false unless they cross a real threshold.
+
+PROCESS FILLER:
+If processFramePresent=true and there is no completed observable result directly quotable from the candidate, set:
+- observableOutcomeEvidence=""
+- pureProcessFiller=true
+
+Do not rescue a process-only event merely because the meeting concerns an important subject.
+
+SATURATED STORYLINES:
+When a storyline already has several recent canonical entries, judge whether the candidate actually changes the situation rather than rewarding it for being specific.
+
+A small new detail inside an already-established process may still have:
+- substantive=true
+- materiallyNewDimensions containing a minor detail
+
+while correctly having:
+- worthwhile=false
+- qualitativeAdvance=false
+- incrementalProcess=true
+
+STORYLINE STAGE REGRESSION:
+A candidate is not a qualitative advance merely because it gives a fresh date or a more detailed description to a diplomatic, political, military, or administrative state that earlier canonical events already resolved.
+
+Read the supplied prior history chronologically.
+
+If prior canonical history shows a storyline progressing through stages such as:
+proposal → response → negotiation → decision → implementation
+
+then a later candidate must not treat an earlier stage as newly occurring again unless the candidate explicitly establishes a new trigger, reopening, reversal, or materially changed position.
+
+Examples:
+
+If a government already formally rejected a proposal, a later event saying that government rejects the same proposal again is normally REDUNDANT unless something reopened the question.
+
+If negotiations already opened and later adjourned, a candidate describing the counterpart's initial response to the original proposal is normally a regression to an already-resolved stage.
+
+If an alliance already finalized mobilization protocols, another event merely finalizing substantially the same protocols or schedules is normally incremental or redundant.
+
+Judge the candidate against the LATEST established state of that storyline, not merely against whether its wording differs from one prior event.
+
+A repeated important fact is still repeated. Importance does not make an already-established state new.
+
+CONFIDENCE:
+Confidence measures confidence in your CLASSIFICATION, not confidence that the event happened. Do not artificially reduce confidence merely because an event is plausible or historically realistic.
+
+Default verdict remains KEEP when uncertain.`;
+}
+
   if (signal) {
     if (signal.aborted) controller.abort(signal.reason);
     else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
