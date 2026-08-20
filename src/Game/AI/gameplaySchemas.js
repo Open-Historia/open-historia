@@ -92,12 +92,16 @@ const regionTransferSchema = {
   description: "A transfer of one map region to a new polity owner.",
   properties: {
     regionId: textSchema(
-      "Exact map region identifier when known; otherwise the region's plain name "
-      + "(the engine resolves names to ids).",
+      "Exact map region id/name when known. If the event is grounded in a city, fortress, translated/exonym name, "
+      + "or historical area and you genuinely do not know the map region name, use that exact grounded place/area wording; "
+      + "the native geography resolver may map it conservatively against fromCode's current regions.",
     ),
-    regionName: textSchema("Human-readable region name, when known."),
-    fromCode: textSchema("Previous owner's FULL country name (\"Spain\"), never a country code."),
-    toCode: textSchema("New owner's FULL country name (\"Spain\"), never a country code such as \"ESP\"."),
+    regionName: textSchema("Human-readable region/place wording, when useful."),
+    fromCode: textSchema(
+      "Previous owner's FULL polity name. Strongly expected for every partial transfer because it bounds geographic resolution "
+      + "to that polity's current regions; never use a country code.",
+    ),
+    toCode: textSchema("New owner's FULL polity name, never a country code such as \"ESP\"."),
     note: textSchema("Brief reason for the transfer."),
     wholeCountry: {
       type: "boolean",
@@ -416,8 +420,9 @@ const impactsSchema = {
       type: "array",
       description:
         "Map ownership changes. REQUIRED whenever the event text says territory was "
-        + "captured, occupied, annexed, ceded, liberated, or otherwise changed hands - "
-        + "one entry per affected region, or the map will not match the story.",
+        + "captured, occupied, annexed, ceded, liberated, or otherwise changed hands. Prefer exact map region ids/names; "
+        + "when only a grounded historical/city/area label is known, preserve that wording and set fromCode so the native "
+        + "geography resolver can attempt a bounded mapping instead of inventing a region.",
       items: regionTransferSchema,
     },
     unitOps: {
@@ -903,6 +908,69 @@ const curatorSaturationSchema = {
   additionalProperties: false,
 };
 
+
+const geographyResolutionSchema = {
+  type: "object",
+  description:
+    "One conservative mapping from an unresolved human place/area label to the current map's real region ids. "
+    + "This is geography only: it never decides conquest, ownership, sovereignty, or whether the transfer should happen.",
+  properties: {
+    index: {
+      type: "integer",
+      minimum: 0,
+      description: "Index of the supplied unresolved geography item.",
+    },
+    status: {
+      type: "string",
+      enum: ["RESOLVED", "UNRESOLVED"],
+      description: "RESOLVED only when the supplied candidate region list supports a high-confidence geographic mapping.",
+    },
+    relation: {
+      type: "string",
+      enum: [
+        "REGION_ALIAS",
+        "CITY_CONTAINING_REGION",
+        "HISTORICAL_AREA",
+        "TRANSLATED_AREA",
+        "UNRESOLVED",
+      ],
+      description:
+        "Why the source label maps to the selected region ids. REGION_ALIAS and CITY_CONTAINING_REGION normally select one id; "
+        + "HISTORICAL_AREA or TRANSLATED_AREA may select several when the named area genuinely spans several supplied regions.",
+    },
+    regionIds: {
+      type: "array",
+      description:
+        "Exact region ids copied ONLY from the supplied candidateRegions list. Empty when status is UNRESOLVED.",
+      items: { type: "string" },
+    },
+    confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Confidence that the source label and selected region ids refer to the same geography.",
+    },
+    reason: textSchema("Brief geography-only reason. Do not discuss who should own or control the territory."),
+  },
+  required: ["index", "status", "relation", "regionIds", "confidence", "reason"],
+  additionalProperties: false,
+};
+
+export const GEOGRAPHY_RESOLVER_SCHEMA = {
+  type: "object",
+  description:
+    "Conservative geography-only resolution for regionTransfers that failed exact map-name matching.",
+  properties: {
+    resolutions: {
+      type: "array",
+      description: "Exactly one resolution for each supplied unresolved item index.",
+      items: geographyResolutionSchema,
+    },
+  },
+  required: ["resolutions"],
+  additionalProperties: false,
+};
+
 export const TIMELINE_CURATOR_SCHEMA = {
   type: "object",
   description:
@@ -941,6 +1009,7 @@ export const TIMELINE_CURATOR_SCHEMA = {
   additionalProperties: false,
 };
 export const GAMEPLAY_SCHEMAS = Object.freeze({
+  geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
@@ -958,6 +1027,13 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
+
+
+export const GEOGRAPHY_RESOLVER_TOOL = makeTool(
+  "submit_geography_resolution",
+  "Resolve unresolved human place or historical-area labels to exact supplied map region ids without deciding territorial outcomes.",
+  GEOGRAPHY_RESOLVER_SCHEMA,
+);
 
 export const TIMELINE_CURATOR_TOOL = makeTool(
   "submit_timeline_curator",
@@ -1044,6 +1120,7 @@ export const PREGAME_HISTORY_TOOL = makeTool(
 );
 
 export const GAMEPLAY_TOOLS = Object.freeze({
+  geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -1230,6 +1307,42 @@ export const validateGameplayPayload = (taskKey, value) => {
     }
     if (!value.summary.trim()) {
       return { valid: false, error: "$.summary must not be empty." };
+    }
+  }
+
+
+  if (taskKey === "geographyResolver") {
+    const seenIndexes = new Set();
+    for (let index = 0; index < value.resolutions.length; index += 1) {
+      const resolution = value.resolutions[index];
+      if (seenIndexes.has(resolution.index)) {
+        return { valid: false, error: `$.resolutions contains duplicate index ${resolution.index}.` };
+      }
+      seenIndexes.add(resolution.index);
+
+      if (resolution.status === "RESOLVED" && resolution.regionIds.length === 0) {
+        return {
+          valid: false,
+          error: `$.resolutions[${index}].regionIds must contain at least one id when status is RESOLVED.`,
+        };
+      }
+
+      if (resolution.status === "UNRESOLVED" && resolution.regionIds.length !== 0) {
+        return {
+          valid: false,
+          error: `$.resolutions[${index}].regionIds must be empty when status is UNRESOLVED.`,
+        };
+      }
+
+      if (
+        ["REGION_ALIAS", "CITY_CONTAINING_REGION"].includes(resolution.relation) &&
+        resolution.regionIds.length > 1
+      ) {
+        return {
+          valid: false,
+          error: `$.resolutions[${index}] relation ${resolution.relation} may select only one region id.`,
+        };
+      }
     }
   }
 
