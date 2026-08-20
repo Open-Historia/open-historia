@@ -1,13 +1,13 @@
 /*!
  * open historia enhanced — native timeline curator
- * v0.3.0 — deterministic semantic audit
+ * v0.4.0 — deterministic live build
  *
  * the ai may suggest that an event is redundant or boring.
  * javascript now checks whether that opinion deserves to survive contact
  * with reality before we even think about deleting anything.
  */
 
-const VERSION = "0.3.0-audit";
+const VERSION = "0.4.0-live";
 
 const CONFIG = Object.freeze({
   historyLookbackEvents: 80,
@@ -980,8 +980,8 @@ else {
 
     wouldAction,
 
-    // audit means javascript may decide DROP and we still ignore it.
-    actualAction: "KEEP",
+// live mode means the deterministic decision actually counts now.
+actualAction: wouldAction,
 
     hard,
     route,
@@ -1160,6 +1160,27 @@ export const curateGeneratedEvents = async ({
         }),
     );
 
+    // audit is over. javascript finally gets ammunition.
+const keptEvents =
+  evaluations
+    .filter(
+      (entry) =>
+        entry.wouldAction === "KEEP",
+    )
+    .map(
+      (entry) => entry.event,
+    );
+
+const droppedEvents =
+  evaluations
+    .filter(
+      (entry) =>
+        entry.wouldAction === "DROP",
+    )
+    .map(
+      (entry) => entry.event,
+    );
+
   const wouldDropCount =
     evaluations.filter(
       (entry) =>
@@ -1214,13 +1235,13 @@ export const curateGeneratedEvents = async ({
           entry.wouldAction,
 
         actualAction:
-          "KEEP — AUDIT",
+  entry.actualAction,
       }),
     );
 
   lastAudit = {
     version: VERSION,
-    mode: "audit",
+    mode: "live",
     simulationMode: mode,
 
     gameDate:
@@ -1235,9 +1256,10 @@ export const curateGeneratedEvents = async ({
       incoming.length,
 
     keptCount:
-      incoming.length,
+  keptEvents.length,
 
-    droppedCount: 0,
+droppedCount:
+  droppedEvents.length,
 
     wouldKeepCount,
     wouldDropCount,
@@ -1320,7 +1342,7 @@ export const curateGeneratedEvents = async ({
   };
 
   console.group(
-    `[OH Native Timeline Curator v${VERSION}] DETERMINISTIC AUDIT — ${incoming.length} generated event(s)`,
+    `[OH Native Timeline Curator v${VERSION}] DETERMINISTIC LIVE — ${incoming.length} generated event(s)`,
   );
 
   console.log({
@@ -1396,14 +1418,13 @@ export const curateGeneratedEvents = async ({
   }
 
   console.log(
-    `audit only — javascript would drop ${wouldDropCount} event(s), but all ${incoming.length} native events are still being returned unchanged.`,
-  );
+  `live curator — kept ${keptEvents.length} event(s), dropped ${droppedEvents.length}.`,
+);
 
   console.groupEnd();
 
-  // yes, this deliberately ignores wouldAction.
-  // v0.3 gets opinions, not ammunition.
-  return incoming;
+  // alright, no more training wheels.
+return keptEvents;
 };
 
 export const getLastNativeCuratorAudit =
@@ -1412,7 +1433,7 @@ export const getLastNativeCuratorAudit =
 if (typeof window !== "undefined") {
   window.__OH_NATIVE_TIMELINE_CURATOR__ = {
     version: VERSION,
-    mode: "audit",
+    mode: "live",
     config: CONFIG,
     last: () => lastAudit,
   };
