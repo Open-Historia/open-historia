@@ -61,6 +61,10 @@ export const WORLD_DEFAULTS = {
   // scenario whose geometry ships as an immutable seed (the modern world), and
   // overridable per-world without touching geometry. Wins over feature props.
   regionClaimants: {},
+  // Legal sovereignty is separate from de-facto map control. This ledger is
+  // lazily/migrationally seeded from existing ownership overrides so old saves
+  // keep their borders, while future wartime occupations stop becoming treaties.
+  regionSovereigntyOverrides: {},
   regionOwnershipOverrides: {},
   simulationHistory: [],
   simulationRules: "",
@@ -490,7 +494,57 @@ const normalizeRegionTransfer = (entry) => {
     regionId,
     regionName: normalizeOptionalString(entry.regionName || entry.name),
     toCode,
+    ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
   };
+};
+
+const normalizeRegionControlOp = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  const op = normalizeOptionalString(entry.op).toLowerCase();
+  const regionId = normalizeOptionalString(entry.regionId || entry.id || entry.gid || entry.GID_1);
+  const regionName = normalizeOptionalString(entry.regionName || entry.name);
+  const fromCode = toCountryName(normalizeOptionalString(entry.fromCode || entry.fromPolity));
+  const note = normalizeOptionalString(entry.note || entry.reason);
+
+  if (!regionId) return null;
+
+  if (op === "contest") {
+    const actorCode = toCountryName(normalizeOptionalString(entry.actorCode || entry.claimantCode || entry.toCode));
+    if (!fromCode || !actorCode || fromCode.toLowerCase() === actorCode.toLowerCase()) return null;
+    return { op, regionId, regionName, fromCode, actorCode, note };
+  }
+
+  if (op === "control" || op === "control_flip") {
+    const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
+    if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
+    return {
+      op: "control",
+      regionId,
+      regionName,
+      fromCode,
+      toCode,
+      note,
+      ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
+    };
+  }
+
+  if (op === "clear_contest" || op === "clear") {
+    const claimantCode = toCountryName(normalizeOptionalString(entry.claimantCode || entry.actorCode));
+    const clearAll = entry.clearAll === true || normalizeOptionalString(entry.claimantCode).toLowerCase() === "all";
+    if (!claimantCode && !clearAll) return null;
+    return {
+      op: "clear_contest",
+      regionId,
+      regionName,
+      fromCode,
+      claimantCode,
+      clearAll,
+      note,
+    };
+  }
+
+  return null;
 };
 
 const normalizePolityChange = (entry) => {
@@ -885,6 +939,7 @@ const normalizeEventImpacts = (value) => {
       markerOps: [],
       polityChanges: [],
       regionTransfers: [],
+      regionControlOps: [],
       unitOps: [],
     };
   }
@@ -895,6 +950,7 @@ const normalizeEventImpacts = (value) => {
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
+    regionControlOps: normalizeArray(value.regionControlOps).map(normalizeRegionControlOp).filter(Boolean),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
     // event that narrates a deployment and troops that actually appear on the map,
     // and it used to vanish into .filter(Boolean) without a word — leaving no way
@@ -1063,11 +1119,33 @@ export const normalizeWorldState = (world) => {
       .filter(([regionId, ownerCode]) => regionId && ownerCode),
   );
 
+  // old saves only had regionOwnershipOverrides. that's enough as a fallback
+  // because a control flip anchors sovereignty BEFORE changing the controller.
+  // do not persist controller === sovereign everywhere; that just bloats the save
+  // with thousands of entries saying "yes, normal territory is still normal".
+  const suppliedSovereignty = nextWorld.regionSovereigntyOverrides && typeof nextWorld.regionSovereigntyOverrides === "object"
+    ? nextWorld.regionSovereigntyOverrides
+    : null;
+  const rawSovereignty = suppliedSovereignty && Object.keys(suppliedSovereignty).length > 0
+    ? suppliedSovereignty
+    : regionOwnershipOverrides;
+  const regionSovereigntyOverrides = Object.fromEntries(
+    Object.entries(rawSovereignty ?? {})
+      .map(([regionId, ownerCode]) => [normalizeOptionalString(regionId), toCountryName(normalizeOptionalString(ownerCode))])
+      .filter(([regionId, ownerCode]) => {
+        if (!regionId || !ownerCode) return false;
+        const controller = normalizeOptionalString(regionOwnershipOverrides[regionId]);
+        return !controller || controller.toLowerCase() !== ownerCode.toLowerCase();
+      }),
+  );
+
   const regionClaimants = Object.fromEntries(
     Object.entries(nextWorld.regionClaimants ?? {})
       .map(([regionId, claimants]) => [
         normalizeOptionalString(regionId),
-        normalizeArray(claimants).map((name) => normalizeOptionalString(name)).filter(Boolean).slice(0, 4),
+        [...new Set(normalizeArray(claimants)
+          .map((name) => toCountryName(normalizeOptionalString(name)))
+          .filter(Boolean))].slice(0, 4),
       ])
       .filter(([regionId, claimants]) => regionId && claimants.length),
   );
@@ -1116,6 +1194,7 @@ export const normalizeWorldState = (world) => {
     notes: normalizeOptionalString(nextWorld.notes),
     polityOverrides,
     regionClaimants,
+    regionSovereigntyOverrides,
     regionOwnershipOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
       .map((entry) => {
@@ -1320,9 +1399,10 @@ const polityOwnsMappedOverride = (world, polityName) => {
   const target = normalizedPolityName(polityName);
   if (!target) return false;
 
-  return Object.values(
-    world?.regionOwnershipOverrides || {},
-  ).some(
+  return [
+    ...Object.values(world?.regionOwnershipOverrides || {}),
+    ...Object.values(world?.regionSovereigntyOverrides || {}),
+  ].some(
     (owner) =>
       normalizedPolityName(owner) === target,
   );
@@ -1641,9 +1721,9 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
       return null;
     }
 
-    // This only proves ownership in the override layer. Base-map/effective control
-    // will be checked properly by the geography/control engine next. For now we
-    // refuse whenever we can prove territory remains, never the other way around.
+    // Refuse dissolution while the polity still appears as either de-facto
+    // controller OR legal sovereign in mapped runtime state. Occupation alone is
+    // not a magic delete-country button; sovereignty must be settled separately.
     if (polityOwnsMappedOverride(world, source.resolved)) {
       console.warn(
         `[polity lifecycle] refusing to dissolve "${source.resolved}": it still owns mapped override territory. ` +
@@ -1710,6 +1790,118 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
   return target.resolved;
 };
 
+const samePolity = (a, b) =>
+  normalizeString(a).toLowerCase() === normalizeString(b).toLowerCase();
+
+const resolveTerritorialNameForWorld = (token, world) => {
+  const raw = toCountryName(normalizeOptionalString(token));
+  if (!raw) return "";
+  const resolution = resolveTerritorialPolityIdentity(raw, world);
+  return resolution.resolved || "";
+};
+
+const writeClaimants = (world, regionId, values) => {
+  const deduped = [...new Set(normalizeArray(values)
+    .map((name) => resolveTerritorialNameForWorld(name, world) || toCountryName(normalizeOptionalString(name)))
+    .filter(Boolean))]
+    .slice(0, 4);
+
+  if (deduped.length > 0) world.regionClaimants[regionId] = deduped;
+  else delete world.regionClaimants[regionId];
+};
+
+const ensureSovereigntyAnchor = (world, regionId, fallbackOwner) => {
+  if (world.regionSovereigntyOverrides[regionId]) return world.regionSovereigntyOverrides[regionId];
+  const resolved = resolveTerritorialNameForWorld(fallbackOwner, world);
+  if (resolved) world.regionSovereigntyOverrides[regionId] = resolved;
+  return resolved;
+};
+
+const applyLegalRegionTransfer = (world, transfer) => {
+  const toCode = resolveTerritorialNameForWorld(transfer.toCode, world);
+  if (!toCode) {
+    console.warn(
+      `[polity identity] legal region transfer "${transfer.regionId}" could not safely resolve ` +
+      `"${transfer.toCode}" — sovereignty change ignored.`,
+    );
+    return;
+  }
+
+  const fromCode = resolveTerritorialNameForWorld(transfer.fromCode, world);
+  const previousSovereign = ensureSovereigntyAnchor(world, transfer.regionId, fromCode);
+  const currentController =
+    resolveTerritorialNameForWorld(world.regionOwnershipOverrides[transfer.regionId], world) ||
+    fromCode ||
+    previousSovereign;
+
+  world.regionSovereigntyOverrides[transfer.regionId] = toCode;
+
+  // A legal hand-over normally moves administration too when the old sovereign
+  // still holds the ground. A genuine third-party occupier is preserved.
+  if (!currentController || samePolity(currentController, previousSovereign) || samePolity(currentController, toCode)) {
+    world.regionOwnershipOverrides[transfer.regionId] = toCode;
+  }
+
+  const effectiveController =
+    resolveTerritorialNameForWorld(world.regionOwnershipOverrides[transfer.regionId], world) ||
+    toCode;
+  const existing = normalizeArray(world.regionClaimants[transfer.regionId]);
+  let claimants = existing.filter((name) => !samePolity(name, toCode) && !samePolity(name, previousSovereign));
+
+  // If somebody else still physically controls the region after the legal title
+  // changes, the lawful sovereign remains visibly present as a claimant.
+  if (!samePolity(effectiveController, toCode)) claimants.push(toCode);
+  writeClaimants(world, transfer.regionId, claimants);
+};
+
+const applyRegionControlOpToWorld = (world, rawOp) => {
+  const op = normalizeRegionControlOp(rawOp);
+  if (!op) return;
+
+  const regionId = op.regionId;
+  const currentController =
+    resolveTerritorialNameForWorld(world.regionOwnershipOverrides[regionId], world) ||
+    resolveTerritorialNameForWorld(op.fromCode, world);
+  const legalSovereign = ensureSovereigntyAnchor(world, regionId, op.fromCode || currentController);
+  const existing = normalizeArray(world.regionClaimants[regionId]);
+
+  if (op.op === "contest") {
+    const actor = resolveTerritorialNameForWorld(op.actorCode, world);
+    if (!actor || samePolity(actor, currentController)) return;
+    const claimants = [...existing, actor];
+    if (legalSovereign && currentController && !samePolity(legalSovereign, currentController)) claimants.push(legalSovereign);
+    writeClaimants(world, regionId, claimants.filter((name) => !samePolity(name, currentController)));
+    return;
+  }
+
+  if (op.op === "control") {
+    const toCode = resolveTerritorialNameForWorld(op.toCode, world);
+    if (!toCode) return;
+    const previousController = currentController || resolveTerritorialNameForWorld(op.fromCode, world);
+    world.regionOwnershipOverrides[regionId] = toCode;
+
+    const claimants = existing.filter((name) => !samePolity(name, toCode));
+    if (previousController && !samePolity(previousController, toCode)) claimants.push(previousController);
+    if (legalSovereign && !samePolity(legalSovereign, toCode)) claimants.push(legalSovereign);
+    writeClaimants(world, regionId, claimants);
+    return;
+  }
+
+  if (op.op === "clear_contest") {
+    let claimants = op.clearAll
+      ? []
+      : existing.filter((name) => !samePolity(name, op.claimantCode));
+
+    // Clearing a battlefield dispute must not erase the legal sovereign while a
+    // foreign controller still occupies the region. That stripe is the whole point.
+    const controller =
+      resolveTerritorialNameForWorld(world.regionOwnershipOverrides[regionId], world) ||
+      currentController;
+    if (legalSovereign && controller && !samePolity(legalSovereign, controller)) claimants.push(legalSovereign);
+    writeClaimants(world, regionId, claimants.filter((name) => !samePolity(name, controller)));
+  }
+};
+
 export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, world }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
@@ -1727,32 +1919,14 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, 
       });
     }
 
+    // regionTransfers now mean LEGAL SOVEREIGNTY. Wartime occupation/control is
+    // regionControlOps and leaves the legal ledger intact.
     for (const transfer of event.impacts.regionTransfers) {
-      const resolution = resolveTerritorialPolityIdentity(
-        transfer.toCode,
-        nextWorld,
-      );
+      applyLegalRegionTransfer(nextWorld, transfer);
+    }
 
-      if (!resolution.resolved) {
-        console.warn(
-          `[polity identity] region transfer "${transfer.regionId}" could not safely resolve ` +
-          `"${transfer.toCode}" — ownership change ignored rather than minting another bullshit country.`,
-          resolution,
-        );
-        continue;
-      }
-
-      if (
-        normalizedPolityName(resolution.resolved) !==
-        normalizedPolityName(transfer.toCode)
-      ) {
-        console.info(
-          `[polity identity] region transfer "${transfer.regionId}": ` +
-          `"${transfer.toCode}" -> "${resolution.resolved}" (${resolution.status})`,
-        );
-      }
-
-      nextWorld.regionOwnershipOverrides[transfer.regionId] = resolution.resolved;
+    for (const controlOp of event.impacts.regionControlOps ?? []) {
+      applyRegionControlOpToWorld(nextWorld, controlOp);
     }
 
     // dissolution comes last so the same event can settle/transfer the polity's

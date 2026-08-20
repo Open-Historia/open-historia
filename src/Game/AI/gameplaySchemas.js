@@ -89,7 +89,7 @@ const createdChatSchema = {
 
 const regionTransferSchema = {
   type: "object",
-  description: "A transfer of one map region to a new polity owner.",
+  description: "A LEGAL sovereignty transfer of one map region to a new polity. Temporary wartime occupation belongs in regionControlOps.",
   properties: {
     regionId: textSchema(
       "Exact map region id/name when known. If the event is grounded in a city, fortress, translated/exonym name, "
@@ -106,8 +106,8 @@ const regionTransferSchema = {
     wholeCountry: {
       type: "boolean",
       description:
-        "Set true ONLY for a total conquest, annexation, unification or partition in "
-        + "which one polity takes EVERY region another still holds. Then put the losing "
+        "Set true ONLY for a total LEGAL annexation, unification, cession or partition settlement in "
+        + "which one polity gains sovereignty over EVERY region another still holds. Then put the losing "
         + "polity's name in regionId instead of a region name, and this single entry "
         + "transfers all of its territory. Leave unset (the normal case) to transfer "
         + "one named region.",
@@ -115,6 +115,64 @@ const regionTransferSchema = {
   },
   required: ["regionId", "toCode"],
   additionalProperties: false,
+};
+
+const regionControlOpSchema = {
+  description:
+    "A de-facto territorial control mutation. This is NOT legal sovereignty: use contest for an active disputed front, "
+    + "control for wartime capture/occupation/retaking, and clear_contest when a ceasefire/withdrawal/settlement ends an active contest.",
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["contest"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded city/historical-area wording from the event for bounded native resolution.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: nonEmptyTextSchema("Current controller/defending polity's FULL name; used to bound geography resolution."),
+        actorCode: nonEmptyTextSchema("Challenging/attacking polity's FULL name."),
+        note: textSchema("Brief reason the region is actively contested."),
+      },
+      required: ["op", "regionId", "fromCode", "actorCode"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["control"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded city/historical-area wording from the event for bounded native resolution.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: nonEmptyTextSchema("Previous de-facto controller's FULL polity name."),
+        toCode: nonEmptyTextSchema("New de-facto controller's FULL polity name."),
+        note: textSchema("Brief reason control changed."),
+        wholeCountry: {
+          type: "boolean",
+          description: "True only for a total military occupation/collapse where the new controller takes every region the previous controller still holds.",
+        },
+      },
+      required: ["op", "regionId", "fromCode", "toCode"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["clear_contest"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded place wording from the event.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: textSchema("Current controller's FULL polity name, strongly preferred to bound geography resolution."),
+        claimantCode: textSchema("Specific claimant/contender to remove. Omit only when clearAll=true."),
+        clearAll: { type: "boolean", description: "Clear all claimants only when a final settlement explicitly resolves the territorial dispute; ordinary ceasefires should remove a specific claimantCode." },
+        note: textSchema("Brief reason the contest ended."),
+      },
+      required: ["op", "regionId"],
+      additionalProperties: false,
+    },
+  ],
 };
 
 // AI-authored updates to a country's PERSISTENT stat sheet (world.countryStats[code]).
@@ -430,11 +488,15 @@ const impactsSchema = {
     regionTransfers: {
       type: "array",
       description:
-        "Map ownership changes. REQUIRED whenever the event text says territory was "
-        + "captured, occupied, annexed, ceded, liberated, or otherwise changed hands. Prefer exact map region ids/names; "
-        + "when only a grounded historical/city/area label is known, preserve that wording and set fromCode so the native "
-        + "geography resolver can attempt a bounded mapping instead of inventing a region.",
+        "LEGAL SOVEREIGNTY changes only: treaty cession, annexation/incorporation, recognized transfer, sale, unification or final settlement. "
+        + "Do NOT use this for a temporary wartime capture/occupation; use regionControlOps instead.",
       items: regionTransferSchema,
+    },
+    regionControlOps: {
+      type: "array",
+      description:
+        "DE-FACTO territorial control and active front disputes. Use for wartime contest, capture/occupation/retaking and clearing a contest without pretending sovereignty changed.",
+      items: regionControlOpSchema,
     },
     unitOps: {
       type: "array",
@@ -1049,10 +1111,39 @@ const UNIT_DIRECTOR_SCHEMA = {
   additionalProperties: false,
 };
 
+const TERRITORY_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation territorial-front repair pass. It may add de-facto regionControlOps but may not invent legal sovereignty changes.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "De-facto control operations to attach to supplied event indexes.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          regionControlOps: {
+            type: "array",
+            items: regionControlOpSchema,
+          },
+          reason: textSchema("Short reason these control-state changes are required for map continuity."),
+        },
+        required: ["eventIndex", "regionControlOps"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of territorial-front state reconciliation."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
+  territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -1087,6 +1178,12 @@ export const UNIT_DIRECTOR_TOOL = makeTool(
   "submit_unit_director",
   "Submit conservative persistent-unit operations for supplied military events.",
   UNIT_DIRECTOR_SCHEMA,
+);
+
+export const TERRITORY_DIRECTOR_TOOL = makeTool(
+  "submit_territory_director",
+  "Submit conservative de-facto territorial control operations for supplied military/front events.",
+  TERRITORY_DIRECTOR_SCHEMA,
 );
 
 export const ACTIONS_TOOL = makeTool(
@@ -1171,6 +1268,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
+  territoryDirector: TERRITORY_DIRECTOR_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,

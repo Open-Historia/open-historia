@@ -1,6 +1,6 @@
 /*!
  * open historia enhanced — native unit director
- * v0.1.2
+ * v0.1.3
  *
  * the main simulator writes history. this thing makes sure armies do not become
  * decorative map stickers the moment an npc owns them.
@@ -202,8 +202,10 @@ const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
         // outcome/territorial transfer, do not let a random clash roll contradict
         // history that the main simulator has already committed to. The next
         // territory-control phase is where those two systems get married properly.
-        if (normalizeArray(event?.impacts?.regionTransfers).length > 0 || DECISIVE_OUTCOME_PATTERN.test(text)) {
-          reject("event already declares a decisive outcome; v0.1 will not roll a clash that could contradict it");
+        const hasDecisiveControl = normalizeArray(event?.impacts?.regionControlOps)
+          .some((entry) => normalizeString(entry?.op).toLowerCase() === "control");
+        if (normalizeArray(event?.impacts?.regionTransfers).length > 0 || hasDecisiveControl || DECISIVE_OUTCOME_PATTERN.test(text)) {
+          reject("event already declares a decisive territorial outcome; v0.1 will not roll a clash that could contradict it");
           continue;
         }
 
@@ -263,7 +265,7 @@ const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
 const publishDirectorDiagnostics = ({ candidates = [], units = [], analysis = null, eventOrders = [], diagnostics = [], skippedReason = "" } = {}) => {
   if (typeof window !== "undefined") {
     window.__OH_NATIVE_UNIT_DIRECTOR__ = {
-      version: "0.1.2",
+      version: "0.1.3",
       last: () => ({
         candidateCount: candidates.length,
         candidateTitles: candidates.map(({ event, index }) => ({ index, title: normalizeString(event?.title) })),
@@ -295,7 +297,7 @@ export const directGeneratedUnitOps = async ({
       ? "no operational military event candidates matched"
       : "no analyzer supplied";
     publishDirectorDiagnostics({ candidates, units, skippedReason });
-    console.groupCollapsed(`[OH Native Unit Director v0.1.2] ${candidates.length} military event(s), ${units.length} existing unit(s)`);
+    console.groupCollapsed(`[OH Native Unit Director v0.1.3] ${candidates.length} military event(s), ${units.length} existing unit(s)`);
     console.info(skippedReason);
     console.groupEnd();
     return sourceEvents;
@@ -370,7 +372,7 @@ export const directGeneratedUnitOps = async ({
   });
 
   console.groupCollapsed(
-    `[OH Native Unit Director v0.1.2] ${candidates.length} military event(s), ${units.length} existing unit(s)`,
+    `[OH Native Unit Director v0.1.3] ${candidates.length} military event(s), ${units.length} existing unit(s)`,
   );
   if (diagnostics.length > 0) console.table(diagnostics);
   else console.info("no unit operations were added this turn.");
