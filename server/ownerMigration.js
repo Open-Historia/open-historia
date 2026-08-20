@@ -8,7 +8,7 @@
 // before any read hook on both platforms, and that is exactly where `owner`
 // physically lives.
 //
-// The mirror of this file is src/runtime/web/ownerMigration.js. Keep them in step.
+//
 
 // ---------------------------------------------------------------------------
 // The resolver. What does the token "ROM" mean in a legacy file?
@@ -100,13 +100,34 @@ export const resolveOwnerName = (token, ctx = {}) => {
 // consistently: resolving per-asset could name the same token differently in
 // colors.json and world.json.
 export const buildOwnerRenameMap = (ctx = {}) => {
-  const { polityOverrides, ownershipOverrides, ownerCodes, features, colors, flags, tags, units, countryTags, internationalReputation, gameCountry } = ctx;
+  const {
+    polityOverrides,
+    ownershipOverrides,
+    sovereigntyOverrides,
+    regionClaimants,
+    ownerCodes,
+    features,
+    colors,
+    flags,
+    tags,
+    units,
+    countryTags,
+    internationalReputation,
+    gameCountry,
+  } = ctx;
 
   const tokens = new Set();
   const add = (v) => { const s = str(v); if (s) tokens.add(s); };
 
   Object.keys(polityOverrides ?? {}).forEach(add);
   Object.values(ownershipOverrides ?? {}).forEach(add);
+  Object.values(sovereigntyOverrides ?? {}).forEach(add);
+  for (const claimants of Object.values(regionClaimants ?? {})) {
+    if (Array.isArray(claimants)) claimants.forEach(add);
+    else if (claimants && typeof claimants === "object") {
+      Object.keys(claimants).filter((key) => claimants[key]).forEach(add);
+    }
+  }
   (Array.isArray(ownerCodes) ? ownerCodes : []).forEach(add);
   Object.keys(colors ?? {}).forEach(add);
   Object.keys(flags ?? {}).forEach(add);
@@ -168,6 +189,22 @@ const renameValue = (value, renames) => {
   return renames.get(token) ?? token;
 };
 
+const renameClaimants = (value, renames) => {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((entry) => renameValue(entry, renames)).filter(Boolean))];
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, enabled] of Object.entries(value)) {
+      if (!enabled) continue;
+      const name = renameValue(key, renames);
+      if (name) out[name] = enabled;
+    }
+    return out;
+  }
+  return value;
+};
+
 // ---------------------------------------------------------------------------
 // The record migration. Every structure listed here is owner-keyed; miss one and
 // a save desyncs silently rather than failing.
@@ -181,6 +218,26 @@ export const migrateWorld = (world, renames, warn) => {
       Object.entries(next.regionOwnershipOverrides).map(([regionId, owner]) => [
         regionId, // region ids are NOT owner-space — they never move
         renameValue(owner, renames),
+      ]),
+    );
+  }
+
+  // controller, legal sovereign and military/diplomatic claimants all live in owner-space.
+  // miss one here and a migrated save can look fine until the first occupation. lovely.
+  if (next.regionSovereigntyOverrides && typeof next.regionSovereigntyOverrides === "object") {
+    next.regionSovereigntyOverrides = Object.fromEntries(
+      Object.entries(next.regionSovereigntyOverrides).map(([regionId, owner]) => [
+        regionId,
+        renameValue(owner, renames),
+      ]),
+    );
+  }
+
+  if (next.regionClaimants && typeof next.regionClaimants === "object") {
+    next.regionClaimants = Object.fromEntries(
+      Object.entries(next.regionClaimants).map(([regionId, claimants]) => [
+        regionId,
+        renameClaimants(claimants, renames),
       ]),
     );
   }
@@ -251,6 +308,15 @@ export const migrateEvents = (events, renames) => {
         ...t,
         ...(t?.toCode ? { toCode: renameValue(t.toCode, renames) } : {}),
         ...(t?.fromCode ? { fromCode: renameValue(t.fromCode, renames) } : {}),
+      }));
+    }
+    if (Array.isArray(next.regionControlOps)) {
+      next.regionControlOps = next.regionControlOps.map((op) => ({
+        ...op,
+        ...(op?.fromCode ? { fromCode: renameValue(op.fromCode, renames) } : {}),
+        ...(op?.toCode ? { toCode: renameValue(op.toCode, renames) } : {}),
+        ...(op?.actorCode ? { actorCode: renameValue(op.actorCode, renames) } : {}),
+        ...(op?.claimantCode ? { claimantCode: renameValue(op.claimantCode, renames) } : {}),
       }));
     }
     if (Array.isArray(next.polityChanges)) {

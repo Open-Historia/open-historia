@@ -44,7 +44,8 @@ export const JSON_ASSET_DEFAULTS = {
 export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "allowedUnitTypes", "author", "background", "basemap", "customCities", "customRegions",
   "difficulty", "language", "mapCredit", "notes", "ownerCodes", "polityOverrides",
-  "regionOwnershipOverrides", "simulationRules", "startingTimelineText",
+  "regionClaimants", "regionOwnershipOverrides", "regionSovereigntyOverrides",
+  "simulationRules", "startingTimelineText",
 ];
 
 export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
@@ -122,9 +123,30 @@ export const canonicalizeWorldCountryRefs = (world) => {
   if (!world || typeof world !== "object" || Array.isArray(world)) return world;
   const next = { ...world };
 
+  const canonicalizeClaimants = (raw) => {
+    const source = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object"
+        ? Object.keys(raw).filter((key) => raw[key])
+        : [];
+    return [...new Set(source.map((entry) => resolveOwnerRef(entry, world)).filter(Boolean))];
+  };
+
   if (next.regionOwnershipOverrides && typeof next.regionOwnershipOverrides === "object") {
     next.regionOwnershipOverrides = Object.fromEntries(
       Object.entries(next.regionOwnershipOverrides).map(([regionId, owner]) => [regionId, resolveOwnerRef(owner, world)]),
+    );
+  }
+  if (next.regionSovereigntyOverrides && typeof next.regionSovereigntyOverrides === "object") {
+    next.regionSovereigntyOverrides = Object.fromEntries(
+      Object.entries(next.regionSovereigntyOverrides).map(([regionId, owner]) => [regionId, resolveOwnerRef(owner, world)]),
+    );
+  }
+  if (next.regionClaimants && typeof next.regionClaimants === "object") {
+    next.regionClaimants = Object.fromEntries(
+      Object.entries(next.regionClaimants)
+        .map(([regionId, claimants]) => [regionId, canonicalizeClaimants(claimants)])
+        .filter(([, claimants]) => claimants.length > 0),
     );
   }
   if (Array.isArray(next.ownerCodes)) {

@@ -31,7 +31,7 @@ export const onRegionSelected = (props) => {
     try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
     if (_clickInterceptor && _clickInterceptor(props)) return;
 
-    const { COUNTRY, NAME_1, GID_0, gid0, owner, lngLat } = props;
+    const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
     const isSame =
@@ -44,7 +44,7 @@ export const onRegionSelected = (props) => {
     } else if (_currentSelection !== null) {
         _dismiss?.();
     } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, gid0, owner, lngLat });
+        _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
     }
 };
 
@@ -141,6 +141,13 @@ const RegionPopup = () => {
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
+    // sparse control metadata. ownership is the de-facto controller; sovereignty is
+    // only stored when it differs, because duplicating every normal border is dumb.
+    const [territoryState, setTerritoryState] = useState({
+        regionClaimants: {},
+        regionOwnershipOverrides: {},
+        regionSovereigntyOverrides: {},
+    });
     // Author-set flags from the scenario's flags.json (owner code -> data URL).
     // Memoized in assets.js, so this is one fetch per scenario, not per selection.
     const [customFlags, setCustomFlags] = useState({});
@@ -153,7 +160,13 @@ const RegionPopup = () => {
         let cancelled = false;
         readWorldState({ force: true })
             .then((world) => {
-                if (!cancelled) setPolities(world?.polityOverrides ?? {});
+                if (cancelled) return;
+                setPolities(world?.polityOverrides ?? {});
+                setTerritoryState({
+                    regionClaimants: world?.regionClaimants ?? {},
+                    regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
+                    regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                });
             })
             .catch(() => {});
         getNationFlags()
@@ -165,7 +178,7 @@ const RegionPopup = () => {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selection?.GID_0, selection?.NAME_1]);
+    }, [selection?.GID_0, selection?.GID_1, selection?.NAME_1]);
 
     _setSelection = (value) => {
         _currentSelection = value;
@@ -176,28 +189,46 @@ const RegionPopup = () => {
         if (value !== null) setAnimKey((key) => key + 1);
     };
 
-    // Era-aware display name for the selected owner (polity name > overrides > modern).
-    const resolveSelectionName = (sel) =>
-        polities[sel?.GID_0]?.name || resolveCountryDisplayName(sel?.COUNTRY, sel?.GID_0);
+    // The popup header is about whoever ACTUALLY administers the selected region.
+    // A stock tile still remembers its base country forever, which is useful geography
+    // but absolutely not a reason to open Serbia's chat while the header says Bulgaria.
+    const controllerForSelection = (sel) => {
+        if (!sel) return "";
+        const regionId = sel.GID_1 || "";
+        return regionId
+            ? territoryState.regionOwnershipOverrides?.[regionId] ?? sel.GID_0 ?? sel.owner ?? ""
+            : sel.GID_0 ?? sel.owner ?? "";
+    };
 
-    // Open a diplomatic chat with the selected country (via the chat panel bridge).
+    // Era-aware display name for the CURRENT controller (polity name > overrides > modern).
+    const resolveSelectionName = (sel) => {
+        const controllerCode = controllerForSelection(sel);
+        return polities[controllerCode]?.name || resolveCountryDisplayName(sel?.COUNTRY, controllerCode);
+    };
+
+    // Open a diplomatic chat with the current controller, not the region's baked
+    // geographic country. Occupation shouldn't make the buttons lie.
     const handleOpenChat = () => {
         if (!_currentSelection) return;
+        const controllerCode = controllerForSelection(_currentSelection);
+        if (!controllerCode) return;
         requestDiplomaticChat({
             name: resolveSelectionName(_currentSelection),
-            code: _currentSelection.GID_0,
+            code: controllerCode,
         });
         _dismiss?.();
     };
 
-    // Open the full country panel (related events, aliases, owned regions,
-    // advisor report, diplomacy) for the selected owner.
+    // Same rule for the country panel: the header, flag and buttons all represent
+    // the current controller. Sovereignty is shown explicitly in the territory rows.
     const handleToggleStats = () => {
         const sel = _currentSelection;
         if (!sel) return;
-        const flagInfo = resolveEraFlagInfo(sel.GID_0, polities[sel.GID_0], customFlags);
+        const controllerCode = controllerForSelection(sel);
+        if (!controllerCode) return;
+        const flagInfo = resolveEraFlagInfo(controllerCode, polities[controllerCode], customFlags);
         openCountryPanel({
-            code: sel.GID_0,
+            code: controllerCode,
             name: resolveSelectionName(sel),
             flagUrl: flagInfo?.imageUrl || null,
             flagEmoji: flagInfo?.emoji || null,
@@ -226,16 +257,16 @@ const RegionPopup = () => {
 
         setFlagImageFailed(false);
 
-        // Era-correct flag only: the polity's own flag, else the owner's ISO flag.
-        // Deliberately NO modern-country fallback — an era polity without a flag
-        // shows "No flag available" rather than an anachronistic modern flag.
-        const flagInfo = resolveEraFlagInfo(selection.GID_0, polities[selection.GID_0], customFlags);
+        // The big header flag belongs to the CURRENT controller. The stock region's
+        // GID/base country is geography, not a magic flag fallback during occupation.
+        const controllerCode = controllerForSelection(selection);
+        const flagInfo = resolveEraFlagInfo(controllerCode, polities[controllerCode], customFlags);
         setFlagState(
             flagInfo
                 ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
                 : createFlagState("error"),
         );
-    }, [selection?.COUNTRY, selection?.GID_0, selection?.owner, polities]);
+    }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, polities, territoryState, customFlags]);
 
     useEffect(() => {
         if (!map) return;
@@ -306,15 +337,41 @@ const RegionPopup = () => {
     if (!selection || !screenPos) return null;
 
     const { COUNTRY, NAME_1 } = selection;
-    // Custom regions with an empty owner are deliberately unclaimed land.
-    const isUnclaimed = selection.owner === "";
-    // Era name first: the scenario's polity name for the owner ("Holy Roman
-    // Empire", not "Germany"), then scenario name overrides, then the modern name.
+    const regionId = selection.GID_1 || "";
+    const controllerCode = controllerForSelection(selection);
+    const sovereignCode = regionId
+        ? territoryState.regionSovereigntyOverrides?.[regionId] ?? controllerCode
+        : controllerCode;
+    const rawClaimants = regionId ? territoryState.regionClaimants?.[regionId] : null;
+    const claimants = [...new Set(
+        (Array.isArray(rawClaimants)
+            ? rawClaimants
+            : rawClaimants && typeof rawClaimants === "object"
+                ? Object.keys(rawClaimants).filter((key) => rawClaimants[key])
+                : [])
+            .map((value) => String(value ?? "").trim())
+            .filter((value) => value && value !== controllerCode),
+    )];
+    const isUnclaimed = controllerCode === "";
+    const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
+    const isContested = claimants.length > 0;
+    const controlStatus = isOccupied && isContested
+        ? "Occupied / contested"
+        : isOccupied
+            ? "Occupied"
+            : isContested
+                ? "Contested"
+                : isUnclaimed
+                    ? "Unclaimed"
+                    : "Administered";
+    const displayPolity = (code) => polities?.[code]?.name || code || "Unclaimed Territory";
+    // header stays on the current administrator/controller. legal title goes below
+    // instead of pretending an occupation magically changed sovereignty.
     const displayCountry = isUnclaimed
         ? "Unclaimed Territory"
-        : polities[selection.GID_0]?.name
-            || resolveCountryDisplayName(COUNTRY, selection.GID_0);
-    const POPUP_WIDTH = 210;
+        : polities[controllerCode]?.name
+            || resolveCountryDisplayName(COUNTRY, controllerCode);
+    const POPUP_WIDTH = 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
     const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
 
@@ -436,6 +493,28 @@ const RegionPopup = () => {
         <IconBtn title="Region info">{"\u24D8"}</IconBtn>
         </div>
         </div>
+
+        {!isUnclaimed && (isOccupied || isContested) && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
+            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
+            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Status</span>
+            <span style={{ color: isOccupied ? "#fbbf24" : "rgba(255,255,255,0.84)", fontWeight: 700 }}>{controlStatus}</span>
+            {claimants.length > 0 && (
+                <>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Claimants</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                {claimants.map(displayPolity).join(", ")}
+                </span>
+                </>
+            )}
+            </div>
+            </>
+        )}
 
         </div>
         </div>

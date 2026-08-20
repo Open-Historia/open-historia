@@ -61,6 +61,8 @@ const eventInvolvesCountry = (event, code, name) => {
     const impacts = event?.impacts ?? {};
     if ((impacts.polityChanges ?? []).some((change) => change?.code === code)) return true;
     if ((impacts.regionTransfers ?? []).some((transfer) => transfer?.toCode === code || transfer?.fromCode === code)) return true;
+    if ((impacts.regionControlOps ?? []).some((op) =>
+        [op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode].some((value) => value === code || value === name))) return true;
     if ((impacts.createdChats ?? []).some((chat) => (chat?.countries ?? []).some((country) => country?.code === code || country?.name === name))) return true;
     const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
     return Boolean(name) && haystack.includes(String(name).toLowerCase());
@@ -72,6 +74,8 @@ const CountryInfoPanel = () => {
     const [aliases, setAliases] = useState([]);
     const [tags, setTags] = useState([]);
     const [regions, setRegions] = useState([]);
+    const [controlledForeignRegions, setControlledForeignRegions] = useState([]);
+    const [occupiedSovereignRegions, setOccupiedSovereignRegions] = useState([]);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
     const [report, setReport] = useState(null); // null | "loading" | text | {error}
@@ -104,25 +108,40 @@ const CountryInfoPanel = () => {
                 // The author's starting tags unless the AI has since rewritten them.
                 setTags(resolveCountryTags(baseTags, world, country.code));
 
-                const overrides = world.regionOwnershipOverrides ?? {};
-                const owned = [];
+                const ownership = world.regionOwnershipOverrides ?? {};
+                const sovereignty = world.regionSovereigntyOverrides ?? {};
+                const sovereign = [];
+                const controlledForeign = [];
+                const occupiedSovereign = [];
                 const seen = new Set();
-                for (const region of catalog) {
-                    const effective = overrides[region.id] ?? region.countryCode;
-                    if (effective === country.code) {
-                        owned.push(region.name);
-                        seen.add(region.id);
-                    }
+
+                const classify = (regionId, regionName, baseOwner = "") => {
+                    const controller = ownership[regionId] ?? baseOwner;
+                    const legalOwner = sovereignty[regionId] ?? controller;
+                    if (legalOwner === country.code) sovereign.push(regionName);
+                    if (controller === country.code && legalOwner && legalOwner !== country.code) controlledForeign.push(regionName);
+                    if (legalOwner === country.code && controller && controller !== country.code) occupiedSovereign.push(regionName);
+                    seen.add(regionId);
+                };
+
+                for (const region of catalog) classify(region.id, region.name, region.countryCode);
+
+                // overrides can reference custom/legacy regions missing from the catalog.
+                // don't make them disappear from the panel just because the lookup is incomplete.
+                const extraIds = new Set([...Object.keys(ownership), ...Object.keys(sovereignty)]);
+                for (const regionId of extraIds) {
+                    if (!seen.has(regionId)) classify(regionId, regionId, "");
                 }
-                // Overridden regions the catalog doesn't know still count.
-                for (const [regionId, code] of Object.entries(overrides)) {
-                    if (code === country.code && !seen.has(regionId)) owned.push(regionId);
-                }
-                setRegions(owned);
+
+                setRegions([...new Set(sovereign)]);
+                setControlledForeignRegions([...new Set(controlledForeign)]);
+                setOccupiedSovereignRegions([...new Set(occupiedSovereign)]);
             } catch {
                 if (!cancelled) {
                     setEvents([]);
                     setRegions([]);
+                    setControlledForeignRegions([]);
+                    setOccupiedSovereignRegions([]);
                 }
             }
         })();
@@ -268,7 +287,7 @@ const CountryInfoPanel = () => {
         )}
         </div>
         <div>
-        <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.35rem" }}>Regions Owned ({regions.length})</div>
+        <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.35rem" }}>Sovereign Regions ({regions.length})</div>
         {regions.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.78rem" }}>None</div>
         ) : (
@@ -281,6 +300,37 @@ const CountryInfoPanel = () => {
         )}
         </div>
         </div>
+
+        {(controlledForeignRegions.length > 0 || occupiedSovereignRegions.length > 0) && (
+            <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", marginTop: "0.45rem" }}>
+            <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Controlled, Not Sovereign ({controlledForeignRegions.length})</div>
+            {controlledForeignRegions.length === 0 ? (
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
+            ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                {controlledForeignRegions.slice(0, 40).map((regionName) => (
+                    <span key={regionName} style={pillStyle}>{regionName}</span>
+                ))}
+                {controlledForeignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{controlledForeignRegions.length - 40} more</span>}
+                </div>
+            )}
+            </div>
+            <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Under Foreign Control ({occupiedSovereignRegions.length})</div>
+            {occupiedSovereignRegions.length === 0 ? (
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
+            ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                {occupiedSovereignRegions.slice(0, 40).map((regionName) => (
+                    <span key={regionName} style={pillStyle}>{regionName}</span>
+                ))}
+                {occupiedSovereignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{occupiedSovereignRegions.length - 40} more</span>}
+                </div>
+            )}
+            </div>
+            </div>
+        )}
 
         {report !== null && (
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, marginTop: "0.6rem", padding: "0.7rem 0.8rem" }}>
