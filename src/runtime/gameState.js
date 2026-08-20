@@ -4,6 +4,8 @@ import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { toCountryName } from "./ownerNames.js";
+import { isStockPolityName, resolvePolityIdentity, resolveTerritorialPolityIdentity } from "./polityIdentity.js";
+
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -72,6 +74,8 @@ const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
 const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
+const POLITY_OPERATION_SET = new Set(["update", "create", "rename", "restore", "dissolve"]);
+const POLITY_STATUS_SET = new Set(["active", "dormant"]);
 
 // Every caller of this parses a COORDINATE (lng/lat/toLng/toLat), which is why it
 // can afford to be lenient in ways a general number parser could not.
@@ -516,12 +520,24 @@ const normalizePolityChange = (entry) => {
     ? entry.stats
     : null;
 
+  const rawOperation = normalizeOptionalString(
+    entry.operation || entry.op || entry.action,
+  ).toLowerCase();
+
+  // Old saved events predate explicit lifecycle operations. Keep them readable as
+  // ordinary updates; NEW AI output is required by the live tool schema to state
+  // create/rename/restore/dissolve explicitly.
+  const operation = POLITY_OPERATION_SET.has(rawOperation)
+    ? rawOperation
+    : "update";
+
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
     color: normalizeOptionalString(entry.color),
     name: normalizeOptionalString(entry.name || entry.newName),
     note: normalizeOptionalString(entry.note || entry.reason),
+    operation,
     reputation,
     stats,
     tags,
@@ -884,12 +900,15 @@ const normalizePolityOverride = (key, value) => {
     return null;
   }
 
+  const status = normalizeOptionalString(value.status).toLowerCase();
+
   return {
     aliases: normalizeActionParticipants(value.aliases || value.additionalNames),
     code,
     color: normalizeOptionalString(value.color),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
+    ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
   };
 };
 
@@ -1183,87 +1202,476 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
   };
 };
 
+const normalizedPolityName = (value) =>
+  normalizeString(value).toLowerCase();
+
+const findPolityOverrideEntry = (world, polityName) => {
+  const target = normalizedPolityName(polityName);
+  if (!target) return null;
+
+  return Object.entries(world?.polityOverrides || {})
+    .find(([key, record]) => {
+      const names = [
+        key,
+        record?.code,
+        record?.name,
+        ...normalizeArray(record?.aliases),
+      ]
+        .map(normalizedPolityName)
+        .filter(Boolean);
+
+      return names.includes(target);
+    }) || null;
+};
+
+const polityOwnsMappedOverride = (world, polityName) => {
+  const target = normalizedPolityName(polityName);
+  if (!target) return false;
+
+  return Object.values(
+    world?.regionOwnershipOverrides || {},
+  ).some(
+    (owner) =>
+      normalizedPolityName(owner) === target,
+  );
+};
+
+const mergePolityMetadata = ({ change, current = {}, canonicalName }) => ({
+  ...current,
+  aliases: [
+    ...new Set([
+      ...normalizeArray(current.aliases),
+      ...normalizeArray(change.aliases),
+      canonicalName,
+      current.name,
+      change.name,
+    ]
+      .map(normalizeOptionalString)
+      .filter(Boolean)),
+  ],
+  code: canonicalName,
+  ...(change.color ? { color: change.color } : {}),
+  ...(change.name ? { name: change.name } : {}),
+  ...(change.note ? { note: change.note } : {}),
+});
+
+const applyPolityMetadataStores = (world, change, canonicalName) => {
+  if (Number.isFinite(change.reputation)) {
+    world.internationalReputation[canonicalName] = change.reputation;
+
+    if (world.countryStats?.[canonicalName]?.indices) {
+      world.countryStats[canonicalName] = {
+        ...world.countryStats[canonicalName],
+        indices: {
+          ...world.countryStats[canonicalName].indices,
+          internationalReputation: change.reputation,
+        },
+      };
+    }
+  }
+
+  if (change.stats && typeof change.stats === "object") {
+    if (!world.countryStats || typeof world.countryStats !== "object") {
+      world.countryStats = {};
+    }
+
+    const prev =
+      world.countryStats[canonicalName] &&
+      typeof world.countryStats[canonicalName] === "object"
+        ? world.countryStats[canonicalName]
+        : {};
+
+    const merged = { ...prev, ...change.stats };
+
+    for (const group of ["indices", "economy", "gdpBreakdown"]) {
+      if (change.stats[group] && typeof change.stats[group] === "object") {
+        merged[group] = {
+          ...(prev[group] || {}),
+          ...change.stats[group],
+        };
+      }
+    }
+
+    world.countryStats[canonicalName] = merged;
+
+    const rep = Number(
+      merged.indices?.internationalReputation,
+    );
+
+    if (Number.isFinite(rep)) {
+      world.internationalReputation[canonicalName] =
+        Math.max(0, Math.min(100, Math.round(rep)));
+    }
+  }
+
+  if (Array.isArray(change.tags)) {
+    if (!world.countryTags || typeof world.countryTags !== "object") {
+      world.countryTags = {};
+    }
+
+    if (change.tags.length) {
+      world.countryTags[canonicalName] = change.tags;
+    } else {
+      delete world.countryTags[canonicalName];
+    }
+  }
+};
+
+const applyPolityColor = (colors, change, canonicalName) => {
+  if (!change.color) return;
+
+  const normalizedColor = normalizeOptionalString(change.color);
+  const hexMatch = /^#?([a-f0-9]{6})$/i.exec(normalizedColor);
+  if (!hexMatch) return;
+
+  const hex = hexMatch[1];
+  colors[canonicalName] = [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16),
+  ];
+};
+
+const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
+  const operation = change.operation || "update";
+
+  if (operation === "dissolve" && phase !== "post") return null;
+  if (operation !== "dissolve" && phase === "post") return null;
+
+  if (operation === "create") {
+    // Exact existing names/aliases are collisions. A bare stock/base name is also
+    // blocked when it already maps cleanly onto one active regime identity (the
+    // Greece -> Kingdom of Greece case). More specific new names remain creatable.
+    let collision = resolvePolityIdentity(
+      change.code,
+      world,
+      {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: false,
+        allowStockBase: true,
+      },
+    );
+
+    if (!collision.resolved && isStockPolityName(change.code)) {
+      collision = resolvePolityIdentity(
+        change.code,
+        world,
+        {
+          allowUnknown: false,
+          requireActive: true,
+          allowCoreMatch: true,
+          allowStockBase: true,
+        },
+      );
+    }
+
+    if (collision.resolved) {
+      console.warn(
+        `[polity lifecycle] create ignored: "${change.code}" already resolves to ` +
+        `"${collision.resolved}" (${collision.status}).`,
+      );
+      return null;
+    }
+
+    const canonicalName = toCountryName(change.code);
+    if (!canonicalName) return null;
+
+    world.polityOverrides[canonicalName] = {
+      ...mergePolityMetadata({
+        change,
+        current: {},
+        canonicalName,
+      }),
+      name: change.name || canonicalName,
+      status: "active",
+    };
+
+    applyPolityMetadataStores(world, change, canonicalName);
+    applyPolityColor(colors, change, canonicalName);
+
+    console.info(`[polity lifecycle] created "${canonicalName}".`);
+    return canonicalName;
+  }
+
+  if (operation === "restore") {
+    // Exact historical identity if known; otherwise explicit RESTORE is enough to
+    // create it. no global encyclopedia of every regime needs to live in each save.
+    let target = resolvePolityIdentity(
+      change.code,
+      world,
+      {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: false,
+        allowStockBase: true,
+      },
+    );
+
+    if (!target.resolved && isStockPolityName(change.code)) {
+      target = resolvePolityIdentity(
+        change.code,
+        world,
+        {
+          allowUnknown: false,
+          requireActive: true,
+          allowCoreMatch: true,
+          allowStockBase: true,
+        },
+      );
+    }
+
+    const canonicalName = target.resolved || toCountryName(change.code);
+    if (!canonicalName) return null;
+
+    const found = findPolityOverrideEntry(world, canonicalName);
+    const current = found?.[1] || {};
+
+    world.polityOverrides[canonicalName] = {
+      ...mergePolityMetadata({
+        change,
+        current,
+        canonicalName,
+      }),
+      name: change.name || current.name || canonicalName,
+      status: "active",
+    };
+
+    applyPolityMetadataStores(world, change, canonicalName);
+    applyPolityColor(colors, change, canonicalName);
+
+    console.info(`[polity lifecycle] restored "${canonicalName}" as a current polity.`);
+    return canonicalName;
+  }
+
+  if (operation === "rename") {
+    const source = resolvePolityIdentity(
+      change.code,
+      world,
+      {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+      },
+    );
+
+    const newName = normalizeOptionalString(change.name);
+
+    if (!source.resolved || !newName) {
+      console.warn(
+        `[polity lifecycle] rename ignored: source="${change.code}" target="${change.name}" could not be resolved.`,
+        source,
+      );
+      return null;
+    }
+
+    const collision = resolvePolityIdentity(
+      newName,
+      world,
+      {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: false,
+        allowStockBase: false,
+      },
+    );
+
+    if (
+      collision.resolved &&
+      normalizedPolityName(collision.resolved) !== normalizedPolityName(source.resolved)
+    ) {
+      console.warn(
+        `[polity lifecycle] rename ignored: target "${newName}" already belongs to ` +
+        `"${collision.resolved}".`,
+      );
+      return null;
+    }
+
+    const found = findPolityOverrideEntry(world, source.resolved);
+    const current = found?.[1] || {
+      aliases: [],
+      code: source.resolved,
+      color: "",
+      name: source.resolved,
+      note: "",
+    };
+
+    world.polityOverrides[source.resolved] = {
+      ...mergePolityMetadata({
+        change: { ...change, name: newName },
+        current,
+        canonicalName: source.resolved,
+      }),
+      aliases: [
+        ...new Set([
+          ...normalizeArray(current.aliases),
+          ...normalizeArray(change.aliases),
+          source.resolved,
+          current.name,
+          newName,
+        ]
+          .map(normalizeOptionalString)
+          .filter(Boolean)),
+      ],
+      code: source.resolved,
+      name: newName,
+      status: "active",
+    };
+
+    applyPolityMetadataStores(world, change, source.resolved);
+    applyPolityColor(colors, change, source.resolved);
+
+    console.info(
+      `[polity lifecycle] renamed "${source.resolved}" display/current identity to "${newName}" ` +
+      "without changing its stable campaign key.",
+    );
+    return source.resolved;
+  }
+
+  if (operation === "dissolve") {
+    const source = resolvePolityIdentity(
+      change.code,
+      world,
+      {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+      },
+    );
+
+    if (!source.resolved) {
+      console.warn(
+        `[polity lifecycle] dissolve ignored: "${change.code}" is not an established polity.`,
+        source,
+      );
+      return null;
+    }
+
+    // This only proves ownership in the override layer. Base-map/effective control
+    // will be checked properly by the geography/control engine next. For now we
+    // refuse whenever we can prove territory remains, never the other way around.
+    if (polityOwnsMappedOverride(world, source.resolved)) {
+      console.warn(
+        `[polity lifecycle] refusing to dissolve "${source.resolved}": it still owns mapped override territory. ` +
+        "transfer/settle that territory in the same event first.",
+      );
+      return null;
+    }
+
+    const found = findPolityOverrideEntry(world, source.resolved);
+    if (found) delete world.polityOverrides[found[0]];
+
+    for (const field of ["countryStats", "countryTags", "internationalReputation"]) {
+      const store = world[field];
+      if (!store || typeof store !== "object" || Array.isArray(store)) continue;
+      delete store[source.resolved];
+    }
+
+    delete colors[source.resolved];
+
+    console.info(`[polity lifecycle] dissolved "${source.resolved}".`);
+    return source.resolved;
+  }
+
+  // ordinary update: NEVER create an unknown identity. this is the safety wall
+  // between a typo/stale base name and a brand-new country.
+  const target = resolvePolityIdentity(
+    change.code,
+    world,
+    {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    },
+  );
+
+  if (!target.resolved) {
+    console.warn(
+      `[polity lifecycle] update ignored: "${change.code}" could not safely resolve to an established polity. ` +
+      "Use operation=create/restore only when the event explicitly establishes a new/current state.",
+      target,
+    );
+    return null;
+  }
+
+  const found = findPolityOverrideEntry(world, target.resolved);
+  const current = found?.[1] || {
+    aliases: [],
+    code: target.resolved,
+    color: "",
+    name: target.resolved,
+    note: "",
+  };
+
+  world.polityOverrides[target.resolved] = mergePolityMetadata({
+    change,
+    current,
+    canonicalName: target.resolved,
+  });
+
+  applyPolityMetadataStores(world, change, target.resolved);
+  applyPolityColor(colors, change, target.resolved);
+
+  return target.resolved;
+};
+
 export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
 
   for (const event of normalizeEvents(events)) {
-    for (const transfer of event.impacts.regionTransfers) {
-      nextWorld.regionOwnershipOverrides[transfer.regionId] = transfer.toCode;
+    // create/restore/rename/update first. a newborn or restored polity therefore
+    // exists before THIS SAME EVENT's territory is resolved — a lesson already
+    // proven by the old devtools territory engine.
+    for (const change of event.impacts.polityChanges) {
+      applyPolityChangeToWorld({
+        change,
+        colors: nextColors,
+        phase: "pre",
+        world: nextWorld,
+      });
     }
 
+    for (const transfer of event.impacts.regionTransfers) {
+      const resolution = resolveTerritorialPolityIdentity(
+        transfer.toCode,
+        nextWorld,
+      );
+
+      if (!resolution.resolved) {
+        console.warn(
+          `[polity identity] region transfer "${transfer.regionId}" could not safely resolve ` +
+          `"${transfer.toCode}" — ownership change ignored rather than minting another bullshit country.`,
+          resolution,
+        );
+        continue;
+      }
+
+      if (
+        normalizedPolityName(resolution.resolved) !==
+        normalizedPolityName(transfer.toCode)
+      ) {
+        console.info(
+          `[polity identity] region transfer "${transfer.regionId}": ` +
+          `"${transfer.toCode}" -> "${resolution.resolved}" (${resolution.status})`,
+        );
+      }
+
+      nextWorld.regionOwnershipOverrides[transfer.regionId] = resolution.resolved;
+    }
+
+    // dissolution comes last so the same event can settle/transfer the polity's
+    // remaining territory before we decide whether it is actually gone.
     for (const change of event.impacts.polityChanges) {
-      nextWorld.polityOverrides[change.code] = {
-        ...(nextWorld.polityOverrides[change.code] ?? {
-          aliases: [],
-          code: change.code,
-          color: "",
-          name: "",
-          note: "",
-        }),
-        ...(change.aliases?.length > 0 ? { aliases: change.aliases } : {}),
-        ...(change.color ? { color: change.color } : {}),
-        ...(change.name ? { name: change.name } : {}),
-        ...(change.note ? { note: change.note } : {}),
-      };
-
-      if (change.color) {
-        const normalizedColor = normalizeOptionalString(change.color);
-        const hexMatch = /^#?([a-f0-9]{6})$/i.exec(normalizedColor);
-        if (hexMatch) {
-          const hex = hexMatch[1];
-          nextColors[change.code] = [
-            Number.parseInt(hex.slice(0, 2), 16),
-            Number.parseInt(hex.slice(2, 4), 16),
-            Number.parseInt(hex.slice(4, 6), 16),
-          ];
-        }
-      }
-
-      // Reputation the AI set this turn becomes the polity's authoritative value.
-      if (Number.isFinite(change.reputation)) {
-        nextWorld.internationalReputation[change.code] = change.reputation;
-        // Keep the persisted sheet's reputation index in sync with the authoritative value.
-        if (nextWorld.countryStats?.[change.code]?.indices) {
-          nextWorld.countryStats[change.code] = {
-            ...nextWorld.countryStats[change.code],
-            indices: { ...nextWorld.countryStats[change.code].indices, internationalReputation: change.reputation },
-          };
-        }
-      }
-
-      // Persistent stat sheet: merge the AI's changed fields into the stored sheet so a
-      // country's stats change ONLY when the AI changes them (not every date). Deep-merge
-      // the nested groups and mirror the reputation index into the authoritative store.
-      if (change.stats && typeof change.stats === "object") {
-        if (!nextWorld.countryStats || typeof nextWorld.countryStats !== "object") nextWorld.countryStats = {};
-        const prev = nextWorld.countryStats[change.code] && typeof nextWorld.countryStats[change.code] === "object"
-          ? nextWorld.countryStats[change.code]
-          : {};
-        const merged = { ...prev, ...change.stats };
-        for (const group of ["indices", "economy", "gdpBreakdown"]) {
-          if (change.stats[group] && typeof change.stats[group] === "object") {
-            merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
-          }
-        }
-        nextWorld.countryStats[change.code] = merged;
-        const rep = Number(merged.indices?.internationalReputation);
-        if (Number.isFinite(rep)) {
-          nextWorld.internationalReputation[change.code] = Math.max(0, Math.min(100, Math.round(rep)));
-        }
-      }
-
-      // Tags the AI set this turn replace the scenario's starting tags for this
-      // country, wholesale — the model sends the complete list, so a revolution
-      // that drops "socialist" must actually drop it. null means "unchanged",
-      // which is why normalizePolityChange distinguishes null from [].
-      if (Array.isArray(change.tags)) {
-        if (!nextWorld.countryTags || typeof nextWorld.countryTags !== "object") {
-          nextWorld.countryTags = {};
-        }
-        if (change.tags.length) nextWorld.countryTags[change.code] = change.tags;
-        else delete nextWorld.countryTags[change.code];
-      }
+      applyPolityChangeToWorld({
+        change,
+        colors: nextColors,
+        phase: "post",
+        world: nextWorld,
+      });
     }
 
     if (event.impacts.unitOps?.length) {

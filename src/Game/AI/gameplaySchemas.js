@@ -172,10 +172,28 @@ const statsUpdateSchema = {
 
 const polityChangeSchema = {
   type: "object",
-  description: "A creation, rename, recolor, or metadata change for a polity.",
+  description:
+    "One explicit polity lifecycle or metadata operation. Ordinary updates MUST target an existing polity; "
+    + "new identities are authorized only by create/restore, so a stale or sloppy name cannot silently mint a country.",
   properties: {
-    code: textSchema("Polity's exact FULL country name (\"Spain\"), never a country code."),
-    name: textSchema("New polity name, only when it changes."),
+    operation: {
+      type: "string",
+      description:
+        "What this entry actually does. update = metadata/stats only on an existing polity; "
+        + "create = establish a genuinely new current polity, including an independence/breakaway actor; "
+        + "rename = reconstitute an existing polity under a new full display/current name while keeping its stable campaign identity; "
+        + "restore = bring back a dormant/dissolved historical polity as a current actor; "
+        + "dissolve = explicitly end a polity's current existence after its territory is separately settled.",
+      enum: ["update", "create", "rename", "restore", "dissolve"],
+    },
+    code: textSchema(
+      "Exact FULL polity name, never a country code. For update/rename/dissolve this identifies the CURRENT/source polity. "
+      + "For create/restore this is the exact polity identity being established."
+    ),
+    name: textSchema(
+      "For rename, the NEW full polity name and it must be nonblank. For create/restore it may repeat the established name. "
+      + "For update omit it unless the display/current name itself intentionally changes without a lifecycle rename."
+    ),
     color: textSchema("New six-digit hexadecimal color, only when it changes."),
     aliases: stringArraySchema("Alternative polity names."),
     // The prompt asks for this and gameState normalizes/clamps/writes it, but it
@@ -196,7 +214,7 @@ const polityChangeSchema = {
     note: textSchema("Brief reason for the change."),
     stats: statsUpdateSchema,
   },
-  required: ["code"],
+  required: ["operation", "code"],
   additionalProperties: false,
 };
 
