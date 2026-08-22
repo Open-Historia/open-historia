@@ -1,6 +1,6 @@
 /*!
  * open historia enhanced — save-aware polity identity resolver
- * v0.2.0 — lifecycle-aware
+ * v0.3.0 — lifecycle + map-reference aware
  *
  * ownerNames.js answers "what stock country name does this code mean?"
  * this answers the much more annoying question:
@@ -31,6 +31,38 @@ const STOCK_COUNTRY_NAMES = new Set(
     .map(normalizeIdentityText)
     .filter(Boolean),
 );
+
+const STOCK_CODES_BY_NAME = (() => {
+  const out = new Map();
+  for (const [code, name] of Object.entries(COUNTRY_NAMES)) {
+    const normalizedName = normalizeIdentityText(name);
+    const normalizedCode = normalizeString(code).toUpperCase();
+    if (!normalizedName || !normalizedCode) continue;
+    const list = out.get(normalizedName) || [];
+    list.push(normalizedCode);
+    out.set(normalizedName, list);
+  }
+  return out;
+})();
+
+const normalizeMapRefs = (value) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const gadm0 = Array.isArray(source.gadm0) ? source.gadm0 : [];
+  return {
+    gadm0: [...new Set(
+      gadm0
+        .map((entry) => normalizeString(entry).toUpperCase())
+        .filter((entry) => Boolean(COUNTRY_NAMES[entry])),
+    )],
+  };
+};
+
+const stockCodesForToken = (rawToken, stockName) => {
+  const raw = normalizeString(rawToken).toUpperCase();
+  const direct = COUNTRY_NAMES[raw] ? [raw] : [];
+  const byName = STOCK_CODES_BY_NAME.get(normalizeIdentityText(stockName)) || [];
+  return [...new Set([...direct, ...byName])];
+};
 
 export const isStockPolityName = (value) =>
   STOCK_COUNTRY_NAMES.has(
@@ -168,6 +200,7 @@ const buildDeclaredPolities = (world) => {
               .filter(Boolean),
           ),
         ],
+        mapRefs: normalizeMapRefs(value?.mapRefs),
         ownedRegions,
         lifecycleStatus,
         active:
@@ -249,10 +282,18 @@ export const resolvePolityIdentity = (
   const index =
     buildPolityIdentityIndex(world);
 
+  const stockCodes = stockCodesForToken(token, stockName);
+  const mapRefMatches = stockCodes.length
+    ? index.declared.filter((candidate) =>
+        candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code)) &&
+        (!requireActive || candidate.active))
+    : [];
+
   const declaredRelated = index.declared.filter(
     (candidate) =>
       candidate.normalizedNames.includes(normalizedInput) ||
-      (coreInput && candidate.cores.includes(coreInput)),
+      (coreInput && candidate.cores.includes(coreInput)) ||
+      candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code)),
   );
 
   // 1. exact declared identity/current name/alias.
@@ -302,7 +343,39 @@ export const resolvePolityIdentity = (
     }
   }
 
-  // 2. conservative regime-wrapper match:
+  // 2. explicit map-reference bridge. A scenario can say that its current
+  // political actor is the lineage associated with a stock GADM geography
+  // without making that geography the actor's identity. This is how a save can
+  // safely establish FRA -> French Republic or GBR -> British Empire without
+  // hardcoding either country name or teaching the resolver linguistic guesses.
+  //
+  // mapRefs are provenance/asset hints, not territorial ownership: empires may
+  // own many modern geographies, but only explicitly established refs count here.
+  {
+    const choice = chooseUnique(mapRefMatches);
+
+    if (choice.candidate) {
+      return {
+        input: normalizeString(token),
+        normalizedInput,
+        resolved: choice.candidate.canonical,
+        status: "map-ref",
+        candidates: mapRefMatches.map((candidate) => candidate.canonical),
+      };
+    }
+
+    if (choice.ambiguous) {
+      return {
+        input: normalizeString(token),
+        normalizedInput,
+        resolved: "",
+        status: "ambiguous-map-ref",
+        candidates: mapRefMatches.map((candidate) => candidate.canonical),
+      };
+    }
+  }
+
+  // 3. conservative regime-wrapper match:
   // "Greece" -> "Kingdom of Greece"
   // "Bulgaria" -> "Kingdom of Bulgaria"
   //
@@ -357,7 +430,7 @@ export const resolvePolityIdentity = (
     }
   }
 
-  // 3. stock/base-map polity. this keeps an ordinary modern scenario working
+  // 4. stock/base-map polity. this keeps an ordinary modern scenario working
   // even when it has no polityOverride record yet. but if this save already
   // declares a related historical/current identity, do NOT resurrect the base
   // label as a second country just because GADM knows the name.
@@ -375,7 +448,7 @@ export const resolvePolityIdentity = (
     };
   }
 
-  // 4. nothing in this save safely claims the name. unknown pass-through is for
+  // 5. nothing in this save safely claims the name. unknown pass-through is for
   // explicit lifecycle code only; ordinary world mutations should set it false.
   if (allowUnknown) {
     return {

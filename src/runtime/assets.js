@@ -2,6 +2,7 @@
 import mapLibreGl from "maplibre-gl";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
+import { resolvePolityIdentity } from "./polityIdentity.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
@@ -189,6 +190,12 @@ const invalidateDerivedCachesForWrite = (url) => {
   if (url && url === JSON_URLS.flags) {
     nationFlagsPromise = null;
     nationFlagsPromiseKey = "";
+    // Flags are heavy/static enough that polling them would be wasteful. A write
+    // is rare and already passes through this choke point, so notify visible UI
+    // once and let each consumer refresh from the memoized asset on demand.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:flags-updated"));
+    }
   }
   if (url && url === JSON_URLS.tags) {
     nationTagsPromise = null;
@@ -947,12 +954,12 @@ export const getNationTags = async () => {
   return nationTagsPromise;
 };
 
-export const getNationFlags = async () => {
+export const getNationFlags = async ({ force = false } = {}) => {
   const cacheKey = JSON_URLS.flags;
 
-  if (!nationFlagsPromise || nationFlagsPromiseKey !== cacheKey) {
+  if (force || !nationFlagsPromise || nationFlagsPromiseKey !== cacheKey) {
     nationFlagsPromiseKey = cacheKey;
-    const promise = readJson(JSON_URLS.flags, { defaultValue: {} }).catch((error) => {
+    const promise = readJson(JSON_URLS.flags, { defaultValue: {}, force }).catch((error) => {
       console.warn("Failed to load nation flags (will retry):", error);
       if (nationFlagsPromise === promise) nationFlagsPromise = null;
       return {};
@@ -1000,19 +1007,49 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 
       try {
         const world = await readJson(JSON_URLS.world, { defaultValue: {} });
-        const merged = new Map(countries.map((entry) => [entry.code || entry.name, entry]));
 
-        for (const [code, polity] of Object.entries(world?.polityOverrides ?? {})) {
-          const resolvedCode = polity?.code || code;
-          // A nameless polity override must NOT degrade an existing proper
-          // name to a bare code.
-          const resolvedName = polity?.name || merged.get(resolvedCode)?.name || resolvedCode;
-          if (!resolvedCode || !resolvedName) {
-            continue;
-          }
+        // Stock PMTiles and runtime polityOverrides can describe the SAME actor
+        // with different identifiers (for example BEL vs Belgium). Merge them
+        // through the save-aware polity lineage resolver instead of keying one
+        // source by map code and the other by runtime name.
+        const merged = new Map();
 
-          merged.set(resolvedCode, {
-            code: resolvedCode,
+        for (const entry of countries) {
+          const token = entry.name || entry.code;
+          const resolution = resolvePolityIdentity(token, world, {
+            allowUnknown: false,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+          });
+
+          // Ambiguous identities deliberately remain distinct. Never collapse a
+          // civil-war/rival-regime situation merely because names look related.
+          const key = resolution.resolved
+            ? `lineage:${resolution.resolved}`
+            : `stock:${entry.code || entry.name}`;
+
+          merged.set(key, entry);
+        }
+
+        // polityOverride keys are the stable campaign lineage identities. If a
+        // stock map entry already represents that lineage, preserve its GID_0
+        // code for flags/map UI while taking the CURRENT runtime display name.
+        for (const [stableKey, polity] of Object.entries(world?.polityOverrides ?? {})) {
+          if (!stableKey) continue;
+
+          const key = `lineage:${stableKey}`;
+          const existing = merged.get(key);
+          const resolvedName =
+            polity?.name ||
+            existing?.name ||
+            polity?.code ||
+            stableKey;
+
+          if (!resolvedName) continue;
+
+          merged.set(key, {
+            code: existing?.code || polity?.code || stableKey,
             name: resolvedName,
           });
         }

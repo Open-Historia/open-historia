@@ -5,6 +5,7 @@ import url from "url";
 import { resolveChildPath as resolveWithinDirectory } from "./security.js";
 import {
   buildOwnerRenameMap,
+  buildPolityMapRefs,
   migrateChat,
   migrateEvents,
   migrateGame,
@@ -746,6 +747,30 @@ const copyGameOptionalAssets = (targetGameId, sourceGameId) => {
   }
 };
 
+// Optional JSON such as flags/colors/tags is STARTING scenario state but becomes
+// mutable campaign state the moment a game begins. Give every new game its own
+// copy so a mid-game flag change never mutates the scenario and never shadows
+// the scenario with a one-entry partial file.
+const copyScenarioOptionalJsonAssetsToGame = (gameId, scenarioId) => {
+  for (const [assetKey] of Object.entries(OPTIONAL_JSON_ASSET_FILES)) {
+    copyJsonFile(
+      getScenarioJsonPath(scenarioId, assetKey),
+      getGameJsonPath(gameId, assetKey),
+      {},
+    );
+  }
+};
+
+const copyGameOptionalJsonAssets = (targetGameId, sourceGameId) => {
+  for (const [assetKey] of Object.entries(OPTIONAL_JSON_ASSET_FILES)) {
+    copyJsonFile(
+      getGameJsonPath(sourceGameId, assetKey),
+      getGameJsonPath(targetGameId, assetKey),
+      {},
+    );
+  }
+};
+
 const normalizeBaseSaveSeedAsset = (assetKey, value) => {
   if (assetKey in STORAGE_JSON_ASSET_FILES) {
     return Array.isArray(value) ? value : cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
@@ -976,6 +1001,7 @@ const seedGameJsonFilesFromScenario = (gameId, scenarioId) => {
                    JSON_ASSET_DEFAULTS[assetKey],
       );
     }
+    copyScenarioOptionalJsonAssetsToGame(gameId, scenarioId);
     return;
   }
 
@@ -1016,6 +1042,7 @@ const seedGameJsonFilesFromScenario = (gameId, scenarioId) => {
                   scenarioWorld: scenarioSnapshot.world,
                 }),
   );
+  copyScenarioOptionalJsonAssetsToGame(gameId, scenarioId);
 };
 
 const seedGameJsonFilesFromGame = (gameId, sourceGameId) => {
@@ -1027,6 +1054,7 @@ const seedGameJsonFilesFromGame = (gameId, sourceGameId) => {
     );
   }
 
+  copyGameOptionalJsonAssets(gameId, sourceGameId);
   copyGameOptionalAssets(gameId, sourceGameId);
 };
 
@@ -2134,7 +2162,7 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   const events = paths.events && fs.existsSync(paths.events) ? readJsonFile(paths.events, null) : null;
   const chat = paths.chat && fs.existsSync(paths.chat) ? readJsonFile(paths.chat, null) : null;
 
-  const renames = buildOwnerRenameMap({
+  const migrationContext = {
     polityOverrides: world.polityOverrides,
     countryNameOverrides: meta?.countryNameOverrides,
     registry: COUNTRY_NAME_REGISTRY,
@@ -2150,7 +2178,11 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
     countryTags: world.countryTags,
     internationalReputation: world.internationalReputation,
     gameCountry: game?.country,
-  });
+    inheritedMapRefs: paths.inheritedMapRefs ?? null,
+    deriveMapRefsFromFeatures: paths.deriveMapRefsFromFeatures !== false,
+  };
+  const renames = buildOwnerRenameMap(migrationContext);
+  const mapRefs = buildPolityMapRefs(migrationContext, renames);
   const warn = (message) => console.warn(`[owner-migration] ${label}: ${message}`);
 
   if (colors) writeJsonFile(paths.colors, rekeyOwnerMap(colors, renames, "colors", warn));
@@ -2177,7 +2209,7 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
 
   // World last: it carries the marker, so a crash mid-migration leaves the record
   // unmarked and the next read simply redoes it.
-  writeJsonFile(paths.world, migrateOwnerWorld(world, renames, warn));
+  writeJsonFile(paths.world, migrateOwnerWorld(world, renames, warn, mapRefs));
   console.log(`[owner-migration] ${label}: ${renames.size} owner(s) -> ${new Set(renames.values()).size} name(s)`);
   return true;
 };
@@ -2187,6 +2219,19 @@ const ensureScenarioOwnerSchema = (scenarioId) => {
   if (ownerSchemaChecked.has(key)) return;
   ownerSchemaChecked.add(key);
   try {
+    // Match the runtime's geometry fallback while deriving identity provenance.
+    // A historical scenario often recolours/re-owns the built-in GADM regions
+    // without shipping a private regions.geojson. In that case the missing GID_0
+    // bridge is still recoverable from the built-in geometry + THIS scenario's
+    // regionOwnershipOverrides. Borrow the default geometry as READ-ONLY context;
+    // never rewrite another scenario's map during migration.
+    const ownRegionsPath = getScenarioUploadPath(scenarioId, "regionsGeojson");
+    const defaultRegionsPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
+    const borrowDefaultRegions =
+      scenarioId !== DEFAULT_SCENARIO_ID &&
+      !fs.existsSync(ownRegionsPath) &&
+      fs.existsSync(defaultRegionsPath);
+
     migrateOwnerRecordAtPaths(key, {
       world: getScenarioJsonPath(scenarioId, "world"),
       game: getScenarioJsonPath(scenarioId, "game"),
@@ -2194,7 +2239,8 @@ const ensureScenarioOwnerSchema = (scenarioId) => {
       colors: getScenarioJsonPath(scenarioId, "colors"),
       flags: getScenarioJsonPath(scenarioId, "flags"),
       tags: getScenarioJsonPath(scenarioId, "tags"),
-      regions: getScenarioUploadPath(scenarioId, "regionsGeojson"),
+      regions: borrowDefaultRegions ? defaultRegionsPath : ownRegionsPath,
+      regionsReadOnly: borrowDefaultRegions,
     });
   } catch (error) {
     ownerSchemaChecked.delete(key); // let the next read retry rather than pin a half state
@@ -2222,6 +2268,19 @@ const ensureGameOwnerSchema = (gameId) => {
     // Migrate the scenario first: it is the record that owns the map, and doing it
     // here means a game can never be resolved against an unmigrated parent.
     ensureScenarioOwnerSchema(parentId);
+
+    // Phase 5B.1: a running game must inherit the scenario's frozen map-reference
+    // provenance rather than re-derive it from live campaign territory. Otherwise a
+    // later conquest could teach the identity resolver that the conquered country's
+    // modern GADM code now "means" the conqueror. The scenario migration above has
+    // already derived/persisted these refs from the starting political map.
+    const parentWorld = readJsonFile(getScenarioJsonPath(parentId, "world"), {});
+    const inheritedMapRefs = Object.fromEntries(
+      Object.entries(parentWorld?.polityOverrides ?? {})
+        .map(([polityKey, polity]) => [polityKey, polity?.mapRefs])
+        .filter(([, refs]) => Array.isArray(refs?.gadm0) && refs.gadm0.length > 0),
+    );
+
     migrateOwnerRecordAtPaths(key, {
       world: getGameJsonPath(gameId, "world"),
       game: getGameJsonPath(gameId, "game"),
@@ -2239,6 +2298,10 @@ const ensureGameOwnerSchema = (gameId) => {
       // migration already rewrote that file, and rewriting it from here would
       // resolve the map against the wrong record.
       regionsReadOnly: true,
+      inheritedMapRefs,
+      // Never infer identity from a campaign's current front lines. The parent
+      // scenario is the provenance authority; live control/sovereignty can change.
+      deriveMapRefsFromFeatures: false,
     });
   } catch (error) {
     ownerSchemaChecked.delete(key);

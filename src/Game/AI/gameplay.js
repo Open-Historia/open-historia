@@ -26,6 +26,7 @@ import {
 } from "../../runtime/assets.js";
 import {
   applyEventImpactsToWorld,
+  mergeIncomingChats,
   normalizeActionEntry,
   normalizeActions,
   normalizeChatEntry,
@@ -35,6 +36,8 @@ import {
   normalizeWorldState,
   readActionsState,
   readChatsState,
+  reconcileChatsForPlayer,
+  resolveChatParticipantIdentity,
   readEventsState,
   readGameData,
   readGameStateBundle,
@@ -895,39 +898,93 @@ const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations 
 export const isSimulationBusy = () => activeSimulations > 0;
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
-  const countryCatalog = [
-    ...mergePolityCatalog(await loadCountryNames(), world),
-    ...normalizeArray(additionalCountries).map((entry) => ({
-      code: normalizeString(entry?.code),
-      name: normalizeString(entry?.name || entry?.code),
-    })),
-  ];
-  const lookup = new Map();
+  const countryCatalog = mergePolityCatalog(await loadCountryNames(), world);
 
+  // Map known scenario/map actors onto the same stable lineage keys used by chat
+  // reconciliation. This keeps useful map codes (flags/UI) without using them as
+  // political identity when a save-aware name/alias already resolves correctly.
+  const catalogByPolityKey = new Map();
   for (const country of countryCatalog) {
-    lookup.set((country.name || "").toUpperCase(), country);
-    if (country.code) {
-      lookup.set(country.code.toUpperCase(), country);
+    const resolved = resolveChatParticipantIdentity(country, world);
+    if (!resolved.safe || !resolved.polityKey) continue;
+    if (!catalogByPolityKey.has(resolved.polityKey)) {
+      catalogByPolityKey.set(resolved.polityKey, resolved.participant);
     }
   }
 
-  const resolved = normalizeArray(names)
-    .map((reference) => {
-      const candidates = typeof reference === "string"
-        ? [reference]
-        : [reference?.name, reference?.code];
-      return candidates
-        .map((candidate) => lookup.get(normalizeString(candidate).toUpperCase()) || null)
-        .find(Boolean) || null;
+  // Same-event polityChanges are validated before those lifecycle mutations have
+  // been applied to world state. Preserve that capability with exact matching only:
+  // an event may create "Republic of X" and open talks with it immediately, but an
+  // unrelated fuzzy name must not get invented into existence by chat resolution.
+  const additional = normalizeArray(additionalCountries)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const code = normalizeString(entry.code);
+      const name = normalizeString(entry.name || entry.code);
+      const aliases = normalizeArray(entry.aliases || entry.additionalNames).map(normalizeString).filter(Boolean);
+      if (!code && !name) return null;
+      return {
+        code: code || name,
+        name: name || code,
+        aliases,
+      };
     })
     .filter(Boolean);
-  const unique = new Map(resolved.map((entry) => [entry.code || entry.name, entry]));
-  return Array.from(unique.values()).map((entry) => ({
-      code: entry.code || "",
-      name: entry.name || entry.code || "",
-    }));
-};
 
+  const resolveAdditional = (reference) => {
+    const tokens = (typeof reference === "string"
+      ? [reference]
+      : [reference?.polityKey, reference?.name, reference?.code])
+      .map((value) => normalizeString(value).toLowerCase())
+      .filter(Boolean);
+    if (tokens.length === 0) return null;
+
+    const matches = additional.filter((country) => {
+      const names = [country.code, country.name, ...country.aliases]
+        .map((value) => normalizeString(value).toLowerCase())
+        .filter(Boolean);
+      return tokens.some((token) => names.includes(token));
+    });
+    if (matches.length !== 1) return null;
+    return {
+      code: matches[0].code,
+      name: matches[0].name,
+      polityKey: matches[0].code,
+    };
+  };
+
+  const resolved = [];
+  const seen = new Set();
+  for (const reference of normalizeArray(names)) {
+    const participantInput = typeof reference === "string" ? { name: reference } : reference;
+    const identity = resolveChatParticipantIdentity(participantInput, world);
+    let participant = null;
+    let polityKey = "";
+
+    if (identity.safe) {
+      polityKey = identity.polityKey;
+      const catalogParticipant = catalogByPolityKey.get(polityKey);
+      participant = {
+        ...identity.participant,
+        // A scenario catalog's compact code is presentation metadata, not identity.
+        // Keep it when available so Phase 5A does not randomly turn flags white.
+        ...(catalogParticipant?.code ? { code: catalogParticipant.code } : {}),
+        polityKey,
+      };
+    } else {
+      participant = resolveAdditional(reference);
+      polityKey = participant?.polityKey || "";
+    }
+
+    if (!participant || !polityKey) continue;
+    const key = normalizeString(polityKey).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    resolved.push(participant);
+  }
+
+  return resolved;
+};
 const inferInviteeNames = async (text, world, playerCountry = "") => {
   const countryCatalog = mergePolityCatalog(await loadCountryNames(), world);
   const normalizedText = normalizeString(text).toLowerCase();
@@ -1025,20 +1082,45 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
 
 export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
-  const countries = await resolveInvitees(countriesInput, world);
+  const resolvedCountries = await resolveInvitees(countriesInput, world);
+
+  // The player is IMPLICIT in every diplomatic chat. Model output sometimes
+  // included the player in `countries`, which created self-participants such as
+  // [United Kingdom, German Empire] while Germany itself was the player. Resolve
+  // through lineage and strip the player before the chat ever reaches storage.
+  const playerIdentity = resolveChatParticipantIdentity({ name: playerName }, world);
+  const playerPolityKey = playerIdentity.safe ? normalizeString(playerIdentity.polityKey).toLowerCase() : "";
+  const playerKey = normalizeString(playerName).toUpperCase();
+  const matchesPlayer = (country) => {
+    const identity = resolveChatParticipantIdentity(country, world);
+    if (
+      playerPolityKey &&
+      identity.safe &&
+      normalizeString(identity.polityKey).toLowerCase() === playerPolityKey
+    ) return true;
+    return playerKey && (
+      normalizeString(country?.name).toUpperCase() === playerKey ||
+      normalizeString(country?.code).toUpperCase() === playerKey
+    );
+  };
+  const countries = resolvedCountries.filter((country) => !matchesPlayer(country));
   if (countries.length === 0) return null;
 
   // The initiating polity speaks first — and it is never the player. When the
   // model names no speaker (or names the player), attribute the opener to the
   // first non-player participant.
-  const playerKey = normalizeString(playerName).toUpperCase();
-  const matchesPlayer = (country) =>
-    playerKey && (normalizeString(country.name).toUpperCase() === playerKey || normalizeString(country.code).toUpperCase() === playerKey);
+  const speakerIdentity = resolveChatParticipantIdentity({ name: chatLike?.speaker }, world);
+  const speakerPolityKey = speakerIdentity.safe ? normalizeString(speakerIdentity.polityKey).toLowerCase() : "";
   const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
   const initiator =
     countries.find((country) =>
-      speakerKey && !matchesPlayer(country)
-      && (normalizeString(country.name).toUpperCase() === speakerKey || normalizeString(country.code).toUpperCase() === speakerKey))
+      !matchesPlayer(country) && (
+        (speakerPolityKey && normalizeString(country?.polityKey).toLowerCase() === speakerPolityKey) ||
+        (speakerKey && (
+          normalizeString(country?.name).toUpperCase() === speakerKey ||
+          normalizeString(country?.code).toUpperCase() === speakerKey
+        ))
+      ))
     ?? countries.find((country) => !matchesPlayer(country))
     ?? countries[0];
 
@@ -1053,6 +1135,7 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
         ? [
             {
               code: initiator?.code || "",
+              polityKey: initiator?.polityKey || "",
               role: "leader",
               speaker: initiator?.name || normalizeString(chatLike?.speaker),
               text: chatLike.openingMessage,
@@ -2164,7 +2247,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     ...action,
     status: action.status === "planned" && result.clearActions ? "resolved" : action.status,
   }));
-  const nextChats = [...normalizeChats(baseChats)];
+  let nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
   // write at the end merges these onto whatever is actually stored by then rather
@@ -2222,6 +2305,11 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
   }
 
+  // Keep the in-memory turn bundle sane too. If two generated items refer to the
+  // same open participant set (including aliases / reversed group order), compacting
+  // history should see one conversation rather than two fake diplomatic threads.
+  nextChats = reconcileChatsForPlayer(nextChats, worldWithImpacts, baseGame.country);
+
   if (result.mode === "jump" || result.mode === "auto") {
     try {
       nextWorld = await compactHistoryIfNeeded({
@@ -2244,14 +2332,21 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   // the read fails, which is the old behaviour and never loses a generated chat.
   let chatsToWrite;
   try {
-    chatsToWrite = [...generatedChats, ...normalizeChats(await readChatsState({ force: true }))];
+    const liveChats = await readChatsState({
+      force: true,
+      world: nextWorld,
+      playerCountry: baseGame.country,
+    });
+    chatsToWrite = mergeIncomingChats(liveChats, generatedChats, nextWorld, {
+      playerCountry: baseGame.country,
+    });
   } catch {
-    chatsToWrite = nextChats;
+    chatsToWrite = reconcileChatsForPlayer(nextChats, nextWorld, baseGame.country);
   }
 
   await Promise.all([
     writeActionsState(nextActions),
-    writeChatsState(chatsToWrite),
+    writeChatsState(chatsToWrite, { world: nextWorld, playerCountry: baseGame.country }),
     writeEventsState(nextEvents),
     writeGameData(nextGame),
     writeJson(JSON_URLS.colors, nextColors, { pretty: true }),
@@ -3041,29 +3136,29 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       playerName: bundle.game.country,
     });
     if (!built) return null;
-    const chats = normalizeChats(await readChatsState({ force: true }));
-    // A note from a country the player already has an open 1:1 with lands in
-    // that thread; anything else (including group approaches) opens a new chat.
-    const single = built.countries.length === 1 ? regionKey(built.countries[0].name) : "";
-    const existing = single
-      ? chats.find((chat) => chat.status !== "closed"
-          && Array.isArray(chat.countries)
-          && chat.countries.length === 1
-          && regionKey(chat.countries[0]?.name) === single)
-      : null;
-    let nextChats;
-    if (existing) {
-      const note = built.messages[0];
-      if (!note) return null;
-      nextChats = chats.map((chat) => (chat === existing
-        ? { ...chat, messages: [...chat.messages, { ...note, time: normalizeString(bundle.game?.gameDate) }] }
-        : chat));
-    } else {
-      nextChats = [built, ...chats];
-    }
+    const chats = await readChatsState({
+      force: true,
+      world: bundle.world,
+      playerCountry: bundle.game.country,
+    });
+    const datedBuilt = {
+      ...built,
+      messages: built.messages.map((message, index) => index === 0 && !normalizeString(message.time)
+        ? { ...message, time: normalizeString(bundle.game?.gameDate) }
+        : message),
+    };
+    // Same reconciliation path as full turns: 1:1 and GROUP approaches reuse an
+    // existing open thread when the stable participant set is the same, regardless
+    // of alias/display name or participant order. Closed historical talks stay closed.
+    const nextChats = mergeIncomingChats(chats, [datedBuilt], bundle.world, {
+      playerCountry: bundle.game.country,
+    });
     if (isSimulationBusy()) return null;
-    await writeChatsState(nextChats);
-    return built;
+    await writeChatsState(nextChats, {
+      world: bundle.world,
+      playerCountry: bundle.game.country,
+    });
+    return datedBuilt;
   } catch {
     return null; // silence is always the safe outcome
   } finally {

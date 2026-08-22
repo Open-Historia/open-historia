@@ -6,26 +6,82 @@ import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } fro
 import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
 import { Actions } from "./actions";
 import {
-    JSON_URLS,
     getNationColors,
+    getNationFlags,
     loadCountryNames as loadCachedCountryNames,
-    readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
-import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import {
+    chatParticipantSetKey,
+    mergeIncomingChats,
+    readChatsState,
+    readGameData,
+    readWorldState,
+    reconcileChatsForPlayer,
+    resolveChatParticipantIdentity,
+    writeChatsState,
+} from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
-const saveAllChats = async (chats) => {
+const saveAllChats = async (chats, { world = null, playerCountry = "" } = {}) => {
     try {
-        await writeChatsState(chats);
+        await writeChatsState(chats, { world, playerCountry });
     } catch (err) { console.error("Failed to save chats:", err); }
 };
 
-const loadAllChats = async ({ force = false } = {}) => {
+const loadAllChats = async ({ force = false, world = null, playerCountry = "" } = {}) => {
     try {
-        return await readChatsState({ force });
+        return await readChatsState({ force, world, playerCountry });
     } catch { return []; }
+};
+
+// Polling must stay structural/cheap. Semantic reconciliation walks every chat
+// message through the save-aware polity resolver; doing that every five seconds
+// can monopolize the browser main thread on established campaigns. These helpers
+// detect whether storage actually contains NEW information before paying that cost.
+const chatStorageSignature = (list) => (Array.isArray(list) ? list : []).map((chat) => {
+    const countries = (chat?.countries ?? [])
+        .map((country) => country?.polityKey || country?.name || country?.code || "")
+        .join(",");
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+    const last = messages.at(-1);
+    return [
+        chat?.id ?? "",
+        chat?.status ?? "",
+        countries,
+        messages.length,
+        last?.role ?? "",
+        last?.speaker ?? "",
+        last?.time ?? "",
+        last?.text ?? "",
+    ].join("\u001e");
+}).join("\u001f");
+
+const storageAddsChatInformation = (local, stored) => {
+    const localById = new Map((Array.isArray(local) ? local : []).map((chat) => [String(chat?.id ?? ""), chat]));
+    for (const chat of Array.isArray(stored) ? stored : []) {
+        const current = localById.get(String(chat?.id ?? ""));
+        if (!current) return true;
+        if ((chat?.status ?? "open") !== (current?.status ?? "open")) return true;
+
+        const storedMessages = Array.isArray(chat?.messages) ? chat.messages : [];
+        const localMessages = Array.isArray(current?.messages) ? current.messages : [];
+        if (storedMessages.length > localMessages.length) return true;
+
+        // Same count but different tail can happen when an external writer edits or
+        // replaces a message rather than appending one. Treat that as new information.
+        if (storedMessages.length === localMessages.length && storedMessages.length > 0) {
+            const a = storedMessages.at(-1);
+            const b = localMessages.at(-1);
+            if (String(a?.text ?? "") !== String(b?.text ?? "") ||
+                String(a?.speaker ?? "") !== String(b?.speaker ?? "") ||
+                String(a?.time ?? "") !== String(b?.time ?? "")) {
+                return true;
+            }
+        }
+    }
+    return false;
 };
 
 // ── PMTiles country loader ────────────────────────────────────────────────────
@@ -34,33 +90,97 @@ const loadCountryNames = async () => {
     return loadCachedCountryNames();
 };
 
-const countryMatchesIdentity = (country, identity) => {
-    const normalizedIdentity = String(identity ?? "").trim().toLowerCase();
-    if (!normalizedIdentity) return false;
-    return [country?.name, country?.code]
-        .some(value => String(value ?? "").trim().toLowerCase() === normalizedIdentity);
+const rawIdentityTokens = (entry) => {
+    if (typeof entry === "string") return [entry];
+    return [entry?.polityKey, entry?.name, entry?.code];
+};
+
+const countryMatchesIdentity = (country, identity, world = null) => {
+    if (world) {
+        const left = resolveChatParticipantIdentity(country, world);
+        const right = resolveChatParticipantIdentity(
+            typeof identity === "string" ? { name: identity } : identity,
+            world,
+        );
+        if (left.safe && right.safe && left.polityKey && right.polityKey) {
+            return left.polityKey.toLowerCase() === right.polityKey.toLowerCase();
+        }
+    }
+
+    const left = rawIdentityTokens(country)
+        .map(value => String(value ?? "").trim().toLowerCase())
+        .filter(Boolean);
+    const right = rawIdentityTokens(identity)
+        .map(value => String(value ?? "").trim().toLowerCase())
+        .filter(Boolean);
+    return left.some(value => right.includes(value));
+};
+
+const canonicalCountry = (country, world) => {
+    if (!country || !world) return country;
+    const resolved = resolveChatParticipantIdentity(country, world);
+    if (!resolved.safe || !resolved.participant) return country;
+    return {
+        ...resolved.participant,
+        // The catalog's compact map code is presentation metadata used for flags.
+        // Keep it when present while polityKey remains the political identity.
+        code: country.code || resolved.participant.code || "",
+    };
 };
 
 // ── Flags ─────────────────────────────────────────────────────────────────────
-// Flag emoji are derived locally from each nation's GID_0 country code. (The
-// previous source, restcountries.com, deprecated its public API and no longer
-// returns flag data.)
+// Diplomacy now renders the same image-backed polity flags as the map. Political
+// identity comes from polityKey/lineage; a GADM code is only an asset fallback.
+// One provider per open panel means flags.json is loaded once, not once per row.
+const FlagContext = React.createContext({ flags: {}, world: null });
 
-const FALLBACK_FLAG = "🏳";
-
-const getCountryFlag = ({ code } = {}) => flagEmojiFromGid(code) ?? FALLBACK_FLAG;
-
-const useCountryFlag = ({ code } = {}) =>
-    useMemo(() => getCountryFlag({ code }), [code]);
+const useCountryFlag = (country = {}) => {
+    const { flags, world } = React.useContext(FlagContext);
+    return useMemo(
+        () => resolvePolityFlag({ polity: country, world, flags }),
+        [country?.polityKey, country?.name, country?.code, world, flags],
+    );
+};
 
 const useCountryFlags = (countries) => {
-    const depsKey = countries.map(c => `${c.name}:${c.code ?? ""}`).join(",");
+    const { flags, world } = React.useContext(FlagContext);
+    const depsKey = (countries || []).map(c => `${c?.polityKey ?? ""}:${c?.name ?? ""}:${c?.code ?? ""}`).join(",");
     return useMemo(() => {
-        const flags = {};
-        for (const { name, code } of countries) flags[name] = getCountryFlag({ code });
-        return flags;
+        const resolved = {};
+        for (const country of countries || []) {
+            const key = country?.polityKey || country?.name || country?.code || "";
+            if (!key) continue;
+            const info = resolvePolityFlag({ polity: country, world, flags });
+            resolved[key] = info;
+            if (country?.name) resolved[country.name] = info;
+        }
+        return resolved;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [depsKey]);
+    }, [depsKey, world, flags]);
+};
+
+const FlagMark = ({ info, width = 22, height = 14, radius = 2 }) => {
+    if (info?.imageUrl) {
+        return <img src={info.imageUrl} alt="" style={{ width, height, objectFit: "cover", borderRadius: radius, display: "inline-block", flexShrink: 0, boxShadow: "0 0 0 1px rgba(255,255,255,0.16)" }} />;
+    }
+    return <span aria-label="No flag" style={{ width, height, borderRadius: radius, display: "inline-block", flexShrink: 0, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.04)" }} />;
+};
+
+const FlagStack = ({ countries, max = 4 }) => {
+    const shown = (countries || []).slice(0, max);
+    const resolved = useCountryFlags(shown);
+    return (
+        <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, paddingRight: shown.length > 1 ? "0.35rem" : 0 }}>
+        {shown.map((country, index) => {
+            const key = country?.polityKey || country?.name || country?.code || String(index);
+            return (
+                <span key={key} style={{ display: "inline-flex", marginLeft: index === 0 ? 0 : "-0.35rem", zIndex: shown.length - index }}>
+                <FlagMark info={resolved[key] || resolved[country?.name]} width={24} height={15} radius={2} />
+                </span>
+            );
+        })}
+        </span>
+    );
 };
 
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
@@ -193,14 +313,14 @@ const MessageBubble = ({ msg }) => {
                        marginBottom: "0.25rem",
                        whiteSpace: "nowrap",
             }}>
-            {isError ? "⚠️ Error" : `${flag} ${msg.speaker}`}
+            {isError ? "⚠️ Error" : <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}><FlagMark info={flag} width={18} height={11} /> <span>{msg.speaker}</span></span>}
             </span>
         )}
 
         {isPlayer && reactions.length > 0 && (
             <div style={{ display: "flex", flexDirection: "row-reverse", gap: "0.15rem", marginBottom: "0.3rem" }}>
             {reactions.map(([country, { emoji, code }]) => (
-                <ReactionBubble key={country} country={country} emoji={emoji} flag={reactionFlags[country] ?? "🏳"} code={code} />
+                <ReactionBubble key={country} country={country} emoji={emoji} flag={reactionFlags[country]} code={code} />
             ))}
             </div>
         )}
@@ -270,7 +390,7 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
                                                     pointerEvents: "none",
                                                     zIndex: 99999,
         }}>
-        {flag} {country}
+        <FlagMark info={flag} width={18} height={11} /> {country}
         </div>,
         document.body
     ) : null;
@@ -304,7 +424,7 @@ const TypingBubble = ({ speaker, code }) => {
     const flag = useCountryFlag({ code, name: speaker });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>{flag} {speaker}</span>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem" }}><FlagMark info={flag} width={18} height={11} /> {speaker}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
         <ThinkingDots />
         </div>
@@ -352,7 +472,7 @@ const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
         {isSelected && (
             <div style={{ position: "absolute", top: "0.3rem", right: "0.3rem", width: "14px", height: "14px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.55rem", color: "white", fontWeight: 700 }}>✓</div>
         )}
-        <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>{flag}</span>
+        <FlagMark info={flag} width={30} height={19} radius={3} />
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.8)", textAlign: "center", lineHeight: 1.3 }}>{shortName}</span>
         </button>
     );
@@ -364,8 +484,13 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
     const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
     const filteredFlags = useCountryFlags(filtered);
     const selectedFlags = useCountryFlags(selected);
-    const isSelectedName = (name) => selected.some(s => s.name === name);
-    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name) ? prev.filter(s => s.name !== name) : [...prev, { name, code }]);
+    const selectionKey = (country) => country?.polityKey || country?.code || country?.name || "";
+    const isSelectedCountry = (country) => selected.some(s => selectionKey(s) === selectionKey(country));
+    const toggle = (country) => setSelected(prev =>
+        prev.some(s => selectionKey(s) === selectionKey(country))
+            ? prev.filter(s => selectionKey(s) !== selectionKey(country))
+            : [...prev, country]
+    );
 
     return (
         <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(17,24,39,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
@@ -396,7 +521,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.5rem 1rem", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "5.5rem", gap: "0.5rem", alignContent: "start" }}>
         {loading && <p style={{ gridColumn: "1/-1", color: "rgba(255,255,255,0.35)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center" }}>Loading countries…</p>}
         {filtered.map(c => (
-            <CountryTile key={c.name} country={c.name} code={c.code} flag={filteredFlags[c.name] ?? "🏳"} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
+            <CountryTile key={c.polityKey || c.code || c.name} country={c.name} code={c.code} flag={filteredFlags[c.polityKey || c.name || c.code] || filteredFlags[c.name]} isSelected={isSelectedCountry(c)} onToggle={() => toggle(c)} />
         ))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
@@ -416,15 +541,26 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
-const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate }) => {
+const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBack, onMessagesUpdate }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
+    const playerIdentity = useMemo(
+        () => world ? resolveChatParticipantIdentity({ name: playerCountry }, world) : null,
+        [playerCountry, world],
+    );
+    const playerDisplayName = playerIdentity?.safe
+        ? playerIdentity.participant.name
+        : playerCountry;
+    const playerPolityKey = playerIdentity?.safe ? playerIdentity.polityKey : "";
     const countries = useMemo(
         () => Array.isArray(chat?.countries)
-            ? chat.countries.filter((country) => country && (country.name || country.code))
+            ? chat.countries
+                .filter((country) => country && (country.name || country.code))
+                .map((country) => canonicalCountry(country, world))
+                .filter((country) => !countryMatchesIdentity(country, playerCountry, world))
             : [],
-        [chat?.countries],
+        [chat?.countries, playerCountry, world],
     );
     const isGroup = countries.length > 1;
 
@@ -442,7 +578,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const messagesRef       = useRef(chat.messages ?? []);
 
     useEffect(() => {
-        countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
+        // Flag images resolve lazily from the shared cached catalog.
     }, [countries]);
 
     useEffect(() => {
@@ -462,7 +598,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             onMessagesUpdate(chat.id, updated);
         };
 
-        const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
+        const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry, world);
 
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
             if (isPlayerCountry(country)) {
@@ -482,17 +618,17 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     if (lastUserIdx !== -1) {
                         msgs[lastUserIdx] = {
                             ...msgs[lastUserIdx],
-                            reactions: { ...(msgs[lastUserIdx].reactions ?? {}), [country.name]: { emoji: reaction, code: country.code } },
+                            reactions: { ...(msgs[lastUserIdx].reactions ?? {}), [country.name]: { emoji: reaction, code: country.code, polityKey: country.polityKey || "" } },
                         };
-                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, text: reply, time: gameDate }]);
+                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
                     } else {
-                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, text: reply, time: gameDate }]);
+                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
                     }
                 } else {
-                    pushMessages([...messagesRef.current, { role: "leader", speaker: country.name, code: country.code, text: reply, time: gameDate }]);
+                    pushMessages([...messagesRef.current, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
                 }
             } catch (err) {
-                pushMessages([...messagesRef.current, { role: "error", speaker: country.name, code: country.code, text: err.message, time: gameDate }]);
+                pushMessages([...messagesRef.current, { role: "error", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: err.message, time: gameDate }]);
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
@@ -525,14 +661,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 return rotatedQueue;
             }
 
-            const suggestedCountry = rotatedQueue.find((country) => country.name.toLowerCase() === suggestedSpeaker.toLowerCase());
+            const suggestedCountry = rotatedQueue.find((country) =>
+                countryMatchesIdentity(country, suggestedSpeaker, world)
+            );
             if (!suggestedCountry) {
                 return rotatedQueue;
             }
 
             return [
                 suggestedCountry,
-                ...rotatedQueue.filter((country) => country.name !== suggestedCountry.name),
+                ...rotatedQueue.filter((country) => !countryMatchesIdentity(country, suggestedCountry, world)),
             ];
         };
 
@@ -558,7 +696,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const text = playerInput.trim();
             if (!text || isLoading) return;
             lastPlayerMessage.current = text;
-            const nextMessages = [...messagesRef.current, { role: "user", speaker: playerCountry, text, time: gameDate }];
+            const nextMessages = [...messagesRef.current, {
+                role: "user",
+                speaker: playerDisplayName,
+                polityKey: playerPolityKey,
+                text,
+                time: gameDate,
+            }];
             pushMessages(nextMessages);
             setPlayerInput("");
             const queue = await buildResponsiveQueue(nextMessages);
@@ -673,7 +817,7 @@ const CountryTurnLabel = ({ country, remaining }) => {
     const flag = useCountryFlag({ code: country.code, name: country.name });
     return (
         <>
-        {flag} <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
+        <FlagMark info={flag} width={18} height={11} /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
         {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
         </>
     );
@@ -725,8 +869,6 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
     // delete never sits waiting to catch a later click.
     const [confirming, setConfirming] = React.useState(false);
     const previewCountries = chat.countries.slice(0, 4);
-    const flagMap  = useCountryFlags(previewCountries);
-    const flags    = previewCountries.map(c => flagMap[c.name] ?? "🏳").join(" ");
     const names    = chat.countries.map(c => c.name).join(", ");
     const lastMsg  = chat.messages?.at(-1);
     const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
@@ -738,7 +880,7 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
         <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
         {unread && <div style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "#60a5fa" }} />}
         </div>
-        <div style={{ fontSize: "1.3rem", flexShrink: 0, lineHeight: 1 }}>{flags}</div>
+        <FlagStack countries={previewCountries} />
         <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "0.82rem", fontWeight: unread ? 700 : 600, color: unread ? "#fff" : "rgba(255,255,255,0.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}{unread && <span style={{ fontWeight: 400, fontSize: "0.7rem", color: "#60a5fa", marginLeft: "0.4rem" }}>new</span>}</div>
         <div style={{ fontSize: "0.75rem", color: unread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)", marginTop: "0.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preview}</div>
@@ -771,6 +913,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
     const [gameDate, setGameDate]                 = useState("");
+    const [world, setWorld]                       = useState(null);
+    const [flagCatalog, setFlagCatalog]           = useState({});
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
@@ -782,6 +926,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     // is reading them. Reopening the panel is what re-sorts.
     const [unreadIds, setUnreadIds] = useState(() => new Set());
     const snapshotTakenRef = useRef(false);
+    const lastStoredChatSignatureRef = useRef("");
 
     useEffect(() => {
         if (!isOpen) { snapshotTakenRef.current = false; return; }
@@ -811,67 +956,164 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         if (!isOpen || hasLoadedInitialData) return;
 
         let cancelled = false;
-        Promise.all([loadCountryNames(), loadAllChats()])
-        .then(([countryList, savedChats]) => {
-            if (cancelled) return;
-            setCountries(countryList);
-            setLoadingCountries(false);
-            if (savedChats.length > 0) setChats(savedChats);
-            setHasLoadedInitialData(true);
-        })
-        .catch(() => {
-            if (!cancelled) {
+        (async () => {
+            try {
+                const [countryList, gameData, worldData, flags] = await Promise.all([
+                    loadCountryNames(),
+                    readGameData({ force: true }),
+                    readWorldState({ force: true }),
+                    getNationFlags({ force: true }).catch(() => ({})),
+                ]);
+                if (cancelled) return;
+
+                const currentPlayer = gameData.country || "your nation";
+                const savedChats = await loadAllChats({
+                    force: true,
+                    world: worldData,
+                    playerCountry: currentPlayer,
+                });
+                if (cancelled) return;
+
+                setCountries(countryList.map((country) => canonicalCountry(country, worldData)));
+                setPlayerCountry(currentPlayer);
+                setGameDate(gameData.gameDate || "");
+                setWorld(worldData);
+                setFlagCatalog(flags || {});
                 setLoadingCountries(false);
+                setChats(savedChats);
+                lastStoredChatSignatureRef.current = chatStorageSignature(savedChats);
                 setHasLoadedInitialData(true);
+
+                // Persist the one-time migration immediately: player aliases are
+                // stripped from participant lists and duplicate open threads created
+                // by [counterpart, player] vs [counterpart] collapse in storage too.
+                saveAllChats(savedChats, {
+                    world: worldData,
+                    playerCountry: currentPlayer,
+                });
+            } catch {
+                if (!cancelled) {
+                    setLoadingCountries(false);
+                    setHasLoadedInitialData(true);
+                }
             }
-        });
+        })();
 
         return () => { cancelled = true; };
     }, [hasLoadedInitialData, isOpen]);
 
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen || !hasLoadedInitialData) return;
+        let cancelled = false;
+        const refresh = () => {
+            getNationFlags({ force: true })
+                .then((flags) => { if (!cancelled) setFlagCatalog(flags || {}); })
+                .catch(() => {});
+        };
+        window.addEventListener("oh:flags-updated", refresh);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:flags-updated", refresh);
+        };
+    }, [isOpen, hasLoadedInitialData]);
+
+    useEffect(() => {
+        if (!isOpen || !hasLoadedInitialData) return;
 
         let cancelled = false;
-        const go = () => readJson(JSON_URLS.game, { defaultValue: {}, force: true })
-        .then((data) => {
-            if (cancelled) return;
-            if (data.country) setPlayerCountry(data.country);
-            if (data.gameDate) setGameDate(data.gameDate);
-        })
-        .catch(() => {});
+        let lastSignature = `${playerCountry}|${gameDate}`;
+        const go = async () => {
+            try {
+                const data = await readGameData({ force: true });
+                if (cancelled) return;
 
-        go();
+                const nextCountry = data.country || playerCountry;
+                const nextDate = data.gameDate || gameDate;
+                const signature = `${nextCountry}|${nextDate}`;
+
+                setPlayerCountry(nextCountry);
+                setGameDate(nextDate);
+
+                // A date/country change means a turn may have renamed/reconstituted
+                // polities. Refresh world identity and the dynamic country catalog
+                // only then, rather than force-reading world.json every five seconds.
+                if (signature !== lastSignature) {
+                    lastSignature = signature;
+                    const [nextWorld, nextCountries] = await Promise.all([
+                        readWorldState({ force: true }),
+                        loadCountryNames(),
+                    ]);
+                    if (cancelled) return;
+                    setWorld(nextWorld);
+                    setCountries(nextCountries.map((country) => canonicalCountry(country, nextWorld)));
+                    setChats((prev) => {
+                        const reconciled = reconcileChatsForPlayer(prev, nextWorld, nextCountry);
+                        lastStoredChatSignatureRef.current = chatStorageSignature(reconciled);
+                        saveAllChats(reconciled, {
+                            world: nextWorld,
+                            playerCountry: nextCountry,
+                        });
+                        return reconciled;
+                    });
+                }
+            } catch { /* keep the last good UI state */ }
+        };
+
         const iv = setInterval(go, 5000);
         return () => {
             cancelled = true;
             clearInterval(iv);
         };
-    }, [isOpen]);
+    }, [isOpen, hasLoadedInitialData, playerCountry, gameDate]);
 
     // Chats created OUTSIDE this panel — a jump's diplomatic invitations, the
-    // idle outreach drip — used to be invisible until a full page reload (the
-    // list loaded exactly once). Poll the stored list while the panel is open
-    // and merge additions/updates in; the active conversation object is left
-    // alone so an in-flight exchange is never clobbered mid-reply.
+    // idle outreach drip — are merged into LOCAL state instead of replacing it.
+    //
+    // IMPORTANT PERFORMANCE RULE: the five-second poll is STRUCTURAL ONLY. The
+    // save-aware reconciler is intentionally expensive because it resolves aliases,
+    // lifecycle identity and ambiguity safely. Running it over every historical
+    // message every five seconds caused multi-second main-thread stalls. We now pay
+    // that semantic cost only when storage contains information the local UI does
+    // not already have.
     useEffect(() => {
-        if (!isOpen || !hasLoadedInitialData) return;
+        if (!isOpen || !hasLoadedInitialData || !world) return;
 
         let cancelled = false;
         const sync = () => loadAllChats({ force: true })
         .then((saved) => {
             if (cancelled || !Array.isArray(saved)) return;
+            const storedSignature = chatStorageSignature(saved);
+
             setChats((prev) => {
-                const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
-                if (signature(saved) === signature(prev)) return prev;
+                const localSignature = chatStorageSignature(prev);
+                if (storedSignature === localSignature ||
+                    storedSignature === lastStoredChatSignatureRef.current) {
+                    lastStoredChatSignatureRef.current = storedSignature;
+                    return prev;
+                }
+
+                // An in-flight local save can make storage temporarily OLDER than
+                // React state. Never invoke the expensive semantic merger merely to
+                // rediscover that local state already has more messages.
+                if (!storageAddsChatInformation(prev, saved)) {
+                    return prev;
+                }
+
+                const merged = mergeIncomingChats(prev, saved, world, { playerCountry });
+                lastStoredChatSignatureRef.current = chatStorageSignature(merged);
+
                 setActiveChat((ac) => {
                     if (!ac) return ac;
-                    const updated = saved.find((c) => c.id === ac.id);
-                    // Only adopt storage's copy when it has MORE messages (an
-                    // outreach note landed); otherwise the in-panel state wins.
-                    return updated && (updated.messages?.length ?? 0) > (ac.messages?.length ?? 0) ? updated : ac;
+                    const direct = merged.find((c) => c.id === ac.id);
+                    if (direct) return direct;
+
+                    const key = chatParticipantSetKey(ac, world);
+                    if (!key) return ac;
+                    return merged.find((c) =>
+                        c.status !== "closed" && chatParticipantSetKey(c, world) === key
+                    ) || ac;
                 });
-                return saved;
+                return merged;
             });
         })
         .catch(() => {});
@@ -881,16 +1123,22 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             cancelled = true;
             clearInterval(iv);
         };
-    }, [isOpen, hasLoadedInitialData]);
+    }, [isOpen, hasLoadedInitialData, world, playerCountry]);
 
     const availableCountries = useMemo(
-        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
-                                       [countries, playerCountry]
+        () => countries
+            .map((country) => canonicalCountry(country, world))
+            .filter((country) => !countryMatchesIdentity(country, playerCountry, world)),
+        [countries, playerCountry, world]
     );
 
     const handleMessagesUpdate = (chatId, newMessages) => {
         setChats(prev => {
+            // Participants were canonicalized when the thread entered the UI and
+            // every newly-created message already carries polityKey. Re-running the
+            // whole campaign identity reconciler for every bubble is wasted work.
             const updated = prev.map(c => c.id === chatId ? { ...c, messages: newMessages } : c);
+            lastStoredChatSignatureRef.current = chatStorageSignature(updated);
             saveAllChats(updated);
             setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
             return updated;
@@ -898,10 +1146,42 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
-        setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
+        if (!world) return;
+        const candidate = reconcileChatsForPlayer([{
+            id: Date.now(),
+            countries: selected,
+            messages: [],
+            status: "open",
+            source: "manual",
+        }], world, playerCountry)[0];
+        if (!candidate) {
+            setShowSelector(false);
+            return;
+        }
+
+        const candidateKey = chatParticipantSetKey(candidate, world);
+        setChats(prev => {
+            const existing = candidateKey
+                ? prev.find(c =>
+                    c.status !== "closed" &&
+                    chatParticipantSetKey(c, world) === candidateKey
+                )
+                : null;
+            if (existing) {
+                setActiveChat(existing);
+                return prev;
+            }
+
+            const next = mergeIncomingChats(prev, [candidate], world, { playerCountry });
+            const opened = candidateKey
+                ? next.find(c => c.status !== "closed" && chatParticipantSetKey(c, world) === candidateKey)
+                : candidate;
+            lastStoredChatSignatureRef.current = chatStorageSignature(next);
+            saveAllChats(next, { world, playerCountry });
+            setActiveChat(opened || candidate);
+            return next;
+        });
         setShowSelector(false);
-        setActiveChat(newChat);
     };
 
     // Deleting hides the thread from the player; it does NOT erase it. gameplay.js
@@ -917,26 +1197,46 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const handleDeleteChat = (id) => {
         setChats(prev => {
             const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
+            lastStoredChatSignatureRef.current = chatStorageSignature(updated);
             saveAllChats(updated);
             return updated;
         });
         if (activeChat?.id === id) setActiveChat(null);
     };
 
-    // Open (or reuse) a 1-on-1 chat with a country requested from the region popup.
+    // Open (or reuse) a 1-on-1 chat requested from a region popup, using stable
+    // lineage identity rather than the current display-name spelling.
     const consumePending = (country) => {
         setShowSelector(false);
+        if (!world || countryMatchesIdentity(country, playerCountry, world)) return;
+
+        const candidate = reconcileChatsForPlayer([{
+            id: Date.now(),
+            countries: [canonicalCountry(country, world)],
+            messages: [],
+            status: "open",
+            source: "manual",
+        }], world, playerCountry)[0];
+        if (!candidate) return;
+        const candidateKey = chatParticipantSetKey(candidate, world);
+
         setChats(prev => {
-            const existing = prev.find(
-                c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
-                     (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
-            );
+            const existing = candidateKey
+                ? prev.find(c =>
+                    c.status !== "closed" &&
+                    chatParticipantSetKey(c, world) === candidateKey
+                )
+                : null;
             if (existing) { setActiveChat(existing); return prev; }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [], status: "open" };
-            const u = [newChat, ...prev];
-            saveAllChats(u);
-            setActiveChat(newChat);
-            return u;
+
+            const next = mergeIncomingChats(prev, [candidate], world, { playerCountry });
+            const opened = candidateKey
+                ? next.find(c => c.status !== "closed" && chatParticipantSetKey(c, world) === candidateKey)
+                : candidate;
+            lastStoredChatSignatureRef.current = chatStorageSignature(next);
+            saveAllChats(next, { world, playerCountry });
+            setActiveChat(opened || candidate);
+            return next;
         });
     };
 
@@ -948,6 +1248,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     }, [isOpen, requestedCountry]);
 
         return (
+            <FlagContext.Provider value={{ flags: flagCatalog, world }}>
             <>
             <MarkdownStyleInjector />
             <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(17,24,39,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
@@ -955,7 +1256,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
+                <ConversationView chat={activeChat} playerCountry={playerCountry} world={world} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -980,6 +1281,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             )}
             </div>
             </>
+            </FlagContext.Provider>
         );
 };
 

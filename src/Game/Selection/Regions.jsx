@@ -3,8 +3,9 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
-import { flagImageUrlFromGid, flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 
@@ -63,25 +64,7 @@ const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
     emoji,
 });
 
-// Flag image (with an emoji fallback) for a selected region's GID_0 country code.
-const resolveFlagInfo = (gid0) => {
-    const imageUrl = flagImageUrlFromGid(gid0);
-    if (!imageUrl) return null;
-    return { imageUrl, emoji: flagEmojiFromGid(gid0) };
-};
-
-// Era-aware flag: a scenario polity's own flag URL wins; otherwise the owner code
-// resolves as an ISO country flag (correct for modern owners). Custom era polities
-// with neither simply have no flag — the popup then says "No flag available".
-const resolveEraFlagInfo = (ownerCode, polity, customFlags) => {
-    // A flag the map-maker uploaded wins: it is the only one anyone chose on purpose.
-    // It lives in the scenario's flags.json rather than on the polity, because
-    // world.json is re-read every 5s and a few hundred flags would ride every poll.
-    const own = ownerCode && customFlags?.[ownerCode];
-    if (own) return { imageUrl: own, emoji: null };
-    if (polity?.flag) return { imageUrl: polity.flag, emoji: null };
-    return resolveFlagInfo(ownerCode);
-};
+// Flags are resolved through the shared stable-lineage flag service below.
 
 const IconBtn = ({ children, title, onClick }) => {
     const [hovered, setHovered] = React.useState(false);
@@ -141,6 +124,7 @@ const RegionPopup = () => {
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
+    const [worldState, setWorldState] = useState(null);
     // sparse control metadata. ownership is the de-facto controller; sovereignty is
     // only stored when it differs, because duplicating every normal border is dumb.
     const [territoryState, setTerritoryState] = useState({
@@ -161,6 +145,7 @@ const RegionPopup = () => {
         readWorldState({ force: true })
             .then((world) => {
                 if (cancelled) return;
+                setWorldState(world);
                 setPolities(world?.polityOverrides ?? {});
                 setTerritoryState({
                     regionClaimants: world?.regionClaimants ?? {},
@@ -169,7 +154,7 @@ const RegionPopup = () => {
                 });
             })
             .catch(() => {});
-        getNationFlags()
+        getNationFlags({ force: true })
             .then((flags) => {
                 if (!cancelled) setCustomFlags(flags || {});
             })
@@ -180,6 +165,26 @@ const RegionPopup = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selection?.GID_0, selection?.GID_1, selection?.NAME_1]);
 
+    useEffect(() => {
+        if (!selection) return;
+        let cancelled = false;
+        const refresh = () => {
+            getNationFlags({ force: true })
+                .then((flags) => {
+                    if (!cancelled) {
+                        setCustomFlags(flags || {});
+                        setFlagImageFailed(false);
+                    }
+                })
+                .catch(() => {});
+        };
+        window.addEventListener("oh:flags-updated", refresh);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:flags-updated", refresh);
+        };
+    }, [selection]);
+
     _setSelection = (value) => {
         _currentSelection = value;
         setDismissing(false);
@@ -189,50 +194,43 @@ const RegionPopup = () => {
         if (value !== null) setAnimKey((key) => key + 1);
     };
 
-    // The popup header is about whoever ACTUALLY administers the selected region.
-    // A stock tile still remembers its base country forever, which is useful geography
-    // but absolutely not a reason to open Serbia's chat while the header says Bulgaria.
     const controllerForSelection = (sel) => {
-        if (!sel) return "";
-        const regionId = sel.GID_1 || "";
+        const regionId = sel?.GID_1 || "";
         return regionId
-            ? territoryState.regionOwnershipOverrides?.[regionId] ?? sel.GID_0 ?? sel.owner ?? ""
-            : sel.GID_0 ?? sel.owner ?? "";
+            ? territoryState.regionOwnershipOverrides?.[regionId] ?? sel?.GID_0 ?? sel?.owner ?? ""
+            : sel?.GID_0 ?? sel?.owner ?? "";
     };
 
-    // Era-aware display name for the CURRENT controller (polity name > overrides > modern).
-    const resolveSelectionName = (sel) => {
-        const controllerCode = controllerForSelection(sel);
-        return polities[controllerCode]?.name || resolveCountryDisplayName(sel?.COUNTRY, controllerCode);
+    const resolveSelectionIdentity = (sel) => {
+        const controller = controllerForSelection(sel);
+        const identity = resolvePolityIdentity(controller || sel?.GID_0 || sel?.COUNTRY, worldState, {
+            allowUnknown: false,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        const polityKey = identity.resolved || controller || sel?.GID_0 || "";
+        const record = worldState?.polityOverrides?.[polityKey];
+        return {
+            polityKey,
+            code: sel?.GID_0 || "",
+            name: record?.name || polityKey || resolveCountryDisplayName(sel?.COUNTRY, sel?.GID_0),
+        };
     };
 
-    // Open a diplomatic chat with the current controller, not the region's baked
-    // geographic country. Occupation shouldn't make the buttons lie.
+    // Open a diplomatic chat with the CURRENT controller, not the baked geography.
     const handleOpenChat = () => {
         if (!_currentSelection) return;
-        const controllerCode = controllerForSelection(_currentSelection);
-        if (!controllerCode) return;
-        requestDiplomaticChat({
-            name: resolveSelectionName(_currentSelection),
-            code: controllerCode,
-        });
+        requestDiplomaticChat(resolveSelectionIdentity(_currentSelection));
         _dismiss?.();
     };
 
-    // Same rule for the country panel: the header, flag and buttons all represent
-    // the current controller. Sovereignty is shown explicitly in the territory rows.
+    // Open the full country panel for the CURRENT controller. The panel resolves
+    // its own live flag, so this bridge never has to carry stale visual metadata.
     const handleToggleStats = () => {
         const sel = _currentSelection;
         if (!sel) return;
-        const controllerCode = controllerForSelection(sel);
-        if (!controllerCode) return;
-        const flagInfo = resolveEraFlagInfo(controllerCode, polities[controllerCode], customFlags);
-        openCountryPanel({
-            code: controllerCode,
-            name: resolveSelectionName(sel),
-            flagUrl: flagInfo?.imageUrl || null,
-            flagEmoji: flagInfo?.emoji || null,
-        });
+        openCountryPanel(resolveSelectionIdentity(sel));
         _dismiss?.();
     };
 
@@ -257,16 +255,18 @@ const RegionPopup = () => {
 
         setFlagImageFailed(false);
 
-        // The big header flag belongs to the CURRENT controller. The stock region's
-        // GID/base country is geography, not a magic flag fallback during occupation.
-        const controllerCode = controllerForSelection(selection);
-        const flagInfo = resolveEraFlagInfo(controllerCode, polities[controllerCode], customFlags);
+        const identity = resolveSelectionIdentity(selection);
+        const flagInfo = resolvePolityFlag({
+            polity: identity,
+            world: worldState,
+            flags: customFlags,
+        });
         setFlagState(
-            flagInfo
-                ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
+            flagInfo?.imageUrl
+                ? createFlagState("ready", flagInfo.imageUrl, null)
                 : createFlagState("error"),
         );
-    }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, polities, territoryState, customFlags]);
+    }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
     useEffect(() => {
         if (!map) return;
@@ -338,7 +338,9 @@ const RegionPopup = () => {
 
     const { COUNTRY, NAME_1 } = selection;
     const regionId = selection.GID_1 || "";
-    const controllerCode = controllerForSelection(selection);
+    const controllerCode = regionId
+        ? territoryState.regionOwnershipOverrides?.[regionId] ?? selection.GID_0 ?? selection.owner ?? ""
+        : selection.GID_0 ?? selection.owner ?? "";
     const sovereignCode = regionId
         ? territoryState.regionSovereigntyOverrides?.[regionId] ?? controllerCode
         : controllerCode;
@@ -364,16 +366,21 @@ const RegionPopup = () => {
                 : isUnclaimed
                     ? "Unclaimed"
                     : "Administered";
-    const displayPolity = (code) => polities?.[code]?.name || code || "Unclaimed Territory";
-    // header stays on the current administrator/controller. legal title goes below
-    // instead of pretending an occupation magically changed sovereignty.
-    const displayCountry = isUnclaimed
-        ? "Unclaimed Territory"
-        : polities[controllerCode]?.name
-            || resolveCountryDisplayName(COUNTRY, controllerCode);
+    const displayPolity = (code) => {
+        if (!code) return "Unclaimed Territory";
+        const identity = resolvePolityIdentity(code, worldState, {
+            allowUnknown: true,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        const key = identity.resolved || code;
+        return worldState?.polityOverrides?.[key]?.name || key || "Unclaimed Territory";
+    };
+    // header stays on the current administrator/controller. legal title goes below.
+    const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
     const POPUP_WIDTH = 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
-    const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
 
     return createPortal(
         <div
@@ -420,15 +427,12 @@ const RegionPopup = () => {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: showFlagEmoji ? "white" : "rgba(255,255,255,0.2)",
-                fontSize: showFlagEmoji ? "3rem" : "11px",
-                letterSpacing: showFlagEmoji ? 0 : "0.05em",
-                textShadow: showFlagEmoji ? "0 4px 18px rgba(0,0,0,0.35)" : "none",
+                color: "rgba(255,255,255,0.2)",
+                fontSize: "11px",
+                letterSpacing: "0.05em",
             }}
             >
-            {showFlagEmoji
-            ? flagState.emoji
-            : flagState.status === "loading" && selection?.GID_0
+            {flagState.status === "loading" && selection?.GID_0
             ? "Loading..."
             : "No flag available"}
             </div>

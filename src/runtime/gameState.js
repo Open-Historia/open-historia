@@ -358,8 +358,9 @@ const normalizeReactionMap = (value) => {
 
         const emoji = normalizeOptionalString(reaction.emoji);
         const code = normalizeOptionalString(reaction.code);
+        const polityKey = normalizeOptionalString(reaction.polityKey || reaction.identityKey);
 
-        if (!emoji && !code) {
+        if (!emoji && !code && !polityKey) {
           return [name, null];
         }
 
@@ -368,6 +369,7 @@ const normalizeReactionMap = (value) => {
           {
             ...(code ? { code } : {}),
             ...(emoji ? { emoji } : {}),
+            ...(polityKey ? { polityKey } : {}),
           },
         ];
       })
@@ -383,6 +385,7 @@ const normalizeChatMessage = (message, index = 0) => {
     return {
       code: "",
       id: generateId(`message-${index}`),
+      polityKey: "",
       reactions: {},
       role: "system",
       speaker: "",
@@ -403,6 +406,7 @@ const normalizeChatMessage = (message, index = 0) => {
   return {
     code: normalizeOptionalString(message.code),
     id: normalizeOptionalString(message.id) || generateId(`message-${index}`),
+    polityKey: normalizeOptionalString(message.polityKey || message.identityKey),
     reactions: normalizeReactionMap(message.reactions),
     role: normalizeOptionalString(message.role || message.sender) || "system",
     speaker: normalizeOptionalString(message.speaker || message.senderName),
@@ -423,6 +427,7 @@ const normalizeChatCountry = (entry) => {
     return {
       code: "",
       name,
+      polityKey: "",
     };
   }
 
@@ -432,14 +437,16 @@ const normalizeChatCountry = (entry) => {
 
   const name = normalizeOptionalString(entry.name || entry.label || entry.country);
   const code = normalizeOptionalString(entry.code || entry.id);
+  const polityKey = normalizeOptionalString(entry.polityKey || entry.identityKey);
 
-  if (!name && !code) {
+  if (!name && !code && !polityKey) {
     return null;
   }
 
   return {
     code,
-    name: name || code,
+    name: name || polityKey || code,
+    polityKey,
   };
 };
 
@@ -470,6 +477,358 @@ export const normalizeChats = (chats) =>
   normalizeArray(chats)
     .map((entry, index) => normalizeChatEntry(entry, index))
     .filter(Boolean);
+
+// ---- Save-aware diplomatic identity -----------------------------------------
+//
+// Chat JSON is deliberately allowed to stay a simple transport/storage shape.
+// The semantic question — "which actor in THIS save does this participant mean?"
+// — belongs here, beside the polity lifecycle resolver, not in four UI call sites.
+//
+// A stable polityOverride key is the lineage identity. Display names may change,
+// but the key does not; old names/aliases can therefore follow the actor through
+// regime changes without teaching chat code anything about Germany, Rome, 1201,
+// 2026, or whatever cursed scenario the player loaded this time.
+const CHAT_MAP_CODE_PATTERN = /^[A-Z]{2,3}$/;
+
+const currentPolityDisplayName = (world, polityKey) => {
+  const record = world?.polityOverrides?.[polityKey];
+  return normalizeOptionalString(record?.name || record?.code || polityKey);
+};
+
+const resolveChatIdentityTokens = ({ code = "", name = "", polityKey = "" } = {}, world) => {
+  const strongTokens = [polityKey, name]
+    .map(normalizeOptionalString)
+    .filter(Boolean);
+  const compactMapCode = CHAT_MAP_CODE_PATTERN.test(normalizeOptionalString(code));
+  const weakCodeToken = normalizeOptionalString(code);
+  const resolutions = [];
+  let ambiguous = false;
+
+  const tryToken = (token) => {
+    if (!token) return;
+    const resolution = resolvePolityIdentity(token, world, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    if (resolution.resolved) resolutions.push(resolution);
+    if (String(resolution.status || "").startsWith("ambiguous")) ambiguous = true;
+  };
+
+  for (const token of strongTokens) tryToken(token);
+
+  // `code` is unfortunately mixed legacy data: generated chats historically used
+  // full polity names here, while the UI used a 3-letter map code for flags. A
+  // short map code is useful as a FALLBACK but must not contradict a perfectly good
+  // lineage/name resolution (DEU must not split "German Republic" back into a
+  // second stock "Germany" actor after a rename).
+  if (resolutions.length === 0 || !compactMapCode) tryToken(weakCodeToken);
+
+  const unique = new Map();
+  for (const resolution of resolutions) {
+    unique.set(normalizeString(resolution.resolved).toLowerCase(), resolution);
+  }
+
+  if (unique.size !== 1) {
+    return {
+      ambiguous: ambiguous || unique.size > 1,
+      candidates: [...unique.values()].flatMap((entry) => entry.candidates || []),
+      resolved: "",
+      safe: false,
+      status: unique.size > 1 ? "conflicting-chat-identity" : (ambiguous ? "ambiguous-chat-identity" : "unresolved-chat-identity"),
+    };
+  }
+
+  const resolution = [...unique.values()][0];
+  return {
+    ...resolution,
+    safe: true,
+  };
+};
+
+export const resolveChatParticipantIdentity = (entry, world) => {
+  const participant = normalizeChatCountry(entry);
+  if (!participant) {
+    return {
+      participant: null,
+      polityKey: "",
+      safe: false,
+      status: "empty-chat-participant",
+    };
+  }
+
+  const resolution = resolveChatIdentityTokens(participant, world);
+  if (!resolution.safe) {
+    return {
+      participant,
+      polityKey: "",
+      safe: false,
+      status: resolution.status,
+      candidates: resolution.candidates || [],
+    };
+  }
+
+  const polityKey = resolution.resolved;
+  return {
+    participant: {
+      ...participant,
+      // Preserve a real map/GID code when one exists; Phase 5B can use the stable
+      // key for identity while the old UI keeps its flag lookup working meanwhile.
+      code: participant.code || polityKey,
+      name: currentPolityDisplayName(world, polityKey) || participant.name || polityKey,
+      polityKey,
+    },
+    polityKey,
+    safe: true,
+    status: resolution.status,
+  };
+};
+
+const reconcileReactionMapForWorld = (reactions, world) => {
+  const next = {};
+  for (const [name, reaction] of Object.entries(normalizeReactionMap(reactions))) {
+    const resolved = resolveChatParticipantIdentity({
+      code: reaction.code,
+      name,
+      polityKey: reaction.polityKey,
+    }, world);
+    const nextName = resolved.safe ? resolved.participant.name : name;
+    if (!nextName) continue;
+
+    // If the same actor appears under an old and a current alias, one reaction slot
+    // is enough. Prefer the later entry's emoji/code while preserving its lineage.
+    next[nextName] = {
+      ...reaction,
+      ...(resolved.safe ? {
+        code: reaction.code || resolved.participant.code || resolved.polityKey,
+        polityKey: resolved.polityKey,
+      } : {}),
+    };
+  }
+  return next;
+};
+
+const reconcileChatMessageForWorld = (message, world) => {
+  const normalized = normalizeChatMessage(message);
+  if (!normalized) return null;
+
+  const resolved = resolveChatParticipantIdentity({
+    code: normalized.code,
+    name: normalized.speaker,
+    polityKey: normalized.polityKey,
+  }, world);
+
+  return {
+    ...normalized,
+    ...(resolved.safe ? {
+      code: normalized.code || resolved.participant.code || resolved.polityKey,
+      polityKey: resolved.polityKey,
+      speaker: resolved.participant.name,
+    } : {}),
+    reactions: reconcileReactionMapForWorld(normalized.reactions, world),
+  };
+};
+
+export const reconcileChatForWorld = (entry, world, index = 0) => {
+  const chat = normalizeChatEntry(entry, index);
+  if (!chat) return null;
+
+  const countries = [];
+  const seenSafeKeys = new Set();
+  for (const country of chat.countries) {
+    const resolved = resolveChatParticipantIdentity(country, world);
+    if (!resolved.participant) continue;
+
+    if (resolved.safe) {
+      const key = normalizeString(resolved.polityKey).toLowerCase();
+      if (seenSafeKeys.has(key)) continue; // same actor entered twice via aliases
+      seenSafeKeys.add(key);
+    }
+    countries.push(resolved.participant);
+  }
+  if (countries.length === 0) return null;
+
+  return {
+    ...chat,
+    countries,
+    messages: chat.messages
+      .map((message) => reconcileChatMessageForWorld(message, world))
+      .filter(Boolean),
+  };
+};
+
+export const chatParticipantSetKey = (entry, world) => {
+  const chat = reconcileChatForWorld(entry, world);
+  if (!chat || chat.countries.length === 0) return "";
+
+  const keys = [];
+  for (const country of chat.countries) {
+    const resolved = resolveChatParticipantIdentity(country, world);
+    if (!resolved.safe || !resolved.polityKey) return "";
+    keys.push(normalizeString(resolved.polityKey).toLowerCase());
+  }
+
+  return [...new Set(keys)].sort().join("\u001f");
+};
+
+const chatMessageFingerprint = (message) => {
+  const normalized = normalizeChatMessage(message);
+  if (!normalized) return "";
+  const reactions = Object.entries(normalized.reactions || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, reaction]) => `${name}:${reaction?.emoji || ""}:${reaction?.polityKey || reaction?.code || ""}`)
+    .join("|");
+  return [
+    normalized.polityKey || normalized.speaker,
+    normalized.role,
+    normalized.text,
+    normalized.time,
+    reactions,
+  ].map((value) => normalizeString(value).toLowerCase()).join("\u001e");
+};
+
+const mergeChatMessages = (primaryMessages, incomingMessages) => {
+  const merged = normalizeArray(primaryMessages).map((entry) => normalizeChatMessage(entry)).filter(Boolean);
+  const ids = new Set(merged.map((message) => normalizeString(message.id)).filter(Boolean));
+  const fingerprints = new Set(merged.map(chatMessageFingerprint).filter(Boolean));
+
+  for (const message of normalizeArray(incomingMessages).map((entry) => normalizeChatMessage(entry)).filter(Boolean)) {
+    const id = normalizeString(message.id);
+    const fingerprint = chatMessageFingerprint(message);
+    if ((id && ids.has(id)) || (fingerprint && fingerprints.has(fingerprint))) continue;
+    merged.push(message);
+    if (id) ids.add(id);
+    if (fingerprint) fingerprints.add(fingerprint);
+  }
+
+  return merged;
+};
+
+const mergeChatRecords = (primary, incoming, world) => {
+  const left = reconcileChatForWorld(primary, world);
+  const right = reconcileChatForWorld(incoming, world);
+  if (!left) return right;
+  if (!right) return left;
+
+  return reconcileChatForWorld({
+    ...right,
+    ...left,
+    // The established thread owns its id/title/status. Incoming material contributes
+    // history and missing metadata, never a surprise identity replacement.
+    id: left.id || right.id,
+    linkedEventId: left.linkedEventId || right.linkedEventId,
+    messages: mergeChatMessages(left.messages, right.messages),
+    source: left.source || right.source,
+    status: left.status || right.status || "open",
+    title: left.title || right.title,
+  }, world);
+};
+
+export const reconcileChatsForWorld = (chats, world) => {
+  const reconciled = normalizeArray(chats)
+    .map((entry, index) => reconcileChatForWorld(entry, world, index))
+    .filter(Boolean);
+
+  const output = [];
+  const openByParticipants = new Map();
+
+  for (const chat of reconciled) {
+    // Closed chats are history. Never fold them into a current negotiation merely
+    // because the same countries are talking again twenty years later.
+    if (normalizeString(chat.status).toLowerCase() === "closed") {
+      output.push(chat);
+      continue;
+    }
+
+    const key = chatParticipantSetKey(chat, world);
+    if (!key) {
+      // Ambiguous/unresolved actors are intentionally NOT merged. This is the civil-
+      // war safety wall: uncertainty produces two threads, not one invented polity.
+      output.push(chat);
+      continue;
+    }
+
+    const existingIndex = openByParticipants.get(key);
+    if (existingIndex == null) {
+      openByParticipants.set(key, output.length);
+      output.push(chat);
+      continue;
+    }
+
+    output[existingIndex] = mergeChatRecords(output[existingIndex], chat, world);
+  }
+
+  return output;
+};
+
+// The player is implicit in every diplomatic thread. Older generated chats sometimes
+// stored the player as an ordinary participant as well, producing self-chats such as
+// "United Kingdom, German Empire" while the campaign player was that same German
+// lineage. Strip the player ONLY when its save-aware lineage resolves unambiguously,
+// then reconcile again so [Britain, player] and [Britain] collapse into one thread.
+// If the player identity is ambiguous/unresolved, preserve the data rather than guess.
+export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
+  const base = reconcileChatsForWorld(chats, world);
+  const playerIdentity = resolveChatParticipantIdentity(
+    typeof playerCountry === "object" ? playerCountry : { name: playerCountry },
+    world,
+  );
+
+  if (!playerIdentity.safe || !playerIdentity.polityKey) return base;
+
+  const playerKey = normalizeString(playerIdentity.polityKey).toLowerCase();
+  const stripped = base
+    .map((chat) => {
+      const countries = normalizeArray(chat.countries).filter((country) => {
+        const resolved = resolveChatParticipantIdentity(country, world);
+        if (!resolved.safe || !resolved.polityKey) return true;
+        return normalizeString(resolved.polityKey).toLowerCase() !== playerKey;
+      });
+
+      // A player-only thread is not diplomacy; it was malformed legacy/generated
+      // state. Dropping it is safer than letting the UI invite the player to answer
+      // themselves or letting an AI leader speak on the player's behalf.
+      if (countries.length === 0) return null;
+      return { ...chat, countries };
+    })
+    .filter(Boolean);
+
+  return reconcileChatsForWorld(stripped, world);
+};
+
+// Merge newly generated/outreach chats onto the LIVE stored list. Existing storage
+// wins identity/id/order; a new unmatched thread is prepended. This is intentionally
+// separate from normalizeChats so structural parsing never starts making historical
+// claims about which two actors are "really" the same country.
+export const mergeIncomingChats = (existingChats, incomingChats, world, { playerCountry = "" } = {}) => {
+  const reconcile = (list) => playerCountry
+    ? reconcileChatsForPlayer(list, world, playerCountry)
+    : reconcileChatsForWorld(list, world);
+  const base = reconcile(existingChats);
+  const incoming = reconcile(incomingChats);
+
+  // Incoming lists are already newest-first. Iterate backwards when prepending so
+  // their visible ordering survives.
+  for (let index = incoming.length - 1; index >= 0; index -= 1) {
+    const chat = incoming[index];
+    const status = normalizeString(chat.status).toLowerCase();
+    const key = status === "closed" ? "" : chatParticipantSetKey(chat, world);
+    const existingIndex = key
+      ? base.findIndex((candidate) =>
+          normalizeString(candidate.status).toLowerCase() !== "closed" &&
+          chatParticipantSetKey(candidate, world) === key)
+      : -1;
+
+    if (existingIndex >= 0) {
+      base[existingIndex] = mergeChatRecords(base[existingIndex], chat, world);
+    } else {
+      base.unshift(chat);
+    }
+  }
+
+  return reconcile(base);
+};
 
 const normalizeRegionTransfer = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -1050,10 +1409,20 @@ const normalizePolityOverride = (key, value) => {
 
   const status = normalizeOptionalString(value.status).toLowerCase();
 
+  const rawMapRefs = value.mapRefs && typeof value.mapRefs === "object" && !Array.isArray(value.mapRefs)
+    ? value.mapRefs
+    : {};
+  const gadm0 = [...new Set(
+    normalizeArray(rawMapRefs.gadm0)
+      .map((entry) => normalizeOptionalString(entry).toUpperCase())
+      .filter(Boolean),
+  )];
+
   return {
     aliases: normalizeActionParticipants(value.aliases || value.additionalNames),
     code,
     color: normalizeOptionalString(value.color),
+    ...(gadm0.length ? { mapRefs: { ...rawMapRefs, gadm0 } } : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
     ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
@@ -1349,11 +1718,33 @@ export const writeEventsState = async (events, options = {}) => {
   return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
 };
 
-export const readChatsState = async ({ force = false } = {}) =>
-  normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
+export const readChatsState = async ({ force = false, world = null, playerCountry = "" } = {}) => {
+  const chats = normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
+  if (!world) return chats;
+  return playerCountry
+    ? reconcileChatsForPlayer(chats, world, playerCountry)
+    : reconcileChatsForWorld(chats, world);
+};
 
-export const writeChatsState = async (chats, options = {}) =>
-  writeJson(JSON_URLS.chat, normalizeChats(chats), { pretty: true, ...options });
+// All chat writers share one queue. The UI can emit a player-message save followed
+// milliseconds later by an NPC-reply save; without serialization the older request
+// can finish last and overwrite the newer history. Serializing at the storage choke
+// point preserves call order for EVERY writer, not just the React panel.
+let chatWriteQueue = Promise.resolve();
+
+export const writeChatsState = (chats, { world = null, playerCountry = "", ...options } = {}) => {
+  const normalized = world
+    ? (playerCountry
+      ? reconcileChatsForPlayer(chats, world, playerCountry)
+      : reconcileChatsForWorld(chats, world))
+    : normalizeChats(chats);
+  const snapshot = cloneValue(normalized);
+
+  const write = () => writeJson(JSON_URLS.chat, snapshot, { pretty: true, ...options });
+  const pending = chatWriteQueue.then(write, write);
+  chatWriteQueue = pending.then(() => undefined, () => undefined);
+  return pending;
+};
 
 export const readGameStateBundle = async ({ force = false } = {}) => {
   const [actions, chats, events, game, world] = await Promise.all([
@@ -1366,7 +1757,7 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
 
   return {
     actions,
-    chats,
+    chats: reconcileChatsForPlayer(chats, world, game.country),
     events,
     game,
     world,
