@@ -526,6 +526,7 @@ async function callGemini(systemPrompt, history, {
     deadline,
     maxTokens = 8192,
     onChunk,
+    reasoningEnabled = getReasoningEnabled(),
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -560,7 +561,7 @@ async function callGemini(systemPrompt, history, {
                 contents: history,
                 generationConfig: {
                     maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
-                    ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+                    ...(reasoningEnabled ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
                 },
                 ...customParams,
             }),
@@ -582,10 +583,19 @@ async function callGemini(systemPrompt, history, {
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
                 contents: history,
-                // Reasoning toggle (settings): let thinking-capable Gemini models think.
-                ...(getReasoningEnabled()
-                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
-                     : {}),
+                // Lightweight structured tasks can explicitly disable reasoning and
+                // cap output; long simulation turns still omit maxTokens and keep the
+                // provider/model defaults.
+                ...((reasoningEnabled || Number(maxTokens) > 0)
+                    ? { generationConfig: {
+                        ...(Number(maxTokens) > 0
+                            ? { maxOutputTokens: Math.max(1, Number(maxTokens)) }
+                            : {}),
+                        ...(reasoningEnabled
+                            ? { thinkingConfig: { thinkingBudget: 8192 } }
+                            : {}),
+                    } }
+                    : {}),
                 ...customParams,
                 ...(tool ? {
                     tools: [{ functionDeclarations: [{
@@ -653,6 +663,7 @@ async function callOpenAIStyleChatCompletions({
     signal,
     tool,
     onChunk,
+    reasoningEnabled = getReasoningEnabled(),
     allowJsonSchemaFallback = false,
     maxTokens,
     tokenLimitField = "max_tokens",
@@ -689,14 +700,14 @@ async function callOpenAIStyleChatCompletions({
                 // fell back to non-tool modes, which DID carry it). Providers that
                 // reject the tools+reasoning combination surface the documented
                 // error below and the call retries without it.
-                ...(getReasoningEnabled() && !disableToolReasoning ? { reasoning_effort: "medium" } : {}),
+                ...(reasoningEnabled && !disableToolReasoning ? { reasoning_effort: "medium" } : {}),
                 // Thinking-class local models (Qwen3, Seed-OSS) key on
                 // enable_thinking, not reasoning_effort — textgen/oobabooga
                 // honors it per-request, llama.cpp/LM Studio ignore unknown
                 // fields. Local endpoints only: strict cloud APIs reject
                 // unknown parameters. Sent only when the toggle is ON so a
                 // server-side --enable-thinking default is never overridden.
-                ...(streamLocalEndpoint && getReasoningEnabled() && !disableToolReasoning ? { enable_thinking: true } : {}),
+                ...(streamLocalEndpoint && reasoningEnabled && !disableToolReasoning ? { enable_thinking: true } : {}),
                 // No cap unless a caller asked for a specific budget: omit the field so
                 // the provider uses the model's own maximum (long turns aren't truncated).
                 ...(Number(maxTokens) > 0 ? { [tokenLimitField]: Number(maxTokens) } : {}),
@@ -888,6 +899,7 @@ async function callAnthropic(systemPrompt, history, {
     deadline,
     maxTokens,
     onChunk,
+    reasoningEnabled = getReasoningEnabled(),
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -916,7 +928,7 @@ async function callAnthropic(systemPrompt, history, {
     // Reasoning toggle (settings): extended thinking. max_tokens must exceed the
     // thinking budget, so it is raised alongside; thinking blocks are filtered out
     // by extractAnthropicText, which only reads text blocks.
-    const reasoning = getReasoningEnabled();
+    const reasoning = reasoningEnabled;
     const customParams = parseCustomParams(settings.customParams, "Anthropic");
     // Uncapped by default -> the model's own maximum (learned from a prior 400).
     let requestedMaxTokens = Number(maxTokens) > 0
@@ -998,6 +1010,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     deadline,
     maxTokens,
     onChunk,
+    reasoningEnabled = getReasoningEnabled(),
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -1027,7 +1040,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         ...(apiKey ? { "x-api-key": apiKey } : {}),
     };
 
-    const reasoning = getReasoningEnabled();
+    const reasoning = reasoningEnabled;
     const customParams = parseCustomParams(settings.customParams, "Anthropic Compatible");
     // Uncapped by default -> the model's own maximum (learned from a prior 400).
     let requestedMaxTokens = Number(maxTokens) > 0
@@ -1195,9 +1208,12 @@ async function buildAdvisorSystemPrompt() {
     return renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
 }
 
-export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
+export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "") {
     await ensurePromptsLoaded();
-    const participantList = countries.map((country) => `- ${country}`).join("\n");
+    const participantNames = (countries ?? [])
+    .map((country) => typeof country === "string" ? country : country?.name)
+    .filter((country) => typeof country === "string" && country.trim());
+    const participantList = participantNames.map((country) => `- ${country}`).join("\n");
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
         readJson(JSON_URLS.game, { defaultValue: {} }),
         readJson(JSON_URLS.actions, { defaultValue: [] }),
@@ -1214,7 +1230,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
             chatData,
             eventData,
             gameData,
-            speakingAs: countries.find((country) => country !== playerCountry) || "",
+            speakingAs: speakingAs || participantNames.find((country) => country !== playerCountry) || "",
             worldData,
         })),
         chatParticipants: participantList || "",
@@ -1287,8 +1303,17 @@ export function loadDiplomaticHistory(savedMessages) {
     .filter((msg) => ["user", "leader"].includes(msg.role))
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.text }],
+        // Group diplomacy needs to remember WHICH delegation said each line after
+        // a panel reopen; otherwise every saved NPC message becomes anonymous model text.
+        parts: [{ text: msg.role === "leader" && msg.speaker ? `[${msg.speaker}]: ${msg.text}` : msg.text }],
     }));
+    diplomaticHistory = compactConversationHistory(diplomaticHistory);
+}
+
+export function appendDiplomaticPlayerMessage(playerMessage) {
+    const text = String(playerMessage ?? "").trim();
+    if (!text) return;
+    diplomaticHistory.push({ role: "user", parts: [{ text }] });
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
 }
 
@@ -1300,11 +1325,14 @@ function parseReaction(raw) {
     return { reply, reaction };
 }
 
-export async function sendDiplomaticMessage(playerMessage, speakingAs, countries, opts) {
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, null);
+export async function sendDiplomaticMessage(playerMessage, speakingAs, countries, opts = {}) {
+    const { appendPlayerMessage = true, ...aiOpts } = opts || {};
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs);
 
-    diplomaticHistory.push({ role: "user", parts: [{ text: playerMessage }] });
-    diplomaticHistory = compactConversationHistory(diplomaticHistory);
+    // Backwards-compatible default: direct callers still append the player's line.
+    // The group-chat UI appends it once up-front, then several delegations may respond
+    // to that SAME line without duplicating it in model history.
+    if (appendPlayerMessage) appendDiplomaticPlayerMessage(playerMessage);
 
     const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
 
@@ -1314,12 +1342,14 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     ];
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat" });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...aiOpts, languageMode: "chat" });
         const { reply, reaction } = parseReaction(raw);
         diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
         return { reply, reaction };
     } catch (err) {
-        diplomaticHistory.pop();
+        // Only undo a player line that THIS function appended. The UI-owned path
+        // keeps the player's sent message in history even if the NPC reply errors.
+        if (appendPlayerMessage) diplomaticHistory.pop();
         throw err;
     }
 }

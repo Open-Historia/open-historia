@@ -26,6 +26,7 @@ import {
 } from "../../runtime/assets.js";
 import {
   applyEventImpactsToWorld,
+  chatParticipantSetKey,
   mergeIncomingChats,
   normalizeActionEntry,
   normalizeActions,
@@ -429,6 +430,8 @@ const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of leve
 
 const runJsonTask = async (taskKey, {
   fallback,
+  maxTokens,
+  reasoningEnabled,
   signal,
   timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0,
   userMessage,
@@ -477,6 +480,23 @@ const runJsonTask = async (taskKey, {
     // Place renaming: appended at call time so existing frozen-prompt campaigns get it
     // too; the markerOps rename op ships via the LIVE tool schema either way.
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
+  }
+
+  // Existing campaigns carry frozen prompt packs, so group-chat floor control
+  // needs a live directive too. Silence is a valid outcome here: this task decides
+  // whether ANOTHER participant should take the floor, not whether a bilateral
+  // counterpart is allowed to ghost the player (1:1 replies are guaranteed by UI).
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    systemPrompt = `${systemPrompt}\n\n[Autonomous Diplomacy — live override]\nA.I.-controlled polities have their own diplomacy and may negotiate, threaten, align, mediate, trade, or make agreements without waiting for ${normalizeString(variables.playerPolity) || "the player"}. Private A.I.↔A.I. diplomacy belongs in the TIMELINE as events, with every lasting consequence expressed through the existing structured impacts (for example polityChanges for alignments/reputation, regionTransfers for legal settlements, unitOps for agreed military coordination). Do NOT create a hidden or fake NPC-only chat: the player is implicit in every diplomatic chat in this game. impacts.createdChats and top-level diplomaticOutreach are ONLY for situations where one or more A.I. polities actually contact the player. A group chat means those listed polities are jointly bringing the player into the discussion, not privately talking among themselves. Keep the combined total of createdChats + diplomaticOutreach to at most 3 per jump; fewer is usually better, and zero is correct when nobody has a reason to contact the player.`;
+  }
+
+  if (taskKey === "idleDiplomacy") {
+    const blockedSets = normalizeString(variables?.idleDiplomacyBlockedParticipantSets) || "None.";
+    systemPrompt = `${systemPrompt}\n\n[Living Diplomacy — live override]\nThis is optional autonomous outreach, not mandatory chatter. Return {"chat":null} unless an A.I.-controlled polity has a concrete reason to contact the player now. The approach may be bilateral OR, when several polities genuinely share the same purpose, a small group approach: countries must list every non-player participant who is jointly contacting the player, and speaker must be one of those participants. Never include the player's polity in countries. Reuse the diplomatic context already visible in Existing Chats instead of repeating a proposal, warning, congratulations, or request that is already there. A group approach is still a conversation WITH the player; never use this task to represent private NPC↔NPC talks.\n\n[Already active on this in-game date — DO NOT choose these exact participant sets]\n${blockedSets}\nIf the only plausible outreach would come from one of those exact participant sets, return {"chat":null} instead of generating a message the runtime must throw away. A different genuinely justified joint group is still allowed; do not invent extra participants merely to evade this guard.`;
+  }
+
+  if (taskKey === "nextSpeaker") {
+    systemPrompt = `${systemPrompt}\n\n[Diplomatic Floor Control — live override]\nThis task decides whether another non-player participant should take the floor in a GROUP diplomatic chat. Returning nextSpeaker:null is valid and often correct when nobody has a distinct useful contribution, the player's message merely acknowledges/closes the exchange, or another reply would only repeat agreement. Never select a participant merely because they are present. If the player directly addresses or asks a participant for an answer, that participant should normally respond. Do not select the most recent speaker or anyone the caller marks as already having spoken in this response round. Bilateral chats do NOT use this silence decision: their counterpart still answers the player's message.`;
   }
 
   if (taskKey === "gameMaster") {
@@ -668,6 +688,8 @@ Default verdict remains KEEP when uncertain.`;
         // the map never changed and no chats opened. main.jsx now lets each provider
         // use its own model maximum when no maxTokens is passed.
         deadline,
+        ...(Number(maxTokens) > 0 ? { maxTokens: Number(maxTokens) } : {}),
+        ...(typeof reasoningEnabled === "boolean" ? { reasoningEnabled } : {}),
         signal: controller.signal,
         tool,
       });
@@ -1046,38 +1068,48 @@ const fallbackDescriptionToAction = async (rawInput, bundle) => {
   };
 };
 
-const pickMentionedSpeaker = (messageText, participants, excludedSpeaker) => {
-  const normalizedText = normalizeString(messageText).toLowerCase();
+const speakerExclusionKey = (value) => normalizeString(value).toLowerCase();
+
+const pickAddressedSpeaker = (messageText, participants, excludedSpeakers = []) => {
+  const text = normalizeString(messageText);
+  const normalizedText = text.toLowerCase();
   if (!normalizedText) return null;
+
+  const excluded = new Set(normalizeArray(excludedSpeakers).map(speakerExclusionKey).filter(Boolean));
+  const hasQuestion = text.includes("?");
 
   return (
     participants.find((country) => {
-      if (country.name === excludedSpeaker) return false;
-      return normalizedText.includes(country.name.toLowerCase());
+      const name = normalizeString(country?.name);
+      const nameKey = name.toLowerCase();
+      if (!nameKey || excluded.has(nameKey)) return false;
+
+      // Native backstop for obvious direct address. The AI normally handles nuance,
+      // but a direct question such as "Russia, will you accept?" must not become
+      // silence merely because a provider returned null or the selector call failed.
+      return normalizedText.startsWith(`${nameKey},`) ||
+        normalizedText.startsWith(`${nameKey}:`) ||
+        normalizedText.includes(`\n${nameKey},`) ||
+        normalizedText.includes(`\n${nameKey}:`) ||
+        (hasQuestion && normalizedText.includes(nameKey));
     }) ?? null
   );
 };
 
-const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
+const fallbackNextSpeaker = ({ chat, excludedSpeaker = "", excludedSpeakers = [] }) => {
   const normalizedChat = normalizeChats([chat])[0];
   if (!normalizedChat) {
-    return { nextSpeaker: "" };
+    return { nextSpeaker: null };
   }
 
+  const excluded = [excludedSpeaker, ...normalizeArray(excludedSpeakers)].filter(Boolean);
   const lastMessage = normalizedChat.messages.at(-1);
-  const mentionedSpeaker = pickMentionedSpeaker(lastMessage?.text, normalizedChat.countries, excludedSpeaker);
-  if (mentionedSpeaker) {
-    return { nextSpeaker: mentionedSpeaker.name };
-  }
+  const addressedSpeaker = pickAddressedSpeaker(lastMessage?.text, normalizedChat.countries, excluded);
 
-  const fallbackCountry =
-    normalizedChat.countries.find((country) => country.name !== excludedSpeaker) ??
-    normalizedChat.countries[0] ??
-    { name: "" };
-
-  return {
-    nextSpeaker: fallbackCountry.name,
-  };
+  // Silence is the safe fallback. We only force a speaker when the player's latest
+  // message clearly addresses somebody; otherwise an AI failure must not recreate
+  // the old "someone always gets the final word" round-robin behaviour.
+  return { nextSpeaker: addressedSpeaker?.name || null };
 };
 
 export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
@@ -1934,6 +1966,33 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
     candidate.diplomaticOutreach = keptOutreach;
   }
 
+  // Prompt advice is not a quota. Enforce the inbox bound here so a provider that
+  // gets enthusiastic cannot dump six invitations into one turn. Event-linked chats
+  // win salvage priority because they have an explicit in-world cause; free-floating
+  // outreach uses whatever slots remain.
+  const generatedChatContainers = containers.filter(({ path }) => path !== "$.impacts");
+  const createdChatCount = generatedChatContainers.reduce(
+    (sum, { impacts }) => sum + normalizeArray(impacts?.createdChats).length,
+    0,
+  );
+  const outreachCount = normalizeArray(candidate?.diplomaticOutreach).length;
+  const totalDiplomaticApproaches = createdChatCount + outreachCount;
+  if (totalDiplomaticApproaches > 3) {
+    if (strict) {
+      return `The combined total of impacts.createdChats and $.diplomaticOutreach must be at most 3; received ${totalDiplomaticApproaches}.`;
+    }
+
+    let remaining = 3;
+    for (const { impacts } of generatedChatContainers) {
+      if (!impacts || !Array.isArray(impacts.createdChats)) continue;
+      impacts.createdChats = impacts.createdChats.slice(0, remaining);
+      remaining = Math.max(0, remaining - impacts.createdChats.length);
+    }
+    if (Array.isArray(candidate?.diplomaticOutreach)) {
+      candidate.diplomaticOutreach = candidate.diplomaticOutreach.slice(0, remaining);
+    }
+  }
+
   return "";
 };
 
@@ -2600,6 +2659,7 @@ export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {
 export const chooseNextDiplomaticSpeaker = async ({
   chat,
   excludeSpeaker = "",
+  excludedSpeakers = [],
 } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const normalizedChat = normalizeChats([chat])[0];
@@ -2607,26 +2667,50 @@ export const chooseNextDiplomaticSpeaker = async ({
     return "";
   }
 
+  const excluded = [excludeSpeaker, ...normalizeArray(excludedSpeakers)]
+    .map(speakerExclusionKey)
+    .filter(Boolean);
+  const excludedSet = new Set(excluded);
   const variables = await buildTemplateVariables(bundle, { chat: normalizedChat });
   const { payload } = await runJsonTask("nextSpeaker", {
-    fallback: () => fallbackNextSpeaker({ chat: normalizedChat, excludedSpeaker: excludeSpeaker }),
-    userMessage: "Choose the next speaker as JSON only.",
+    fallback: () => fallbackNextSpeaker({
+      chat: normalizedChat,
+      excludedSpeaker: excludeSpeaker,
+      excludedSpeakers,
+    }),
+    userMessage: [
+      "Decide whether another participant genuinely needs to speak now. Return JSON only.",
+      "Use nextSpeaker:null when nobody has a distinct useful response; silence is valid and often natural.",
+      "A participant directly addressed or asked a question should normally answer.",
+      excluded.length > 0
+        ? `Do not select these participants in this response round: ${[excludeSpeaker, ...normalizeArray(excludedSpeakers)].filter(Boolean).join(", ")}.`
+        : "No participant is excluded beyond the normal most-recent-speaker rule.",
+    ].join("\n"),
     variables: {
       ...variables,
       lastSpeaker: excludeSpeaker || variables.lastSpeaker,
     },
   });
 
+  const fallback = () => fallbackNextSpeaker({
+    chat: normalizedChat,
+    excludedSpeaker: excludeSpeaker,
+    excludedSpeakers,
+  }).nextSpeaker || "";
+
   const nextSpeaker = normalizeString(payload?.nextSpeaker);
   if (!nextSpeaker) {
-    return fallbackNextSpeaker({ chat: normalizedChat, excludedSpeaker: excludeSpeaker }).nextSpeaker;
+    return fallback();
   }
 
-  const validSpeaker =
-    normalizedChat.countries.find((country) => country.name.toLowerCase() === nextSpeaker.toLowerCase()) ??
-    normalizedChat.countries.find((country) => country.name !== excludeSpeaker);
+  const validSpeaker = normalizedChat.countries.find((country) => {
+    const nameKey = speakerExclusionKey(country?.name);
+    return nameKey === nextSpeaker.toLowerCase() && !excludedSet.has(nameKey);
+  });
 
-  return validSpeaker?.name || "";
+  // Invalid / stale / already-spoken model output does not force a random country.
+  // Either the latest player line directly addresses somebody, or the floor is quiet.
+  return validSpeaker?.name || fallback();
 };
 
 export const consolidateRecentHistory = async ({ limit = 12 } = {}) => {
@@ -3100,20 +3184,106 @@ export const maybeGeneratePregameHistory = async () => {
 // filling the inbox while making an idle approach actually plausible; the jump-path
 // cap (see defaultPrompts.json) remains the primary source of diplomacy.
 const IDLE_DIPLOMACY_CHANCE = 1 / 8;
-let idleDiplomacyInFlight = false;
+const IDLE_DIPLOMACY_MAX_PER_GAME_DATE = 2;
 
-export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } = {}) => {
-  if (idleDiplomacyInFlight || isSimulationBusy()) return null;
-  if (Math.random() >= chance) return null;
+const idleDiplomacyBlockedSetsForDate = (chats, world, gameDate) => {
+  const blocked = new Map();
+  const wantedDate = normalizeString(gameDate);
+  if (!wantedDate) return blocked;
+
+  for (const chat of normalizeChats(chats)) {
+    if (normalizeString(chat?.status).toLowerCase() === "closed") continue;
+    const participantKey = chatParticipantSetKey(chat, world);
+    if (!participantKey) continue;
+
+    const activeToday = normalizeArray(chat?.messages).some((message) =>
+      normalizeString(message?.role).toLowerCase() === "leader" &&
+      normalizeString(message?.time) === wantedDate
+    );
+    if (!activeToday) continue;
+
+    const names = normalizeArray(chat?.countries)
+      .map((country) => {
+        const identity = resolveChatParticipantIdentity(country, world);
+        return normalizeString(identity?.name || country?.name || country?.code);
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+
+    blocked.set(participantKey, names.join(" + ") || participantKey);
+  }
+
+  return blocked;
+};
+
+const idleDiplomacyNoop = (debug, reason, details = {}) =>
+  debug
+    ? { __idleDiplomacyDebug: true, sent: false, reason, ...details }
+    : null;
+
+let idleDiplomacyInFlight = false;
+let idleDiplomacyGameDate = "";
+let idleDiplomacySuccessesThisDate = 0;
+
+export const maybeSendIdleDiplomacy = async ({
+  chance = IDLE_DIPLOMACY_CHANCE,
+  debug = false,
+} = {}) => {
+  if (idleDiplomacyInFlight) return idleDiplomacyNoop(debug, "already-in-flight");
+  if (isSimulationBusy()) return idleDiplomacyNoop(debug, "simulation-busy");
+  if (Math.random() >= chance) return idleDiplomacyNoop(debug, "chance-miss");
+
   idleDiplomacyInFlight = true;
   try {
     const bundle = await readGameStateBundle({ force: true });
-    if (!normalizeString(bundle.game?.country)) return null; // no active game
-    const variables = await buildTemplateVariables(bundle);
+    if (!normalizeString(bundle.game?.country)) {
+      return idleDiplomacyNoop(debug, "no-active-game");
+    }
+
+    // Real-time idling must not turn one frozen in-game day into an inbox avalanche.
+    // Two successful autonomous notes per game date is enough to make the world feel
+    // alive; advancing the campaign date resets the allowance. This remains
+    // session-local: the saved-history guard below handles already-active threads.
+    const currentGameDate = normalizeString(bundle.game?.gameDate);
+    if (currentGameDate !== idleDiplomacyGameDate) {
+      idleDiplomacyGameDate = currentGameDate;
+      idleDiplomacySuccessesThisDate = 0;
+    }
+    if (idleDiplomacySuccessesThisDate >= IDLE_DIPLOMACY_MAX_PER_GAME_DATE) {
+      return idleDiplomacyNoop(debug, "daily-cap-reached", {
+        gameDate: currentGameDate,
+        successesThisDate: idleDiplomacySuccessesThisDate,
+      });
+    }
+
+    // Do this BEFORE the model call. The old version learned that Russia had already
+    // spoken only after paying for another Russia message and then discarding it.
+    // Existing chat state is already in the bundle, so this adds no network request.
+    const blockedParticipantSets = idleDiplomacyBlockedSetsForDate(
+      bundle.chats,
+      bundle.world,
+      currentGameDate,
+    );
+    const blockedParticipantKeys = new Set(blockedParticipantSets.keys());
+    const blockedParticipantLabels = Array.from(blockedParticipantSets.values());
+
+    const variables = {
+      ...(await buildTemplateVariables(bundle)),
+      idleDiplomacyBlockedParticipantSets:
+        blockedParticipantLabels.length > 0
+          ? blockedParticipantLabels.map((label) => `- ${label}`).join("\n")
+          : "None.",
+    };
+
     const { payload } = await runJsonTask("idleDiplomacy", {
-      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
+      // Background diplomacy must be bounded even when the global "limit AI
+      // generation" setting is off. A stuck provider should not hold the idle lock
+      // forever or burn a full reasoning budget for a one-paragraph telegram.
+      timeoutMs: 60000,
+      maxTokens: 1024,
+      reasoningEnabled: false,
       userMessage:
-        "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now. Return JSON only.",
+        "A quiet moment between rounds. Decide whether one eligible polity or small joint group would send the player a short diplomatic note right now. Respect the blocked participant sets in the system instructions. Return JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
@@ -3128,39 +3298,93 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       },
       variables,
     });
-    if (!payload?.chat) return null;
+
+    if (!payload?.chat) {
+      return idleDiplomacyNoop(debug, "model-chose-silence", {
+        blockedParticipantSets: blockedParticipantLabels,
+      });
+    }
+
     // A jump may have started while the model was thinking; its state bundle
     // predates our write, so drop the note rather than race the save.
-    if (isSimulationBusy()) return null;
-    const built = await buildGeneratedChat({ ...payload.chat, source: "outreach" }, "", bundle.world, {
-      playerName: bundle.game.country,
-    });
-    if (!built) return null;
+    if (isSimulationBusy()) {
+      return idleDiplomacyNoop(debug, "simulation-started-during-generation");
+    }
+
+    const built = await buildGeneratedChat(
+      { ...payload.chat, source: "outreach" },
+      "",
+      bundle.world,
+      { playerName: bundle.game.country },
+    );
+    if (!built) {
+      return idleDiplomacyNoop(debug, "generated-chat-invalid");
+    }
+
+    const builtParticipantKey = chatParticipantSetKey(built, bundle.world);
+
+    // Final deterministic backstop for the pre-generation exclusion. The prompt
+    // should prevent this in normal use, but model output never gets to override a
+    // cost/spam guard.
+    if (builtParticipantKey && blockedParticipantKeys.has(builtParticipantKey)) {
+      return idleDiplomacyNoop(debug, "participant-set-already-active-today", {
+        participants: normalizeArray(built.countries).map((country) => country.name).filter(Boolean),
+      });
+    }
+
+    // Re-read immediately before the write because another diplomacy action could
+    // have landed while the model was thinking. This is the race-safe guard; unlike
+    // the old implementation, it should almost never be the first time we discover
+    // that a participant set is already active today.
     const chats = await readChatsState({
       force: true,
       world: bundle.world,
       playerCountry: bundle.game.country,
     });
+    const alreadyActiveToday = builtParticipantKey && chats.some((chat) =>
+      normalizeString(chat?.status).toLowerCase() !== "closed" &&
+      chatParticipantSetKey(chat, bundle.world) === builtParticipantKey &&
+      normalizeArray(chat?.messages).some((message) =>
+        normalizeString(message?.role).toLowerCase() === "leader" &&
+        normalizeString(message?.time) === currentGameDate
+      )
+    );
+    if (alreadyActiveToday) {
+      return idleDiplomacyNoop(debug, "participant-set-became-active-during-generation", {
+        participants: normalizeArray(built.countries).map((country) => country.name).filter(Boolean),
+      });
+    }
+
     const datedBuilt = {
       ...built,
-      messages: built.messages.map((message, index) => index === 0 && !normalizeString(message.time)
-        ? { ...message, time: normalizeString(bundle.game?.gameDate) }
-        : message),
+      messages: built.messages.map((message, index) =>
+        index === 0 && !normalizeString(message.time)
+          ? { ...message, time: currentGameDate }
+          : message
+      ),
     };
+
     // Same reconciliation path as full turns: 1:1 and GROUP approaches reuse an
     // existing open thread when the stable participant set is the same, regardless
     // of alias/display name or participant order. Closed historical talks stay closed.
     const nextChats = mergeIncomingChats(chats, [datedBuilt], bundle.world, {
       playerCountry: bundle.game.country,
     });
-    if (isSimulationBusy()) return null;
+
+    if (isSimulationBusy()) {
+      return idleDiplomacyNoop(debug, "simulation-started-before-write");
+    }
+
     await writeChatsState(nextChats, {
       world: bundle.world,
       playerCountry: bundle.game.country,
     });
+    idleDiplomacySuccessesThisDate += 1;
     return datedBuilt;
-  } catch {
-    return null; // silence is always the safe outcome
+  } catch (error) {
+    return idleDiplomacyNoop(debug, "error", {
+      message: normalizeString(error?.message),
+    });
   } finally {
     idleDiplomacyInFlight = false;
   }

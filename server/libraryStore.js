@@ -37,20 +37,13 @@ const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
 
 // ---------------------------------------------------------------------------
-// One naming scheme, and it is the COUNTRY'S NAME. Everywhere a country is
-// referenced — ownership overrides, ownerCodes, polity keys, colors, the played
-// country — the identifier is "Russia", not "RUS".
+// Owner references use a STABLE polity lineage key once a record is migrated.
+// The visible polity name may change mid-campaign; that display change must not
+// re-key ownership, colors, flags, chats, or the played country.
 //
-// This used to run the other way: names canonicalized DOWN to a GADM code. That
-// inverted here for two reasons. The obvious one is that owners are names now, so
-// the old direction silently undid every edit at the persistence boundary. The
-// other is that the name->code direction could not be made correct: NAME_TO_CODE
-// was built by last-write-wins over a registry where six codes share the name
-// "India", so canonicalizeCountryRef("India") returned Z07 — a disputed sliver of
-// Kashmir — rather than IND.
-//
-// A code still resolves (an old client, or a model that says "RUS"), and so does
-// a polity's alias, so an author writing "Rome" still reaches "Roman Empire".
+// Legacy GADM codes and historical/current aliases still resolve, but only onto
+// one unambiguous stable key. Stock names remain the fallback for ordinary worlds
+// with no declared polity bridge.
 // ---------------------------------------------------------------------------
 const COUNTRY_NAMES_PATH = path.join(__dirname, "country-names.json");
 
@@ -73,45 +66,89 @@ const resolveOwnerRef = (value, world) => {
   if (!raw) return raw;
 
   const lower = raw.toLowerCase();
-  const overrides = world?.polityOverrides;
-  // A polity the map editor marked `verbatim` was named by a human whose text
-  // collides with a GADM code ("USA"); honour it literally rather than
-  // canonicalising it to the code's country. Nothing else sets this flag, so
-  // legacy and model-written owners are untouched. See resolveOwnerName in
-  // ownerMigration.js for the full note.
-  const verbatimPolity = overrides?.[raw];
-  if (verbatimPolity?.verbatim) return String(verbatimPolity.name ?? raw).trim() || raw;
-  if (overrides && typeof overrides === "object") {
-    for (const [key, polity] of Object.entries(overrides)) {
-      const name = String(polity?.name ?? key).trim();
-      // A polity that names itself after the very token we are resolving tells us
-      // nothing the token didn't already say — skip it and let the registry decide.
-      //
-      // This is the same guard resolveOwnerName has, and it is not a nicety. Without
-      // it {"MNG": {name: "MNG"}} — which is exactly what an editor export emits for
-      // an owner it thinks is custom — shadows the registry, so "MNG" resolves to
-      // "MNG" and can NEVER become "Mongolia". Any author or model that writes a
-      // self-naming polity pins that token permanently.
-      //
-      // Skipping is safe for the polities that are genuinely self-named ("Votengia",
-      // "Roman Empire"): they fall through to a registry miss and come back as
-      // themselves — the same answer, reached honestly.
-      if (name === raw) continue;
-      if (name.toLowerCase() === lower) return name; // already canonical, bar case
-      if (polity && Array.isArray(polity.aliases) &&
-          polity.aliases.some((alias) => String(alias).trim().toLowerCase() === lower)) {
-        return name; // "Rome" -> "Roman Empire"
+  const overrides =
+    world?.polityOverrides && typeof world.polityOverrides === "object"
+      ? world.polityOverrides
+      : null;
+
+  // Legacy/code-keyed records still need the old code -> authored/stock NAME
+  // interpretation until ownerMigration gets its one shot. Do not treat their raw
+  // polity keys as stable lineages yet or ROM/SOV/etc. would get pinned as codes.
+  if (needsOwnerMigration(world)) {
+    const verbatimPolity = overrides?.[raw];
+    if (verbatimPolity?.verbatim) {
+      return String(verbatimPolity.name ?? raw).trim() || raw;
+    }
+    if (overrides) {
+      for (const [key, polity] of Object.entries(overrides)) {
+        const name = String(polity?.name ?? key).trim();
+        if (name === raw) continue;
+        if (name.toLowerCase() === lower) return name;
+        if (
+          Array.isArray(polity?.aliases) &&
+          polity.aliases.some(
+            (alias) => String(alias ?? "").trim().toLowerCase() === lower,
+          )
+        ) {
+          return name;
+        }
+        if (key === raw) return name;
       }
-      if (key === raw) return name; // a legacy code key still maps to its polity
+    }
+    return COUNTRY_NAME_REGISTRY[raw.toUpperCase()] || raw;
+  }
+
+  if (overrides) {
+    // Phase 5 identity rule: the polityOverrides KEY is the stable campaign
+    // lineage. A rename changes record.name; it must never silently re-key every
+    // owner reference at the persistence boundary.
+    if (Object.prototype.hasOwnProperty.call(overrides, raw)) return raw;
+
+    const exactMatches = [];
+    for (const [key, polity] of Object.entries(overrides)) {
+      const tokens = [
+        key,
+        polity?.code,
+        polity?.name,
+        ...(Array.isArray(polity?.aliases) ? polity.aliases : []),
+      ]
+        .map((entry) => String(entry ?? "").trim().toLowerCase())
+        .filter(Boolean);
+      if (tokens.includes(lower)) exactMatches.push(key);
+    }
+    if (exactMatches.length === 1) return exactMatches[0];
+    if (exactMatches.length > 1) return raw; // ambiguity is not permission to guess
+
+    // Stock GADM/ISO identity is provenance, not political identity. An explicit
+    // mapRefs bridge may still tell us which stable polity owns that stock token.
+    const rawUpper = raw.toUpperCase();
+    const stockCodes = new Set();
+    if (COUNTRY_NAME_REGISTRY[rawUpper]) stockCodes.add(rawUpper);
+    for (const [code, name] of Object.entries(COUNTRY_NAME_REGISTRY)) {
+      if (String(name ?? "").trim().toLowerCase() === lower) {
+        stockCodes.add(code.toUpperCase());
+      }
+    }
+
+    if (stockCodes.size > 0) {
+      const mapRefMatches = [];
+      for (const [key, polity] of Object.entries(overrides)) {
+        const refs = Array.isArray(polity?.mapRefs?.gadm0)
+          ? polity.mapRefs.gadm0
+              .map((entry) => String(entry ?? "").trim().toUpperCase())
+              .filter(Boolean)
+          : [];
+        if (refs.some((code) => stockCodes.has(code))) mapRefMatches.push(key);
+      }
+      if (mapRefMatches.length === 1) return mapRefMatches[0];
+      if (mapRefMatches.length > 1) return raw;
     }
   }
 
-  const known = COUNTRY_NAME_REGISTRY[raw];
-  if (known) return known; // legacy code, or a model still saying "RUS"
+  const known = COUNTRY_NAME_REGISTRY[raw.toUpperCase()];
+  if (known) return known; // ordinary stock polity with no declared lineage bridge
 
-  // Unknown reference: it already IS its own identifier — a custom polity simply
-  // is its name.
-  return raw;
+  return raw; // custom polity/name already is its own identifier
 };
 
 // Resolve every country reference inside a world payload, in place-safe copies.
@@ -175,15 +212,17 @@ const canonicalizeWorldCountryRefs = (world) => {
   }
 
   if (next.polityOverrides && typeof next.polityOverrides === "object") {
-    // Keyed by name, and `.code` is dropped rather than rewritten: the key IS the
-    // identifier now, so a `.code` beside it is the exact thing being deleted and
-    // would only mislead the next reader.
+    // Stable key != display name. The owner migration established these keys once;
+    // runtime writes must preserve them forever after. Re-keying this object by
+    // polity.name is exactly how "Austrian Empire" became a brand-new
+    // "Austria-Hungary" lineage and detached its chats/flag.
     next.polityOverrides = Object.fromEntries(
       Object.entries(next.polityOverrides).map(([key, polity]) => {
-        const name = resolveOwnerRef(polity?.name || key, world);
-        if (!polity || typeof polity !== "object") return [name, polity];
+        const stableKey = resolveOwnerRef(key, world) || String(key ?? "").trim();
+        if (!polity || typeof polity !== "object") return [stableKey, polity];
         const { code, ...rest } = polity;
-        return [name, { ...rest, name }];
+        const displayName = String(polity.name ?? stableKey).trim() || stableKey;
+        return [stableKey, { ...rest, name: displayName }];
       }),
     );
   }
@@ -211,7 +250,7 @@ const canonicalizeWorldCountryRefs = (world) => {
   return next;
 };
 
-// Colors may be keyed by a code or an alias; keys resolve like everything else.
+// Owner-keyed presentation maps (colors, etc.) resolve onto the stable lineage.
 const canonicalizeColorKeys = (colors, world) => {
   if (!colors || typeof colors !== "object" || Array.isArray(colors)) return colors;
   return Object.fromEntries(
@@ -219,9 +258,8 @@ const canonicalizeColorKeys = (colors, world) => {
   );
 };
 
-// The played country. `world` is REQUIRED: without it a preset's game.country
-// ("ROM") can reach neither its polity nor the registry, so it stays a raw code
-// while every region around it says "Roman Empire" — and the player owns nothing.
+// The played country is stable lineage identity too. `world` is REQUIRED so an
+// alias/current display name or legacy code resolves back to that key.
 const canonicalizeGameCountry = (game, world) => {
   if (!game || typeof game !== "object" || Array.isArray(game) || !game.country) return game;
   return { ...game, country: resolveOwnerRef(game.country, world) };
@@ -2494,8 +2532,8 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     activeGameId = details.game.id;
     console.log(`No active game — created "${activeGameId}" from scenario "${scenario.id}".`);
   }
-  // Authors and the AI may reference a country by an alias or a legacy code
-  // anywhere; the stored form is the country's name (see resolveOwnerRef).
+  // Authors and the AI may reference a country by an alias, current display
+  // name, or legacy code; the stored form is the stable polity lineage key.
   //
   // The world is read through readRuntimeJsonAsset rather than readJsonFile so it
   // arrives migrated — resolving a name against a still-code-keyed world would

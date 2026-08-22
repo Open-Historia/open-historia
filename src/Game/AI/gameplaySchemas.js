@@ -692,9 +692,14 @@ export const DESCRIPTION_TO_ACTION_SCHEMA = {
 
 export const NEXT_SPEAKER_SCHEMA = {
   type: "object",
-  description: "The exact participant who should speak next in the diplomatic chat.",
+  description: "The exact participant who should speak next in a group diplomatic chat, or null when the floor should return to the player.",
   properties: {
-    nextSpeaker: textSchema("Exact name of one chat participant other than the most recent speaker."),
+    nextSpeaker: {
+      anyOf: [
+        { type: "null", description: "Nobody has a distinct useful response right now; return the floor to the player." },
+        textSchema("Exact name of one eligible chat participant who should speak next."),
+      ],
+    },
   },
   required: ["nextSpeaker"],
   additionalProperties: false,
@@ -1212,7 +1217,7 @@ export const DESCRIPTION_TO_ACTION_TOOL = makeTool(
 
 export const NEXT_SPEAKER_TOOL = makeTool(
   "submit_next_speaker",
-  "Submit the exact diplomatic chat participant who should speak next.",
+  "Submit the exact group-chat participant who should speak next, or null when nobody needs the floor.",
   NEXT_SPEAKER_SCHEMA,
 );
 
@@ -1495,7 +1500,6 @@ export const validateGameplayPayload = (taskKey, value) => {
 
   const requiredTextByTask = {
     descriptionToAction: ["title", "text", "kind"],
-    nextSpeaker: ["nextSpeaker"],
     eventConsolidator: ["summary"],
     catalystCreation: ["title", "premise", "opening"],
     catalystExecutor: ["summary"],

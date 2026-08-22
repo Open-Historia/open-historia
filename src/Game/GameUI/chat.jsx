@@ -2,7 +2,7 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
-import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
+import { appendDiplomaticPlayerMessage, sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
 import { Actions } from "./actions";
 import {
@@ -116,8 +116,58 @@ const countryMatchesIdentity = (country, identity, world = null) => {
     return left.some(value => right.includes(value));
 };
 
+const polityIdentitySignature = (world) => JSON.stringify(
+    Object.entries(world?.polityOverrides || {})
+        .sort(([a], [b]) => String(a).localeCompare(String(b)))
+        .map(([key, record]) => [
+            key,
+            String(record?.name || ""),
+            String(record?.code || ""),
+            String(record?.status || ""),
+            [...(Array.isArray(record?.aliases) ? record.aliases : [])]
+                .map((value) => String(value || ""))
+                .sort(),
+        ]),
+);
+
 const canonicalCountry = (country, world) => {
     if (!country || !world) return country;
+
+    // The selector is fed by the map/asset catalog, whose entries do not always
+    // carry a stable polityKey after a mid-campaign rename. Map popups already
+    // know the owner lineage directly, but the selector may only have the new
+    // display name ("Austria-Hungary"). Bind an exact current name/code/alias
+    // match back to the declared stable key before falling through to the general
+    // resolver. Exact-only keeps rival/civil-war identities fail-safe.
+    const rawName = String(country?.name ?? "").trim().toLowerCase();
+    const rawCode = String(country?.code ?? "").trim().toLowerCase();
+    const rawKey = String(country?.polityKey ?? country?.identityKey ?? "").trim().toLowerCase();
+    const declaredMatches = Object.entries(world?.polityOverrides || {}).filter(([key, record]) => {
+        const tokens = [
+            key,
+            record?.code,
+            record?.name,
+            ...(Array.isArray(record?.aliases) ? record.aliases : []),
+        ]
+            .map((value) => String(value ?? "").trim().toLowerCase())
+            .filter(Boolean);
+        return (rawKey && tokens.includes(rawKey)) ||
+            (rawName && tokens.includes(rawName)) ||
+            (rawCode && tokens.includes(rawCode));
+    });
+
+    if (declaredMatches.length === 1) {
+        const [polityKey, record] = declaredMatches[0];
+        return {
+            ...country,
+            polityKey,
+            name: String(record?.name || country?.name || polityKey).trim(),
+            // Preserve the catalog code as presentation metadata. Political
+            // identity is the stable key above, never this field.
+            code: country?.code || record?.code || polityKey,
+        };
+    }
+
     const resolved = resolveChatParticipantIdentity(country, world);
     if (!resolved.safe || !resolved.participant) return country;
     return {
@@ -295,9 +345,9 @@ const TrashIcon = () => (
 const MessageBubble = ({ msg }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
-    const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
+    const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker, polityKey: msg.polityKey });
     const reactions = Object.entries(msg.reactions ?? {});
-    const reactionFlags = useCountryFlags(reactions.map(([name, { code }]) => ({ name, code })));
+    const reactionFlags = useCountryFlags(reactions.map(([name, { code, polityKey }]) => ({ name, code, polityKey })));
     const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
 
@@ -420,8 +470,8 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
     );
 };
 
-const TypingBubble = ({ speaker, code }) => {
-    const flag = useCountryFlag({ code, name: speaker });
+const TypingBubble = ({ speaker, code, polityKey }) => {
+    const flag = useCountryFlag({ code, name: speaker, polityKey });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
         <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem" }}><FlagMark info={flag} width={18} height={11} /> {speaker}</span>
@@ -507,7 +557,20 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>Selected Countries ({selected.length}):</div>
         <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem" }}>
-        {selected.length === 0 ? "No countries selected yet" : selected.map(c => `${selectedFlags[c.name] ?? "🏳"} ${c.name}`).join(", ")}
+        {selected.length === 0 ? "No countries selected yet" : (
+            <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem" }}>
+            {selected.map((c, index) => {
+                const key = selectionKey(c);
+                const info = selectedFlags[key] || selectedFlags[c.name];
+                return (
+                    <span key={key || `${c.name}-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                    <FlagMark info={info} width={18} height={11} />
+                    <span>{c.name}{index < selected.length - 1 ? "," : ""}</span>
+                    </span>
+                );
+            })}
+            </span>
+        )}
         </div>
         </div>
         <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
@@ -541,6 +604,11 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
+// A group can have a short natural burst of replies, but never an endless model
+// parliament. Each NPC may speak at most once per player message and the burst is
+// capped even in very large conferences.
+const MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE = 3;
+
 const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBack, onMessagesUpdate }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
@@ -569,13 +637,12 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
     const [pendingCountry, setPendingCountry]   = useState(null);
-    const [remainingQueue, setRemainingQueue]   = useState([]);
     const [speakingCountry, setSpeakingCountry] = useState(null);
 
-    const nextSpeakerIdx    = useRef(0);
     const lastPlayerMessage = useRef("");
     const messagesEndRef    = useRef(null);
     const messagesRef       = useRef(chat.messages ?? []);
+    const groupSpeakersThisTurnRef = useRef([]);
 
     useEffect(() => {
         // Flag images resolve lazily from the shared cached catalog.
@@ -600,17 +667,65 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
 
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry, world);
 
-        const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
-            if (isPlayerCountry(country)) {
+        const chooseResponsiveSpeaker = async (updatedMessages) => {
+            const alreadySpoken = groupSpeakersThisTurnRef.current;
+            if (alreadySpoken.length >= MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE) return null;
+
+            const suggestedSpeaker = await chooseNextDiplomaticSpeaker({
+                chat: {
+                    ...chat,
+                    countries,
+                    messages: updatedMessages,
+                },
+                excludeSpeaker: updatedMessages.at(-1)?.speaker || updatedMessages.at(-1)?.role || "",
+                excludedSpeakers: alreadySpoken.map((country) => country.name),
+            }).catch(() => "");
+
+            if (!suggestedSpeaker) return null;
+
+            return countries.find((country) =>
+                !alreadySpoken.some((spoken) => countryMatchesIdentity(country, spoken, world)) &&
+                countryMatchesIdentity(country, suggestedSpeaker, world)
+            ) || null;
+        };
+
+        const offerNextCountry = (country) => {
+            if (!country || isPlayerCountry(country)) {
                 setPendingCountry(null);
-                setRemainingQueue([]);
                 setPhase("player");
                 return;
             }
+            setPendingCountry(country);
+            setPhase("pending");
+        };
+
+        const fetchLeaderResponse = async (country, playerMessage, { continueGroup = false } = {}) => {
+            if (!country || isPlayerCountry(country)) {
+                setPendingCountry(null);
+                setPhase("player");
+                return;
+            }
+
             setIsLoading(true);
             setSpeakingCountry(country);
+            let updatedMessages = null;
+            let replySucceeded = false;
             try {
-                const { reply, reaction } = await sendDiplomaticMessage(playerMessage, country.name, countries);
+                const { reply, reaction } = await sendDiplomaticMessage(
+                    playerMessage,
+                    country.name,
+                    countries,
+                    { appendPlayerMessage: false },
+                );
+
+                const leaderMessage = {
+                    role: "leader",
+                    speaker: country.name,
+                    code: country.code,
+                    polityKey: country.polityKey || "",
+                    text: reply,
+                    time: gameDate,
+                };
 
                 if (reaction) {
                     const msgs = [...messagesRef.current];
@@ -620,81 +735,52 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                             ...msgs[lastUserIdx],
                             reactions: { ...(msgs[lastUserIdx].reactions ?? {}), [country.name]: { emoji: reaction, code: country.code, polityKey: country.polityKey || "" } },
                         };
-                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
-                    } else {
-                        pushMessages([...msgs, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
                     }
+                    updatedMessages = [...msgs, leaderMessage];
                 } else {
-                    pushMessages([...messagesRef.current, { role: "leader", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: reply, time: gameDate }]);
+                    updatedMessages = [...messagesRef.current, leaderMessage];
                 }
+
+                pushMessages(updatedMessages);
+                replySucceeded = true;
             } catch (err) {
-                pushMessages([...messagesRef.current, { role: "error", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: err.message, time: gameDate }]);
+                updatedMessages = [...messagesRef.current, { role: "error", speaker: country.name, code: country.code, polityKey: country.polityKey || "", text: err.message, time: gameDate }];
+                pushMessages(updatedMessages);
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
-            if (queueAfter.length > 0) {
-                offerNextCountry(queueAfter);
-            } else {
+
+            if (!continueGroup || !replySucceeded) {
                 setPhase("player");
-            }
-        };
-
-        const buildRoundQueue = () => {
-            const n = countries.length;
-            if (n === 0) return [];
-            const s = nextSpeakerIdx.current % n;
-            return [...countries.slice(s), ...countries.slice(0, s)];
-        };
-
-        const buildResponsiveQueue = async (updatedMessages) => {
-            const rotatedQueue = buildRoundQueue();
-            const suggestedSpeaker = await chooseNextDiplomaticSpeaker({
-                chat: {
-                    ...chat,
-                    messages: updatedMessages,
-                },
-                excludeSpeaker: updatedMessages.at(-1)?.speaker || updatedMessages.at(-1)?.role || "",
-            }).catch(() => "");
-
-            if (!suggestedSpeaker) {
-                return rotatedQueue;
+                return;
             }
 
-            const suggestedCountry = rotatedQueue.find((country) =>
-                countryMatchesIdentity(country, suggestedSpeaker, world)
-            );
-            if (!suggestedCountry) {
-                return rotatedQueue;
-            }
-
-            return [
-                suggestedCountry,
-                ...rotatedQueue.filter((country) => !countryMatchesIdentity(country, suggestedCountry, world)),
+            groupSpeakersThisTurnRef.current = [
+                ...groupSpeakersThisTurnRef.current,
+                country,
             ];
-        };
 
-        const offerNextCountry = (queue) => {
-            const [next, ...rest] = queue;
-            if (!next || countries.length === 0) {
+            if (groupSpeakersThisTurnRef.current.length >= MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE) {
                 setPhase("player");
                 return;
             }
-            nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % countries.length;
-            if (isPlayerCountry(next)) {
-                setPendingCountry(null);
-                setRemainingQueue([]);
-                setPhase("player");
-                return;
-            }
-            setPendingCountry(next);
-            setRemainingQueue(rest);
-            setPhase("pending");
+
+            // Do NOT walk a prebuilt queue. After every actual reply, ask whether
+            // anybody else has a distinct reason to take the floor. Null = player turn.
+            setPhase("choosing");
+            const next = await chooseResponsiveSpeaker(updatedMessages);
+            offerNextCountry(next);
         };
 
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
-            if (!text || isLoading) return;
+            if (!text || isLoading || phase === "choosing") return;
+            if (countries.length === 0) {
+                pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
+                return;
+            }
+
             lastPlayerMessage.current = text;
             const nextMessages = [...messagesRef.current, {
                 role: "user",
@@ -704,31 +790,30 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                 time: gameDate,
             }];
             pushMessages(nextMessages);
+            appendDiplomaticPlayerMessage(text);
             setPlayerInput("");
-            const queue = await buildResponsiveQueue(nextMessages);
-            if (queue.length === 0) {
-                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
+
+            if (!isGroup) {
+                // Bilateral diplomacy remains dependable: the one counterpart answers.
+                await fetchLeaderResponse(countries[0], text, { continueGroup: false });
                 return;
             }
-            if (isGroup) {
-                offerNextCountry(queue);
-            } else {
-                await fetchLeaderResponse(queue[0], text, []);
-            }
+
+            groupSpeakersThisTurnRef.current = [];
+            setPhase("choosing");
+            const next = await chooseResponsiveSpeaker(nextMessages);
+            offerNextCountry(next);
         };
 
         const handleSpeakInstead = () => {
             setPendingCountry(null);
-            setRemainingQueue([]);
             setPhase("player");
         };
 
         const handleLetSpeak = async () => {
             const country = pendingCountry;
-            const rest    = remainingQueue;
             setPendingCountry(null);
-            setRemainingQueue([]);
-            await fetchLeaderResponse(country, lastPlayerMessage.current, rest);
+            await fetchLeaderResponse(country, lastPlayerMessage.current, { continueGroup: true });
         };
 
         const typingSpeaker = speakingCountry ?? countries[0];
@@ -766,14 +851,14 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                 </p>
             )}
             {messages.map((msg, i) => <MessageBubble key={i} msg={msg} chatCountries={countries} />)}
-            {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
+            {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} polityKey={typingSpeaker.polityKey} />}
             <div ref={messagesEndRef} />
             </div>
 
             {phase === "pending" && !isLoading && pendingCountry ? (
                 <div style={{ padding: "0.75rem 1rem 0.9rem", borderTop: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(0,0,0,0.15)", flexShrink: 0 }}>
                 <p style={{ margin: "0 0 0.55rem 0", fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", textAlign: "center" }}>
-                <CountryTurnLabel country={pendingCountry} remaining={remainingQueue.length} />
+                <CountryTurnLabel country={pendingCountry} />
                 </p>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
@@ -813,12 +898,11 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
         );
 };
 
-const CountryTurnLabel = ({ country, remaining }) => {
-    const flag = useCountryFlag({ code: country.code, name: country.name });
+const CountryTurnLabel = ({ country }) => {
+    const flag = useCountryFlag(country);
     return (
         <>
         <FlagMark info={flag} width={18} height={11} /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
-        {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
         </>
     );
 };
@@ -919,7 +1003,81 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+    const wasOpenRef = useRef(false);
+    const identitySignatureRef = useRef("");
+    const identityRefreshSeqRef = useRef(0);
     const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+
+    const refreshDiplomaticIdentityState = async ({ preserveActiveChat = true } = {}) => {
+        const refreshSeq = ++identityRefreshSeqRef.current;
+        const [gameData, nextWorld, nextCountries, nextFlags] = await Promise.all([
+            readGameData({ force: true }),
+            readWorldState({ force: true }),
+            loadCountryNames(),
+            getNationFlags().catch(() => ({})),
+        ]);
+
+        // If a newer explicit refresh finished/started while this one was in flight,
+        // discard this result rather than letting stale state win.
+        if (refreshSeq !== identityRefreshSeqRef.current) return null;
+
+        const nextPlayer = gameData.country || playerCountry || "your nation";
+        const nextGameDate = gameData.gameDate || gameDate || "";
+        const nextIdentitySignature = polityIdentitySignature(nextWorld);
+        const identityChanged = Boolean(
+            identitySignatureRef.current &&
+            identitySignatureRef.current !== nextIdentitySignature
+        );
+
+        setPlayerCountry(nextPlayer);
+        setGameDate(nextGameDate);
+        setWorld(nextWorld);
+        setCountries(nextCountries.map((country) => canonicalCountry(country, nextWorld)));
+        setFlagCatalog(nextFlags || {});
+
+        // Reopening diplomacy and opening the country selector should normally be
+        // cheap: fresh world + flags + country catalog only. Full semantic chat
+        // reconciliation happens ONLY when polity identity metadata actually changed
+        // (rename/reconstitution/alias/lifecycle update), never on every open.
+        if (!identityChanged) {
+            identitySignatureRef.current = nextIdentitySignature;
+            return {
+                identityChanged: false,
+                nextWorld,
+                nextPlayer,
+            };
+        }
+
+        const refreshedChats = await loadAllChats({
+            force: true,
+            world: nextWorld,
+            playerCountry: nextPlayer,
+        });
+        if (refreshSeq !== identityRefreshSeqRef.current) return null;
+
+        identitySignatureRef.current = nextIdentitySignature;
+        setChats(refreshedChats);
+        lastStoredChatSignatureRef.current = chatStorageSignature(refreshedChats);
+
+        if (preserveActiveChat) {
+            setActiveChat((current) => {
+                if (!current) return current;
+                return refreshedChats.find((chat) => String(chat.id) === String(current.id)) || current;
+            });
+        }
+
+        // readChatsState already performed the expensive semantic reconciliation.
+        // Persist that finished result WITHOUT passing world again, avoiding a second
+        // full lineage walk over the same history.
+        saveAllChats(refreshedChats);
+
+        return {
+            identityChanged: true,
+            nextWorld,
+            nextPlayer,
+            refreshedChats,
+        };
+    };
 
     // Which chats to flag as unread, snapshotted when the panel OPENS and held
     // until it closes — rows must not reshuffle under the cursor while the player
@@ -953,6 +1111,20 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     };
 
     useEffect(() => {
+        const justOpened = isOpen && !wasOpenRef.current;
+        wasOpenRef.current = isOpen;
+
+        if (!justOpened || !hasLoadedInitialData) return;
+
+        refreshDiplomaticIdentityState()
+            .catch(() => {
+                // Keep the last good UI state if a refresh fails.
+            });
+        // `refreshDiplomaticIdentityState` intentionally reads the live save on open.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, hasLoadedInitialData]);
+
+    useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
 
         let cancelled = false;
@@ -979,6 +1151,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 setGameDate(gameData.gameDate || "");
                 setWorld(worldData);
                 setFlagCatalog(flags || {});
+                identitySignatureRef.current = polityIdentitySignature(worldData);
                 setLoadingCountries(false);
                 setChats(savedChats);
                 lastStoredChatSignatureRef.current = chatStorageSignature(savedChats);
@@ -987,10 +1160,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 // Persist the one-time migration immediately: player aliases are
                 // stripped from participant lists and duplicate open threads created
                 // by [counterpart, player] vs [counterpart] collapse in storage too.
-                saveAllChats(savedChats, {
-                    world: worldData,
-                    playerCountry: currentPlayer,
-                });
+                saveAllChats(savedChats);
             } catch {
                 if (!cancelled) {
                     setLoadingCountries(false);
@@ -1046,13 +1216,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                     if (cancelled) return;
                     setWorld(nextWorld);
                     setCountries(nextCountries.map((country) => canonicalCountry(country, nextWorld)));
+                    identitySignatureRef.current = polityIdentitySignature(nextWorld);
                     setChats((prev) => {
                         const reconciled = reconcileChatsForPlayer(prev, nextWorld, nextCountry);
                         lastStoredChatSignatureRef.current = chatStorageSignature(reconciled);
-                        saveAllChats(reconciled, {
-                            world: nextWorld,
-                            playerCountry: nextCountry,
-                        });
+                        saveAllChats(reconciled);
                         return reconciled;
                     });
                 }
@@ -1125,12 +1293,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         };
     }, [isOpen, hasLoadedInitialData, world, playerCountry]);
 
-    const availableCountries = useMemo(
-        () => countries
-            .map((country) => canonicalCountry(country, world))
-            .filter((country) => !countryMatchesIdentity(country, playerCountry, world)),
-        [countries, playerCountry, world]
-    );
+    const availableCountries = useMemo(() => {
+        const seen = new Set();
+        const available = [];
+        for (const country of countries.map((entry) => canonicalCountry(entry, world))) {
+            if (!country || countryMatchesIdentity(country, playerCountry, world)) continue;
+            const key = String(country?.polityKey || country?.code || country?.name || "").trim().toLowerCase();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            available.push(country);
+        }
+        return available;
+    }, [countries, playerCountry, world]);
 
     const handleMessagesUpdate = (chatId, newMessages) => {
         setChats(prev => {
@@ -1143,6 +1317,16 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
+    };
+
+    const openCountrySelector = async () => {
+        setShowSelector(true);
+        try {
+            await refreshDiplomaticIdentityState({ preserveActiveChat: true });
+        } catch {
+            // The selector can still use the last good identity/flag catalog if a
+            // one-off refresh fails. No polling or retry loop is introduced here.
+        }
     };
 
     const handleStartChat = (selected) => {
@@ -1273,7 +1457,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 ) : orderedChats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+                <button onClick={openCountrySelector} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
