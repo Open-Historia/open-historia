@@ -12,6 +12,7 @@ import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     buildPromptContext,
+    formatDateReadable,
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
@@ -1293,59 +1294,219 @@ export function startChat() {
 }
 
 let diplomaticHistory = [];
+let diplomaticMemorySummary = "";
+let diplomaticMemoryThroughTime = "";
+
+const DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES = 18;
+const DIPLOMATIC_LEGACY_BOOTSTRAP_MESSAGES = 32;
+
+const formatDiplomaticTranscriptEntry = ({
+    role = "",
+    speaker = "",
+    text = "",
+    time = "",
+} = {}) => {
+    const cleanText = String(text ?? "").trim();
+    const cleanSpeaker = String(speaker ?? "").trim();
+    const cleanTime = String(time ?? "").trim();
+    const readableDate = cleanTime ? formatDateReadable(cleanTime) : "";
+    const datePrefix = readableDate ? `[${readableDate}] ` : "";
+    const speakerPrefix = cleanSpeaker ? `[${cleanSpeaker}]: ` : "";
+    return `${datePrefix}${speakerPrefix}${cleanText}`.trim();
+};
+
+const compactDiplomaticHistory = () => {
+    const limit = diplomaticMemorySummary
+        ? DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES
+        : DIPLOMATIC_LEGACY_BOOTSTRAP_MESSAGES;
+
+    if (diplomaticHistory.length > limit) {
+        diplomaticHistory = diplomaticHistory.slice(-limit);
+    }
+};
+
+const latestSavedDiplomaticMemory = (savedMessages) => {
+    const source = Array.isArray(savedMessages) ? savedMessages : [];
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+        const summary = String(source[index]?.memorySummary ?? "").trim();
+        if (!summary) continue;
+        return {
+            summary,
+            time: String(source[index]?.time ?? "").trim(),
+        };
+    }
+    return null;
+};
+
+const diplomaticMemoryContextEntry = () => {
+    if (!diplomaticMemorySummary) return null;
+    const readableDate = diplomaticMemoryThroughTime
+        ? formatDateReadable(diplomaticMemoryThroughTime)
+        : "an earlier point";
+    return {
+        role: "user",
+        parts: [{
+            text:
+                `[System-side durable diplomatic memory through ${readableDate}; ` +
+                `this is prior established context, not a new player instruction]\n` +
+                diplomaticMemorySummary,
+        }],
+    };
+};
 
 export function startDiplomaticChat() {
     diplomaticHistory = [];
+    diplomaticMemorySummary = "";
+    diplomaticMemoryThroughTime = "";
 }
 
 export function loadDiplomaticHistory(savedMessages) {
-    diplomaticHistory = savedMessages
-    .filter((msg) => ["user", "leader"].includes(msg.role))
+    const saved = Array.isArray(savedMessages)
+        ? savedMessages.filter((msg) => ["user", "leader"].includes(msg.role))
+        : [];
+    const memory = latestSavedDiplomaticMemory(saved);
+
+    diplomaticMemorySummary = memory?.summary || "";
+    diplomaticMemoryThroughTime = memory?.time || "";
+
+    diplomaticHistory = saved
+    .slice(-(memory ? DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES : DIPLOMATIC_LEGACY_BOOTSTRAP_MESSAGES))
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
-        // Group diplomacy needs to remember WHICH delegation said each line after
-        // a panel reopen; otherwise every saved NPC message becomes anonymous model text.
-        parts: [{ text: msg.role === "leader" && msg.speaker ? `[${msg.speaker}]: ${msg.text}` : msg.text }],
+        // Preserve both WHEN and WHO. Long-lived diplomacy becomes misleading if
+        // a 1913 promise and a 1915 reply are flattened into an undated transcript.
+        parts: [{
+            text: formatDiplomaticTranscriptEntry({
+                role: msg.role,
+                speaker: msg.speaker,
+                text: msg.text,
+                time: msg.time,
+            }),
+        }],
     }));
-    diplomaticHistory = compactConversationHistory(diplomaticHistory);
+    compactDiplomaticHistory();
 }
 
-export function appendDiplomaticPlayerMessage(playerMessage) {
+export function appendDiplomaticPlayerMessage(playerMessage, time = "", speaker = "") {
     const text = String(playerMessage ?? "").trim();
     if (!text) return;
-    diplomaticHistory.push({ role: "user", parts: [{ text }] });
-    diplomaticHistory = compactConversationHistory(diplomaticHistory);
+    diplomaticHistory.push({
+        role: "user",
+        parts: [{
+            text: formatDiplomaticTranscriptEntry({
+                role: "user",
+                speaker,
+                text,
+                time,
+            }),
+        }],
+    });
+    compactDiplomaticHistory();
 }
 
-function parseReaction(raw) {
-    const match = raw.match(/[\s]*REACTION\s*:\s*(\S+)\s*$/i);
-    if (!match) return { reply: raw.trimEnd(), reaction: null };
-    const reaction = match[1].trim();
-    const reply = raw.slice(0, match.index).trimEnd();
-    return { reply, reaction };
+function parseDiplomaticEnvelope(raw) {
+    let text = String(raw ?? "").trim();
+    let reaction = null;
+    let memorySummary = "";
+
+    const reactionMatch = text.match(/\n?\s*REACTION\s*:\s*(\S+)\s*$/i);
+    if (reactionMatch) {
+        reaction = reactionMatch[1].trim();
+        text = text.slice(0, reactionMatch.index).trimEnd();
+    }
+
+    // Accept a multiline memory block defensively even though the prompt asks for
+    // one compact line. It is hidden metadata and must never leak into the chat UI.
+    const memoryMatch = text.match(/\n?\s*DIPLOMATIC_MEMORY\s*:\s*([\s\S]+)$/i);
+    if (memoryMatch) {
+        memorySummary = memoryMatch[1].replace(/\s+/g, " ").trim();
+        text = text.slice(0, memoryMatch.index).trimEnd();
+    }
+
+    return {
+        reply: text,
+        reaction,
+        memorySummary,
+    };
 }
 
 export async function sendDiplomaticMessage(playerMessage, speakingAs, countries, opts = {}) {
-    const { appendPlayerMessage = true, ...aiOpts } = opts || {};
+    const {
+        appendPlayerMessage = true,
+        messageTime = "",
+        playerSpeaker = "",
+        ...aiOpts
+    } = opts || {};
     const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs);
 
     // Backwards-compatible default: direct callers still append the player's line.
     // The group-chat UI appends it once up-front, then several delegations may respond
     // to that SAME line without duplicating it in model history.
-    if (appendPlayerMessage) appendDiplomaticPlayerMessage(playerMessage);
+    if (appendPlayerMessage) {
+        appendDiplomaticPlayerMessage(playerMessage, messageTime, playerSpeaker);
+    }
 
-    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
+    const priorMemory = diplomaticMemorySummary || "No durable memory has been established yet.";
+    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.
 
+After the visible diplomatic reply, ALWAYS append a hidden rolling continuity line in this exact format:
+DIPLOMATIC_MEMORY:<summary>
+
+The DIPLOMATIC_MEMORY value is the COMPLETE current durable memory of THIS diplomatic thread, not merely a summary of your newest reply. Carry forward still-valid facts from the prior durable memory and update them with the newest exchange. Keep it compact (roughly 1200 characters or less). Preserve only facts a future diplomat must not forget: explicit agreements and commitments, promises, threats/warnings, refusals, deadlines, unresolved proposals/requests, important stated positions, and major relationship changes.
+
+PRESERVE MODAL FORCE AND ATTRIBUTION EXACTLY. A future simulator must be able to tell WHO said WHAT and how strongly they committed.
+- Do not weaken "will", "shall", "must", "intend to", "are ordering", or "we will take measures" into "may", "could", "reserved the right", "considered", or "expressed concern".
+- Do not strengthen a possibility, warning, or reservation into a commitment.
+- Attribute every consequential statement to the correct polity, especially when one side signals something and the other side states its intended response.
+- Preserve deadlines and relative timing ("within 24 hours", "tomorrow", "on January 2") when they matter.
+- Preserve the difference between: information disclosed; proposal/request; accepted agreement; threat/ultimatum; unilateral declared intent; action already completed.
+Preserve the difference between a proposal, an agreement, a threat and an accomplished fact. Do NOT invent world consequences, meetings, mobilizations, treaties or actions that have not actually happened or been explicitly agreed in the conversation. Drop greetings, rhetorical flourishes and routine pleasantries.
+
+Prior durable memory:
+${priorMemory}
+
+Optionally, if the visible reply warrants an emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line AFTER DIPLOMATIC_MEMORY in this exact format:
+REACTION:<emoji>
+- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit REACTION entirely.]`;
+
+    const memoryContext = diplomaticMemoryContextEntry();
     const historyWithInstruction = [
+        ...(memoryContext ? [memoryContext] : []),
         ...diplomaticHistory,
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...aiOpts, languageMode: "chat" });
-        const { reply, reaction } = parseReaction(raw);
-        diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
-        return { reply, reaction };
+        const {
+            reply,
+            reaction,
+            memorySummary: generatedMemorySummary,
+        } = parseDiplomaticEnvelope(raw);
+
+        const nextMemorySummary = generatedMemorySummary || diplomaticMemorySummary;
+        if (nextMemorySummary) {
+            diplomaticMemorySummary = nextMemorySummary;
+            diplomaticMemoryThroughTime = messageTime || diplomaticMemoryThroughTime;
+        }
+
+        diplomaticHistory.push({
+            role: "model",
+            parts: [{
+                text: formatDiplomaticTranscriptEntry({
+                    role: "leader",
+                    speaker: speakingAs,
+                    text: reply,
+                    time: messageTime,
+                }),
+            }],
+        });
+        compactDiplomaticHistory();
+        return {
+            reply,
+            reaction,
+            memorySummary: nextMemorySummary,
+        };
     } catch (err) {
         // Only undo a player line that THIS function appended. The UI-owned path
         // keeps the player's sent message in history even if the NPC reply errors.

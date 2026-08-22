@@ -342,6 +342,39 @@ const TrashIcon = () => (
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 
+const chatDateKey = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+    const isoDay = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+    return isoDay || raw;
+};
+
+const formatChatDateLabel = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+
+    // Bare YYYY-MM-DD parses as UTC in browsers, which can shift a displayed day in
+    // some time zones. Noon-local keeps an in-game calendar date exactly on that day.
+    const isoDay = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const parsed = isoDay
+        ? new Date(Number(isoDay[1]), Number(isoDay[2]) - 1, Number(isoDay[3]), 12, 0, 0)
+        : new Date(raw);
+
+    return Number.isNaN(parsed.getTime())
+        ? raw
+        : parsed.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+};
+
+const ChatDateSeparator = ({ value }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", margin: "0.15rem 0 0.05rem" }}>
+        <div style={{ height: "1px", flex: 1, background: "rgba(255,255,255,0.08)" }} />
+        <span style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.32)", whiteSpace: "nowrap", fontWeight: 600 }}>
+            {formatChatDateLabel(value)}
+        </span>
+        <div style={{ height: "1px", flex: 1, background: "rgba(255,255,255,0.08)" }} />
+    </div>
+);
+
 const MessageBubble = ({ msg }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
@@ -398,11 +431,6 @@ const MessageBubble = ({ msg }) => {
         {isPlayer ? msg.text : <div className="chat-markdown"><ReactMarkdown>{msg.text}</ReactMarkdown></div>}
         </div>
 
-        {!isPlayer && msg.time && (
-            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem", display: "block" }}>
-            {new Date(msg.time).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })}
-            </span>
-        )}
         </div>
         </div>
     );
@@ -711,11 +739,14 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
             let updatedMessages = null;
             let replySucceeded = false;
             try {
-                const { reply, reaction } = await sendDiplomaticMessage(
+                const { reply, reaction, memorySummary } = await sendDiplomaticMessage(
                     playerMessage,
                     country.name,
                     countries,
-                    { appendPlayerMessage: false },
+                    {
+                        appendPlayerMessage: false,
+                        messageTime: gameDate,
+                    },
                 );
 
                 const leaderMessage = {
@@ -725,6 +756,7 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                     polityKey: country.polityKey || "",
                     text: reply,
                     time: gameDate,
+                    ...(memorySummary ? { memorySummary } : {}),
                 };
 
                 if (reaction) {
@@ -790,7 +822,7 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                 time: gameDate,
             }];
             pushMessages(nextMessages);
-            appendDiplomaticPlayerMessage(text);
+            appendDiplomaticPlayerMessage(text, gameDate, playerDisplayName);
             setPlayerInput("");
 
             if (!isGroup) {
@@ -850,7 +882,19 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                 Begin the diplomatic conversation.
                 </p>
             )}
-            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} chatCountries={countries} />)}
+            {messages.map((msg, i) => {
+                const previous = messages[i - 1];
+                const dateKey = chatDateKey(msg?.time);
+                const previousDateKey = chatDateKey(previous?.time);
+                const showDateSeparator = Boolean(dateKey) && dateKey !== previousDateKey;
+
+                return (
+                    <React.Fragment key={`${i}-${dateKey || "undated"}`}>
+                    {showDateSeparator && <ChatDateSeparator value={msg.time} />}
+                    <MessageBubble msg={msg} chatCountries={countries} />
+                    </React.Fragment>
+                );
+            })}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} polityKey={typingSpeaker.polityKey} />}
             <div ref={messagesEndRef} />
             </div>
@@ -944,7 +988,256 @@ const isChatUnread = (chat, seen) => {
     return prev === undefined || chatMessageCount(chat) > prev;
 };
 
+// ── Incoming diplomacy notifications ──────────────────────────────────────────
+//
+// The toolbar already performs a cheap stored-chat poll for its unread badge.
+// 5D.4 reuses THAT SAME watcher for toasts/sound/notification-center updates;
+// there is no second polling loop and no AI/network work beyond the existing
+// chat-state read.
+//
+// Message fingerprints intentionally exclude mutable speaker display names. A
+// mid-campaign polity rename or identity reconciliation therefore cannot make an
+// old message look newly arrived merely because "Austrian Empire" became
+// "Austria-Hungary".
+const NOTIFICATION_CURSOR_KEY = "oh:chat-notification-cursors-v2";
+const NOTIFICATION_SOUND_KEY = "oh:chat-notification-sound-v1";
+const MAX_NOTIFICATION_ITEMS = 40;
+const ACTIVE_REPLY_GRACE_MS = 15000;
+
+// Shared floating-UI spacing. The toast is anchored immediately LEFT of the
+// native top-right date/turn control rather than to a fixed screen corner.
+const FLOATING_UI_EDGE_GAP = "0.75rem";
+const TOAST_DATE_CONTROL_GAP_PX = 8;
+const TOAST_DATE_CONTROL_FALLBACK_RIGHT_PX = 184;
+
+// Keep the pre-5D.4 toolbar's background cadence instead of increasing it.
+// Hidden tabs back off further because responsiveness matters less there.
+const NOTIFICATION_VISIBLE_POLL_MS = 15000;
+const NOTIFICATION_HIDDEN_POLL_MS = 30000;
+
+let activeDiplomaticChatId = "";
+let notificationAudioContext = null;
+const recentOutgoingByChat = new Map();
+
+// Fingerprint only the immutable-ish tail fields needed to detect an in-place
+// replacement. Speaker display names / polity identity metadata are excluded so
+// renames and reconciliation cannot make an old message appear newly arrived.
+const notificationTailFingerprint = (message) => [
+    String(message?.role ?? "").trim(),
+    String(message?.time ?? message?.date ?? message?.timestamp ?? "").trim(),
+    String(message?.text ?? message?.content ?? message?.message ?? "").trim(),
+].join("\u001e");
+
+const notificationCursorForChat = (chat) => {
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+    return {
+        count: messages.length,
+        tail: messages.length ? notificationTailFingerprint(messages.at(-1)) : "",
+    };
+};
+
+const notificationCursorSnapshot = (chats) => Object.fromEntries(
+    (Array.isArray(chats) ? chats : []).map((chat) => [
+        String(chat?.id ?? ""),
+        notificationCursorForChat(chat),
+    ]),
+);
+
+const readNotificationCursors = () => {
+    try {
+        const raw = localStorage.getItem(NOTIFICATION_CURSOR_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed
+            : null;
+    } catch {
+        return null;
+    }
+};
+
+const writeNotificationCursors = (cursors) => {
+    try {
+        localStorage.setItem(NOTIFICATION_CURSOR_KEY, JSON.stringify(cursors || {}));
+    } catch { /* private mode / quota */ }
+};
+
+const readNotificationSoundEnabled = () => {
+    try {
+        const raw = localStorage.getItem(NOTIFICATION_SOUND_KEY);
+        return raw == null ? true : raw !== "0";
+    } catch {
+        return true;
+    }
+};
+
+const writeNotificationSoundEnabled = (enabled) => {
+    try { localStorage.setItem(NOTIFICATION_SOUND_KEY, enabled ? "1" : "0"); } catch { /* noop */ }
+};
+
+const ensureNotificationAudioContext = () => {
+    if (typeof window === "undefined") return null;
+    const AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) return null;
+
+    if (!notificationAudioContext || notificationAudioContext.state === "closed") {
+        try {
+            notificationAudioContext = new AudioCtor();
+        } catch {
+            return null;
+        }
+    }
+
+    if (notificationAudioContext.state === "suspended") {
+        notificationAudioContext.resume().catch(() => {});
+    }
+    return notificationAudioContext;
+};
+
+const playDiplomaticNotificationSound = () => {
+    const ctx = ensureNotificationAudioContext();
+    if (!ctx || ctx.state !== "running") return false;
+
+    try {
+        const now = ctx.currentTime;
+        const master = ctx.createGain();
+        master.gain.setValueAtTime(0.0001, now);
+        master.gain.exponentialRampToValueAtTime(0.028, now + 0.008);
+        master.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+        master.connect(ctx.destination);
+
+        for (const note of [
+            { frequency: 740, delay: 0.000, duration: 0.115 },
+            { frequency: 988, delay: 0.082, duration: 0.145 },
+        ]) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            const start = now + note.delay;
+            const stop = start + note.duration;
+
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(note.frequency, start);
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.72, start + 0.006);
+            gain.gain.exponentialRampToValueAtTime(0.0001, stop);
+            osc.connect(gain);
+            gain.connect(master);
+            osc.start(start);
+            osc.stop(stop + 0.01);
+        }
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const recordRecentDiplomaticOutgoing = (chatId) => {
+    if (chatId == null) return;
+    recentOutgoingByChat.set(String(chatId), Date.now());
+};
+
+const notificationPreview = (message) => {
+    const body = String(message?.text ?? message?.content ?? message?.message ?? "")
+        .replace(/\*\*/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    if (!body) return "New diplomatic message received.";
+    return body.length <= 180 ? body : `${body.slice(0, 177)}…`;
+};
+
+const foreignChatSender = (chat, message) =>
+    String(message?.speaker || chat?.countries?.[0]?.name || "Diplomatic message").trim();
+
+const isIncomingDiplomaticMessage = (message) => {
+    const role = String(message?.role ?? "").trim().toLowerCase();
+    return role === "leader" || role === "assistant" || role === "npc";
+};
+
+// Locate the native turn/date control in the top-right. This is intentionally
+// presentation-only and runs only when React renders this toolbar component; it
+// does NOT add a MutationObserver or polling work.
+//
+// Prefer the smallest visible element near the top-right whose text looks like
+// the game's current date. If the native markup changes, fall back to the tuned
+// right offset used by the current UI instead of breaking notifications.
+const nativeTopRightDateControlRect = () => {
+    if (typeof document === "undefined" || typeof window === "undefined") return null;
+
+    const vw = Math.max(1, window.innerWidth || 0);
+    const dateLike = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b[\s\S]{0,24}\b\d{4}\b/i;
+
+    const candidates = [...document.querySelectorAll("button, [role='button'], div")]
+        .map((node) => {
+            const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+            if (!text || !dateLike.test(text)) return null;
+
+            const rect = node.getBoundingClientRect?.();
+            if (!rect) return null;
+            if (rect.top < 0 || rect.top > 120) return null;
+            if (rect.right < vw * 0.72) return null;
+            if (rect.width < 100 || rect.width > 420) return null;
+            if (rect.height < 28 || rect.height > 110) return null;
+
+            const style = getComputedStyle(node);
+            if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return null;
+
+            return { rect, area: rect.width * rect.height };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.area - b.area);
+
+    return candidates[0]?.rect || null;
+};
+
+const toastRightOffsetPx = () => {
+    const rect = nativeTopRightDateControlRect();
+    if (!rect || typeof window === "undefined") {
+        return TOAST_DATE_CONTROL_FALLBACK_RIGHT_PX;
+    }
+
+    return Math.max(
+        TOAST_DATE_CONTROL_GAP_PX,
+        Math.round(window.innerWidth - rect.left + TOAST_DATE_CONTROL_GAP_PX),
+    );
+};
+
 // ── Chat list item ────────────────────────────────────────────────────────────
+
+// The inbox is chronological by IN-GAME diplomatic activity, not by storage order.
+// Scan backwards because a thread may contain old/legacy messages without dates.
+const chatLastActivityDate = (chat) => {
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const time = String(messages[index]?.time ?? "").trim();
+        if (time) return time;
+    }
+    return "";
+};
+
+const chatActivitySortValue = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return Number.NEGATIVE_INFINITY;
+
+    // ISO in-game dates are the normal shape and sort safely. Date.parse is only
+    // a compatibility fallback for older saves that may contain a fuller timestamp.
+    const isoDay = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoDay) {
+        return Date.UTC(Number(isoDay[1]), Number(isoDay[2]) - 1, Number(isoDay[3]));
+    }
+
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+};
+
+const ChatListDateSeparator = ({ value }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", margin: "0.55rem 0 0.15rem" }}>
+        <div style={{ height: "1px", flex: 1, background: "rgba(255,255,255,0.09)" }} />
+        <span style={{ fontSize: "0.69rem", color: "rgba(255,255,255,0.42)", whiteSpace: "nowrap", fontWeight: 600 }}>
+            {value ? formatChatDateLabel(value) : "No dated activity"}
+        </span>
+        <div style={{ height: "1px", flex: 1, background: "rgba(255,255,255,0.09)" }} />
+    </div>
+);
 
 const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
     const [hovered, setHovered] = React.useState(false);
@@ -992,7 +1285,7 @@ export const requestDiplomaticChat = (country) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
 };
 
-const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
+const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, requestedChatId, onConsumeRequestedChat }) => {
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -1007,6 +1300,23 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     const identitySignatureRef = useRef("");
     const identityRefreshSeqRef = useRef(0);
     const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+
+    // Expose only the currently VISIBLE conversation to the lightweight watcher.
+    // New messages arriving in this exact thread are marked seen and never toast.
+    useEffect(() => {
+        activeDiplomaticChatId = isOpen && activeChat ? String(activeChat.id) : "";
+        if (isOpen && activeChat) {
+            writeSeen({
+                ...(readSeen() || {}),
+                [String(activeChat.id)]: chatMessageCount(activeChat),
+            });
+        }
+        return () => {
+            if (activeDiplomaticChatId === String(activeChat?.id ?? "")) {
+                activeDiplomaticChatId = "";
+            }
+        };
+    }, [isOpen, activeChat?.id, activeChat?.messages?.length]);
 
     const refreshDiplomaticIdentityState = async ({ preserveActiveChat = true } = {}) => {
         const refreshSeq = ++identityRefreshSeqRef.current;
@@ -1096,12 +1406,28 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         writeSeen(seenTotals(openChats));
     }, [isOpen, hasLoadedInitialData, openChats]);
 
-    // Unread first, everything else in the order it already had — a stable
-    // partition, so chats the player has read don't jump around too.
-    const orderedChats = [
-        ...openChats.filter((chat) => unreadIds.has(String(chat.id))),
-        ...openChats.filter((chat) => !unreadIds.has(String(chat.id))),
-    ];
+    // Most recently USED diplomatic threads always come first. The old list used
+    // unread-first + storage order, which is why a newly active thread could remain
+    // buried near the bottom. Grouping is by the date of each thread's latest dated
+    // message, matching the date semantics used inside the conversation itself.
+    const orderedChats = openChats
+        .map((chat, index) => ({
+            chat,
+            index,
+            activityDate: chatLastActivityDate(chat),
+            unread: unreadIds.has(String(chat.id)),
+        }))
+        .sort((left, right) => {
+            const byDate = chatActivitySortValue(right.activityDate) - chatActivitySortValue(left.activityDate);
+            if (byDate !== 0) return byDate;
+
+            // Within the same in-game day there may be no wall-clock timestamp.
+            // Prefer unread/new material, then newer storage insertion as a stable
+            // approximation without adding another persistence field or timer.
+            if (left.unread !== right.unread) return left.unread ? -1 : 1;
+            return right.index - left.index;
+        })
+        .map((entry) => entry.chat);
 
     // Opening a chat marks it read, so messages that landed while the panel was
     // already open don't come back flagged on the next open.
@@ -1307,6 +1633,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
     }, [countries, playerCountry, world]);
 
     const handleMessagesUpdate = (chatId, newMessages) => {
+        if (newMessages?.at(-1)?.role === "user") {
+            recordRecentDiplomaticOutgoing(chatId);
+        }
+
         setChats(prev => {
             // Participants were canonicalized when the thread entered the UI and
             // every newly-created message already carries polityKey. Re-running the
@@ -1431,6 +1761,16 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, requestedCountry]);
 
+    // Notification/toast clicks target an existing thread directly. They never
+    // synthesize a new chat just to navigate to diplomacy that already exists.
+    useEffect(() => {
+        if (!isOpen || !requestedChatId || !hasLoadedInitialData) return;
+        const target = openChats.find((chat) => String(chat.id) === String(requestedChatId));
+        if (target) openChatFromList(target);
+        onConsumeRequestedChat?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, requestedChatId, hasLoadedInitialData, chats]);
+
         return (
             <FlagContext.Provider value={{ flags: flagCatalog, world }}>
             <>
@@ -1454,7 +1794,26 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : orderedChats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
+                ) : orderedChats.map((chat, index) => {
+                    const activityDate = chatLastActivityDate(chat);
+                    const previousActivityDate = index > 0
+                        ? chatLastActivityDate(orderedChats[index - 1])
+                        : null;
+                    const showDateSeparator = index === 0 ||
+                        chatDateKey(activityDate) !== chatDateKey(previousActivityDate);
+
+                    return (
+                        <React.Fragment key={chat.id}>
+                        {showDateSeparator && <ChatListDateSeparator value={activityDate} />}
+                        <ChatListItem
+                            chat={chat}
+                            unread={unreadIds.has(String(chat.id))}
+                            onClick={() => openChatFromList(chat)}
+                            onDelete={() => handleDeleteChat(chat.id)}
+                        />
+                        </React.Fragment>
+                    );
+                })}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={openCountrySelector} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
@@ -1469,51 +1828,300 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         );
 };
 
-// ── Chat toolbar button ───────────────────────────────────────────────────────
+// ── Chat toolbar button + 5D.4 notification center ───────────────────────────
 
 const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
+    const [pendingChatId, setPendingChatId] = useState("");
     const [unseenCount, setUnseenCount] = useState(0);
-    const setChatOpen = () => { onToggle(); };
+    const [notificationItems, setNotificationItems] = useState([]);
+    const [toastItems, setToastItems] = useState([]);
+    const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+    const [soundEnabled, setSoundEnabled] = useState(readNotificationSoundEnabled);
+    const [desktopPermission, setDesktopPermission] = useState(() =>
+        typeof Notification === "undefined" ? "unsupported" : Notification.permission
+    );
+    const notificationCursorsRef = useRef(null);
+    const notificationPollStatsRef = useRef({
+        chatsChecked: 0,
+        messagesInspected: 0,
+        changedChats: 0,
+    });
+    const toastTimersRef = useRef(new Map());
+    const notificationSeqRef = useRef(0);
 
     useEffect(() => {
-        if (isOpen) setHasOpened(true);
+        if (isOpen) {
+            setHasOpened(true);
+            setNotificationCenterOpen(false);
+            setNotificationItems([]);
+            setToastItems([]);
+            for (const timer of toastTimersRef.current.values()) clearTimeout(timer);
+            toastTimersRef.current.clear();
+        }
     }, [isOpen]);
 
-    // Unread badge: countries now message the player unprompted (jump
-    // invitations, the idle outreach drip), so the toolbar button must say so.
-    // A cheap poll of the stored chat list counts open chats that gained
-    // messages (or appeared) since the panel was last open.
+    useEffect(() => {
+        const unlock = () => ensureNotificationAudioContext();
+        document.addEventListener("pointerdown", unlock, true);
+        document.addEventListener("keydown", unlock, true);
+        return () => {
+            document.removeEventListener("pointerdown", unlock, true);
+            document.removeEventListener("keydown", unlock, true);
+            for (const timer of toastTimersRef.current.values()) clearTimeout(timer);
+            toastTimersRef.current.clear();
+        };
+    }, []);
+
+    const removeToast = (id) => {
+        const timer = toastTimersRef.current.get(id);
+        if (timer) clearTimeout(timer);
+        toastTimersRef.current.delete(id);
+        setToastItems((current) => current.filter((item) => item.id !== id));
+    };
+
+    const openNotificationChat = (item) => {
+        if (!item) return;
+        removeToast(item.id);
+        if (!item.chatId) return;
+
+        setNotificationItems((current) => current.filter((entry) => entry.id !== item.id));
+        setNotificationCenterOpen(false);
+        setPendingChatId(String(item.chatId));
+        if (!isOpen) onToggle();
+    };
+
+    const pushNotification = (chat, message, source = "poll") => {
+        const item = {
+            id: ++notificationSeqRef.current,
+            at: Date.now(),
+            source,
+            chatId: String(chat?.id ?? ""),
+            sender: foreignChatSender(chat, message),
+            preview: notificationPreview(message),
+            gameDate: String(message?.time ?? ""),
+        };
+
+        setNotificationItems((current) => [...current, item].slice(-MAX_NOTIFICATION_ITEMS));
+        setToastItems((current) => [...current, item].slice(-4));
+
+        const timer = setTimeout(() => removeToast(item.id), 12000);
+        toastTimersRef.current.set(item.id, timer);
+
+        if (soundEnabled) playDiplomaticNotificationSound();
+
+        try {
+            if (
+                document.hidden &&
+                typeof Notification !== "undefined" &&
+                Notification.permission === "granted"
+            ) {
+                const desktop = new Notification(`OpenHistoria — ${item.sender}`, {
+                    body: item.preview,
+                    tag: `oh-diplomacy-${item.chatId}`,
+                    renotify: true,
+                });
+                desktop.onclick = () => {
+                    try { window.focus(); } catch { /* noop */ }
+                    openNotificationChat(item);
+                    try { desktop.close(); } catch { /* noop */ }
+                };
+            }
+        } catch { /* browser notification failures must never affect diplomacy */ }
+
+        console.info(`[OH native diplomacy] incoming message 🔔 ${item.sender}: ${item.preview}`);
+        return item;
+    };
+
+    // Combined unread + incoming-message watcher. This REPLACES the previous
+    // badge-only 15-second interval; it is not an additional poll. Normal checks
+    // compare only per-chat count + tail fingerprint. Full history is never rescanned.
     useEffect(() => {
         let cancelled = false;
-        const check = () => loadAllChats({ force: true })
-        .then((saved) => {
-            if (cancelled || !Array.isArray(saved)) return;
-            const open = saved.filter((c) => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length > 0);
-            // The badge only READS the baseline. The panel writes it when it opens,
-            // and it must be the only writer: if this poll also wrote on isOpen it
-            // could clear the baseline first and the list would find nothing unread.
-            if (isOpen) { setUnseenCount(0); return; }
-            const seen = readSeen();
-            if (seen === null) {
-                // First look ever — seed the baseline instead of declaring every
-                // chat that already existed unread.
-                writeSeen(seenTotals(open));
-                setUnseenCount(0);
-                return;
-            }
-            setUnseenCount(open.filter((c) => isChatUnread(c, seen)).length);
-        })
-        .catch(() => {});
+        let timer = null;
 
-        check();
-        const iv = setInterval(check, 15000);
+        const check = async () => {
+            try {
+                const saved = await loadAllChats({ force: true });
+                if (cancelled || !Array.isArray(saved)) return;
+
+                const open = saved.filter((chat) =>
+                    chat.status !== "closed" &&
+                    Array.isArray(chat.countries) &&
+                    chat.countries.length > 0
+                );
+
+                // First run after installing 5D.4 v2: seed ONE cursor per chat.
+                // This is O(number of chats), not O(total diplomatic messages), and
+                // prevents an upgrade-time avalanche of historical notifications.
+                if (notificationCursorsRef.current == null) {
+                    notificationCursorsRef.current =
+                        readNotificationCursors() || notificationCursorSnapshot(open);
+
+                    // If a persisted cursor set predates a rollback and points beyond
+                    // the current save, the per-chat logic below safely resets it.
+                    writeNotificationCursors(notificationCursorsRef.current);
+                }
+
+                const cursors = notificationCursorsRef.current;
+                const now = Date.now();
+                let cursorChanged = false;
+                let messagesInspected = 0;
+                let changedChats = 0;
+
+                for (const chat of open) {
+                    const chatId = String(chat?.id ?? "");
+                    if (!chatId) continue;
+
+                    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+                    const current = notificationCursorForChat(chat);
+                    const previous = cursors[chatId];
+
+                    if (!previous) {
+                        // A genuinely new thread normally contains one opening message.
+                        // Inspect only this new thread, never the rest of history.
+                        changedChats++;
+                        for (const message of messages) {
+                            messagesInspected++;
+
+                            if (String(message?.role ?? "").trim().toLowerCase() === "user") {
+                                recentOutgoingByChat.set(chatId, now);
+                                continue;
+                            }
+                            if (!isIncomingDiplomaticMessage(message)) continue;
+
+                            const currentlyViewing =
+                                Boolean(isOpen) && activeDiplomaticChatId === chatId;
+                            if (currentlyViewing) continue;
+
+                            pushNotification(chat, message, "new-chat");
+                        }
+
+                        cursors[chatId] = current;
+                        cursorChanged = true;
+                        continue;
+                    }
+
+                    if (current.count < Number(previous.count || 0)) {
+                        // Save rollback / thread rewrite backwards: reset baseline.
+                        // Never reinterpret surviving historical messages as incoming.
+                        cursors[chatId] = current;
+                        cursorChanged = true;
+                        changedChats++;
+                        continue;
+                    }
+
+                    if (current.count === Number(previous.count || 0)) {
+                        // Same count + same tail = the overwhelmingly common idle poll:
+                        // O(1) work for this chat.
+                        if (current.tail === String(previous.tail || "")) continue;
+
+                        // Same-count replacement/canonicalization is treated as a state
+                        // correction, not a new message, specifically to avoid false
+                        // alerts from identity repair or message edits.
+                        cursors[chatId] = current;
+                        cursorChanged = true;
+                        changedChats++;
+                        continue;
+                    }
+
+                    // The thread GREW. Only inspect the appended suffix.
+                    changedChats++;
+                    const previousCount = Math.max(0, Number(previous.count || 0));
+                    const appended = messages.slice(previousCount);
+
+                    for (const message of appended) {
+                        messagesInspected++;
+
+                        // Stored order matters: if one check observes both the player's
+                        // outbound message and the immediate reply, the outbound message
+                        // arms the grace period before the reply is considered.
+                        if (String(message?.role ?? "").trim().toLowerCase() === "user") {
+                            recentOutgoingByChat.set(chatId, now);
+                            continue;
+                        }
+
+                        if (!isIncomingDiplomaticMessage(message)) continue;
+
+                        const recentlyOutgoing =
+                            now - (recentOutgoingByChat.get(chatId) || 0) <= ACTIVE_REPLY_GRACE_MS;
+                        const currentlyViewing =
+                            Boolean(isOpen) && activeDiplomaticChatId === chatId;
+
+                        if (recentlyOutgoing || currentlyViewing) {
+                            console.debug(
+                                "[OH native diplomacy] notification suppressed for active/recent chat:",
+                                foreignChatSender(chat, message),
+                            );
+                            continue;
+                        }
+
+                        pushNotification(chat, message, "chat-watch");
+                    }
+
+                    cursors[chatId] = current;
+                    cursorChanged = true;
+                }
+
+                // Remove cursors for threads no longer present/open. This keeps the
+                // persisted baseline bounded by current open chat count.
+                const liveIds = new Set(open.map((chat) => String(chat?.id ?? "")).filter(Boolean));
+                for (const chatId of Object.keys(cursors)) {
+                    if (!liveIds.has(chatId)) {
+                        delete cursors[chatId];
+                        cursorChanged = true;
+                    }
+                }
+
+                if (cursorChanged) writeNotificationCursors(cursors);
+
+                notificationPollStatsRef.current = {
+                    chatsChecked: open.length,
+                    messagesInspected,
+                    changedChats,
+                };
+
+                // Existing badge semantics stay intact: unread count is per thread.
+                if (isOpen) {
+                    setUnseenCount(0);
+                } else {
+                    const seen = readSeen();
+                    if (seen === null) {
+                        writeSeen(seenTotals(open));
+                        setUnseenCount(0);
+                    } else {
+                        setUnseenCount(open.filter((chat) => isChatUnread(chat, seen)).length);
+                    }
+                }
+            } catch {
+                // One failed read must not disturb the last good UI state.
+            }
+        };
+
+        const schedule = () => {
+            if (cancelled) return;
+            clearTimeout(timer);
+            timer = setTimeout(async () => {
+                await check();
+                schedule();
+            }, document.hidden ? NOTIFICATION_HIDDEN_POLL_MS : NOTIFICATION_VISIBLE_POLL_MS);
+        };
+
+        const onVisibilityChange = () => {
+            clearTimeout(timer);
+            check().finally(schedule);
+        };
+
+        check().finally(schedule);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+
         return () => {
             cancelled = true;
-            clearInterval(iv);
+            clearTimeout(timer);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
         };
-    }, [isOpen]);
+    }, [isOpen, soundEnabled]);
 
     useEffect(() => {
         const handler = (country) => {
@@ -1523,23 +2131,424 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         _chatOpenSubs.add(handler);
         return () => _chatOpenSubs.delete(handler);
     }, [isOpen, onToggle]);
-        return (
+
+    const toggleSound = () => {
+        const next = !soundEnabled;
+        setSoundEnabled(next);
+        writeNotificationSoundEnabled(next);
+        if (next) {
+            ensureNotificationAudioContext();
+            playDiplomaticNotificationSound();
+        }
+    };
+
+    const enableDesktop = async () => {
+        if (typeof Notification === "undefined") {
+            setDesktopPermission("unsupported");
+            return;
+        }
+        try {
+            const permission = Notification.permission === "default"
+                ? await Notification.requestPermission()
+                : Notification.permission;
+            setDesktopPermission(permission);
+        } catch {
+            setDesktopPermission("unsupported");
+        }
+    };
+
+    // Tiny native diagnostic API, analogous to the old AIO helper, so 5D.4 can
+    // be tested without waiting for an autonomous foreign message.
+    useEffect(() => {
+        if (typeof window === "undefined") return undefined;
+
+        window.__OH_DIPLO_NOTIFICATIONS__ = {
+            status: () => ({
+                unreadChats: unseenCount,
+                notificationItems: notificationItems.length,
+                soundEnabled,
+                desktopPermission:
+                    typeof Notification === "undefined"
+                        ? "unsupported"
+                        : Notification.permission,
+                audioState: notificationAudioContext?.state || "not-created",
+                pollVisibleMs: NOTIFICATION_VISIBLE_POLL_MS,
+                pollHiddenMs: NOTIFICATION_HIDDEN_POLL_MS,
+                scanMode: "per-chat-cursor",
+                lastPoll: { ...notificationPollStatsRef.current },
+            }),
+            testSound: () => playDiplomaticNotificationSound(),
+            enableDesktop,
+            clear: () => {
+                for (const timer of toastTimersRef.current.values()) clearTimeout(timer);
+                toastTimersRef.current.clear();
+                setToastItems([]);
+                setNotificationItems([]);
+                setNotificationCenterOpen(false);
+                return true;
+            },
+            test: () => pushNotification(
+                { id: "", countries: [{ name: "Diplomatic notification test" }] },
+                {
+                    role: "leader",
+                    speaker: "Diplomatic notification test",
+                    text: "If you can see this toast and notification button, 5D.4 is working.",
+                },
+                "manual-test",
+            ),
+            testExistingChat: async () => {
+                const saved = await loadAllChats({ force: true });
+                const open = (Array.isArray(saved) ? saved : [])
+                    .filter((chat) =>
+                        chat.status !== "closed" &&
+                        Array.isArray(chat.countries) &&
+                        chat.countries.length > 0
+                    )
+                    .sort((a, b) =>
+                        chatActivitySortValue(chatLastActivityDate(b)) -
+                        chatActivitySortValue(chatLastActivityDate(a))
+                    );
+
+                const chat = open[0];
+                if (!chat) {
+                    return { ok: false, reason: "no-open-chat" };
+                }
+
+                const messages = Array.isArray(chat.messages) ? chat.messages : [];
+                const incoming = [...messages]
+                    .reverse()
+                    .find((message) => isIncomingDiplomaticMessage(message));
+
+                const message = incoming || {
+                    role: "leader",
+                    speaker: chat?.countries?.[0]?.name || "Diplomatic contact",
+                    text: "Manual click-through test for this existing diplomatic thread.",
+                    time: chatLastActivityDate(chat),
+                };
+
+                const item = pushNotification(chat, message, "manual-existing-chat");
+                return {
+                    ok: true,
+                    chatId: String(chat.id),
+                    sender: item.sender,
+                    preview: item.preview,
+                };
+            },
+        };
+
+        return () => {
+            if (window.__OH_DIPLO_NOTIFICATIONS__) {
+                delete window.__OH_DIPLO_NOTIFICATIONS__;
+            }
+        };
+    }, [unseenCount, notificationItems.length, soundEnabled, desktopPermission]);
+
+    const notificationPortal = typeof document !== "undefined"
+        ? ReactDOM.createPortal(
             <>
-            {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} />}
-            <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
-            onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-            onClick={() => setChatOpen(o => !o)}>
+            <div
+                style={{
+                    position: "fixed",
+                    top: FLOATING_UI_EDGE_GAP,
+                    left: "auto",
+                    right: `${toastRightOffsetPx()}px`,
+                    width: "min(23rem, calc(100vw - 2rem))",
+                    zIndex: 10002,
+                    pointerEvents: "none",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.55rem",
+                }}
+            >
+                {toastItems.map((item) => (
+                    <div
+                        key={item.id}
+                        role={item.chatId ? "button" : undefined}
+                        tabIndex={item.chatId ? 0 : -1}
+                        onClick={() => {
+                            if (item.chatId) openNotificationChat(item);
+                        }}
+                        onKeyDown={(event) => {
+                            if (!item.chatId) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                openNotificationChat(item);
+                            }
+                        }}
+                        style={{
+                            pointerEvents: "auto",
+                            position: "relative",
+                            width: "100%",
+                            textAlign: "left",
+                            border: "1px solid rgba(96,165,250,0.35)",
+                            borderRadius: "12px",
+                            background: "rgba(15,23,42,0.97)",
+                            color: "white",
+                            padding: "0.75rem 2.35rem 0.75rem 0.85rem",
+                            boxShadow: "0 14px 38px rgba(0,0,0,0.42)",
+                            cursor: item.chatId ? "pointer" : "default",
+                            fontFamily: "sans-serif",
+                        }}
+                        title={item.chatId ? "Open diplomatic chat" : "Notification test"}
+                    >
+                        <button
+                            type="button"
+                            aria-label="Dismiss diplomatic notification"
+                            title="Dismiss"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                removeToast(item.id);
+                            }}
+                            style={{
+                                position: "absolute",
+                                top: "0.45rem",
+                                right: "0.45rem",
+                                width: "1.55rem",
+                                height: "1.55rem",
+                                borderRadius: "7px",
+                                border: "1px solid rgba(255,255,255,0.10)",
+                                background: "rgba(255,255,255,0.06)",
+                                color: "rgba(255,255,255,0.72)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                cursor: "pointer",
+                                fontSize: "0.8rem",
+                                lineHeight: 1,
+                                padding: 0,
+                            }}
+                            onMouseEnter={(event) => {
+                                event.currentTarget.style.background = "rgba(255,255,255,0.12)";
+                                event.currentTarget.style.color = "white";
+                            }}
+                            onMouseLeave={(event) => {
+                                event.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                                event.currentTarget.style.color = "rgba(255,255,255,0.72)";
+                            }}
+                        >
+                            ✕
+                        </button>
+
+                        <div style={{ fontSize: "0.78rem", fontWeight: 800, marginBottom: "0.25rem" }}>
+                            💬 {item.sender}
+                        </div>
+                        <div style={{ fontSize: "0.74rem", lineHeight: 1.35, color: "rgba(255,255,255,0.72)" }}>
+                            {item.preview}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {notificationItems.length > 0 && !isOpen && (
+                <div
+                    style={{
+                        position: "fixed",
+                        left: "9.7rem",
+                        bottom: FLOATING_UI_EDGE_GAP,
+                        zIndex: 10001,
+                        fontFamily: "sans-serif",
+                    }}
+                >
+                    {notificationCenterOpen && (
+                        <div
+                            style={{
+                                position: "absolute",
+                                left: 0,
+                                bottom: "3rem",
+                                width: "min(22rem, calc(100vw - 1rem))",
+                                maxHeight: "min(27rem, calc(100vh - 7rem))",
+                                overflowY: "auto",
+                                borderRadius: "14px",
+                                border: "1px solid rgba(255,255,255,0.12)",
+                                background: "rgba(15,23,42,0.98)",
+                                boxShadow: "0 18px 50px rgba(0,0,0,0.48)",
+                                color: "white",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    position: "sticky",
+                                    top: 0,
+                                    zIndex: 1,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "0.45rem",
+                                    padding: "0.65rem 0.75rem",
+                                    borderBottom: "1px solid rgba(255,255,255,0.08)",
+                                    background: "rgba(15,23,42,0.99)",
+                                }}
+                            >
+                                <strong style={{ flex: 1, fontSize: "0.78rem" }}>
+                                    Diplomatic messages ({notificationItems.length})
+                                </strong>
+                                <button
+                                    onClick={toggleSound}
+                                    title={soundEnabled ? "Mute diplomacy notification sound" : "Enable diplomacy notification sound"}
+                                    style={{ border: "none", background: "transparent", color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.82rem" }}
+                                >
+                                    {soundEnabled ? "🔊" : "🔇"}
+                                </button>
+                                <button
+                                    onClick={enableDesktop}
+                                    title="Desktop notification permission"
+                                    style={{
+                                        border: "none",
+                                        background: "transparent",
+                                        color: desktopPermission === "granted" ? "#86efac" : "rgba(255,255,255,0.55)",
+                                        cursor: desktopPermission === "unsupported" ? "default" : "pointer",
+                                        fontSize: "0.68rem",
+                                    }}
+                                >
+                                    {desktopPermission === "granted" ? "Desktop ✓" : "Desktop"}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setNotificationItems([]);
+                                        setNotificationCenterOpen(false);
+                                    }}
+                                    style={{ border: "none", background: "transparent", color: "#93c5fd", cursor: "pointer", fontSize: "0.68rem" }}
+                                >
+                                    Clear
+                                </button>
+                            </div>
+
+                            {[...notificationItems].reverse().map((item) => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => openNotificationChat(item)}
+                                    disabled={!item.chatId}
+                                    style={{
+                                        width: "100%",
+                                        border: "none",
+                                        borderBottom: "1px solid rgba(255,255,255,0.07)",
+                                        background: "transparent",
+                                        color: "white",
+                                        padding: "0.7rem 0.8rem",
+                                        textAlign: "left",
+                                        cursor: item.chatId ? "pointer" : "default",
+                                        fontFamily: "sans-serif",
+                                    }}
+                                >
+                                    <div style={{ fontSize: "0.76rem", fontWeight: 750 }}>{item.sender}</div>
+                                    <div style={{ marginTop: "0.2rem", fontSize: "0.7rem", lineHeight: 1.35, color: "rgba(255,255,255,0.62)" }}>
+                                        {item.preview}
+                                    </div>
+                                    <div style={{ marginTop: "0.25rem", fontSize: "0.62rem", color: "rgba(255,255,255,0.32)" }}>
+                                        {item.gameDate ? formatChatDateLabel(item.gameDate) : new Date(item.at).toLocaleTimeString()}
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    <button
+                        onClick={() => setNotificationCenterOpen((open) => !open)}
+                        title="Diplomatic notifications"
+                        style={{
+                            minWidth: "2.8rem",
+                            height: "2.5rem",
+                            padding: "0 0.65rem",
+                            borderRadius: "10px",
+                            border: "1px solid rgba(96,165,250,0.35)",
+                            background: "rgba(15,23,42,0.96)",
+                            color: "white",
+                            boxShadow: "0 6px 18px rgba(0,0,0,0.38)",
+                            cursor: "pointer",
+                            fontFamily: "sans-serif",
+                            fontWeight: 800,
+                            fontSize: "0.72rem",
+                        }}
+                    >
+                        🔔 {notificationItems.length > 99 ? "99+" : notificationItems.length}
+                    </button>
+                </div>
+            )}
+            </>,
+            document.body,
+        )
+        : null;
+
+    return (
+        <>
+        {hasOpened && (
+            <ChatPanel
+                isOpen={isOpen}
+                onClose={onToggle}
+                requestedCountry={pendingCountry}
+                onConsumeRequest={() => setPendingCountry(null)}
+                requestedChatId={pendingChatId}
+                onConsumeRequestedChat={() => setPendingChatId("")}
+            />
+        )}
+
+        {notificationPortal}
+
+        <button
+            title="Chat"
+            style={{
+                width: "3.3rem",
+                height: "3.3rem",
+                borderRadius: "10px",
+                border: hovered
+                    ? "1px solid rgba(255,255,255,0.2)"
+                    : isOpen
+                        ? "1px solid rgba(139,92,246,0.5)"
+                        : "1px solid rgba(255,255,255,0.1)",
+                background: isOpen
+                    ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))"
+                    : hovered
+                        ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))"
+                        : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                transition: "all 0.12s ease",
+                boxShadow: hovered
+                    ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)"
+                    : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)",
+                fontSize: "1.2rem",
+                outline: "none",
+                transform: hovered ? "translateY(-1px)" : "translateY(0)",
+                color: "white",
+                fontFamily: "sans-serif",
+                flexShrink: 0,
+            }}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            onClick={onToggle}
+        >
             <span style={{ position: "relative", display: "inline-flex" }}>
                 💬
                 {unseenCount > 0 && !isOpen && (
-                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.2rem", borderRadius: "999px", background: "#dc2626", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.62rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
+                    <span
+                        style={{
+                            position: "absolute",
+                            top: "-0.55rem",
+                            right: "-0.8rem",
+                            minWidth: "1.05rem",
+                            height: "1.05rem",
+                            padding: "0 0.2rem",
+                            borderRadius: "999px",
+                            background: "#dc2626",
+                            border: "1px solid rgba(255,255,255,0.35)",
+                            color: "white",
+                            fontSize: "0.62rem",
+                            fontWeight: 700,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            lineHeight: 1,
+                            boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+                        }}
+                    >
                         {unseenCount > 9 ? "9+" : unseenCount}
                     </span>
                 )}
             </span>
-            </button>
-            </>
-        );
+        </button>
+        </>
+    );
 };
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────

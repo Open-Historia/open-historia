@@ -102,28 +102,167 @@ export const buildCampaignHistoryText = (events, world, { limit = 24 } = {}) => 
   buildEventHistoryText(events, { limit, world }),
 ].join("\n");
 
+const buildDiplomaticMessageLine = (message) => {
+  const speaker = normalizeString(message?.speaker || message?.role || "message");
+  const text = normalizeString(message?.text);
+  const date = normalizeString(message?.time);
+  const dateLabel = date ? formatDateReadable(date) : "";
+  return `${dateLabel ? `[${dateLabel}] ` : ""}${speaker}: ${text}`;
+};
+
+const getLatestDiplomaticMemory = (chat) => {
+  const messages = normalizeArray(chat?.messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const summary = normalizeString(messages[index]?.memorySummary);
+    if (!summary) continue;
+    return {
+      summary,
+      time: normalizeString(messages[index]?.time),
+    };
+  }
+  return null;
+};
+
+const buildDiplomaticMemoryLine = (chat, { maxChars = 1400 } = {}) => {
+  const memory = getLatestDiplomaticMemory(chat);
+  if (!memory) return "";
+  const dateLabel = memory.time ? formatDateReadable(memory.time) : "an earlier point";
+  const summary = memory.summary.length > maxChars
+    ? `${memory.summary.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
+    : memory.summary;
+  return `Durable diplomatic memory through ${dateLabel}: ${summary}`;
+};
+
+const diplomaticChatActivityKey = (chat) => {
+  const messages = normalizeArray(chat?.messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const time = normalizeString(messages[index]?.time);
+    if (time) return time;
+  }
+  return "";
+};
+
+const sortDiplomaticChatsByRecentActivity = (chats) =>
+  normalizeChats(chats)
+    .map((chat, index) => ({
+      chat,
+      index,
+      activity: diplomaticChatActivityKey(chat),
+      hasMemory: Boolean(getLatestDiplomaticMemory(chat)),
+    }))
+    .sort((left, right) => {
+      const byActivity = right.activity.localeCompare(left.activity);
+      if (byActivity !== 0) return byActivity;
+
+      // On the same in-game date, prefer a thread that already carries durable
+      // continuity memory. This keeps explicit agreements/commitments visible to
+      // world-generation context instead of letting a routine note crowd them out.
+      if (left.hasMemory !== right.hasMemory) {
+        return left.hasMemory ? -1 : 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map((entry) => entry.chat);
+
+const buildSingleChatHistoryText = (chat, { messageLimit = 10 } = {}) => {
+  if (!chat) return "No chat history.";
+
+  const memoryLine = buildDiplomaticMemoryLine(chat);
+  const recentMessages = normalizeArray(chat.messages)
+    .slice(-messageLimit)
+    .map(buildDiplomaticMessageLine)
+    .join("\n");
+
+  return [
+    memoryLine,
+    recentMessages || "No messages yet.",
+  ].filter(Boolean).join("\n");
+};
+
 export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
+  const normalizedChats = sortDiplomaticChatsByRecentActivity(chats);
   if (normalizedChats.length === 0) return "No diplomatic chats are currently recorded.";
 
   return normalizedChats.slice(0, limit).map((chat) => {
     const participants = chat.countries.map((country) => country.name).join(", ");
     const lastMessage = chat.messages.at(-1);
-    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}: ${lastMessage.text}` : "no messages yet"}`;
+    const memoryLine = buildDiplomaticMemoryLine(chat, { maxChars: 700 });
+    return [
+      `- ${participants}:`,
+      memoryLine ? `  ${memoryLine}` : "",
+      `  Latest: ${lastMessage ? buildDiplomaticMessageLine(lastMessage) : "no messages yet"}`,
+    ].filter(Boolean).join("\n");
   }).join("\n");
 };
 
 export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
+  const normalizedChats = sortDiplomaticChatsByRecentActivity(chats);
   if (normalizedChats.length === 0) return "No chats occurred in these rounds.";
 
   return normalizedChats.slice(0, limit).map((chat, index) => {
     const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
-    const body = chat.messages.length > 0
-      ? chat.messages.slice(-messageLimit).map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
-      : "No messages yet.";
-    return `${header}\n${body}`;
+    return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
   }).join("\n\n");
+};
+
+// Compact diplomatic continuity ledger for the world simulator. Long-term meaning
+// comes from rolling memory, while a tiny recent verbatim tail preserves exact
+// actor attribution and modal force when summaries paraphrase too aggressively.
+export const buildDiplomaticContinuityText = (
+  chats,
+  {
+    limit = 12,
+    maxCharsPerThread = 1000,
+    evidenceMessageLimit = 4,
+    maxEvidenceCharsPerThread = 1800,
+    maxTotalChars = 12000,
+  } = {},
+) => {
+  const rows = [];
+  let usedChars = 0;
+
+  for (const chat of sortDiplomaticChatsByRecentActivity(chats)) {
+    const memory = getLatestDiplomaticMemory(chat);
+    if (!memory?.summary) continue;
+
+    const participants = normalizeArray(chat?.countries)
+      .map((country) => normalizeString(country?.name || country?.code))
+      .filter(Boolean)
+      .join(", ") || "Unknown participants";
+    const updated = memory.time ? formatDateReadable(memory.time) : "unknown date";
+    const clippedSummary = memory.summary.length > maxCharsPerThread
+      ? `${memory.summary.slice(0, Math.max(0, maxCharsPerThread - 1)).trimEnd()}…`
+      : memory.summary;
+
+    const recentEvidenceRaw = normalizeArray(chat?.messages)
+      .filter((message) => ["user", "leader"].includes(normalizeString(message?.role)))
+      .slice(-evidenceMessageLimit)
+      .map(buildDiplomaticMessageLine)
+      .join("\n");
+    const recentEvidence = recentEvidenceRaw.length > maxEvidenceCharsPerThread
+      ? `…${recentEvidenceRaw.slice(-Math.max(0, maxEvidenceCharsPerThread - 1)).trimStart()}`
+      : recentEvidenceRaw;
+
+    const row = [
+      `Participants: ${participants}`,
+      `Memory updated: ${updated}`,
+      `Standing diplomatic memory: ${clippedSummary}`,
+      recentEvidence
+        ? `Recent verbatim diplomatic evidence (authoritative for exact wording and modality):\n${recentEvidence}`
+        : "",
+    ].filter(Boolean).join("\n");
+
+    if (rows.length >= limit) break;
+    if (usedChars + row.length > maxTotalChars && rows.length > 0) break;
+
+    rows.push(row);
+    usedChars += row.length;
+  }
+
+  return rows.length > 0
+    ? rows.join("\n\n")
+    : "No durable diplomatic commitments, positions, threats, or unresolved matters are currently recorded.";
 };
 
 export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
@@ -475,7 +614,8 @@ export const buildPromptContext = async (bundle, {
   );
   const unconsolidatedChats = normalizeChats(bundle.chats)
     .filter((entry) => !consolidatedChatIds.has(entry.id));
-  const currentChat = normalizedChat ?? unconsolidatedChats[0] ?? null;
+  const promptChats = sortDiplomaticChatsByRecentActivity(unconsolidatedChats);
+  const currentChat = normalizedChat ?? promptChats[0] ?? null;
 
   return {
     actionInput,
@@ -491,12 +631,15 @@ export const buildPromptContext = async (bundle, {
       : "0%",
     catalystPremise,
     citiesSummary,
-    chat: JSON.stringify(unconsolidatedChats),
-    chatHistory: currentChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") || "No chat history.",
-    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit }),
+    chat: JSON.stringify(promptChats),
+    chatHistory: currentChat
+      ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
+      : "No chat history.",
+    chatHistoryLong: buildDetailedChatHistoryText(promptChats, { limit: chatLimit }),
     chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
-    chatSummary: buildChatSummaryText(unconsolidatedChats),
-    chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(unconsolidatedChats, { limit: 12, messageLimit: 50 }),
+    chatSummary: buildChatSummaryText(promptChats),
+    diplomaticContinuity: buildDiplomaticContinuityText(promptChats),
+    chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 }),
     consolidatedHistory: buildConsolidatedHistoryText(bundle.world),
     date,
     dateReadable: formatDateReadable(date),

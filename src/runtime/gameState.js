@@ -391,6 +391,7 @@ const normalizeChatMessage = (message, index = 0) => {
       speaker: "",
       text,
       time: "",
+      memorySummary: "",
     };
   }
 
@@ -412,6 +413,12 @@ const normalizeChatMessage = (message, index = 0) => {
     speaker: normalizeOptionalString(message.speaker || message.senderName),
     text,
     time: normalizeOptionalString(message.time || message.date),
+    // Hidden rolling continuity note produced alongside a diplomatic reply.
+    // It is never rendered as chat text; it exists so long-lived negotiations can
+    // stay bounded without forgetting agreements, threats or unresolved proposals.
+    memorySummary: normalizeOptionalString(
+      message.memorySummary || message.diplomaticMemorySummary,
+    ),
   };
 };
 
@@ -696,7 +703,31 @@ const mergeChatMessages = (primaryMessages, incomingMessages) => {
   for (const message of normalizeArray(incomingMessages).map((entry) => normalizeChatMessage(entry)).filter(Boolean)) {
     const id = normalizeString(message.id);
     const fingerprint = chatMessageFingerprint(message);
-    if ((id && ids.has(id)) || (fingerprint && fingerprints.has(fingerprint))) continue;
+    const duplicate = (id && ids.has(id)) || (fingerprint && fingerprints.has(fingerprint));
+
+    if (duplicate) {
+      // A stale structural copy can race a richer copy of the same reply. Never let
+      // reconciliation throw away the hidden continuity memory merely because the
+      // visible message already exists.
+      const matchIndex = merged.findIndex((existing) => {
+        const existingId = normalizeString(existing.id);
+        if (id && existingId === id) return true;
+        return fingerprint && chatMessageFingerprint(existing) === fingerprint;
+      });
+
+      if (
+        matchIndex >= 0 &&
+        !normalizeOptionalString(merged[matchIndex].memorySummary) &&
+        normalizeOptionalString(message.memorySummary)
+      ) {
+        merged[matchIndex] = {
+          ...merged[matchIndex],
+          memorySummary: message.memorySummary,
+        };
+      }
+      continue;
+    }
+
     merged.push(message);
     if (id) ids.add(id);
     if (fingerprint) fingerprints.add(fingerprint);
@@ -1330,6 +1361,46 @@ const normalizeEventImpacts = (value) => {
   };
 };
 
+const stripWrappingQuoteMarks = (value) => {
+  const text = normalizeOptionalString(value);
+  if (!text || text.length < 2) return text;
+
+  const pairs = [
+    ['"', '"'],
+    ["“", "”"],
+    ["‘", "’"],
+    ["'", "'"],
+  ];
+
+  for (const [open, close] of pairs) {
+    if (text.startsWith(open) && text.endsWith(close)) {
+      return text.slice(open.length, text.length - close.length).trim();
+    }
+  }
+
+  return text;
+};
+
+const normalizeEventQuote = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const text = stripWrappingQuoteMarks(value.text || value.quote || value.content);
+  if (!text) return null;
+
+  const speaker = normalizeOptionalString(
+    value.speaker || value.attribution || value.author,
+  );
+  const role = normalizeOptionalString(value.role || value.title);
+
+  return {
+    text,
+    ...(speaker ? { speaker } : {}),
+    ...(role ? { role } : {}),
+  };
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -1362,6 +1433,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
+  const quote = normalizeEventQuote(entry.quote);
+
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
@@ -1372,6 +1445,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     kind: normalizeOptionalString(entry.kind) || "world",
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
+    ...(quote ? { quote } : {}),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };

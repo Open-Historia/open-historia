@@ -515,6 +515,26 @@ const impactsSchema = {
   additionalProperties: false,
 };
 
+const eventQuoteSchema = {
+  type: "object",
+  description:
+    "Optional attributed quotation displayed separately from the event narrative. "
+    + "Use only when a genuinely meaningful quotation improves the event.",
+  properties: {
+    text: nonEmptyTextSchema(
+      "Quotation text only, without surrounding quotation marks. Do not duplicate it in description.",
+    ),
+    speaker: textSchema(
+      "Person or institution to whom the quotation is attributed. Leave empty rather than guessing.",
+    ),
+    role: textSchema(
+      "Optional office, title, or role of the speaker when it helps identify them.",
+    ),
+  },
+  required: ["text"],
+  additionalProperties: false,
+};
+
 const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
@@ -523,6 +543,7 @@ const eventSchema = {
     date: textSchema("In-game date on which the event occurs."),
     title: textSchema("Concise event headline."),
     description: textSchema("Specific narrative description and consequences."),
+    quote: eventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     notable: {
@@ -634,6 +655,7 @@ const pregameEventSchema = {
     date: textSchema("Date the event occurred, strictly before the game start date."),
     title: textSchema("Concise event headline."),
     description: textSchema("Specific narrative description and its consequences."),
+    quote: eventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
   },

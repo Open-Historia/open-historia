@@ -694,6 +694,41 @@ const EventCard = ({ event, footer = null, lookups }) => {
             </div>
         )}
 
+        {/* structured-event-quote-v1 */}
+        {event?.quote?.text && (
+            <div
+            style={{
+                borderLeft: "3px solid rgba(148,163,184,0.42)",
+                marginTop: "0.08rem",
+                padding: "0.08rem 0 0.08rem 0.82rem",
+            }}
+            >
+            <div
+            style={{
+                color: "rgba(245,247,252,0.92)",
+                fontSize: "0.82rem",
+                fontStyle: "italic",
+                lineHeight: "1.55",
+            }}
+            >
+            “{event.quote.text}”
+            </div>
+            {(event.quote.speaker || event.quote.role) && (
+                <div
+                style={{
+                    color: "rgba(196,207,224,0.52)",
+                    fontSize: "0.69rem",
+                    lineHeight: "1.4",
+                    marginTop: "0.34rem",
+                }}
+                >
+                — {event.quote.speaker || "Unknown speaker"}
+                {event.quote.role ? `, ${event.quote.role}` : ""}
+                </div>
+            )}
+            </div>
+        )}
+
         {footer}
         </div>
         </div>
