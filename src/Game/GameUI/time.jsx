@@ -11,6 +11,7 @@ import {
     loadRegionCatalog,
 } from "../../runtime/assets.js";
 import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -547,6 +548,9 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
+        // Only ever non-empty on a fallback turn (see gameplay.js) — the "Copy
+        // debugging message" button's reason for existing.
+        rawResponse: entry.rawResponse || "",
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
         source: entry.source || "ai",
@@ -1121,6 +1125,7 @@ const TimelineHistoryPanel = ({
     onRevealAll,
     lookups,
     onClose,
+    onCopyDebugMessage,
     record,
     topOffset,
     visibleEventCount,
@@ -1133,6 +1138,16 @@ const TimelineHistoryPanel = ({
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
     const lastVisibleEventRef = React.useRef(null);
+    // idle | copying | copied | failed — resets to idle shortly after a result
+    // so the button doesn't get stuck reading "Copied!" forever.
+    const [copyState, setCopyState] = useState("idle");
+    const handleCopyClick = async () => {
+        if (copyState === "copying" || typeof onCopyDebugMessage !== "function") return;
+        setCopyState("copying");
+        const succeeded = await onCopyDebugMessage();
+        setCopyState(succeeded ? "copied" : "failed");
+        setTimeout(() => setCopyState("idle"), 2000);
+    };
 
     useEffect(() => {
         if (!isOpen || !lastVisibleEventRef.current) {
@@ -1168,6 +1183,31 @@ const TimelineHistoryPanel = ({
             }}
             >
             {warning}
+            {typeof onCopyDebugMessage === "function" && (
+                <button
+                type="button"
+                onClick={handleCopyClick}
+                title="Copies everything needed to debug this — what was attempted, game/provider context, and the raw model response — so it can be pasted straight to Claude, no DevTools needed."
+                style={{
+                    alignItems: "center",
+                    background: copyState === "copied" ? "rgba(34,197,94,0.16)" : "rgba(251,191,36,0.1)",
+                    border: `1px solid ${copyState === "copied" ? "rgba(74,222,128,0.4)" : "rgba(251,191,36,0.3)"}`,
+                    borderRadius: "8px",
+                    color: copyState === "copied" ? "#86efac" : "#fde68a",
+                    cursor: copyState === "copying" ? "default" : "pointer",
+                    display: "flex",
+                    fontFamily: "sans-serif",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    gap: "0.35rem",
+                    marginTop: "0.6rem",
+                    padding: "0.4rem 0.7rem",
+                    transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                }}
+                >
+                {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy — try again" : copyState === "copying" ? "Copying…" : "📋 Copy debugging message"}
+                </button>
+            )}
             </div>
         )}
         {!record ? (
@@ -1507,6 +1547,68 @@ const DateWidget = ({
         || polityLookup.get(playerCountryCode)
         || playerCountryCode)
     : "";
+
+    // "Copy debugging message" (TimelineHistoryPanel, next to the fallback
+    // warning): everything a report needs in one paste — what was attempted,
+    // the game/provider context, and the raw model response — so a fallback
+    // can be diagnosed with no DevTools, no log-hunting, one click and one
+    // paste. Built lazily on click, not kept in state, since it's read-only
+    // derived data that only ever matters if the button is actually pressed.
+    const buildFallbackDebugMessage = () => {
+        const record = latestTurnRecord;
+        if (!record) return "";
+        const provider = getStoredProvider();
+        const model = getProviderField(provider, "model") || "(default)";
+        const actionsList = record.plannedActions.length
+        ? record.plannedActions.map((action) =>
+            `- ${action.title}${action.text && action.text !== action.title ? `: ${action.text}` : ""}`).join("\n")
+        : "(none queued)";
+        // The events THIS fallback turn produced are generic canned text (no
+        // diagnostic value) — exclude them and show what actually led up to it.
+        const recordEventIds = new Set(record.events.map((event) => event.id));
+        const priorEvents = events.filter((event) => !recordEventIds.has(event.id)).slice(-3);
+        const recentEvents = priorEvents.length
+        ? priorEvents.map((event) => `- ${event.date || "undated"}: ${event.title}`).join("\n")
+        : "(none)";
+
+        return [
+            "OPEN HISTORIA — AI TURN FALLBACK DEBUG REPORT",
+            `Generated: ${new Date().toISOString()}`,
+            "",
+            "-- What happened --",
+            `Mode: ${record.mode}`,
+            `Requested range: ${record.fromDate || "unknown"} -> ${record.toDate || "unknown"}`,
+            `Round: ${record.round}`,
+            `Failure reason: ${record.fallbackReason || "(unknown)"}`,
+            "",
+            "-- Game context --",
+            `Player polity: ${playerCountry || gameData?.country || "unknown"}`,
+            `Difficulty: ${gameData?.difficulty || "standard"}`,
+            `AI provider: ${provider}`,
+            `Model: ${model}`,
+            "",
+            "-- Player's queued actions this round --",
+            actionsList,
+            "",
+            "-- Most recent prior events --",
+            recentEvents,
+            "",
+            "-- Raw model response that failed to parse --",
+            record.rawResponse || "(not captured — this turn happened before raw-response logging was added; a future fallback will include it)",
+        ].join("\n");
+    };
+
+    const handleCopyDebugMessage = async () => {
+        const message = buildFallbackDebugMessage();
+        if (!message) return false;
+        try {
+            await navigator.clipboard.writeText(message);
+            return true;
+        } catch (error) {
+            console.error("Failed to copy debugging message:", error);
+            return false;
+        }
+    };
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     const parsedGameDate = rawGameDate ? dayjs(rawGameDate) : null;
     const hasValidGameDate = Boolean(parsedGameDate && parsedGameDate.isValid());
@@ -1654,6 +1756,7 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={lookups}
         onClose={() => setPanel(null)}
+        onCopyDebugMessage={handleCopyDebugMessage}
         record={latestTurnRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}

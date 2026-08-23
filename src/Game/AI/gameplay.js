@@ -521,6 +521,12 @@ const runJsonTask = async (taskKey, {
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   let failureReason = "The model did not return valid structured output.";
+  // The player's only recourse when a turn falls back is "give Claude the
+  // logs" — but the fallback warning below used to log only failureReason, a
+  // short label ("Response did not contain parseable JSON..."), never the
+  // actual text that failed to parse. Kept across attempts so whichever one
+  // the loop last saw is what the warning below can show.
+  let lastRawText = "";
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
@@ -535,6 +541,7 @@ const runJsonTask = async (taskKey, {
         tool,
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+      lastRawText = rawText;
       const parsed = response?.toolInput ?? extractJsonPayload(rawText);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
@@ -626,8 +633,20 @@ const runJsonTask = async (taskKey, {
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
+  // Capped so one runaway response can't bloat world.json (this rides along on
+  // every recent fallback's simulationHistory entry, see applySimulationResult)
+  // or flood the console. Surfaced to the player as the "Copy debugging
+  // message" button next to the fallback warning (time.jsx) — that button, not
+  // DevTools, is the primary way this reaches anyone now.
+  const RAW_RESPONSE_LIMIT = 12000;
+  const rawResponse = lastRawText.length > RAW_RESPONSE_LIMIT
+    ? `${lastRawText.slice(0, RAW_RESPONSE_LIMIT)}\n…[${lastRawText.length - RAW_RESPONSE_LIMIT} more characters truncated]`
+    : lastRawText;
+  if (rawResponse) {
+    console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${rawResponse}`);
+  }
   return {
-    generation: { source: "fallback", fallbackReason: failureReason },
+    generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
     payload: await fallback(),
   };
 };
@@ -1604,6 +1623,11 @@ const applySimulationResult = async ({
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
           plannedActions: plannedActionSnapshot,
+          // The raw model response that failed to parse (runJsonTask), so the
+          // fallback warning's "Copy debugging message" button (time.jsx) has
+          // something to copy even after a reload — only ever non-empty on a
+          // fallback turn; a normal AI turn carries nothing here.
+          rawResponse: normalizeString(result.generation?.rawResponse),
           round: nextGame.round,
           summary: normalizeString(result.summary),
           source: result.generation?.source || "ai",

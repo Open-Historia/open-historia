@@ -1101,6 +1101,9 @@ export const normalizeWorldState = (world) => {
           fromDate: normalizeOptionalString(entry.fromDate || entry.startDate),
           mode: normalizeOptionalString(entry.mode),
           plannedActions: normalizeActions(entry.plannedActions || entry.actions),
+          // The raw model response a fallback turn failed to parse — empty on a
+          // normal AI turn. See gameplay.js's runJsonTask/applySimulationResult.
+          rawResponse: normalizeOptionalString(entry.rawResponse),
           round:
             Number.isFinite(Number(entry.round)) && Number(entry.round) > 0
               ? Math.trunc(Number(entry.round))
