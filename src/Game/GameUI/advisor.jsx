@@ -288,6 +288,91 @@ const TabButton = ({ icon, label, active, onClick }) => (
     </button>
 );
 
+// No closure over component state, so hoisted rather than redefined on every
+// AdvisorPanel render (and needed at module scope by the memoized row below).
+const formatAdvisorDate = (dateStr) => {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+};
+
+// One chat bubble, memoized. AdvisorPanel's `input` (the composer text) used to
+// live in the SAME component as the whole message history, so every keystroke
+// re-rendered every bubble in the conversation: re-running parseMessage's
+// regex/JSON.parse over each message's full text, re-parsing every markdown
+// body, and — the expensive part — handing AdvisorChart a BRAND NEW config
+// object each time (parseMessage's JSON.parse always returns a fresh
+// reference), which tore down and rebuilt every historical Chart.js chart on
+// every keystroke. None of that scales with the length of the conversation —
+// it's exactly why a long chat felt laggy while a short one didn't. Wrapped
+// here, a row only re-renders when ITS OWN message object actually changes (a
+// new message appended, or the streaming placeholder being replaced); memo's
+// default shallow prop comparison skips everything else, including every
+// keystroke in the composer below.
+const AdvisorMessageRow = React.memo(({ msg, chatDiffers, chatDir, onOpenActions }) => {
+    const { text, chartConfig } = msg.role === "advisor"
+        ? parseMessage(msg.text)
+        : { text: msg.text, chartConfig: null };
+    const asWritten = msg.role === "advisor" && chatDiffers;
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+        {msg.role !== "user" && (
+            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
+            {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
+            </span>
+        )}
+        {/* Player-typed text stays verbatim under UI translation. */}
+        <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
+            maxWidth: "90%", width: chartConfig ? "90%" : undefined,
+            padding: "0.6rem 0.85rem",
+            borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+            backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
+            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
+            border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
+            boxSizing: "border-box",
+        }}>
+        {msg.role === "user" ? text : (
+            <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
+        )}
+        {chartConfig && <AdvisorChart config={chartConfig} />}
+        {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        </div>
+        {msg.time && msg.role !== "user" && (
+            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+            {formatAdvisorDate(msg.time)}
+            </span>
+        )}
+        </div>
+    );
+});
+
+// The whole scrollable history, also memoized as a unit — so a keystroke in
+// the composer (state that lives in AdvisorPanel, outside this component)
+// never even reaches AdvisorMessageRow's own per-row check above.
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, messagesEndRef }) => (
+    <div style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+    {messages.length === 0 && (
+        <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
+        No messages yet. Ask your advisor something!
+        </p>
+    )}
+
+    {messages.map((msg, i) => (
+        <AdvisorMessageRow key={i} msg={msg} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} />
+    ))}
+
+    {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
+        <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
+        <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+        <ThinkingDots />
+        </div>
+        </div>
+    )}
+    <div ref={messagesEndRef} />
+    </div>
+));
+
 const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
@@ -447,11 +532,6 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
-    const formatDate = (dateStr) => {
-        if (!dateStr) return "";
-        return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
-    };
-
     if (!hasOpened) return null;
 
     return (
@@ -528,61 +608,17 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         </div>
 
         <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        {/* Messages */}
-        <div style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
-        {messages.length === 0 && (
-            <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
-            No messages yet. Ask your advisor something!
-            </p>
-        )}
-
-        {messages.map((msg, i) => {
-            const { text, chartConfig } = msg.role === "advisor"
-            ? parseMessage(msg.text)
-            : { text: msg.text, chartConfig: null };
-            const asWritten = msg.role === "advisor" && chatDiffers;
-            return (
-                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                {msg.role !== "user" && (
-                    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
-                    {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
-                    </span>
-                )}
-                {/* Player-typed text stays verbatim under UI translation. */}
-                <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
-                    maxWidth: "90%", width: chartConfig ? "90%" : undefined,
-                    padding: "0.6rem 0.85rem",
-                    borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-                    backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
-                    fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
-                    boxSizing: "border-box",
-                }}>
-                {msg.role === "user" ? text : (
-                    <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
-                )}
-                {chartConfig && <AdvisorChart config={chartConfig} />}
-                {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
-                </div>
-                {msg.time && msg.role !== "user" && (
-                    <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
-                    {formatDate(msg.time)}
-                    </span>
-                )}
-                </div>
-            );
-        })}
-
-        {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
-            <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
-            <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
-            <ThinkingDots />
-            </div>
-            </div>
-        )}
-        <div ref={messagesEndRef} />
-        </div>
+        {/* Messages — memoized as its own component so typing below (state that
+            lives in AdvisorPanel) doesn't re-render the whole history on every
+            keystroke. See AdvisorMessageRow's comment for why that mattered. */}
+        <AdvisorMessageList
+        messages={messages}
+        isLoading={isLoading}
+        chatDiffers={chatDiffers}
+        chatDir={chatDir}
+        onOpenActions={onOpenActions}
+        messagesEndRef={messagesEndRef}
+        />
 
         {/* Input */}
         <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
