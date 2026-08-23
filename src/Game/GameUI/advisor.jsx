@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { normalizeActionEntry, readActionsState, writeActionsState } from "../../runtime/gameState.js";
@@ -51,8 +52,12 @@ const extractFencedJson = (text, lang) => {
 
 const parseMessage = (rawText) => {
     const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
-    const { rest, json: actionsRaw } = extractFencedJson(afterChart, "actions");
-    return { text: rest.trim(), chartConfig, actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null };
+    const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
+    const { rest, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
+    const messageDrafts = Array.isArray(draftsRaw)
+        ? draftsRaw.filter((draft) => draft && String(draft.country ?? "").trim() && String(draft.text ?? "").trim())
+        : null;
+    return { text: rest.trim(), chartConfig, actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null, messageDrafts };
 };
 
 // Applies the advisor's ```actions proposal to the real queue (readActionsState/
@@ -144,6 +149,47 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
             </li>
         ))}
         </ul>
+        </div>
+    );
+};
+
+// One drafted message's send button. Local status state so a click shows
+// "Sending…" then "✓ Sent" immediately without waiting on a parent re-render;
+// `sent` (persisted on the message itself, see AdvisorPanel's handleSendDraft)
+// is what survives a reload — the local state just tracks an in-flight click.
+const AdvisorDraftSend = ({ draft, sent, onSend }) => {
+    const [status, setStatus] = useState(sent ? "sent" : "idle");
+    const [error, setError] = useState("");
+
+    useEffect(() => { if (sent) setStatus("sent"); }, [sent]);
+
+    const handleClick = async () => {
+        if (status === "sending" || status === "sent") return;
+        setStatus("sending");
+        setError("");
+        const result = await onSend();
+        if (result?.ok) setStatus("sent");
+        else {
+            setStatus("error");
+            setError(result?.error || "Failed to send.");
+        }
+    };
+
+    const busy = status === "sending" || status === "sent";
+    return (
+        <div>
+        <button type="button" onClick={handleClick} disabled={busy} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "sent" ? "rgba(52,211,153,0.12)" : "rgba(59,130,246,0.16)",
+            border: `1px solid ${status === "sent" ? "rgba(52,211,153,0.4)" : "rgba(59,130,246,0.45)"}`,
+            borderRadius: "8px",
+            color: status === "sent" ? "rgba(167,243,208,0.95)" : "rgba(191,219,254,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+        }}>
+        {status === "sent" ? `✓ Sent to ${draft.country}` : status === "sending" ? `Sending to ${draft.country}…` : `✉️ Send message to ${draft.country}`}
+        </button>
+        {status === "error" && <div style={{ fontSize: "0.7rem", color: "rgba(248,113,113,0.85)", marginTop: "0.3rem" }}>{error}</div>}
         </div>
     );
 };
@@ -308,10 +354,10 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, chatDiffers, chatDir, onOpenActions }) => {
-    const { text, chartConfig } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onSendDraft }) => {
+    const { text, chartConfig, messageDrafts } = msg.role === "advisor"
         ? parseMessage(msg.text)
-        : { text: msg.text, chartConfig: null };
+        : { text: msg.text, chartConfig: null, messageDrafts: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -336,6 +382,18 @@ const AdvisorMessageRow = React.memo(({ msg, chatDiffers, chatDir, onOpenActions
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        {messageDrafts && messageDrafts.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {messageDrafts.map((draft, draftIndex) => (
+                <AdvisorDraftSend
+                key={draftIndex}
+                draft={draft}
+                sent={!!msg.sentDrafts?.includes(draftIndex)}
+                onSend={() => onSendDraft(msgIndex, draftIndex, draft)}
+                />
+            ))}
+            </div>
+        )}
         </div>
         {msg.time && msg.role !== "user" && (
             <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
@@ -349,7 +407,7 @@ const AdvisorMessageRow = React.memo(({ msg, chatDiffers, chatDir, onOpenActions
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onSendDraft, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -358,7 +416,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     )}
 
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onSendDraft={onSendDraft} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -552,6 +610,29 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
+    // Sends one drafted message (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx)
+    // straight to its country's diplomatic chat, then marks it sent on the
+    // ADVISOR message itself (not just local UI state) so the button stays
+    // "✓ Sent" across a reload instead of reappearing clickable. A stable
+    // reference (no deps) so it never breaks AdvisorMessageList's memoization —
+    // see the comment on that component for why that matters.
+    const handleSendDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
+        try {
+            const { chat } = await sendAdvisorDraftedMessage({ countryName: draft.country, text: draft.text });
+            setMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                next[msgIndex] = { ...target, sentDrafts: [...(target.sentDrafts || []), draftIndex] };
+                saveMessages(next);
+                return next;
+            });
+            return { ok: true, chatId: chat?.id };
+        } catch (err) {
+            return { ok: false, error: err.message || "Failed to send message." };
+        }
+    }, []);
+
     if (!hasOpened) return null;
 
     return (
@@ -637,6 +718,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         chatDiffers={chatDiffers}
         chatDir={chatDir}
         onOpenActions={onOpenActions}
+        onSendDraft={handleSendDraft}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}
         onScroll={handleMessagesScroll}

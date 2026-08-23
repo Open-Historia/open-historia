@@ -1194,6 +1194,19 @@ Example:
 [Current Planned Actions]
 ${plannedActionsWithIds}`;
 
+// Lets the UI offer a real "Send message to X" button for a drafted diplomatic
+// message instead of the player copy-pasting your blockquote into the
+// Diplomacy panel themselves. Appended at call time for the same frozen-prompt
+// reason as buildAdvisorActionsDirective above.
+const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
+Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do. Immediately after it, in ADDITION to your normal prose (never instead of it), append a fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message in this reply: {"country":"<the exact recipient polity name>","text":"<the message text, identical to the blockquote, no quotation marks or markdown>"}. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
+
+Example:
+> Your Excellency, I write to propose a mutual non-aggression pact between our nations...
+\`\`\`senddraft
+[{"country":"France","text":"Your Excellency, I write to propose a mutual non-aggression pact between our nations..."}]
+\`\`\``;
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1216,7 +1229,7 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}`;
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
@@ -1346,4 +1359,36 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         diplomaticHistory.pop();
         throw err;
     }
+}
+
+// A one-off diplomatic exchange for callers with no live ConversationView
+// mounted — the Advisor's "Send message to <country>" button (advisor.jsx,
+// via gameplay.js's sendAdvisorDraftedMessage). Builds its OWN local history
+// from the target chat's own saved messages instead of touching the
+// module-level `diplomaticHistory` above, which always reflects whichever
+// chat a ConversationView currently has open in the Diplomacy panel — reusing
+// it here would splice this unrelated exchange into whatever chat the player
+// happens to be mid-reading.
+export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], opts }) {
+    const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry);
+
+    let history = priorMessages
+        .filter((msg) => ["user", "leader"].includes(msg.role))
+        .map((msg) => ({
+            role: msg.role === "user" ? "user" : "model",
+            parts: [{ text: msg.text }],
+        }));
+    history = compactConversationHistory(history);
+    history.push({ role: "user", parts: [{ text: playerMessage }] });
+    history = compactConversationHistory(history);
+
+    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
+
+    const historyWithInstruction = [
+        ...history,
+        { role: "user", parts: [{ text: turnInstruction }] },
+    ];
+
+    const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat" });
+    return parseReaction(raw);
 }

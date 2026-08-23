@@ -1,5 +1,5 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { callAI } from "./main.jsx";
+import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -1575,6 +1575,75 @@ export const rollBackToSnapshot = async (index = 0) => {
     await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
     const bundle = await readGameStateBundle({ force: true });
     return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+  } finally {
+    endSimulation();
+  }
+};
+
+// Sends a message the Advisor drafted (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in
+// main.jsx) straight into the diplomatic channel with `countryName`, exactly
+// as if the player had typed it into the Diplomacy panel and waited for a
+// reply — used by advisor.jsx's "Send message to <country>" button so a
+// drafted message never has to be manually copy-pasted. Reuses the same
+// participant-set matching foldGeneratedChatsIntoStorage applies to
+// AI-initiated notes, so this lands in an existing 1-on-1 thread with that
+// country instead of forking a duplicate one, and takes the same busy-lock
+// every other chat.json writer above takes so it can't race the idle
+// diplomacy drip or a jump/rollback in flight.
+export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
+  const trimmedText = normalizeString(text);
+  if (!trimmedText) throw new Error("There's no message text to send.");
+
+  beginSimulation();
+  try {
+    const bundle = await readGameStateBundle({ force: true });
+    const playerName = normalizeString(bundle.game?.country);
+    if (!playerName) throw new Error("No active game to send a message in.");
+
+    const [recipient] = await resolveInvitees([countryName], bundle.world);
+    if (!recipient) throw new Error(`Could not identify "${countryName}" among the known polities.`);
+    if (regionKey(recipient.name) === regionKey(playerName)) {
+      throw new Error("Can't send a diplomatic message to your own polity.");
+    }
+
+    const chats = normalizeChats(await readChatsState({ force: true }));
+    const recipientKey = chatParticipantKey([recipient]);
+    const existing = chats.find((chat) =>
+      chat.status !== "closed" && chatParticipantKey(chat.countries) === recipientKey);
+    const priorMessages = existing?.messages ?? [];
+
+    const gameDate = normalizeString(bundle.game?.gameDate);
+    const { reply, reaction } = await sendDiplomaticMessageOnceOff({
+      playerMessage: trimmedText,
+      speakingAs: recipient.name,
+      participantNames: [playerName, recipient.name],
+      playerCountry: playerName,
+      priorMessages,
+    });
+
+    const userMessage = {
+      role: "user",
+      speaker: playerName,
+      text: trimmedText,
+      time: gameDate,
+      ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
+    };
+    const leaderMessage = { role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate };
+
+    const built = normalizeChatEntry({
+      countries: [recipient],
+      messages: [userMessage, leaderMessage],
+      source: "advisor",
+      status: "open",
+      title: existing?.title || `Chat with ${recipient.name}`,
+    });
+    if (!built) throw new Error("Could not build the message.");
+
+    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
+    await writeChatsState(nextChats);
+
+    const finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    return { chat: finalChat, reply };
   } finally {
     endSimulation();
   }
