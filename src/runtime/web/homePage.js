@@ -211,7 +211,7 @@ export const showHomePage = () => {
   playBtn = play;
   const foot = el("div", { className: "oh-foot" },
     el("a", { href: "https://github.com/Open-Historia/open-historia", target: "_blank", rel: "noopener", textContent: "GitHub" }),
-    el("a", { href: "https://discord.gg/C3AVwHacZ4", target: "_blank", rel: "noopener", textContent: "Discord" }),
+    el("a", { href: "https://discord.gg/QaqAK7fQAg", target: "_blank", rel: "noopener", textContent: "Discord" }),
     el("a", { href: "https://github.com/Open-Historia/open-historia-node", target: "_blank", rel: "noopener", textContent: "Host a node" }),
   );
 
