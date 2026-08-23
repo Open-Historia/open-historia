@@ -554,6 +554,16 @@ const eventSchema = {
       type: "boolean",
       description: "Whether the event directly concerns the player polity.",
     },
+    warId: textSchema(
+      "Canonical world.wars id for this event when it declares/joins/ends a war or depicts actual combat. Blank for non-war events.",
+    ),
+    combatants: {
+      type: "array",
+      description:
+        "For actual battlefield combat, the polity names directly fighting in this event. Must include belligerents from both sides of warId.",
+      maxItems: 8,
+      items: nonEmptyTextSchema("One canonical belligerent polity name."),
+    },
     impacts: impactsSchema,
   },
   required: ["date", "title", "description"],
@@ -638,8 +648,18 @@ export const JUMP_FORWARD_SCHEMA = {
         + "plausibly reach out this period.",
       items: createdChatSchema,
     },
+    storylineUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated storyline records. Empty string when none. Record format is documented in the live prompt.",
+    },
+    warUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated canonical war-state operations. Empty string when no belligerency changes. Record format is documented in the live prompt.",
+    },
   },
-  required: ["events", "stopDate", "summary", "clearActions"],
+  required: ["events", "stopDate", "summary", "clearActions", "storylineUpdates", "warUpdates"],
   additionalProperties: false,
 };
 
@@ -777,8 +797,13 @@ export const GAME_MASTER_SCHEMA = {
   properties: {
     summary: textSchema("Concise account of how the GM request changed the world."),
     impacts: impactsSchema,
+    warUpdates: {
+      type: "string",
+      description:
+        "Compact canonical war-state operations caused by this GM intervention. Empty string when belligerency is unchanged.",
+    },
   },
-  required: ["summary", "impacts"],
+  required: ["summary", "impacts", "warUpdates"],
   additionalProperties: false,
 };
 

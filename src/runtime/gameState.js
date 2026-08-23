@@ -69,6 +69,13 @@ export const WORLD_DEFAULTS = {
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
+  // Persistent authoritative belligerency. Storylines explain WHY a conflict
+  // matters; wars say WHO is mechanically at war with whom.
+  wars: [],
+  // Persistent world processes (wars, crises, political movements, diplomatic
+  // tracks, economic shocks, etc.). Timeline cards are only their visible
+  // milestones; this ledger is what keeps the process alive between cards.
+  storylines: [],
   units: [],
 };
 
@@ -81,6 +88,10 @@ const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pendi
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
 const POLITY_OPERATION_SET = new Set(["update", "create", "rename", "restore", "dissolve"]);
 const POLITY_STATUS_SET = new Set(["active", "dormant"]);
+const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
+const WORLD_WAR_STATUS_SET = new Set(["active", "ceasefire", "ended"]);
+const MAX_WORLD_STORYLINES = 96;
+const MAX_WORLD_WARS = 64;
 
 // Every caller of this parses a COORDINATE (lng/lat/toLng/toLat), which is why it
 // can afford to be lenient in ways a general number parser could not.
@@ -1416,6 +1427,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
       kind: "world",
       notable: false,
       playerRelated: false,
+      storylineIds: [],
+      warId: "",
+      combatants: [],
       source: "scenario",
       title,
     };
@@ -1445,6 +1459,13 @@ export const normalizeEventEntry = (entry, index = 0) => {
     kind: normalizeOptionalString(entry.kind) || "world",
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
+    storylineIds: [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(0, 6),
+    warId: normalizeOptionalString(entry.warId),
+    combatants: [...new Set(
+      normalizeActionParticipants(entry.combatants)
+        .map((name) => toCountryName(normalizeOptionalString(name)) || normalizeOptionalString(name))
+        .filter(Boolean),
+    )].slice(0, 8),
     ...(quote ? { quote } : {}),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
@@ -1545,6 +1566,148 @@ const normalizeConsolidatedHistory = (value) => normalizeArray(value)
     };
   })
   .filter(Boolean);
+
+const clampWorldStorylinePercent = (value, fallback = 0) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+};
+
+const normalizeWorldStoryline = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+
+  const title = normalizeOptionalString(entry.title || entry.name);
+  if (!title) return null;
+
+  const id = normalizeOptionalString(entry.id) || `storyline-${index}`;
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_STORYLINE_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const uniqueStrings = (value, limit) =>
+    [...new Set(normalizeActionParticipants(value))].slice(0, limit);
+
+  return {
+    id,
+    kind: normalizeOptionalString(entry.kind) || "world",
+    title,
+    participants: uniqueStrings(entry.participants, 12),
+    status,
+    pressure: clampWorldStorylinePercent(entry.pressure),
+    momentum: clampWorldStorylinePercent(entry.momentum),
+    startedDate: canonicalizeDateString(entry.startedDate),
+    accountedThroughDate: canonicalizeDateString(
+      entry.accountedThroughDate || entry.lastUpdatedDate || entry.startedDate,
+    ),
+    lastUpdatedDate: canonicalizeDateString(
+      entry.lastUpdatedDate || entry.accountedThroughDate || entry.startedDate,
+    ),
+    lastVisibleEventDate: canonicalizeDateString(entry.lastVisibleEventDate),
+    nextReviewDate:
+      status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
+    state: normalizeTextLike(entry.state || entry.summary || entry.description),
+    drivers: uniqueStrings(entry.drivers, 8),
+    constraints: uniqueStrings(entry.constraints, 8),
+    sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
+    createdRound:
+      Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0
+        ? Math.trunc(Number(entry.createdRound))
+        : 0,
+    updatedRound:
+      Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0
+        ? Math.trunc(Number(entry.updatedRound))
+        : 0,
+  };
+};
+
+const normalizeWorldStorylines = (value) => {
+  const deduped = new Map();
+
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldStoryline(entry, index);
+    if (!normalized) return;
+    // Last occurrence wins so a write can intentionally replace an earlier copy.
+    deduped.set(normalized.id, normalized);
+  });
+
+  const statusRank = { active: 0, dormant: 1, resolved: 2 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.accountedThroughDate || "").localeCompare(
+        String(a.lastUpdatedDate || a.accountedThroughDate || ""),
+      ) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_STORYLINES);
+};
+
+const normalizeWorldWar = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+
+  const canonicalPolity = (value) => {
+    const raw = normalizeOptionalString(value);
+    return raw ? (toCountryName(raw) || raw) : "";
+  };
+  const uniquePolities = (value, limit = 12) => {
+    const seen = new Set();
+    const result = [];
+    for (const raw of normalizeArray(value)) {
+      const polity = canonicalPolity(raw);
+      const key = polity.toLocaleLowerCase();
+      if (!polity || seen.has(key)) continue;
+      seen.add(key);
+      result.push(polity);
+      if (result.length >= limit) break;
+    }
+    return result;
+  };
+
+  const id = normalizeOptionalString(entry.id) || `war-${index}`;
+  const sideA = uniquePolities(entry.sideA);
+  const sideAKeys = new Set(sideA.map((name) => name.toLocaleLowerCase()));
+  const sideB = uniquePolities(entry.sideB)
+    .filter((name) => !sideAKeys.has(name.toLocaleLowerCase()));
+  if (!sideA.length || !sideB.length) return null;
+
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_WAR_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const sourceEventIds = [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24);
+  const storylineIds = [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(-12);
+  const title = normalizeOptionalString(entry.title) || `${sideA[0]}–${sideB[0]} War`;
+
+  return {
+    id,
+    title,
+    status,
+    sideA,
+    sideB,
+    startedDate: canonicalizeDateString(entry.startedDate),
+    endedDate: status === "ended" ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate) : "",
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
+    cause: normalizeTextLike(entry.cause),
+    note: normalizeTextLike(entry.note),
+    sourceEventIds,
+    storylineIds,
+    createdRound: Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0 ? Math.trunc(Number(entry.createdRound)) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0 ? Math.trunc(Number(entry.updatedRound)) : 0,
+  };
+};
+
+const normalizeWorldWars = (value) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldWar(entry, index);
+    if (!normalized) return;
+    deduped.set(normalized.id, normalized);
+  });
+  const statusRank = { active: 0, ceasefire: 1, ended: 2 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.startedDate || "").localeCompare(String(a.lastUpdatedDate || a.startedDate || "")) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_WARS);
+};
 
 export const normalizeWorldState = (world) => {
   const nextWorld = world && typeof world === "object" ? world : {};
@@ -1674,6 +1837,8 @@ export const normalizeWorldState = (world) => {
     ),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
+    wars: normalizeWorldWars(nextWorld.wars),
+    storylines: normalizeWorldStorylines(nextWorld.storylines),
     units: normalizeUnits(nextWorld.units),
   };
 };
