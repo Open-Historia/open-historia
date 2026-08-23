@@ -977,10 +977,13 @@ const chatParticipantKey = (countries) =>
 // forking a new one. `built` may itself contain chats that duplicate each other
 // (two events in the same turn both reaching out to France), so a match against
 // an entry already folded in THIS pass counts too, not just against `storageChats`.
-// A message landing in an ALREADY-open thread gets stamped with `stampTime` when
-// it has none of its own — the opener of a brand-new chat needs no extra date
-// (its title/event already dates it), but a note dropped into an ongoing
-// conversation reads as floating without one.
+// Every message gets stamped with `stampTime` when it has none of its own —
+// including a brand-new chat's own opener. That used to be skipped on the
+// theory that a new chat's title/event already dates IT, but nothing reads
+// the event for a chat's date: the UI groups/sorts chats by their messages'
+// own `time`, so an unstamped opener left the whole chat looking dateless
+// (and, sorted as "no date yet", indistinguishable from a chat with no
+// messages at all — see chat.jsx's chatGroupLabel).
 const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "" } = {}) => {
   let chats = [...storageChats];
   const created = [];
@@ -1000,10 +1003,10 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
     }
     const createdIdx = key ? created.findIndex((chat) => chatParticipantKey(chat.countries) === key) : -1;
     if (createdIdx !== -1) {
-      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...built.messages] };
+      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };
       continue;
     }
-    created.push(built);
+    created.push({ ...built, messages: stamp(built.messages) });
   }
 
   return [...created, ...chats];

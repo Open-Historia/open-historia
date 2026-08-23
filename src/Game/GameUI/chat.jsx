@@ -753,24 +753,36 @@ const isChatUnread = (chat, seen) => {
 // way the list reads as one clean timeline instead of two competing orders.
 // The unread dot/bold on each row (ChatListItem) is what still marks "new".
 
+// Walks BACKWARD from the last message to the first usable `time` — not just
+// the very last message. AI-opened chats used to leave their opener's `time`
+// blank (fixed in gameplay.js's foldGeneratedChatsIntoStorage, but that fix
+// only stops NEW blanks; every chat already saved with one needs this to
+// self-heal), and a one-sided note the player never replied to has no OTHER
+// message to fall back on if only the last one were checked.
 const chatLastMessageTime = (chat) => {
-    const raw = chat.messages?.at(-1)?.time;
-    if (!raw) return null;
-    const ms = new Date(raw).getTime();
-    return Number.isFinite(ms) ? ms : null;
+    const messages = chat.messages ?? [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const raw = messages[i]?.time;
+        if (!raw) continue;
+        const ms = new Date(raw).getTime();
+        if (Number.isFinite(ms)) return ms;
+    }
+    return null;
 };
 
-// The label a chat's row groups under — the in-game date its last message
-// carries (not the real-world calendar day, which would be meaningless
-// against a historical or alt-history timeline). Chats sharing a label render
-// under one header, in the order sortChatsByRecency already put them in.
+// The label a chat's row groups under — the in-game date of its most recent
+// TIMED message (not the real-world calendar day, which would be meaningless
+// against a historical or alt-history timeline). "New" is reserved for a chat
+// with literally no messages yet; one with messages but no usable date at all
+// (every one blank/unparseable) falls back to "Undated" rather than being
+// mistaken for a chat that was just opened. Chats sharing a label render under
+// one header, in the order sortChatsByRecency already put them in.
 const chatGroupLabel = (chat) => {
-    const raw = chat.messages?.at(-1)?.time;
-    if (!raw) return "New";
-    const parsed = chatLastMessageTime(chat);
-    return parsed === null
+    if (!chat.messages?.length) return "New";
+    const ms = chatLastMessageTime(chat);
+    return ms === null
         ? "Undated"
-        : new Date(raw).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+        : new Date(ms).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
 };
 
 const sortChatsByRecency = (list) => [...list].sort((a, b) => {
@@ -913,7 +925,17 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         ...openChats.filter((chat) => !orderedIds.has(String(chat.id))),
         ...displayOrder.map((id) => openChats.find((chat) => String(chat.id) === id)).filter(Boolean),
     ];
-    const groupedChats = groupChatsByDate(orderedChats);
+
+    // Unread filter — resets to off on every fresh open so it never silently
+    // hides chats the player forgot they'd filtered down to last time.
+    const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+    useEffect(() => {
+        if (!isOpen) setShowUnreadOnly(false);
+    }, [isOpen]);
+    const visibleChats = showUnreadOnly
+        ? orderedChats.filter((chat) => unreadIds.has(String(chat.id)))
+        : orderedChats;
+    const groupedChats = groupChatsByDate(visibleChats);
 
     // Single writer for a chat's read state: updates BOTH the persisted baseline
     // (localStorage, read back on the next panel/toolbar check) and the in-memory
@@ -935,6 +957,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
             if (read) next.delete(id); else next.add(id);
             return next;
         });
+    };
+
+    // One write instead of N: mostly here as a direct escape hatch if the unread
+    // baseline is ever wrong for reasons outside the player's control (a fresh
+    // profile/origin with no prior "seen" baseline, a save carried over from
+    // somewhere else) — a single click clears it rather than opening every
+    // wrongly-flagged chat by hand.
+    const markAllRead = () => {
+        const seen = { ...(readSeen() || {}) };
+        for (const chat of openChats) seen[String(chat.id)] = chatMessageCount(chat);
+        writeSeen(seen);
+        setUnreadIds(new Set());
     };
 
     // Opening a chat marks it read immediately (list row clears right away, not
@@ -1111,11 +1145,30 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
+                {openChats.length > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
+                    <button onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
+                    {showUnreadOnly && <span style={{ width: "0.4rem", height: "0.4rem", borderRadius: "50%", background: "#60a5fa" }} />}
+                    Unread{unreadIds.size > 0 ? ` (${unreadIds.size})` : ""}
+                    </button>
+                    {unreadIds.size > 0 && (
+                        <button onClick={markAllRead} style={{ background: "none", border: "none", color: "rgba(96,165,250,0.75)", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, padding: "0.2rem" }}
+                        onMouseEnter={e => e.currentTarget.style.color = "rgba(96,165,250,1)"}
+                        onMouseLeave={e => e.currentTarget.style.color = "rgba(96,165,250,0.75)"}>
+                        Mark all read
+                        </button>
+                    )}
+                    </div>
+                )}
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                 {isGenerating && <GeneratingBanner />}
                 {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
+                    </div>
+                ) : visibleChats.length === 0 ? (
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
+                    No unread chats — you're all caught up.
                     </div>
                 ) : groupedChats.map((group, index) => (
                     <React.Fragment key={`${group.label}-${group.chats[0]?.id ?? index}`}>
