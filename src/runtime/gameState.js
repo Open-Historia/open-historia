@@ -2072,7 +2072,7 @@ export const applyCountryStatPatchToWorld = (world, canonicalName, patch, option
   return next;
 };
 
-const applyPolityMetadataStores = (world, change, canonicalName) => {
+const applyPolityMetadataStores = (world, change, canonicalName, { eventId = "" } = {}) => {
   if (Number.isFinite(change.reputation)) {
     world.internationalReputation[canonicalName] = change.reputation;
 
@@ -2084,7 +2084,16 @@ const applyPolityMetadataStores = (world, change, canonicalName) => {
   }
 
   if (change.stats && typeof change.stats === "object") {
-    const merged = applyCountryStatPatchToWorld(world, canonicalName, change.stats);
+    const merged = applyCountryStatPatchToWorld(
+      world,
+      canonicalName,
+      change.stats,
+      {
+        continuity: eventId
+          ? { accountedEventIds: [eventId] }
+          : null,
+      },
+    );
 
     const rep = Number(
       merged?.indices?.internationalReputation,
@@ -2124,7 +2133,7 @@ const applyPolityColor = (colors, change, canonicalName) => {
   ];
 };
 
-const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
+const applyPolityChangeToWorld = ({ change, colors, event = null, phase, world }) => {
   const operation = change.operation || "update";
 
   if (operation === "dissolve" && phase !== "post") return null;
@@ -2179,7 +2188,7 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
       status: "active",
     };
 
-    applyPolityMetadataStores(world, change, canonicalName);
+    applyPolityMetadataStores(world, change, canonicalName, { eventId: normalizeOptionalString(event?.id) });
     applyPolityColor(colors, change, canonicalName);
 
     console.info(`[polity lifecycle] created "${canonicalName}".`);
@@ -2229,7 +2238,7 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
       status: "active",
     };
 
-    applyPolityMetadataStores(world, change, canonicalName);
+    applyPolityMetadataStores(world, change, canonicalName, { eventId: normalizeOptionalString(event?.id) });
     applyPolityColor(colors, change, canonicalName);
 
     console.info(`[polity lifecycle] restored "${canonicalName}" as a current polity.`);
@@ -2311,7 +2320,7 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
       status: "active",
     };
 
-    applyPolityMetadataStores(world, change, source.resolved);
+    applyPolityMetadataStores(world, change, source.resolved, { eventId: normalizeOptionalString(event?.id) });
     applyPolityColor(colors, change, source.resolved);
 
     console.info(
@@ -2404,7 +2413,7 @@ const applyPolityChangeToWorld = ({ change, colors, phase, world }) => {
     canonicalName: target.resolved,
   });
 
-  applyPolityMetadataStores(world, change, target.resolved);
+  applyPolityMetadataStores(world, change, target.resolved, { eventId: normalizeOptionalString(event?.id) });
   applyPolityColor(colors, change, target.resolved);
 
   return target.resolved;
@@ -2534,6 +2543,7 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, 
       applyPolityChangeToWorld({
         change,
         colors: nextColors,
+        event,
         phase: "pre",
         world: nextWorld,
       });
@@ -2555,6 +2565,7 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, 
       applyPolityChangeToWorld({
         change,
         colors: nextColors,
+        event,
         phase: "post",
         world: nextWorld,
       });

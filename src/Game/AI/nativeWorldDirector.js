@@ -1,3 +1,5 @@
+import { buildCompactEconomicContext, isCompleteCountryStatSheet } from "../../runtime/countryStats.js";
+
 // OpenHistoria Continuum — Native World Director v0.5.0
 //
 // Phase 6B.2: bounded multi-pass world initiative + fair persistent storyline attention.
@@ -15,7 +17,7 @@
 // - bounded candidate count
 // - O(recent events + recent chats + a tiny bounded world-state sample)
 
-export const WORLD_DIRECTOR_VERSION = "0.5.0";
+export const WORLD_DIRECTOR_VERSION = "0.6.0";
 
 const DEFAULT_MAX_CANDIDATES = 10;
 const RECENT_EVENT_WINDOW = 56;
@@ -25,6 +27,7 @@ const TERRITORIAL_SAMPLE_LIMIT = 8;
 const ACTIVE_UNIT_SAMPLE_LIMIT = 6;
 const MAX_ATTENTION_STORYLINES = 8;
 const MAX_PERSISTED_STORYLINES = 96;
+const MAX_ECONOMIC_ACTORS = 8;
 
 let lastAnalysis = null;
 
@@ -760,6 +763,76 @@ export const applyWorldStorylineUpdates = ({
   };
 };
 
+
+const resolveCountryStatEntry = (worldLike, token) => {
+  const world = worldLike && typeof worldLike === "object" ? worldLike : {};
+  const raw = normalizeString(token);
+  if (!raw) return null;
+
+  const countryStats = world.countryStats && typeof world.countryStats === "object"
+    ? world.countryStats
+    : {};
+  const directKey = Object.keys(countryStats)
+    .find((key) => normalizeString(key).toLowerCase() === raw.toLowerCase());
+  if (directKey) return { key: directKey, sheet: countryStats[directKey] };
+
+  const overrides = world.polityOverrides && typeof world.polityOverrides === "object"
+    ? world.polityOverrides
+    : {};
+  for (const [key, polity] of Object.entries(overrides)) {
+    const names = [
+      key,
+      polity?.code,
+      polity?.name,
+      ...normalizeArray(polity?.aliases),
+    ]
+      .map(normalizeString)
+      .filter(Boolean);
+    if (!names.some((name) => name.toLowerCase() === raw.toLowerCase())) continue;
+
+    const statKey = Object.keys(countryStats)
+      .find((candidate) => normalizeString(candidate).toLowerCase() === normalizeString(key).toLowerCase());
+    if (statKey) return { key: statKey, sheet: countryStats[statKey] };
+  }
+
+  return null;
+};
+
+const buildEconomicAttentionContext = (bundle, storylineAttention) => {
+  const world = bundle?.world || {};
+  const requested = [
+    normalizeString(bundle?.game?.country),
+    ...normalizeArray(storylineAttention?.selected)
+      .flatMap((storyline) => normalizeArray(storyline?.participants))
+      .map(normalizeString),
+  ].filter(Boolean);
+
+  const seen = new Set();
+  const rows = [];
+  for (const actor of requested) {
+    if (rows.length >= MAX_ECONOMIC_ACTORS) break;
+    const key = actor.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const resolved = resolveCountryStatEntry(world, actor);
+    // Partial sheets can exist after a leadership-only event. They are useful as
+    // persistence scaffolding but are NOT a canonical economic baseline. Do not
+    // let a stray debt/growth field masquerade as a complete national economy.
+    if (!resolved?.sheet || !isCompleteCountryStatSheet(resolved.sheet)) continue;
+    const summary = buildCompactEconomicContext(resolved.sheet, { name: actor });
+    if (!summary) continue;
+
+    rows.push({
+      actor,
+      canonicalKey: resolved.key,
+      summary: truncate(summary, 620),
+    });
+  }
+
+  return rows;
+};
+
 const candidateKey = (candidate) =>
   `${normalizeString(candidate?.type).toLowerCase()}|${normalizeString(candidate?.title).toLowerCase()}|${normalizeString(candidate?.detail).toLowerCase()}`;
 
@@ -787,6 +860,7 @@ export const buildWorldInitiativeContext = (
   const horizonDate = normalizeString(targetDate) || originDate;
   const candidates = [];
   const storylineAttention = selectStorylineAttention(bundle?.world || {}, originDate, horizonDate);
+  const economicAttention = buildEconomicAttentionContext(bundle, storylineAttention);
 
   const recentEvents = normalizeArray(bundle?.events).slice(-RECENT_EVENT_WINDOW);
   recentEvents.forEach((event, index) => {
@@ -895,6 +969,13 @@ export const buildWorldInitiativeContext = (
     "After accounting for urgent continuity, inspect the independent causal evidence and structural background for other worthwhile developments. Do not invent filler to satisfy diversity; simply do not treat the hottest storyline as the only thing capable of happening.",
     "New autonomous processes may begin in any pass when current interests, structures, and capabilities justify them.",
     "",
+    "CANONICAL ECONOMIC CONSTRAINTS",
+    "Only actors with an already-persisted native Stats baseline are listed here; absence means no canonical numeric baseline exists, not that the actor has infinite resources.",
+    "Use these figures as causal capability/financing constraints, never as rigid action gates. A stressed polity can still mobilize, subsidize, build, or fight by borrowing, taxing, cutting elsewhere, seeking foreign finance, monetizing, or accepting inflation/debt/political consequences.",
+    economicAttention.length
+      ? economicAttention.map((row, index) => `${index + 1}. ${row.summary}`).join("\n")
+      : "No attention-selected actor currently has a canonical economic Stats baseline.",
+    "",
     "CURRENT EXPLICIT EVIDENCE",
     "These are current causal pressures / continuity anchors, NOT scheduled events and NOT an exhaustive list.",
     "A foreign polity may still take a genuinely new initiative when its present interests and capabilities justify it.",
@@ -927,6 +1008,7 @@ export const buildWorldInitiativeContext = (
     storylineCount: storylineAttention.all.length,
     attentionCount: storylineAttention.selected.length,
     attentionStorylines: storylineAttention.selected,
+    economicActors: economicAttention,
     scanned: {
       recentEvents: recentEvents.length,
       recentChats: recentChats.length,
@@ -956,7 +1038,7 @@ export const buildWorldInitiativeContext = (
   console.info(
     `[OH Native World Director v${WORLD_DIRECTOR_VERSION}] ` +
     `${storylineAttention.selected.length}/${storylineAttention.all.length} storyline(s) selected, ` +
-    `${bounded.length} causal candidate(s), ${recentEvents.length} recent event(s), ${recentChats.length} recent chat(s)`,
+    `${bounded.length} causal candidate(s), ${economicAttention.length} economic actor baseline(s), ${recentEvents.length} recent event(s), ${recentChats.length} recent chat(s)`,
   );
 
   return {

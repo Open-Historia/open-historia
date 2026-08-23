@@ -220,6 +220,56 @@ const normalizePopulation = (value) => {
   return Object.keys(out).length ? out : undefined;
 };
 
+
+const MAX_ACCOUNTED_ECONOMIC_EVENTS = 64;
+
+export const normalizeCountryStatContinuity = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+
+  const out = {};
+  const assessedDate = clean(value.assessedDate);
+  const stateFingerprint = clean(value.stateFingerprint);
+  const territorialFingerprint = clean(value.territorialFingerprint);
+  const assessedRound = Number(value.assessedRound);
+
+  if (assessedDate) out.assessedDate = assessedDate;
+  if (Number.isFinite(assessedRound) && assessedRound >= 0) {
+    out.assessedRound = Math.trunc(assessedRound);
+  }
+  if (stateFingerprint) out.stateFingerprint = stateFingerprint;
+  if (territorialFingerprint) out.territorialFingerprint = territorialFingerprint;
+
+  const accountedEventIds = [...new Set(
+    (Array.isArray(value.accountedEventIds) ? value.accountedEventIds : [])
+      .map(clean)
+      .filter(Boolean),
+  )].slice(-MAX_ACCOUNTED_ECONOMIC_EVENTS);
+
+  if (accountedEventIds.length) out.accountedEventIds = accountedEventIds;
+
+  return Object.keys(out).length ? out : undefined;
+};
+
+const mergeCountryStatContinuity = (...values) => {
+  let out = {};
+  let eventIds = [];
+
+  for (const value of values) {
+    const normalized = normalizeCountryStatContinuity(value);
+    if (!normalized) continue;
+    eventIds = [...eventIds, ...(normalized.accountedEventIds || [])];
+    out = { ...out, ...normalized };
+  }
+
+  eventIds = [...new Set(eventIds.map(clean).filter(Boolean))]
+    .slice(-MAX_ACCOUNTED_ECONOMIC_EVENTS);
+
+  if (eventIds.length) out.accountedEventIds = eventIds;
+  else delete out.accountedEventIds;
+
+  return Object.keys(out).length ? out : undefined;
+};
+
 const copyTextField = (source, target, key) => {
   const text = clean(source?.[key]);
   if (text) target[key] = text;
@@ -250,6 +300,9 @@ export const normalizeCountryStatSheet = (value) => {
 
   const components = normalizeTerritorialComponents(value.territorialComponents);
   if (components.length) out.territorialComponents = components;
+
+  const continuity = normalizeCountryStatContinuity(value.continuity);
+  if (continuity) out.continuity = continuity;
 
   const declaredVersion = Number(value.statsSchemaVersion);
   out.statsSchemaVersion = Number.isInteger(declaredVersion) && declaredVersion > 0
@@ -285,8 +338,10 @@ export const finalizeCountryStatSheet = (value) => {
   const economy = normalizeEconomy(value.economy) || {};
   const components = normalizeTerritorialComponents(value.territorialComponents);
   const aggregate = aggregateTerritorialEconomy(components);
+  const continuity = normalizeCountryStatContinuity(value.continuity);
 
   if (components.length) out.territorialComponents = components;
+  if (continuity) out.continuity = continuity;
 
   if (aggregate) {
     out.population = {
@@ -355,7 +410,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false } = {},
+  { replaceComponents = false, continuity = null } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const patch = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -370,6 +425,13 @@ export const mergeCountryStatPatch = (
         .filter(([, value]) => value),
     ),
   };
+
+  const mergedContinuity = mergeCountryStatContinuity(
+    base.continuity,
+    patch.continuity,
+    continuity,
+  );
+  if (mergedContinuity) merged.continuity = mergedContinuity;
 
   const stability = normalizePercent(patch.stability);
   if (stability != null) merged.stability = Math.round(stability);
@@ -525,4 +587,165 @@ export const buildEconomicConditionSummary = (value) => {
 
   const position = clauses.length ? clauses.join(", ") : "broadly moderate recorded conditions";
   return `${position}. Economic stress constrains the cost and financing of major programs; it does not make them impossible. Extraordinary spending may require borrowing, taxation, cuts elsewhere, foreign finance, or acceptance of inflation/debt consequences.`;
+};
+
+
+const compactEconomicNumber = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const abs = Math.abs(number);
+  if (abs >= 1e12) return `${Math.round((number / 1e12) * 10) / 10}T`;
+  if (abs >= 1e9) return `${Math.round((number / 1e9) * 10) / 10}B`;
+  if (abs >= 1e6) return `${Math.round((number / 1e6) * 10) / 10}M`;
+  if (abs >= 1e3) return `${Math.round((number / 1e3) * 10) / 10}K`;
+  return `${Math.round(number * 10) / 10}`;
+};
+
+export const buildCompactEconomicContext = (value, { name = "" } = {}) => {
+  const sheet = finalizeCountryStatSheet(value);
+  if (!sheet || !sheet.economy) return "";
+
+  const economy = sheet.economy;
+  const breakdown = sheet.gdpBreakdown || {};
+  const indices = sheet.indices || {};
+  const fields = [
+    Number.isFinite(Number(economy.gdp)) ? `GDP-eq €${compactEconomicNumber(economy.gdp)}` : "",
+    Number.isFinite(Number(economy.gdpGrowth)) ? `growth ${Number(economy.gdpGrowth)}%` : "",
+    Number.isFinite(Number(economy.inflation)) ? `inflation ${Number(economy.inflation)}%` : "",
+    Number.isFinite(Number(economy.unemployment)) ? `unemployment ${Number(economy.unemployment)}%` : "",
+    Number.isFinite(Number(economy.publicDebt)) ? `debt ${Number(economy.publicDebt)}% GDP` : "",
+    Number.isFinite(Number(economy.budgetBalance)) ? `budget ${Number(economy.budgetBalance)}% GDP` : "",
+    Number.isFinite(Number(breakdown.industry)) ? `industry ${Number(breakdown.industry)}%` : "",
+    Number.isFinite(Number(indices.foodAutonomy)) ? `food autonomy ${Number(indices.foodAutonomy)}/100` : "",
+    Number.isFinite(Number(indices.energyAutonomy)) ? `energy autonomy ${Number(indices.energyAutonomy)}/100` : "",
+    Number.isFinite(Number(indices.economicIndependence)) ? `economic independence ${Number(indices.economicIndependence)}/100` : "",
+  ].filter(Boolean);
+
+  if (!fields.length) return "";
+  const prefix = clean(name);
+  return `${prefix ? `${prefix}: ` : ""}${fields.join("; ")}. ${buildEconomicConditionSummary(sheet)}`;
+};
+
+const ratioOutside = (value, reference, lower, upper) => {
+  if (!(Number(reference) > 0) || !(Number(value) >= 0)) return false;
+  const ratio = Number(value) / Number(reference);
+  return ratio < lower || ratio > upper;
+};
+
+const evidenceMentionsGeography = (evidenceText, geography) => {
+  const evidence = clean(evidenceText).toLocaleLowerCase();
+  const target = clean(geography).toLocaleLowerCase();
+  if (!evidence || !target || target.length < 4) return false;
+  return evidence.includes(target);
+};
+
+// Conservative native continuity guard for on-demand reassessments. It is NOT a
+// macroeconomic simulator: it only prevents a fresh model call from silently
+// re-baselining surviving components or macro indicators without enough elapsed
+// time / supplied campaign evidence. Territory changes are handled structurally
+// by the native component plan and therefore bypass this guard for changed rows.
+export const guardCountryStatContinuity = (
+  previousValue,
+  candidateValue,
+  {
+    elapsedYears = 0,
+    evidenceText = "",
+    territoryChanged = false,
+  } = {},
+) => {
+  const previous = finalizeCountryStatSheet(previousValue);
+  const candidate = finalizeCountryStatSheet(candidateValue);
+  if (!previous || !candidate) return { sheet: candidate, restored: [] };
+
+  const previousComponents = new Map(
+    normalizeTerritorialComponents(previous.territorialComponents)
+      .map((component) => [componentKey(component.geography), component]),
+  );
+  const restored = [];
+  const years = Math.max(0, Number(elapsedYears) || 0);
+  const genericEvidence = Boolean(clean(evidenceText));
+
+  let components = normalizeTerritorialComponents(candidate.territorialComponents)
+    .map((component) => {
+      const prior = previousComponents.get(componentKey(component.geography));
+      if (!prior) return component;
+
+      const specificEvidence = evidenceMentionsGeography(evidenceText, component.geography);
+      // Longer spans naturally permit larger cumulative demographic/productivity
+      // changes. Fresh explicit evidence widens the band, and a legal-territory
+      // change widens it further because the SAME base-geography bucket may now
+      // cover a different subset of regions. Surviving matched components are still
+      // guarded rather than globally unlocked by one annexation elsewhere.
+      const territorialMultiplier = territoryChanged ? 1.6 : 1;
+      const populationSwing = Math.min(1.25, 0.5 + years * 0.03) * (genericEvidence ? 1.2 : 1) * territorialMultiplier;
+      const productivitySwing = Math.min(1.75, 0.5 + years * 0.05) * (genericEvidence ? 1.25 : 1) * territorialMultiplier;
+      const popLower = 1 / (1 + populationSwing);
+      const popUpper = 1 + populationSwing;
+      const pcLower = 1 / (1 + productivitySwing);
+      const pcUpper = 1 + productivitySwing;
+
+      const next = { ...component };
+
+      if (
+        ratioOutside(component.population, prior.population, popLower, popUpper) &&
+        !specificEvidence
+      ) {
+        restored.push({
+          geography: component.geography,
+          field: "population",
+          attempted: component.population,
+          restored: prior.population,
+        });
+        next.population = prior.population;
+      }
+
+      const extremePc = ratioOutside(component.gdpPerCapita, prior.gdpPerCapita, 0.5, 2);
+      if (
+        (
+          ratioOutside(component.gdpPerCapita, prior.gdpPerCapita, pcLower, pcUpper) ||
+          extremePc
+        ) &&
+        !specificEvidence
+      ) {
+        restored.push({
+          geography: component.geography,
+          field: "gdpPerCapita",
+          attempted: component.gdpPerCapita,
+          restored: prior.gdpPerCapita,
+        });
+        next.gdpPerCapita = prior.gdpPerCapita;
+      }
+
+      return next;
+    });
+
+  let guarded = finalizeCountryStatSheet({
+    ...candidate,
+    territorialComponents: components,
+  });
+
+  // With no new economic evidence, a short-span refresh should not randomly
+  // re-roll macro rates by double-digit percentage points. These are absolute
+  // indicators, not deltas.
+  if (!genericEvidence && years <= 2 && previous.economy && guarded?.economy) {
+    const thresholds = {
+      gdpGrowth: 8,
+      inflation: 10,
+      unemployment: 8,
+      publicDebt: 25,
+      budgetBalance: 8,
+    };
+    const economy = { ...guarded.economy };
+    for (const [field, threshold] of Object.entries(thresholds)) {
+      const before = Number(previous.economy[field]);
+      const after = Number(guarded.economy[field]);
+      if (!Number.isFinite(before) || !Number.isFinite(after)) continue;
+      if (Math.abs(after - before) <= threshold) continue;
+      restored.push({ geography: "whole polity", field, attempted: after, restored: before });
+      economy[field] = before;
+    }
+    guarded = finalizeCountryStatSheet({ ...guarded, economy });
+  }
+
+  return { sheet: guarded, restored };
 };

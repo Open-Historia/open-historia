@@ -23,7 +23,8 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
   finalizeCountryStatSheet,
-  mergeCountryStatPatch,
+  guardCountryStatContinuity,
+  isCompleteCountryStatSheet,
   normalizeCountryStatSheet,
 } from "../../runtime/countryStats.js";
 import {
@@ -44,6 +45,7 @@ import {
   writeJson,
 } from "../../runtime/assets.js";
 import {
+  applyCountryStatPatchToWorld,
   applyEventImpactsToWorld,
   chatParticipantSetKey,
   mergeIncomingChats,
@@ -575,7 +577,7 @@ const runJsonTask = async (taskKey, {
   if (taskKey === "countryStatSheet") {
     systemPrompt = `${systemPrompt}
 
-[Native Country Stats — LIVE 7A.1.4]
+[Native Country Stats — LIVE 7A.2]
 This is a PERSISTENT campaign stat sheet, not a disposable modern-country lookup. The supplied LEGAL TERRITORIAL BASIS is authoritative for the polity's demographic/economic scope. A polity name is never shorthand for modern or textbook historical borders. Temporary battlefield occupation/control does not automatically become part of national population/GDP; legal sovereignty is the territorial accounting basis.
 
 LEGAL TERRITORIAL BASIS:
@@ -583,6 +585,17 @@ ${normalizeString(variables?.statsTerritorialContext) || "No territorial basis w
 
 PREVIOUS PERSISTENT STATS / CONTINUITY ANCHOR:
 ${normalizeString(variables?.statsPreviousContext) || "No previous persistent stat sheet exists; establish a fresh baseline."}
+
+FRESH ECONOMIC / DEMOGRAPHIC EVIDENCE NOT YET ACCOUNTED IN THAT BASELINE:
+${normalizeString(variables?.statsEconomicEvidenceContext) || "None. Preserve continuity; the absence of fresh evidence is not permission to reroll the economy."}
+
+CONTINUITY CONTRACT — REQUIRED:
+- The previous persistent sheet is the numeric baseline, not a suggestion. Reassess it from fresh campaign evidence and elapsed time; do NOT regenerate a new textbook estimate from scratch.
+- Events already accounted in the baseline may still appear elsewhere in broad history/context. Do NOT apply them a second time. Only the FRESH evidence block above is newly account-able evidence for this reassessment.
+- If legal territory is unchanged and there is little/no fresh evidence, surviving component populations/productivity and macro indicators should remain close to their previous values. Slow demographic/productivity drift over elapsed time is fine; unexplained discontinuities are not.
+- A short-span component population or GDP/capita re-baseline of roughly 50% or more needs a real supplied campaign cause affecting that component or the whole polity. Native JavaScript applies a conservative final guard as a second line of defense.
+- A legal annexation/cession can add/remove/change native components. Temporary battlefield occupation alone cannot.
+- Never use modern-country wealth/population stereotypes to overwrite the campaign baseline.
 
 COMPONENT METHOD — REQUIRED:
 - Native code has already partitioned the legal territorial basis into NUMBERED components shown below. You MUST NOT choose, rename, split, merge, add, or omit geographies.
@@ -595,15 +608,13 @@ COMPONENT METHOD — REQUIRED:
 - group is only an economic/display bucket: core | integrated | overseas/dependent. It is NOT a sovereignty, alliance, customs-union, or constitutional judgment. A partial modern-base geography may still be core/integrated if those exact subregions are constitutionally part of the polity.
 - Previous component names are a continuity/economic reference only. If they conflict with the current numbered legal basis, the current numbered basis wins and native code will rebind continuity going forward.
 - gdpPerCapita inside each component is expressed in 2026-EUR-equivalent purchasing-value/accounting terms ONLY so different components and eras can be aggregated. It does NOT import 2026 technology, institutions, productivity, or living standards.
-- Estimate productivity as it plausibly exists at the CURRENT SIMULATION DATE using the campaign's actual development, war/peace, infrastructure, trade, institutions and shocks. Do not use modern national wealth stereotypes as evidence for an earlier era.
-- Preserve plausible continuity with surviving previous components. Large discontinuities need a real campaign cause.
-- population totals and GDP aggregates are DERIVED. Native JavaScript will decode territorialComponentsText and recompute them after your response, so focus on getting component populations/productivity and the macro indicators right.
+- population totals and GDP aggregates are DERIVED. Native JavaScript will decode territorialComponentsText and recompute them after your response.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
 - economy.currency is the polity's actual current domestic currency/medium, even though component GDP accounting uses 2026-EUR-equivalent values.
 - GDP breakdown must sum to exactly 100.
-- Never invent a war, reform, boom, depression, trade bloc, annexation, or reconstruction program absent from supplied campaign evidence.
+- Never invent a war, reform, boom, depression, trade bloc, annexation, reconstruction program, tax change, loan, or fiscal shock absent from supplied campaign evidence.
 
-This live instruction supersedes older frozen country-stat prompts and the 7A.1/7A.1.2 free-form component transport that treated the target's name or modern borders as sufficient territorial/economic scope.`;
+This live instruction supersedes older frozen country-stat prompts and all earlier 7A.1 free-form component transport rules.`;
   }
 
   // Structured event quotations are appended at call time because campaign prompt
@@ -783,6 +794,19 @@ Example record:
 storyline-austro-serbian-war~active~88~32~1914-07-28~war~Austro-Serbian War~Austria-Hungary,Kingdom of Serbia~3,4~The initial campaign has settled into a difficult winter front while both governments remain committed to the war.
 
 Keep this compact and factual.`;
+
+    systemPrompt = `${systemPrompt}
+
+[Economic Causality — LIVE 7A.2]
+The CANONICAL ECONOMIC CONSTRAINTS supplied by the Native World Director are authoritative where present. They describe capability and financing pressure, NOT hard action gates. Never use a crude threshold such as "debt above X means this action is impossible." A fiscally stressed government may still rearm, mobilize, subsidize, build infrastructure, or fight — but a large program must plausibly be financed through borrowing, taxation, cuts/reallocation, monetary expansion, foreign credit, asset sales, or acceptance of higher inflation/debt and political strain.
+
+When a NEW event in this pass materially changes the macroeconomic condition of a polity that has a canonical Stats baseline, encode the lasting consequence in that SAME event with impacts.polityChanges[].stats using ABSOLUTE post-event values for only the fields that actually changed. Prefer gdpGrowth, inflation, unemployment, publicDebt, budgetBalance, stability, and relevant autonomy/independence indices. Do not casually rewrite derived GDP, GDP/capita, population, or territorial components from a normal world event; those aggregates are governed by the native component ledger.
+
+Examples of causes that can warrant a Stats consequence when genuinely material: sustained war/mobilization finance, blockade or sanctions, major tax/borrowing programs, currency/financial crisis, severe harvest/energy shock, major industrial/infrastructure expansion, depression/boom, or a territorial settlement with substantial economic scope. A routine meeting, speech, single budget debate, or mere passage of time does NOT require a numeric change.
+
+If an actor has NO canonical economic baseline in the supplied constraints, do not fabricate an entire numeric Stats sheet just to satisfy this rule. Reason qualitatively from the ordinary campaign context instead.
+
+Any emitted stats update must remain causally compatible with the event prose. Economic strain changes the price and consequences of policy; it does not silently veto policy.`;
     // Map truth: the recurring field report is the OPPOSITE failure — invasions
     // narrated turn after turn with zero regionTransfers, so the map never moves.
     // Appended at call time for the same reason as [Player Agency]: existing
@@ -2966,6 +2990,160 @@ const canonicalStatsPolity = (token, world) => {
   return normalizeString(resolved?.resolved) || toCountryName(text) || text;
 };
 
+// ---------------------------------------------------------------------------
+// Phase 7A.2 — bounded economic continuity evidence
+// ---------------------------------------------------------------------------
+// This is deliberately cheap/native: no extra AI call, no whole-history semantic
+// scan. Stats reassessment sees at most a small recent target-specific evidence
+// packet, while the persistent continuity ledger prevents already-accounted events
+// from being applied twice.
+const STATS_ECONOMIC_EVENT_SCAN_LIMIT = 64;
+const STATS_ECONOMIC_EVIDENCE_LIMIT = 12;
+const STATS_ACCOUNTED_EVENT_LIMIT = 64;
+
+const ECONOMIC_EVENT_PATTERN = /\b(?:tax|taxation|levy|budget|fiscal|deficit|surplus|debt|bond|loan|credit|bank|banking|currency|monetary|inflation|unemployment|recession|depression|boom|growth|trade|tariff|customs|sanction|blockade|shortage|harvest|famine|food|coal|oil|energy|industry|industrial|factory|rail|railway|infrastructure|subsid|spending|appropriation|finance|financial|wage|strike|mobiliz|war finance|occupation|annex|cession|reparat|investment|export|import)\b/i;
+
+const stableStatsHash = (value) => {
+  let hash = 2166136261;
+  const text = String(value ?? "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const statsDateMillis = (value) => {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return null;
+  const time = Date.UTC(parsed.year, parsed.month - 1, parsed.day);
+  return Number.isFinite(time) ? time : null;
+};
+
+const statsElapsedYears = (fromDate, toDate) => {
+  const from = statsDateMillis(fromDate);
+  const to = statsDateMillis(toDate);
+  if (from == null || to == null || to <= from) return 0;
+  return (to - from) / (365.2425 * 86400000);
+};
+
+const statsPolityAliases = (world, canonicalName) => {
+  const values = new Set([normalizeString(canonicalName)]);
+  const target = normalizeString(canonicalName).toLowerCase();
+  for (const [key, polity] of Object.entries(world?.polityOverrides || {})) {
+    const candidates = [key, polity?.code, polity?.name, ...normalizeArray(polity?.aliases)]
+      .map(normalizeString)
+      .filter(Boolean);
+    const belongs = candidates.some((candidate) => {
+      const resolved = canonicalStatsPolity(candidate, world);
+      return normalizeString(resolved).toLowerCase() === target;
+    });
+    if (belongs) candidates.forEach((candidate) => values.add(candidate));
+  }
+  return [...values].filter(Boolean);
+};
+
+const STATS_GENERIC_POLITY_WORDS = new Set([
+  "empire", "kingdom", "republic", "state", "states", "federation", "federal",
+  "union", "united", "people", "peoples", "grand", "duchy", "commonwealth",
+]);
+
+const statsTextMentionsTarget = (textValue, aliases) => {
+  const text = normalizeString(textValue).toLowerCase();
+  if (!text) return false;
+
+  for (const alias of aliases) {
+    const phrase = normalizeString(alias).toLowerCase();
+    if (phrase.length >= 4 && text.includes(phrase)) return true;
+    const tokens = phrase
+      .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+      .split(/[\s-]+/)
+      .filter((token) => token.length >= 5 && !STATS_GENERIC_POLITY_WORDS.has(token));
+    for (const token of tokens) {
+      if (text.includes(token)) return true;
+      // Conservative adjective/name-family bridge: Germany/German,
+      // Russia/Russian, Austria/Austrian, Serbia/Serbian, etc.
+      if (token.length >= 6 && text.includes(token.slice(0, 5))) return true;
+    }
+  }
+  return false;
+};
+
+const buildTargetEconomicEvidence = ({ bundle, statCode, previous }) => {
+  const world = normalizeWorldState(bundle?.world);
+  const target = canonicalStatsPolity(statCode, world) || normalizeString(statCode);
+  const targetKey = target.toLowerCase();
+  const aliases = statsPolityAliases(world, target);
+  const accounted = new Set(
+    normalizeArray(previous?.continuity?.accountedEventIds)
+      .map(normalizeString)
+      .filter(Boolean),
+  );
+
+  const sameTarget = (token) => {
+    const resolved = canonicalStatsPolity(token, world);
+    return normalizeString(resolved).toLowerCase() === targetKey;
+  };
+
+  const recent = normalizeEvents(bundle?.events).slice(-STATS_ECONOMIC_EVENT_SCAN_LIMIT);
+  const relevant = [];
+
+  for (const event of recent) {
+    const id = normalizeString(event?.id);
+    if (!id) continue;
+    const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
+
+    const statImpact = normalizeArray(impacts.polityChanges).some((change) =>
+      change?.stats && sameTarget(change?.code || change?.name));
+    const legalTerritoryImpact = normalizeArray(impacts.regionTransfers).some((transfer) =>
+      sameTarget(transfer?.fromCode) || sameTarget(transfer?.toCode));
+    const controlImpact = normalizeArray(impacts.regionControlOps).some((op) =>
+      sameTarget(op?.fromCode) || sameTarget(op?.toCode) || sameTarget(op?.actorCode) || sameTarget(op?.claimantCode));
+    const combatant = normalizeArray(event?.combatants).some(sameTarget);
+    const mentioned = statsTextMentionsTarget(prose, aliases);
+    const economicCue = ECONOMIC_EVENT_PATTERN.test(prose);
+
+    if (!(statImpact || legalTerritoryImpact || (economicCue && (mentioned || controlImpact || combatant)))) {
+      continue;
+    }
+
+    relevant.push({
+      id,
+      date: normalizeString(event?.date),
+      title: normalizeString(event?.title) || "Economic development",
+      description: normalizeString(event?.description),
+      importance: normalizeString(event?.importance),
+      directStatImpact: statImpact,
+      legalTerritoryImpact,
+    });
+  }
+
+  const unaccounted = relevant.filter((event) => !accounted.has(event.id));
+  const selectedFresh = unaccounted.slice(-STATS_ECONOMIC_EVIDENCE_LIMIT);
+  const deferredCount = Math.max(0, unaccounted.length - selectedFresh.length);
+  const lines = selectedFresh.map((event) => {
+    const detail = event.description.length > 360
+      ? `${event.description.slice(0, 359).trimEnd()}…`
+      : event.description;
+    const flags = [
+      event.directStatImpact ? "event carries explicit stats impact" : "",
+      event.legalTerritoryImpact ? "legal-territory change" : "",
+    ].filter(Boolean).join(", ");
+    return `- ${event.date || "undated"} — ${event.title}${flags ? ` [${flags}]` : ""}${detail ? `: ${detail}` : ""}`;
+  });
+  if (deferredCount > 0) {
+    lines.unshift(`- ${deferredCount} earlier fresh relevant economic event(s) are intentionally deferred by the bounded evidence window; do not invent their details.`);
+  }
+
+  return {
+    text: lines.join("\n"),
+    relevantIds: relevant.map((event) => event.id).slice(-STATS_ACCOUNTED_EVENT_LIMIT),
+    selectedFreshIds: selectedFresh.map((event) => event.id),
+    unaccountedCount: unaccounted.length,
+  };
+};
+
 // Build a native legal-territory accounting basis for Stats. Unlike the old AIO,
 // this does not scrape rendered DOM/map prose. We have direct access to the region
 // catalog plus separate controller/sovereign ledgers, so temporary occupation can
@@ -3085,9 +3263,18 @@ const buildTargetStatsTerritorialBasis = async (bundle, code) => {
   if (occupiedByTarget > 0) lines.push(`Temporary occupations held by ${target} but legally sovereign to others: ${occupiedByTarget} region(s) — DO NOT add these inhabitants/GDP to the national component total.`);
   if (targetOccupiedByOthers > 0) lines.push(`Legally sovereign ${target} regions under temporary foreign control: ${targetOccupiedByOthers} region(s) — keep them in legal population/GDP scope, but current occupation may economically depress/disrupt them if campaign evidence supports it.`);
 
+  const fingerprintSource = plannedRows
+    .map((row) => [
+      row.geography,
+      row.total,
+      row.regions.map((region) => region.id).sort().join(","),
+    ].join("|"))
+    .join("\n");
+
   return {
     context: lines.join("\n"),
     plan: plannedRows.map((row) => ({ index: row.index, geography: row.geography })),
+    fingerprint: `territory-${stableStatsHash(fingerprintSource)}`,
   };
 };
 
@@ -3130,11 +3317,58 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
   const territorialBasis = await buildTargetStatsTerritorialBasis(bundle, statCode);
   const territorialContext = territorialBasis.context;
   const territorialPlan = territorialBasis.plan;
+  const territorialFingerprint = normalizeString(territorialBasis.fingerprint);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
   const previous = normalizeCountryStatSheet(worldAtStart.countryStats?.[statCode]);
+  const previousComplete = isCompleteCountryStatSheet(previous);
+  const economicEvidence = buildTargetEconomicEvidence({ bundle, statCode, previous });
+  const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
+  const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
+  const stateFingerprint = `stats-${stableStatsHash(JSON.stringify({
+    date: currentDate,
+    round: currentRound,
+    territory: territorialFingerprint,
+    economicEvents: economicEvidence.relevantIds,
+  }))}`;
+
+  // Migration lock: 7A.1 already produced a current-state baseline but had no
+  // continuity metadata. Do NOT immediately ask the model to reinterpret the same
+  // history and double-count it. Stamp the current baseline as accounted once.
+  if (statCode && previousComplete && !normalizeString(previous?.continuity?.stateFingerprint)) {
+    try {
+      const world = normalizeWorldState(await readWorldState({ force: true }));
+      const migrated = applyCountryStatPatchToWorld(world, statCode, {}, {
+        continuity: {
+          assessedDate: currentDate,
+          assessedRound: currentRound,
+          stateFingerprint,
+          territorialFingerprint,
+          accountedEventIds: economicEvidence.relevantIds,
+        },
+      });
+      await writeWorldState(world);
+      console.info(`[stats 7A.2] continuity metadata migrated for ${statCode}; existing current-state baseline reused.`);
+      return migrated || previous;
+    } catch (error) {
+      console.warn("[stats 7A.2] continuity migration failed; falling through to reassessment:", error);
+    }
+  }
+
+  // Exact same simulation state + no unaccounted target-economic events = no AI
+  // call. The refresh button becomes a deterministic read, not a reroll button.
+  if (
+    previousComplete &&
+    normalizeString(previous?.continuity?.stateFingerprint) === stateFingerprint &&
+    economicEvidence.unaccountedCount === 0
+  ) {
+    console.info(`[stats 7A.2] same-state refresh for ${statCode}; canonical baseline reused with zero AI calls.`);
+    return previous;
+  }
+
   const previousContext = previous
     ? JSON.stringify(previous, null, 2).slice(0, 9000)
     : "";
+  const evidenceContext = economicEvidence.text;
 
   const { payload } = await runJsonTask("countryStatSheet", {
     userMessage: [
@@ -3143,42 +3377,70 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
       `LEGAL TERRITORIAL BASIS:\n${territorialContext}`,
       previousContext ? `PREVIOUS PERSISTENT STATS:\n${previousContext}` : "",
+      `FRESH ECONOMIC / DEMOGRAPHIC EVIDENCE:\n${evidenceContext || "None newly unaccounted."}`,
     ].filter(Boolean).join("\n\n"),
     variables: {
       ...variables,
       statsTerritorialContext: territorialContext,
       statsTerritorialPlan: territorialPlan,
       statsPreviousContext: previousContext,
+      statsEconomicEvidenceContext: evidenceContext,
     },
   });
 
   const finalized = finalizeCountryStatSheet(payload);
+  const elapsedYears = statsElapsedYears(previous?.continuity?.assessedDate, currentDate);
+  const territoryChanged = Boolean(
+    normalizeString(previous?.continuity?.territorialFingerprint) &&
+    normalizeString(previous?.continuity?.territorialFingerprint) !== territorialFingerprint
+  );
+  const guarded = guardCountryStatContinuity(previous, finalized, {
+    elapsedYears,
+    evidenceText: evidenceContext,
+    territoryChanged,
+  });
 
-  // Persist through the SAME native mutation boundary used by polityChanges.stats
-  // and intended for the expanded GM/editor. Components replace the previous
-  // component ledger; every derived population/GDP field is recomputed in JS.
-  if (statCode && finalized && typeof finalized === "object") {
+  if (guarded.restored?.length) {
+    console.warn(
+      `[stats 7A.2] restored ${guarded.restored.length} unsupported continuity discontinuity/discontinuities for ${statCode}:`,
+      guarded.restored,
+    );
+  }
+
+  // A newly-created baseline conceptually accounts for the current recent ledger.
+  // An established baseline accounts only the bounded fresh evidence shown in THIS
+  // reassessment; if more than 12 fresh events existed, another refresh can process
+  // the deferred remainder instead of silently marking unseen evidence as handled.
+  const accountedNow = previous?.continuity
+    ? economicEvidence.selectedFreshIds
+    : economicEvidence.relevantIds;
+
+  if (statCode && guarded.sheet && typeof guarded.sheet === "object") {
     try {
       const world = normalizeWorldState(await readWorldState({ force: true }));
-      const nextSheet = mergeCountryStatPatch(
-        world.countryStats?.[statCode],
-        finalized,
-        { replaceComponents: true },
-      );
-      await writeWorldState({
-        ...world,
-        countryStats: {
-          ...world.countryStats,
-          [statCode]: nextSheet,
+      const nextSheet = applyCountryStatPatchToWorld(
+        world,
+        statCode,
+        guarded.sheet,
+        {
+          replaceComponents: true,
+          continuity: {
+            assessedDate: currentDate,
+            assessedRound: currentRound,
+            stateFingerprint,
+            territorialFingerprint,
+            accountedEventIds: accountedNow,
+          },
         },
-      });
+      );
+      await writeWorldState(world);
       return nextSheet;
     } catch (error) {
       console.warn("[ai] failed to persist native country stats:", error);
     }
   }
 
-  return finalized;
+  return guarded.sheet || finalized;
 };
 
 export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {

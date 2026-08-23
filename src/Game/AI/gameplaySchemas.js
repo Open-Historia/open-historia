@@ -183,9 +183,9 @@ const statPct = (description) => ({ type: "integer", minimum: 0, maximum: 100, d
 const statsUpdateSchema = {
   type: "object",
   description:
-    "Updated national statistics for this polity. Include ONLY the fields that changed this period "
-    + "(a coup changes leader/government/stability; a war changes reputation/economy) — every field you "
-    + "omit keeps its previous value. Values are absolute, not deltas.",
+    "Updated PERSISTENT national statistics for this polity. Include ONLY fields materially changed by this event/period. "
+    + "Economic fields are absolute values, not deltas, and should be emitted only when the simulation has a canonical baseline "
+    + "for the polity and a concrete causal reason for the change. Fiscal stress constrains financing but never creates a hard action veto.",
   properties: {
     capital: textSchema("Capital, only when it changes."),
     continent: textSchema("Continent / broad region, only when it changes."),
@@ -207,9 +207,9 @@ const statsUpdateSchema = {
     economy: {
       type: "object",
       properties: {
-        gdp: textSchema("GDP estimate."),
+        gdp: textSchema("Absolute whole-polity GDP only for an explicit authoritative re-baseline; ordinary world events should prefer growth/inflation/debt/budget/unemployment and omit GDP."),
         gdpGrowth: textSchema("Annual GDP growth estimate."),
-        gdpPerCapita: textSchema("GDP per capita estimate."),
+        gdpPerCapita: textSchema("Absolute whole-polity GDP/capita only for an explicit authoritative re-baseline; ordinary world events should omit this derived aggregate."),
         currency: textSchema("Currency."),
         inflation: textSchema("Inflation estimate."),
         unemployment: textSchema("Unemployment estimate."),
@@ -897,6 +897,22 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       type: "integer",
       minimum: 1,
       description: "Native country-stat schema version. Current version is 1; the runtime fills this when omitted.",
+    },
+    continuity: {
+      type: "object",
+      description: "Native-only continuity/accounting metadata. The country-stat generation tool does not author this; runtime may attach it after validation.",
+      properties: {
+        assessedDate: nonEmptyTextSchema("Simulation date of the last full country-stat reassessment."),
+        assessedRound: { type: "integer", minimum: 0 },
+        stateFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed simulation/economic state."),
+        territorialFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed legal territorial basis."),
+        accountedEventIds: {
+          type: "array",
+          maxItems: 64,
+          items: nonEmptyTextSchema("Canonical economic event id already incorporated into this stat baseline."),
+        },
+      },
+      additionalProperties: false,
     },
     capital: nonEmptyTextSchema("Capital or primary seat of government."),
     continent: nonEmptyTextSchema("Continent or broad geographic region."),
