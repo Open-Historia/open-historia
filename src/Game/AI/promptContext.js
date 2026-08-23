@@ -17,6 +17,42 @@ import { buildRegionOwnershipText } from "./regionVocab.js";
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
+// Walks BACKWARD from a chat's last message to the first one with a usable
+// `time`, mirroring chat.jsx's chatLastMessageTime (kept as a separate copy
+// here rather than imported — that file is a React/UI module this AI-prompt
+// layer shouldn't depend on). Returns null when nothing in the chat carries a
+// parseable date, so an all-blank chat sorts as "unknown" rather than as
+// artificially ancient (which would bury it) or artificially current (which
+// would crowd out chats that really are active).
+const chatLastMessageTimeMs = (chat) => {
+  const messages = chat.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const raw = messages[i]?.time;
+    if (!raw) continue;
+    const ms = new Date(raw).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+};
+
+// Most-recently-ACTIVE first. A long-running chat with a country the player
+// has kept talking to for many rounds otherwise stays parked wherever it was
+// first inserted into storage (chats are only ever prepended on creation, not
+// re-ordered on new messages) — so a still-open, actively-updated chat could
+// silently fall outside chatHistoryLong/chatSummary's `limit` slice just
+// because several OTHER chats were started more recently, even though none of
+// them are as current. A chat with no usable date at all sorts to the end,
+// same convention as chat.jsx's "Undated" bucket, rather than winning the
+// front of the list by default.
+const sortChatsByLastActivity = (chats) => [...chats].sort((a, b) => {
+  const ta = chatLastMessageTimeMs(a);
+  const tb = chatLastMessageTimeMs(b);
+  if (ta === null && tb === null) return 0;
+  if (ta === null) return 1;
+  if (tb === null) return -1;
+  return tb - ta;
+});
+
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
     const value = variables[key];
@@ -511,8 +547,9 @@ export const buildPromptContext = async (bundle, {
   const consolidatedChatIds = new Set(
     normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
   );
-  const unconsolidatedChats = normalizeChats(bundle.chats)
-    .filter((entry) => !consolidatedChatIds.has(entry.id));
+  const unconsolidatedChats = sortChatsByLastActivity(
+    normalizeChats(bundle.chats).filter((entry) => !consolidatedChatIds.has(entry.id)),
+  );
   const currentChat = normalizedChat ?? unconsolidatedChats[0] ?? null;
 
   return {

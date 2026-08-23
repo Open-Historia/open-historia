@@ -162,11 +162,13 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js:379`
 | `consolidatedHistory` | `buildConsolidatedHistoryText(world)` — the `consolidatedHistory[]` summaries | `promptContext.js:433` / builder `86` |
 | `recentRoundsWithDates` | `from → to` date pairs from `world.simulationHistory` (≤8) | `buildRecentRoundsWithDates` `promptContext.js:187` |
 | `chatHistory` | Current chat's `speaker: text` lines, or "No chat history." | `promptContext.js:428` |
-| `chatHistoryLong` | `buildDetailedChatHistoryText(unconsolidatedChats, {limit: chatLimit})` | `promptContext.js:429` / builder `114` |
-| `chatSummary` | One-line-per-chat last-message summary | `buildChatSummaryText` `promptContext.js:431` / builder `103` |
-| `chatParticipants` | Current chat's participant names, comma-joined | `promptContext.js:430` (overridden with a bulleted list in `buildDiplomaticSystemPrompt`, `main.jsx:1058`) |
-| `chatsToConsolidate` | Explicit batch, else detailed transcript (≤12 chats, ≤50 msgs) | `promptContext.js:432` |
-| `chat` | `JSON.stringify(unconsolidatedChats)` | `promptContext.js:427` |
+| `chatHistoryLong` | `buildDetailedChatHistoryText(unconsolidatedChats, {limit: chatLimit})` | `promptContext.js:571` / builder `153` |
+| `chatSummary` | One-line-per-chat last-message summary | `buildChatSummaryText` `promptContext.js:573` / builder `142` |
+| `chatParticipants` | Current chat's participant names, comma-joined | `promptContext.js:572` (overridden with a bulleted list in `buildDiplomaticSystemPrompt`, `main.jsx:1058`) |
+| `chatsToConsolidate` | Explicit batch, else detailed transcript (≤12 chats, ≤50 msgs) | `promptContext.js:574` |
+| `chat` | `JSON.stringify(unconsolidatedChats)` | `promptContext.js:569` |
+
+`unconsolidatedChats` (`promptContext.js:550`) is sorted most-recently-ACTIVE first (`sortChatsByLastActivity`, walking each chat's messages backward for the first usable `time`, same convention as chat.jsx's `chatLastMessageTime`) before anything above slices it to a `limit`. Chats are only ever prepended to storage on creation, never reordered when a new message lands on an existing one — without this sort, a long-running chat that started many rounds ago but is still being actively messaged could silently fall out of `chatHistoryLong`'s window just because several other chats were *started* more recently, even though none of them were as current. (Real bug: the advisor had no record of an ongoing Algeria negotiation because Algeria's chat, opened in round 1, had aged past `chatLimit` while newer-but-quiet chats occupied the slice.)
 | `lastSpeaker` | Current chat's last speaker name | `promptContext.js:442` |
 | `respondingPolityName` | Option override, else first non-player participant | `promptContext.js:452` |
 | `advisorMessages` | `buildAdvisorHistoryText(bundle.advisor, {limit: advisorLimit=18})` | `promptContext.js:416` / builder `127` |
