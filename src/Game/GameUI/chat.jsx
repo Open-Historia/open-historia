@@ -3,7 +3,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { appendDiplomaticPlayerMessage, sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker, processPendingEventOutreach } from "../AI/gameplay.js";
 import { Actions } from "./actions";
 import {
     getNationColors,
@@ -1862,6 +1862,72 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         }
     }, [isOpen]);
 
+    // 8A.8 — persistent Event Editor diplomatic reaction scheduler. The queue
+    // lives in world.json, so refreshes do not cancel the grace window. This is
+    // deadline-driven rather than another poll: read once, sleep until the next
+    // pending evaluation, then let gameplay.js re-check the event and deliver (or
+    // deliberately choose silence) through the canonical chat seam.
+    useEffect(() => {
+        let cancelled = false;
+        let timer = null;
+
+        const clear = () => {
+            if (timer) clearTimeout(timer);
+            timer = null;
+        };
+
+        const scheduleFromWorld = async (minimumDelayMs = 0) => {
+            if (cancelled) return;
+            clear();
+            try {
+                const world = await readWorldState({ force: true });
+                const queue = Array.isArray(world?.pendingEventOutreach)
+                    ? world.pendingEventOutreach
+                    : [];
+                if (queue.length === 0) return;
+
+                const now = Date.now();
+                const dueTimes = queue
+                    .map((entry) => Date.parse(String(entry?.deliverAfter || "")))
+                    .filter(Number.isFinite)
+                    .sort((a, b) => a - b);
+                if (dueTimes.length === 0) return;
+
+                const delay = Math.max(minimumDelayMs, dueTimes[0] - now, 100);
+                timer = setTimeout(async () => {
+                    if (cancelled) return;
+                    const result = await processPendingEventOutreach({ debug: true }).catch((error) => ({
+                        reason: "scheduler-error",
+                        retryAfterMs: 30000,
+                        message: error?.message || String(error),
+                    }));
+                    if (cancelled) return;
+                    const retry = Math.max(0, Number(result?.retryAfterMs) || 0);
+                    scheduleFromWorld(retry);
+                }, Math.min(delay, 2147483000));
+            } catch {
+                // A transient world read should not permanently orphan persisted work.
+                timer = setTimeout(() => scheduleFromWorld(), 30000);
+            }
+        };
+
+        const queueChanged = () => scheduleFromWorld();
+        const visibilityChanged = () => {
+            if (!document.hidden) scheduleFromWorld();
+        };
+
+        scheduleFromWorld();
+        window.addEventListener("oh:event-outreach-queue-changed", queueChanged);
+        document.addEventListener("visibilitychange", visibilityChanged);
+
+        return () => {
+            cancelled = true;
+            clear();
+            window.removeEventListener("oh:event-outreach-queue-changed", queueChanged);
+            document.removeEventListener("visibilitychange", visibilityChanged);
+        };
+    }, []);
+
     useEffect(() => {
         const unlock = () => ensureNotificationAudioContext();
         document.addEventListener("pointerdown", unlock, true);
@@ -2113,13 +2179,20 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             check().finally(schedule);
         };
 
+        const onExternalChatUpdate = () => {
+            clearTimeout(timer);
+            check().finally(schedule);
+        };
+
         check().finally(schedule);
         document.addEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("oh:diplomacy-chats-updated", onExternalChatUpdate);
 
         return () => {
             cancelled = true;
             clearTimeout(timer);
             document.removeEventListener("visibilitychange", onVisibilityChange);
+            window.removeEventListener("oh:diplomacy-chats-updated", onExternalChatUpdate);
         };
     }, [isOpen, soundEnabled]);
 

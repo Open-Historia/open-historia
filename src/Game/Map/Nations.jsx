@@ -8,6 +8,7 @@ import {
   getInteractionMode,
   clearInteractionMode,
   deployUnit,
+  placeUnitAdmin,
   moveUnitTo,
   attackWith,
   attackFeature,
@@ -605,6 +606,15 @@ const WorldMap = ({ isGlobe = false }) => {
     const mode = getInteractionMode();
 
     // Active troop command modes intercept the click as a target, not a selection.
+    // Cheats 2.0 admin placement is an authoritative relocation, distinct from
+    // normal movement: it must work anywhere on the map without creating an
+    // order, changing status, or applying era/logistics movement limits.
+    if (mode.kind === "admin-place") {
+      placeUnitAdmin(mode.unitId, event.lngLat.lng, event.lngLat.lat);
+      clearInteractionMode();
+      return;
+    }
+
     if (mode.kind === "deploy") {
       deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
       clearInteractionMode();

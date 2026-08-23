@@ -54,6 +54,10 @@ export const WORLD_DEFAULTS = {
   // and rendered as map markers beside the stock cities. Stored here so they
   // share every existing read/write/poll/normalize path, exactly like units.
   markers: [],
+  // Real-time grace-period queue for optional Event Editor → NPC diplomatic
+  // reactions. These are only pending evaluations, not chats themselves. The
+  // actual conversation is created later through the normal chat merge seam.
+  pendingEventOutreach: [],
   notes: "",
   polityOverrides: {},
   // Region id -> claimant polity names: the world-data way to mark a region
@@ -1089,6 +1093,33 @@ export const normalizeMarkers = (markers) =>
     .map((entry, index) => normalizeMarkerEntry(entry, index))
     .filter(Boolean);
 
+// Pending Event Editor diplomatic evaluations. The grace deadline is real-world
+// time because its only purpose is an "undo send" window for the administrator;
+// the resulting diplomatic message is stamped with the event's in-game date.
+export const normalizePendingEventOutreach = (entries) =>
+  normalizeArray(entries)
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object") return null;
+      const sourceEventId = normalizeOptionalString(entry.sourceEventId);
+      const sourceEventCreatedAt = normalizeOptionalString(entry.sourceEventCreatedAt);
+      const deliverAfter = normalizeOptionalString(entry.deliverAfter);
+      if (!sourceEventId || !deliverAfter) return null;
+      const attempts = Number.isFinite(Number(entry.attempts))
+        ? Math.max(0, Math.trunc(Number(entry.attempts)))
+        : 0;
+      return {
+        id: normalizeOptionalString(entry.id) || generateId(`event-outreach-${index}`),
+        sourceEventId,
+        sourceEventCreatedAt,
+        queuedAt: normalizeOptionalString(entry.queuedAt) || new Date().toISOString(),
+        deliverAfter,
+        attempts,
+        lastError: normalizeOptionalString(entry.lastError),
+      };
+    })
+    .filter(Boolean)
+    .slice(-80);
+
 // One AI-authored mutation to the built-structure list: build | remove.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -1427,6 +1458,29 @@ const normalizeEventQuote = (value) => {
   };
 };
 
+// Optional Event Editor policy: the event may invite a one-shot autonomous
+// diplomatic reaction after a short real-time grace window. This is metadata
+// about whether the evaluation is allowed/completed; the resulting chat remains
+// a separate canonical object linked through chat.linkedEventId.
+const normalizeEventNpcReaction = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const enabled = Boolean(value.enabled);
+  const evaluatedAt = normalizeOptionalString(value.evaluatedAt);
+  const rawResult = normalizeOptionalString(value.result).toLowerCase();
+  const result = ["sent", "silent"].includes(rawResult) ? rawResult : "";
+  const chatId = normalizeOptionalString(value.chatId);
+
+  if (!enabled && !evaluatedAt && !result && !chatId) return null;
+
+  return {
+    enabled,
+    ...(evaluatedAt ? { evaluatedAt } : {}),
+    ...(result ? { result } : {}),
+    ...(chatId ? { chatId } : {}),
+  };
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -1463,6 +1517,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
   }
 
   const quote = normalizeEventQuote(entry.quote);
+  const npcReaction = normalizeEventNpcReaction(entry.npcReaction);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -1482,6 +1537,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
         .filter(Boolean),
     )].slice(0, 8),
     ...(quote ? { quote } : {}),
+    ...(npcReaction ? { npcReaction } : {}),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };
@@ -1970,6 +2026,7 @@ export const normalizeWorldState = (world) => {
       })
       .filter(Boolean),
     markers: normalizeMarkers(nextWorld.markers),
+    pendingEventOutreach: normalizePendingEventOutreach(nextWorld.pendingEventOutreach),
     // Explicit (not via the ...WORLD_DEFAULTS spread) so this new field survives every
     // write path — the documented new-world-field trap.
     cityRenames: Object.fromEntries(

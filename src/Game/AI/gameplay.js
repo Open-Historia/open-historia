@@ -589,12 +589,25 @@ const runJsonTask = async (taskKey, {
     ...helperValues,
   });
 
-  // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
-  try {
-    const game = await readGameData();
-    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
-  } catch {
-    // Without game data the task still runs at its default temperament.
+  // Difficulty 2.0 is intentionally scoped. It belongs only in places that
+  // actually RESOLVE uncertain simulation pressure or bargaining. Mechanical
+  // helpers (Stats, geography, timeline curation, unit/territory directors),
+  // action parsing/suggestions, pregame history, and the GM/admin path must stay
+  // difficulty-neutral so challenge can never corrupt canonical bookkeeping.
+  const difficultyScope = (() => {
+    if (["jumpForward", "autoJumpForward"].includes(taskKey)) return "simulation";
+    if (["catalystCreation", "catalystExecutor"].includes(taskKey)) return "catalyst";
+    if (taskKey === "idleDiplomacy") return "diplomacy";
+    return "";
+  })();
+
+  if (difficultyScope) {
+    try {
+      const game = await readGameData();
+      systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScope)}`;
+    } catch {
+      // Missing game data leaves the task neutral rather than inventing a level.
+    }
   }
 
   if (taskKey === "countryStatSheet") {
@@ -875,7 +888,8 @@ ${canonicalDiplomacy}`;
 
   if (taskKey === "idleDiplomacy") {
     const blockedSets = normalizeString(variables?.idleDiplomacyBlockedParticipantSets) || "None.";
-    systemPrompt = `${systemPrompt}\n\n[Living Diplomacy — live override]\nThis is optional autonomous outreach, not mandatory chatter. Return {"chat":null} unless an A.I.-controlled polity has a concrete reason to contact the player now. The approach may be bilateral OR, when several polities genuinely share the same purpose, a small group approach: countries must list every non-player participant who is jointly contacting the player, and speaker must be one of those participants. Never include the player's polity in countries. Reuse the diplomatic context already visible in Existing Chats instead of repeating a proposal, warning, congratulations, or request that is already there. A group approach is still a conversation WITH the player; never use this task to represent private NPC↔NPC talks.\n\n[Already active on this in-game date — DO NOT choose these exact participant sets]\n${blockedSets}\nIf the only plausible outreach would come from one of those exact participant sets, return {"chat":null} instead of generating a message the runtime must throw away. A different genuinely justified joint group is still allowed; do not invent extra participants merely to evade this guard.`;
+    const eventReaction = normalizeString(variables?.eventDiplomaticReactionContext);
+    systemPrompt = `${systemPrompt}\n\n[Living Diplomacy — live override]\nThis is optional autonomous outreach, not mandatory chatter. Return {"chat":null} unless an A.I.-controlled polity has a natural reason to contact the player now. A reason does NOT have to be a crisis or strategic negotiation: friendly congratulations, condolences, professional courtesy, curiosity, reassurance, or a warm acknowledgement of a minor public development are valid when they fit the sender's relationship and interests. Do not manufacture importance, knowledge, hostility, or diplomatic stakes that the supplied world does not support. The approach may be bilateral OR, when several polities genuinely share the same purpose, a small group approach: countries must list every non-player participant who is jointly contacting the player, and speaker must be one of those participants. Never include the player's polity in countries. Reuse the diplomatic context already visible in Existing Chats instead of repeating a proposal, warning, congratulations, or request that is already there. A group approach is still a conversation WITH the player; never use this task to represent private NPC↔NPC talks.\n\n[Already active on this in-game date — DO NOT choose these exact participant sets]\n${blockedSets}\nIf the only plausible outreach would come from one of those exact participant sets, return {"chat":null} instead of generating a message the runtime must throw away. A different genuinely justified joint group is still allowed; do not invent extra participants merely to evade this guard.${eventReaction ? `\n\n[Event-triggered reaction — one-shot]\nA human administrator explicitly allowed NPCs to react to the canonical event below. Evaluate THIS event in the current diplomatic world. Silence remains valid and must be chosen when nobody would plausibly contact the player. But do not confuse "minor" with "unworthy of human contact": a friendly ally may simply congratulate the player, express sympathy, show interest, or make a brief good-natured remark even when no treaty, warning, or mechanical consequence is needed. Keep any opener natural and proportionate. The schema permits at most one initiating chat for this one-shot evaluation.\n\n${eventReaction}` : ""}`;
   }
 
   if (taskKey === "nextSpeaker") {
@@ -4606,6 +4620,281 @@ export const maybeGeneratePregameHistory = async () => {
     return null;
   } finally {
     endSimulation();
+  }
+};
+
+// ---- Event Editor diplomatic reaction queue ---------------------------------
+// A manually-authored event can optionally invite ONE autonomous NPC reaction.
+// The editor commits the event immediately, then stores a real-time grace deadline
+// in world.pendingEventOutreach. This worker evaluates only when the deadline is
+// due, re-reads the exact event before AND after the model call, and routes any
+// resulting message through the same canonical chat merge path as normal gameplay.
+const eventReactionKey = (event) => [
+  normalizeString(event?.id),
+  normalizeString(event?.createdAt),
+].join("\u001f");
+
+const eventReactionQueueKey = (entry) => [
+  normalizeString(entry?.sourceEventId),
+  normalizeString(entry?.sourceEventCreatedAt),
+].join("\u001f");
+
+const eventReactionPromptText = (event, playerName) => {
+  const quote = event?.quote?.text
+    ? `\nQuote: “${normalizeString(event.quote.text)}”${event.quote.speaker ? ` — ${normalizeString(event.quote.speaker)}` : ""}`
+    : "";
+  return [
+    `PLAYER POLITY: ${normalizeString(playerName) || "Unknown"}`,
+    `EVENT DATE: ${normalizeString(event?.date) || "Undated"}`,
+    `EVENT TITLE: ${normalizeString(event?.title) || "Untitled"}`,
+    `EVENT KIND: ${normalizeString(event?.kind) || "world"}`,
+    `EVENT IMPORTANCE: ${normalizeString(event?.importance) || "minor"}`,
+    `PLAYER-RELATED FLAG: ${event?.playerRelated ? "yes" : "no"}`,
+    `EVENT DESCRIPTION: ${normalizeString(event?.description) || "No description."}${quote}`,
+  ].join("\n");
+};
+
+const eventReactionDueMs = (entry) => {
+  const ms = Date.parse(normalizeString(entry?.deliverAfter));
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+let eventReactionInFlight = false;
+
+export const processPendingEventOutreach = async ({ debug = false } = {}) => {
+  if (eventReactionInFlight) return debug ? { processed: 0, reason: "already-in-flight", retryAfterMs: 1000 } : null;
+  if (isSimulationBusy()) return debug ? { processed: 0, reason: "simulation-busy", retryAfterMs: 5000 } : null;
+
+  eventReactionInFlight = true;
+  try {
+    let bundle = await readGameStateBundle({ force: true });
+    const now = Date.now();
+    const queue = normalizeArray(bundle.world?.pendingEventOutreach)
+      .slice()
+      .sort((a, b) => eventReactionDueMs(a) - eventReactionDueMs(b));
+    const due = queue.find((entry) => eventReactionDueMs(entry) <= now);
+
+    if (!due) {
+      const nextDue = queue.length ? eventReactionDueMs(queue[0]) : 0;
+      return debug ? {
+        processed: 0,
+        reason: queue.length ? "not-due" : "empty",
+        nextDueAt: nextDue ? new Date(nextDue).toISOString() : "",
+      } : null;
+    }
+
+    const dueKey = eventReactionQueueKey(due);
+    const dueQueueId = normalizeString(due?.id);
+    const findCurrentEvent = (events) => normalizeArray(events).find((event) => eventReactionKey(event) === dueKey);
+    let event = findCurrentEvent(bundle.events);
+
+    const removeQueueEntry = async (worldInput, { events = null, reactionResult = "", chatId = "" } = {}) => {
+      const nextWorld = {
+        ...worldInput,
+        pendingEventOutreach: normalizeArray(worldInput?.pendingEventOutreach)
+          .filter((entry) => normalizeString(entry?.id) !== dueQueueId),
+      };
+      await writeWorldState(nextWorld);
+
+      if (event && events && reactionResult) {
+        const updatedEvents = normalizeArray(events).map((candidate) =>
+          eventReactionKey(candidate) === dueKey
+            ? {
+                ...candidate,
+                npcReaction: {
+                  ...(candidate?.npcReaction || {}),
+                  enabled: Boolean(candidate?.npcReaction?.enabled),
+                  evaluatedAt: new Date().toISOString(),
+                  result: reactionResult,
+                  ...(chatId ? { chatId } : {}),
+                },
+              }
+            : candidate
+        );
+        await writeEventsState(updatedEvents);
+      }
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-evaluated", {
+          detail: { sourceEventId: due.sourceEventId, result: reactionResult || "cancelled", chatId },
+        }));
+      }
+    };
+
+    if (!event || !event?.npcReaction?.enabled) {
+      await removeQueueEntry(bundle.world);
+      return debug ? { processed: 1, reason: event ? "reaction-disabled" : "event-missing" } : null;
+    }
+
+    const beforeSignature = JSON.stringify({
+      date: event.date,
+      title: event.title,
+      description: event.description,
+      quote: event.quote || null,
+      kind: event.kind,
+      importance: event.importance,
+      playerRelated: Boolean(event.playerRelated),
+    });
+
+    const variables = {
+      ...(await buildTemplateVariables(bundle)),
+      idleDiplomacyBlockedParticipantSets: "None.",
+      eventDiplomaticReactionContext: eventReactionPromptText(event, bundle.game?.country),
+    };
+
+    let payload;
+    try {
+      ({ payload } = await runJsonTask("idleDiplomacy", {
+        timeoutMs: 60000,
+        maxTokens: 1024,
+        reasoningEnabled: false,
+        userMessage:
+          "Evaluate the supplied canonical event once. Decide whether one AI-controlled polity or a genuinely joint small group would naturally send the player a diplomatic message because of it. Casual friendly acknowledgement is allowed; silence is also fully valid. Return JSON only.",
+        validatePayload: async (candidate, { finalAttempt } = {}) => {
+          if (candidate?.chat == null) return "";
+          const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
+          if (countries.length === 0) {
+            return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
+          }
+          return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
+        },
+        variables,
+      }));
+    } catch (error) {
+      // Keep the request pending, but back off instead of hot-looping a dead provider.
+      const latestWorld = await readWorldState({ force: true });
+      const latestQueue = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? {
+              ...entry,
+              attempts: Number(entry?.attempts || 0) + 1,
+              deliverAfter: new Date(Date.now() + 30000).toISOString(),
+              lastError: normalizeString(error?.message),
+            }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: latestQueue });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      }
+      return debug ? { processed: 0, reason: "ai-error", retryAfterMs: 30000, message: normalizeString(error?.message) } : null;
+    }
+
+    // The grace window extends through generation in practice: if the admin edits,
+    // disables, or deletes the event while the model is thinking, do NOT send a stale
+    // message. Re-evaluate the latest edit instead, or cancel if the event vanished.
+    const [latestWorld, latestEvents] = await Promise.all([
+      readWorldState({ force: true }),
+      readEventsState({ force: true }),
+    ]);
+    const queueStillPending = normalizeArray(latestWorld.pendingEventOutreach)
+      .some((entry) => normalizeString(entry?.id) === dueQueueId);
+    const latestEvent = findCurrentEvent(latestEvents);
+
+    if (!queueStillPending || !latestEvent || !latestEvent?.npcReaction?.enabled) {
+      if (queueStillPending) await removeQueueEntry(latestWorld);
+      return debug ? { processed: 1, reason: "cancelled-during-generation" } : null;
+    }
+
+    const afterSignature = JSON.stringify({
+      date: latestEvent.date,
+      title: latestEvent.title,
+      description: latestEvent.description,
+      quote: latestEvent.quote || null,
+      kind: latestEvent.kind,
+      importance: latestEvent.importance,
+      playerRelated: Boolean(latestEvent.playerRelated),
+    });
+
+    if (afterSignature !== beforeSignature) {
+      const rescheduled = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? { ...entry, deliverAfter: new Date(Date.now() + 1000).toISOString(), lastError: "" }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: rescheduled });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      }
+      return debug ? { processed: 0, reason: "event-changed-requeue", retryAfterMs: 1000 } : null;
+    }
+
+    event = latestEvent;
+
+    if (!payload?.chat) {
+      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "model-chose-silence" } : null;
+    }
+
+    if (isSimulationBusy()) {
+      const deferred = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? { ...entry, deliverAfter: new Date(Date.now() + 5000).toISOString() }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: deferred });
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      return debug ? { processed: 0, reason: "simulation-started-during-generation", retryAfterMs: 5000 } : null;
+    }
+
+    const built = await buildGeneratedChat(
+      { ...payload.chat, source: "event-reaction" },
+      event.id,
+      latestWorld,
+      { fallbackTitle: event.title, playerName: bundle.game?.country },
+    );
+
+    if (!built) {
+      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "generated-chat-invalid-treated-as-silence" } : null;
+    }
+
+    const messageDate = normalizeString(event.date) || normalizeString(bundle.game?.gameDate);
+    const datedBuilt = {
+      ...built,
+      messages: built.messages.map((message, index) =>
+        index === 0 && !normalizeString(message.time)
+          ? { ...message, time: messageDate }
+          : message
+      ),
+    };
+
+    const currentChats = await readChatsState({
+      force: true,
+      world: latestWorld,
+      playerCountry: bundle.game?.country,
+    });
+    const nextChats = mergeIncomingChats(currentChats, [datedBuilt], latestWorld, {
+      playerCountry: bundle.game?.country,
+    });
+    await writeChatsState(nextChats, {
+      world: latestWorld,
+      playerCountry: bundle.game?.country,
+    });
+
+    const builtParticipantKey = chatParticipantSetKey(datedBuilt, latestWorld);
+    const mergedChat = builtParticipantKey
+      ? nextChats.find((chat) =>
+          normalizeString(chat?.status).toLowerCase() !== "closed" &&
+          chatParticipantSetKey(chat, latestWorld) === builtParticipantKey)
+      : null;
+    const actualChatId = normalizeString(mergedChat?.id || datedBuilt.id);
+
+    await removeQueueEntry(latestWorld, {
+      events: latestEvents,
+      reactionResult: "sent",
+      chatId: actualChatId,
+    });
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:diplomacy-chats-updated", {
+        detail: { source: "event-reaction", linkedEventId: event.id, chatId: actualChatId },
+      }));
+    }
+
+    return datedBuilt;
+  } finally {
+    eventReactionInFlight = false;
   }
 };
 

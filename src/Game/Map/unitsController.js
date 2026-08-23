@@ -26,7 +26,7 @@ let playerCode = "";
 let round = 1;
 let gameDate = "";
 let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
-let interactionMode = { kind: "idle" }; // idle | deploy | move | attack
+let interactionMode = { kind: "idle" }; // idle | deploy | admin-place | move | attack
 let pollTimer = null;
 let busy = false; // suppress poll overwrite mid-commit
 
@@ -113,6 +113,57 @@ const commit = async (mutator) => {
   } finally {
     busy = false;
   }
+};
+
+// Authoritative editor seam used by Cheats 2.0 / Force Manager. Unlike normal
+// player move/deploy/attack functions below, this does NOT queue an Action and
+// does not apply movement leashes or AI adjudication. The explicit admin surface
+// is allowed to repair the canonical unit record directly while still sharing
+// the same normalized world.units persistence path.
+export const updateUnitAdmin = async (unitId, patch = {}) => {
+  const id = String(unitId ?? "").trim();
+  if (!id || !patch || typeof patch !== "object") return null;
+
+  await commit((list) =>
+    list.map((unit, index) => {
+      if (unit.id !== id) return unit;
+
+      const next = normalizeUnitEntry({
+        ...unit,
+        ...(Object.prototype.hasOwnProperty.call(patch, "name") ? { name: patch.name } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "type") ? { type: patch.type } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "strength") ? { strength: patch.strength } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "status") ? { status: patch.status } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "lng") ? { lng: patch.lng } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "lat") ? { lat: patch.lat } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "note") ? { note: patch.note } : {}),
+        id: unit.id,
+        ownerCode: unit.ownerCode,
+        source: unit.source,
+        orderId: unit.orderId,
+        createdAt: unit.createdAt,
+        updatedAt: new Date().toISOString(),
+      }, index);
+
+      return next || unit;
+    }),
+  );
+
+  return units.find((unit) => unit.id === id) ?? null;
+};
+
+// Authoritative map-placement seam for Cheats 2.0. This is deliberately NOT a
+// normal move order: no movement leash, no status mutation, no queued player
+// Action, and no AI permission step. It only changes the selected canonical
+// unit's coordinates while preserving its identity, owner, strength and status.
+export const placeUnitAdmin = async (unitId, lng, lat) => {
+  const id = String(unitId ?? "").trim();
+  const nextLng = Number(lng);
+  const nextLat = Number(lat);
+  if (!id || !Number.isFinite(nextLng) || !Number.isFinite(nextLat)) return null;
+  if (nextLng < -180 || nextLng > 180 || nextLat < -90 || nextLat > 90) return null;
+  if (!units.some((unit) => unit.id === id)) return null;
+  return updateUnitAdmin(id, { lng: nextLng, lat: nextLat });
 };
 
 // unitRevert records how to undo the order if the player deletes the queued

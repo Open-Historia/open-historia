@@ -586,6 +586,46 @@ const StatsPane = ({ active }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [targetCountry, player.gameKey, player.date, displayName]);
 
+    // Cheats 2.0 country edits mutate the same canonical world.countryStats seam.
+    // If this pane is already open, consume the lightweight local event and refresh
+    // from world state immediately instead of showing a stale pre-edit browser view.
+    useEffect(() => {
+        if (!active || !targetCountry || typeof window === "undefined") return undefined;
+
+        let cancelled = false;
+        const onCountryStatsUpdated = async (event) => {
+            const changedCountry = String(event?.detail?.country || "").trim();
+            if (changedCountry && changedCountry !== targetCountry) return;
+
+            try {
+                const world = await readWorldState({ force: true });
+                if (cancelled) return;
+
+                const persisted = world?.countryStats?.[targetCountry];
+                if (persisted && typeof persisted === "object") {
+                    const cacheKey = `${player.gameKey}:${targetCountry}`;
+                    const entry = { date: player.date, sheet: persisted };
+                    memoryCache.set(cacheKey, entry);
+                    storeSheet(cacheKey, entry);
+                    setState({ status: "ready", sheet: persisted, error: "" });
+                }
+
+                setWorldSnapshot(world || {});
+                setPolity(world?.polityOverrides?.[targetCountry] ?? null);
+                setPlayerLandless(isPolityLandless(world, player.code));
+            } catch {
+                // The normal pane refresh path remains available if this best-effort
+                // same-session synchronization cannot read the world immediately.
+            }
+        };
+
+        window.addEventListener("oh:country-stats-updated", onCountryStatsUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:country-stats-updated", onCountryStatsUpdated);
+        };
+    }, [active, targetCountry, player.gameKey, player.date, player.code]);
+
     useEffect(() => {
         if (!active || !targetCountry) return;
         setFlagFailed(false);

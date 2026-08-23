@@ -192,11 +192,22 @@ const Cities = () => {
     // so the map doesn't fire its own independent 5s poll.
     const { customCities: customFlag, cityRenames } = useWorldState();
     const [customData, setCustomData] = useState(null);
+    const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
 
-    // The city set itself is static per scenario — fetched once when the flag (or
-    // the runtime token behind the URL) changes.
+    // Cheats 2.0 can authoritatively edit the scenario city asset while the game is
+    // already open. Listen for that narrow editor signal rather than polling a ~MB
+    // GeoJSON document or forcing a page reload. Normal scenario switches still use
+    // the runtime token / customCities dependencies below.
+    useEffect(() => {
+        const refresh = () => setCityEditorEpoch((value) => value + 1);
+        window.addEventListener("oh:cities-updated", refresh);
+        return () => window.removeEventListener("oh:cities-updated", refresh);
+    }, []);
+
+    // The city set itself is static per scenario except for explicit editor writes.
+    // Those writes bump cityEditorEpoch so the map refetches the canonical asset.
     useEffect(() => {
         let cancelled = false;
         if (!customFlag) {
@@ -214,7 +225,7 @@ const Cities = () => {
         return () => {
             cancelled = true;
         };
-    }, [customFlag, citiesGeojsonUrl]);
+    }, [customFlag, citiesGeojsonUrl, cityEditorEpoch]);
 
     // Custom-city scenarios never show the modern database (anachronistic); while
     // the custom set is still loading, show nothing rather than flash modern names.

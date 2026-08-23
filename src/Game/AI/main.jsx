@@ -1238,8 +1238,9 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    // Difficulty 2.0 affects bargaining firmness and interpretation of leverage,
+    // never the counterpart's canonical interests, knowledge, or disposition.
+    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty, "diplomacy")}`;
 }
 
 let advisorHistory = [];
