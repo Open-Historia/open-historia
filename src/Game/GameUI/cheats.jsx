@@ -17,7 +17,7 @@ import {
 } from "../../runtime/gameState.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
-import { applyGameMasterCommand } from "../AI/gameplay.js";
+import { applyGameMasterCommand, rollBackToSnapshot } from "../AI/gameplay.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
 
 const PANEL_TOP = "4.75rem";
@@ -446,22 +446,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         disabled={busy}
                         style={{ ...primaryButtonStyle, padding: "0.25rem 0.55rem" }}
                         onClick={() => runBusy(async () => {
-                            const s = snap.state ?? {};
-                            await Promise.all([
-                                writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
-                                writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
-                                writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
-                                writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
-                                writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
-                                writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
-                            ]);
-                            // Drop this restore point and every newer one — those turns no longer happened.
-                            const remaining = snapshots.slice(index + 1);
-                            await writeJson(JSON_URLS.snapshots, remaining);
-                            setItems(remaining);
+                            // Delegates to the same rollBackToSnapshot the timeline's Undo
+                            // button uses, rather than re-doing the six-asset restore here —
+                            // this used to duplicate it inline, so it never took the
+                            // beginSimulation/endSimulation busy-lock the shared version now
+                            // does, and a rollback here could race the idle diplomacy drip's
+                            // own chat.json read-modify-write the same way Undo could (see
+                            // rollBackToSnapshot's comment in gameplay.js).
+                            const result = await rollBackToSnapshot(index);
+                            if (!result) throw new Error("That restore point no longer exists.");
+                            setItems(snapshots.slice(index + 1));
                             setEditingId(null);
                             await refresh();
-                            return `Rolled back to Round ${snap.round}. The map, date and panels catch up within a few seconds.`;
+                            return `Rolled back to Round ${result.round}. The map, date and panels catch up within a few seconds.`;
                         })}
                         >
                         Confirm

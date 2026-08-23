@@ -1546,22 +1546,38 @@ export const loadRollbackSnapshots = async () => {
 // per-turn assets, discard that restore point and every newer one (those turns
 // no longer happened), and return the freshly-normalized bundle so the caller
 // can update immediately. Returns null if there is no such snapshot.
+//
+// Wrapped in the same beginSimulation/endSimulation busy-lock every jump/
+// game-master/catalyst call already uses (see "Simulation busy lock" above) —
+// without it, the idle diplomacy drip (on its own real-time timer, entirely
+// independent of turns) could read chat.json mid-rollback, then write its own
+// read-modify-write back AFTER this function's restore, resurrecting the
+// pre-rollback chat history with its own new note landed on top: exactly a
+// "rollback didn't undo diplomatic messages, and now there's a message from
+// someone" field report. maybeSendIdleDiplomacy already re-checks
+// isSimulationBusy() right before its own write specifically to yield to a
+// simulation that started after it did — this just makes rollback count.
 export const rollBackToSnapshot = async (index = 0) => {
-  const snapshots = await loadRollbackSnapshots();
-  const snap = snapshots[index];
-  if (!snap) return null;
-  const s = snap.state ?? {};
-  await Promise.all([
-    writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
-    writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
-    writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
-    writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
-    writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
-    writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
-  ]);
-  await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
-  const bundle = await readGameStateBundle({ force: true });
-  return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+  beginSimulation();
+  try {
+    const snapshots = await loadRollbackSnapshots();
+    const snap = snapshots[index];
+    if (!snap) return null;
+    const s = snap.state ?? {};
+    await Promise.all([
+      writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
+      writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
+      writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
+      writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
+      writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
+      writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
+    ]);
+    await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
+    const bundle = await readGameStateBundle({ force: true });
+    return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+  } finally {
+    endSimulation();
+  }
 };
 
 const applySimulationResult = async ({
