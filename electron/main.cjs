@@ -9,7 +9,7 @@
 // would be ESM, and Electron's main process is most predictable as CJS. The
 // server is ESM and is pulled in with a dynamic import().
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -115,6 +115,56 @@ const createSetupWindow = () =>
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
   });
 
+// Electron builds NO context menu on its own — a right-click just does
+// nothing, in an editable field or not. Chrome's spellchecker (spellcheck:
+// true, the default, made explicit below) still runs and underlines
+// misspellings, but with no menu there is nowhere to pick a suggested
+// correction, let alone cut/copy/paste. This is the standard fix: build one
+// from `params` on every "context-menu" event. Suggestions/dictionary first
+// (only when the click actually landed on a misspelled word), then the usual
+// edit actions — each one only offered when `editFlags` says it applies, so
+// e.g. a right-click on plain, non-editable text doesn't offer "Paste".
+const attachEditingContextMenu = (win) => {
+  win.webContents.on("context-menu", (_event, params) => {
+    const menu = new Menu();
+    const { editFlags, dictionarySuggestions, misspelledWord } = params;
+
+    if (misspelledWord) {
+      if (dictionarySuggestions.length === 0) {
+        menu.append(new MenuItem({ label: "No spelling suggestions", enabled: false }));
+      } else {
+        for (const suggestion of dictionarySuggestions) {
+          menu.append(new MenuItem({
+            label: suggestion,
+            click: () => win.webContents.replaceMisspelling(suggestion),
+          }));
+        }
+      }
+      menu.append(new MenuItem({
+        label: "Add to dictionary",
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(misspelledWord),
+      }));
+      menu.append(new MenuItem({ type: "separator" }));
+    }
+
+    if (editFlags.canUndo) menu.append(new MenuItem({ label: "Undo", role: "undo" }));
+    if (editFlags.canRedo) menu.append(new MenuItem({ label: "Redo", role: "redo" }));
+    if (editFlags.canUndo || editFlags.canRedo) menu.append(new MenuItem({ type: "separator" }));
+
+    if (editFlags.canCut) menu.append(new MenuItem({ label: "Cut", role: "cut" }));
+    if (editFlags.canCopy) menu.append(new MenuItem({ label: "Copy", role: "copy" }));
+    if (editFlags.canPaste) menu.append(new MenuItem({ label: "Paste", role: "paste" }));
+    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: "Select All", role: "selectAll" }));
+
+    // Right-clicking blank space with nothing selected/editable earns none of
+    // the above — popping up an empty menu would just be a dead flash. Pinned
+    // to `win` explicitly rather than relying on popup()'s "focused window"
+    // default, which is one assumption fewer to hold if a second window is
+    // ever added.
+    if (menu.items.length > 0) menu.popup({ window: win });
+  });
+};
+
 const createMainWindow = () => {
   const win = new BrowserWindow({
     width: 1440,
@@ -125,6 +175,9 @@ const createMainWindow = () => {
     backgroundColor: "#0d1122",
     show: false,
     title: "Open Historia",
+    // Explicit even though it's already Electron's default — the whole reason
+    // this window needs a context menu at all is to surface what this enables.
+    webPreferences: { spellcheck: true },
   });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
@@ -132,6 +185,7 @@ const createMainWindow = () => {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  attachEditingContextMenu(win);
   win.once("ready-to-show", () => win.show());
   return win;
 };
