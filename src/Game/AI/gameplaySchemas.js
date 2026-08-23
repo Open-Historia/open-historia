@@ -516,7 +516,7 @@ export const JUMP_FORWARD_SCHEMA = {
     summary: textSchema("Concise summary of the period and its strategic consequences."),
     clearActions: {
       type: "boolean",
-      description: "Whether planned player actions were resolved by this jump.",
+      description: "Whether planned player actions were resolved by this jump. Defaults to true (resolved) when omitted.",
     },
     catalyst: nullableCatalystSchema,
     diplomaticOutreach: {
@@ -529,7 +529,15 @@ export const JUMP_FORWARD_SCHEMA = {
       items: createdChatSchema,
     },
   },
-  required: ["events", "stopDate", "summary", "clearActions"],
+  // clearActions is deliberately NOT required: simulateTimelineJump already
+  // reads it as `payload?.clearActions !== false`, so a missing value already
+  // means "resolved" everywhere it's consumed. Some models (field report: an
+  // openai-compatible endpoint) reliably omit it even after being told
+  // exactly which field is missing on the one retry this task gets — with it
+  // required, that omission failed validation and threw away an otherwise
+  // complete, correct turn (real events, a real summary) to the fallback for
+  // a boolean nothing downstream needed present in the first place.
+  required: ["events", "stopDate", "summary"],
   additionalProperties: false,
 };
 
