@@ -814,9 +814,17 @@ const percentageSchema = (description) => ({
   maximum: 100,
 });
 
-export const COUNTRY_STAT_SHEET_SCHEMA = {
+const statNumberSchema = (description, { minimum, maximum } = {}) => ({
+  type: "number",
+  description,
+  ...(Number.isFinite(minimum) ? { minimum } : {}),
+  ...(Number.isFinite(maximum) ? { maximum } : {}),
+});
+
+export const COUNTRY_STAT_GENERATION_SCHEMA = {
   type: "object",
-  description: "A complete national statistics sheet for the selected polity.",
+  description:
+    "Compact generation transport for a persistent national statistics sheet. Native code decodes territorialComponentsText and deterministically derives population/GDP aggregates before canonical validation.",
   properties: {
     capital: nonEmptyTextSchema("Capital or primary seat of government."),
     continent: nonEmptyTextSchema("Continent or broad geographic region."),
@@ -836,19 +844,23 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
       additionalProperties: false,
     },
+    territorialComponentsText: {
+      type: "string",
+      minLength: 1,
+      description:
+        "Compact territorial component ledger. One row per line, exactly group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent. population is an integer; gdpPerCapita is a positive number in 2026-EUR-equivalent accounting terms. Do not use ~ inside geography names.",
+    },
     economy: {
       type: "object",
       properties: {
-        gdp: nonEmptyTextSchema("Era-appropriate gross domestic product estimate."),
-        gdpGrowth: nonEmptyTextSchema("Annual GDP growth estimate."),
-        gdpPerCapita: nonEmptyTextSchema("Era-appropriate GDP per capita estimate."),
-        currency: nonEmptyTextSchema("Currency or dominant medium of exchange."),
-        inflation: nonEmptyTextSchema("Inflation estimate."),
-        unemployment: nonEmptyTextSchema("Unemployment estimate."),
-        publicDebt: nonEmptyTextSchema("Public debt estimate."),
-        budgetBalance: nonEmptyTextSchema("Budget surplus or deficit estimate."),
+        gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
+        currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
+        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
+        publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
+        budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
       },
-      required: ["gdp", "gdpGrowth", "gdpPerCapita", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
+      required: ["gdpGrowth", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
       additionalProperties: false,
     },
     gdpBreakdown: {
@@ -862,7 +874,122 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["capital", "continent", "government", "leader", "stability", "indices", "economy", "gdpBreakdown"],
+  required: [
+    "capital",
+    "continent",
+    "government",
+    "leader",
+    "stability",
+    "indices",
+    "territorialComponentsText",
+    "economy",
+    "gdpBreakdown",
+  ],
+  additionalProperties: false,
+};
+
+export const COUNTRY_STAT_SHEET_SCHEMA = {
+  type: "object",
+  description:
+    "A complete persistent national statistics sheet. Territorial components are the arithmetic authority for population and GDP; derived aggregate fields may be omitted because native JavaScript recomputes them before validation/persistence.",
+  properties: {
+    statsSchemaVersion: {
+      type: "integer",
+      minimum: 1,
+      description: "Native country-stat schema version. Current version is 1; the runtime fills this when omitted.",
+    },
+    capital: nonEmptyTextSchema("Capital or primary seat of government."),
+    continent: nonEmptyTextSchema("Continent or broad geographic region."),
+    government: nonEmptyTextSchema("Government system and ideology."),
+    leader: nonEmptyTextSchema("Head of state or government."),
+    stability: percentageSchema("National stability from 0 to 100."),
+    indices: {
+      type: "object",
+      properties: {
+        sovereignty: percentageSchema("Practical political sovereignty."),
+        foodAutonomy: percentageSchema("Domestic food autonomy."),
+        energyAutonomy: percentageSchema("Domestic energy autonomy."),
+        economicIndependence: percentageSchema("Economic independence."),
+        internalSecurity: percentageSchema("Internal security."),
+        internationalReputation: percentageSchema("International reputation / standing (0-100)."),
+      },
+      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
+      additionalProperties: false,
+    },
+    population: {
+      type: "object",
+      description: "Derived population aggregates. The runtime recomputes these from territorialComponents.",
+      properties: {
+        total: { type: "integer", minimum: 0 },
+        coreIntegrated: { type: "integer", minimum: 0 },
+        otherTerritories: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    territorialComponents: {
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      description:
+        "One demographic/economic component for every material legal territorial geography in the supplied territorial basis. Estimate EACH component independently. Never copy metropolitan productivity to colonies/dependencies/peripheral territories.",
+      items: {
+        type: "object",
+        properties: {
+          geography: nonEmptyTextSchema("Human-readable controlled/legal geography matching the supplied territorial basis."),
+          group: {
+            type: "string",
+            enum: ["core", "integrated", "overseas/dependent"],
+            description: "Economic aggregation/display group only; not a sovereignty or constitutional judgment.",
+          },
+          population: { type: "integer", minimum: 0, description: "Current inhabitants in THIS geography only." },
+          gdpPerCapita: statNumberSchema(
+            "THIS component's GDP per capita in 2026-EUR-equivalent purchasing-value terms. This is an accounting unit only; do not import 2026 technology/productivity.",
+            { minimum: 1 },
+          ),
+        },
+        required: ["geography", "group", "population", "gdpPerCapita"],
+        additionalProperties: false,
+      },
+    },
+    economy: {
+      type: "object",
+      properties: {
+        gdp: statNumberSchema("Derived whole-polity GDP in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
+        gdpPerCapita: statNumberSchema("Derived whole-polity GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        coreGdpPerCapita: statNumberSchema("Derived core/integrated GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
+        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
+        publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
+        budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
+      },
+      required: ["gdpGrowth", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
+      additionalProperties: false,
+    },
+    gdpBreakdown: {
+      type: "object",
+      properties: {
+        agriculture: percentageSchema("Agriculture share of GDP."),
+        industry: percentageSchema("Industry share of GDP."),
+        services: percentageSchema("Services share of GDP."),
+      },
+      required: ["agriculture", "industry", "services"],
+      additionalProperties: false,
+    },
+  },
+  required: [
+    "capital",
+    "continent",
+    "government",
+    "leader",
+    "stability",
+    "indices",
+    "territorialComponents",
+    "economy",
+    "gdpBreakdown",
+  ],
   additionalProperties: false,
 };
 // ---- native timeline curator -----------------------------------------------
@@ -1300,8 +1427,8 @@ export const GAME_MASTER_TOOL = makeTool(
 
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
-  "Submit the complete validated national statistics sheet.",
-  COUNTRY_STAT_SHEET_SCHEMA,
+  "Submit the compact national statistics generation payload. Native code decodes the territorial ledger and derives aggregate population/GDP fields before persistence.",
+  COUNTRY_STAT_GENERATION_SCHEMA,
 );
 
 export const IDLE_DIPLOMACY_TOOL = makeTool(
@@ -1581,6 +1708,14 @@ export const validateGameplayPayload = (taskKey, value) => {
     const breakdown = value.gdpBreakdown;
     if (breakdown.agriculture + breakdown.industry + breakdown.services !== 100) {
       return { valid: false, error: "$.gdpBreakdown percentages must sum to 100." };
+    }
+    const names = new Set();
+    for (let index = 0; index < value.territorialComponents.length; index += 1) {
+      const key = value.territorialComponents[index].geography.trim().toLowerCase();
+      if (names.has(key)) {
+        return { valid: false, error: `$.territorialComponents[${index}].geography duplicates another component.` };
+      }
+      names.add(key);
     }
   }
 

@@ -9,32 +9,26 @@ import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { generateCountryStatSheet } from "../AI/gameplay.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
+import {
+    finalizeCountryStatSheet,
+    isCompleteCountryStatSheet,
+    mergeCountryStatPatch,
+} from "../../runtime/countryStats.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
 const STORAGE_KEY = "oh-stat-sheets";
 const MAX_STORED_SHEETS = 60;
 const memoryCache = new Map();
-const isValidStatSheet = (value) => validateGameplayPayload("countryStatSheet", value).valid;
-
-// world.countryStats holds a PARTIAL sheet: applyEventImpactsToWorld merges only the
-// fields the AI actually changed, so after a coup it can hold nothing but
-// {leader, government, stability}. Validating that whole and dropping it when
-// incomplete is why an AI-installed leader never appeared — the pane fell straight
-// back to the full sheet it had generated BEFORE the coup, old leader and all.
-// Layer the AI's fields on top of that full sheet instead: the AI always wins, and
-// every partial change (leader, government, stability, a single index) shows up.
-const mergeStatSheet = (base, override) => {
-    if (!override || typeof override !== "object") return base;
-    if (!base || typeof base !== "object") return override;
-    const merged = { ...base, ...override };
-    for (const group of ["indices", "economy", "gdpBreakdown"]) {
-        if (override[group] && typeof override[group] === "object") {
-            merged[group] = { ...(base[group] || {}), ...override[group] };
-        }
-    }
-    return merged;
+const isValidStatSheet = (value) => {
+    const sheet = finalizeCountryStatSheet(value);
+    return isCompleteCountryStatSheet(sheet) && validateGameplayPayload("countryStatSheet", sheet).valid;
 };
+
+// One native mutation path: the same merge semantics are used by normal world
+// simulation, future GM/editor writes, and this cache-overlay fallback. Derived
+// population/GDP fields are always recomputed from territorial components.
+const mergeStatSheet = (base, override) => mergeCountryStatPatch(base, override);
 
 const readStoredSheets = () => {
     try {
@@ -110,6 +104,34 @@ const compactEconomyValue = (value) => {
     return `${prefix}${compact}${suffix}`;
 };
 
+const formatCompactNumber = (value, { digits = 1 } = {}) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "—";
+    const abs = Math.abs(number);
+    if (abs >= 1e12) return `${(number / 1e12).toFixed(abs >= 100e12 ? 0 : digits)}T`;
+    if (abs >= 1e9) return `${(number / 1e9).toFixed(abs >= 100e9 ? 0 : digits)}B`;
+    if (abs >= 1e6) return `${(number / 1e6).toFixed(abs >= 100e6 ? 0 : digits)}M`;
+    if (abs >= 1e3) return `${(number / 1e3).toFixed(abs >= 100e3 ? 0 : digits)}K`;
+    return Number.isInteger(number) ? number.toLocaleString() : number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+};
+
+const formatPopulation = (value) => formatCompactNumber(value);
+const formatEuroTotal = (value) => {
+    const text = formatCompactNumber(value);
+    return text === "—" ? text : `€${text}`;
+};
+const formatEuroPerCapita = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? `€${Math.round(number).toLocaleString()}` : "—";
+};
+const formatPercent = (value, { signed = false } = {}) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "—";
+    const rounded = Math.round(number * 10) / 10;
+    const prefix = signed && rounded > 0 ? "+" : "";
+    return `${prefix}${rounded}%`;
+};
+
 const EconomyCard = ({ label, value, sub, tone }) => (
     <div style={cardStyle}>
     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
@@ -158,7 +180,7 @@ const StatsPane = ({ active }) => {
                 const nextPlayer = {
                     code,
                     date: String(game?.gameDate || game?.startDate || ""),
-                    gameKey: String(JSON_URLS.game || game?.id || game?.name || "game"),
+                    gameKey: String(activeGameId || game?.id || game?.name || JSON_URLS.game || "game"),
                 };
                 if (player.gameKey !== nextPlayer.gameKey) {
                     setTargetCountry(code);
@@ -231,12 +253,25 @@ const StatsPane = ({ active }) => {
         }
         setState({ status: "loading", sheet: null, error: "" });
         try {
-            const generated = await generateCountryStatSheet({ code, name: displayName || code });
+            // targetCountry is the stable campaign identity key. A polity rename keeps
+            // that key on purpose, so resolve the CURRENT display name separately for
+            // the human-facing header and the Stats generation prompt. Identity and
+            // territorial scope remain independent: a renamed polity does not gain land.
+            let generationName = displayName || code;
+            try {
+                const latestWorld = await readWorldState({ force: false });
+                const liveName = String(latestWorld?.polityOverrides?.[code]?.name || "").trim();
+                if (liveName) generationName = liveName;
+            } catch { /* display-name lookup is non-fatal */ }
+
+            const generated = await generateCountryStatSheet({ code, name: generationName });
             const validation = validateGameplayPayload("countryStatSheet", generated);
             if (!validation.valid) throw new Error(`The stat sheet failed validation: ${validation.error}`);
-            // A sheet generated now describes the country as it was BEFORE this game's
-            // events, so the AI's recorded changes still have to win over it.
-            const sheet = mergeStatSheet(generated, aiOverride);
+            // generateCountryStatSheet already receives the previous persistent sheet as
+            // continuity context and persists through the native mutation boundary. Do
+            // not re-apply the legacy/partial pre-generation record here: doing so can
+            // overwrite freshly normalized component-derived GDP with stale browser-era values.
+            const sheet = finalizeCountryStatSheet(generated);
             const entry = { date: player.date, sheet };
             memoryCache.set(cacheKey, entry);
             storeSheet(cacheKey, entry);
@@ -286,7 +321,22 @@ const StatsPane = ({ active }) => {
         return parts.map((part) => ({ ...part, share: (part.value / total) * 100 }));
     }, [sheet]);
 
-    const budgetNegative = String(sheet?.economy?.budgetBalance ?? "").trim().startsWith("-");
+    const budgetNegative = Number(sheet?.economy?.budgetBalance) < 0;
+    const totalPopulation = Number(sheet?.population?.total);
+    const corePopulation = Number(sheet?.population?.coreIntegrated);
+    const otherPopulation = Number(sheet?.population?.otherTerritories);
+    const hasOtherTerritories = Number.isFinite(otherPopulation) && otherPopulation > 0;
+    const wholePerCapita = Number(sheet?.economy?.gdpPerCapita);
+    const corePerCapita = Number(sheet?.economy?.coreGdpPerCapita);
+    const displayedPerCapita = hasOtherTerritories && Number.isFinite(corePerCapita)
+        ? corePerCapita
+        : wholePerCapita;
+    const populationScope = hasOtherTerritories
+        ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}`
+        : "";
+    const capitaScope = hasOtherTerritories
+        ? `Core/integrated · Whole polity ${formatEuroPerCapita(wholePerCapita)}`
+        : "Whole polity";
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -315,7 +365,7 @@ const StatsPane = ({ active }) => {
             <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
             <span style={{ fontSize: "1.05rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {displayName || targetCountry}
+            {polity?.name || displayName || targetCountry}
             </span>
             {isPlayer && (
                 <span style={{ backgroundColor: "rgba(245,158,11,0.18)", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "999px", color: "#fbbf24", flexShrink: 0, fontSize: "0.62rem", fontWeight: 700, padding: "0.14rem 0.5rem" }}>
@@ -400,21 +450,52 @@ const StatsPane = ({ active }) => {
                 })}
                 </div>
 
+                {/* Population — whole polity plus core/integrated vs other territories. */}
+                <div style={sectionTitleStyle}>👥 Population</div>
+                <div style={cardStyle}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
+                Total population
+                </div>
+                <div data-no-translate style={{ color: "#e5e7eb", fontSize: "1.15rem", fontWeight: 800 }}>
+                {formatPopulation(totalPopulation)}
+                </div>
+                {populationScope && (
+                    <div data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem", marginTop: "0.2rem" }}>
+                    {populationScope}
+                    </div>
+                )}
+                </div>
+
                 {/* Economy */}
                 <div style={sectionTitleStyle}>📈 Economy</div>
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "1fr 1fr" }}>
-                <EconomyCard label="GDP" value={sheet.economy?.gdp} sub={sheet.economy?.gdpGrowth} tone="#34d399" />
-                <EconomyCard label="GDP/capita" value={sheet.economy?.gdpPerCapita} sub={sheet.economy?.currency} tone="#e5e7eb" />
-                <EconomyCard label="Inflation" value={sheet.economy?.inflation} tone="#34d399" />
-                <EconomyCard label="Unemployment" value={sheet.economy?.unemployment} tone="#34d399" />
-                <EconomyCard label="Public debt" value={sheet.economy?.publicDebt} tone="#34d399" />
+                <EconomyCard
+                label="GDP"
+                value={formatEuroTotal(sheet.economy?.gdp)}
+                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-EUR eq.`}
+                tone="#34d399"
+                />
+                <EconomyCard
+                label="GDP/capita"
+                value={formatEuroPerCapita(displayedPerCapita)}
+                sub={capitaScope}
+                tone="#e5e7eb"
+                />
+                <EconomyCard label="Inflation" value={formatPercent(sheet.economy?.inflation)} tone="#34d399" />
+                <EconomyCard label="Unemployment" value={formatPercent(sheet.economy?.unemployment)} tone="#34d399" />
+                <EconomyCard label="Public debt" value={formatPercent(sheet.economy?.publicDebt)} sub="of GDP" tone="#34d399" />
                 <EconomyCard
                 label="Budget balance"
-                value={sheet.economy?.budgetBalance}
-                sub={budgetNegative ? "Deficit" : "Surplus"}
+                value={formatPercent(sheet.economy?.budgetBalance, { signed: true })}
+                sub={`${budgetNegative ? "Deficit" : "Surplus"} · of GDP`}
                 tone={budgetNegative ? "#f87171" : "#34d399"}
                 />
                 </div>
+                {sheet.economy?.currency && (
+                    <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.66rem", marginTop: "0.45rem" }}>
+                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP accounting shown in 2026-EUR-equivalent values.
+                    </div>
+                )}
 
                 {/* GDP breakdown */}
                 <div style={{ ...cardStyle, marginTop: "0.9rem" }}>

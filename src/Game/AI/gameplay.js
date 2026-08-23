@@ -22,6 +22,11 @@ import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
+  finalizeCountryStatSheet,
+  mergeCountryStatPatch,
+  normalizeCountryStatSheet,
+} from "../../runtime/countryStats.js";
+import {
   buildActionHistoryText,
   buildChatSummaryText,
   buildDetailedChatHistoryText,
@@ -109,6 +114,105 @@ const DEFAULT_SUGGESTION_TOPICS = [
     description: "Expand the industrial and fiscal base that decides whether later gambles are sustainable.",
   },
 ];
+
+const decodeCountryStatComponents = (value, plan = []) => {
+  // 7A.1.3: when native code has a legal-territory plan, Gemini is allowed to
+  // estimate ONLY the economic values/classification. Geography identity and
+  // coverage are bound by index here so the model cannot replace Germany with
+  // Prussia/Bavaria, omit a partial modern-base bucket, or double-count a parent
+  // and child. The persistent sheet therefore inherits the map's exact legal
+  // partition rather than the model's preferred historical vocabulary.
+  const nativePlan = normalizeArray(plan)
+    .map((entry, index) => ({
+      index: Number(entry?.index) || index + 1,
+      geography: normalizeString(entry?.geography),
+    }))
+    .filter((entry) => entry.geography);
+
+  if (nativePlan.length > 0) {
+    const text = normalizeString(value);
+    if (!text) {
+      return { components: [], error: `territorialComponentsText is empty; return exactly ${nativePlan.length} indexed component estimate row(s).` };
+    }
+
+    const estimates = new Map();
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const parts = line.split("~").map((part) => part.trim());
+      if (parts.length !== 4) continue;
+
+      const index = Number(parts[0]);
+      const group = parts[1].toLowerCase();
+      const population = Number(String(parts[2]).replace(/[,_\s]/g, ""));
+      const gdpPerCapita = Number(String(parts[3]).replace(/[,_€$£\s]/g, ""));
+
+      if (!Number.isInteger(index) || index < 1 || index > nativePlan.length) continue;
+      if (!["core", "integrated", "overseas/dependent"].includes(group)) continue;
+      if (!Number.isFinite(population) || population < 0) continue;
+      if (!Number.isFinite(gdpPerCapita) || gdpPerCapita <= 0) continue;
+      if (estimates.has(index)) continue;
+
+      estimates.set(index, {
+        group,
+        population: Math.round(population),
+        gdpPerCapita,
+      });
+    }
+
+    const missing = nativePlan
+      .map((entry) => entry.index)
+      .filter((index) => !estimates.has(index));
+    if (missing.length > 0 || estimates.size !== nativePlan.length) {
+      return {
+        components: [],
+        error: `territorialComponentsText must contain exactly one valid row for every native component index 1-${nativePlan.length}; missing index(es): ${missing.join(", ") || "none"}.`,
+      };
+    }
+
+    return {
+      components: nativePlan.map((entry) => ({
+        geography: entry.geography,
+        ...estimates.get(entry.index),
+      })),
+      error: "",
+    };
+  }
+
+  // Compatibility fallback for a save/scenario where no map-derived plan could
+  // be built. This preserves the 7A.1 compact transport rather than making Stats
+  // unusable for landless/custom scenarios.
+  if (Array.isArray(value)) return { components: value, error: "" };
+  const text = normalizeString(value);
+  if (!text) return { components: [], error: "" };
+
+  const rows = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line.split("~").map((part) => part.trim());
+    if (parts.length !== 4) continue;
+
+    const [groupRaw, geography, populationRaw, gdpPerCapitaRaw] = parts;
+    const group = groupRaw.toLowerCase();
+    const population = Number(String(populationRaw).replace(/[,_\s]/g, ""));
+    const gdpPerCapita = Number(String(gdpPerCapitaRaw).replace(/[,_€$£\s]/g, ""));
+
+    if (!["core", "integrated", "overseas/dependent"].includes(group)) continue;
+    if (!geography || !Number.isFinite(population) || population < 0) continue;
+    if (!Number.isFinite(gdpPerCapita) || gdpPerCapita <= 0) continue;
+
+    rows.push({
+      geography,
+      group,
+      population: Math.round(population),
+      gdpPerCapita,
+    });
+    if (rows.length >= 64) break;
+  }
+
+  return { components: rows, error: "" };
+};
 
 const cloneValue = (value) => {
   if (value == null) return value;
@@ -466,6 +570,40 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
   } catch {
     // Without game data the task still runs at its default temperament.
+  }
+
+  if (taskKey === "countryStatSheet") {
+    systemPrompt = `${systemPrompt}
+
+[Native Country Stats — LIVE 7A.1.4]
+This is a PERSISTENT campaign stat sheet, not a disposable modern-country lookup. The supplied LEGAL TERRITORIAL BASIS is authoritative for the polity's demographic/economic scope. A polity name is never shorthand for modern or textbook historical borders. Temporary battlefield occupation/control does not automatically become part of national population/GDP; legal sovereignty is the territorial accounting basis.
+
+LEGAL TERRITORIAL BASIS:
+${normalizeString(variables?.statsTerritorialContext) || "No territorial basis was resolved; use the target dossier conservatively."}
+
+PREVIOUS PERSISTENT STATS / CONTINUITY ANCHOR:
+${normalizeString(variables?.statsPreviousContext) || "No previous persistent stat sheet exists; establish a fresh baseline."}
+
+COMPONENT METHOD — REQUIRED:
+- Native code has already partitioned the legal territorial basis into NUMBERED components shown below. You MUST NOT choose, rename, split, merge, add, or omit geographies.
+- Return territorialComponentsText with EXACTLY ONE row for EVERY numbered component, in this exact transport format: index~group~population~gdpPerCapita
+- Example rows: 1~core~4100000~4200 OR 2~overseas/dependent~800000~900
+- index MUST be the supplied integer component index. Native JavaScript binds that index back to the authoritative geography name; geography names therefore do NOT appear in your response.
+- Allowed group values: core | integrated | overseas/dependent.
+- For PARTIAL components, population/GDP estimates cover ONLY the explicitly listed legal subregions, never the entire modern base geography.
+- Estimate EACH numbered component's current population and GDP/capita independently. Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
+- group is only an economic/display bucket: core | integrated | overseas/dependent. It is NOT a sovereignty, alliance, customs-union, or constitutional judgment. A partial modern-base geography may still be core/integrated if those exact subregions are constitutionally part of the polity.
+- Previous component names are a continuity/economic reference only. If they conflict with the current numbered legal basis, the current numbered basis wins and native code will rebind continuity going forward.
+- gdpPerCapita inside each component is expressed in 2026-EUR-equivalent purchasing-value/accounting terms ONLY so different components and eras can be aggregated. It does NOT import 2026 technology, institutions, productivity, or living standards.
+- Estimate productivity as it plausibly exists at the CURRENT SIMULATION DATE using the campaign's actual development, war/peace, infrastructure, trade, institutions and shocks. Do not use modern national wealth stereotypes as evidence for an earlier era.
+- Preserve plausible continuity with surviving previous components. Large discontinuities need a real campaign cause.
+- population totals and GDP aggregates are DERIVED. Native JavaScript will decode territorialComponentsText and recompute them after your response, so focus on getting component populations/productivity and the macro indicators right.
+- economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
+- economy.currency is the polity's actual current domestic currency/medium, even though component GDP accounting uses 2026-EUR-equivalent values.
+- GDP breakdown must sum to exactly 100.
+- Never invent a war, reform, boom, depression, trade bloc, annexation, or reconstruction program absent from supplied campaign evidence.
+
+This live instruction supersedes older frozen country-stat prompts and the 7A.1/7A.1.2 free-form component transport that treated the target's name or modern borders as sufficient territorial/economic scope.`;
   }
 
   // Structured event quotations are appended at call time because campaign prompt
@@ -888,7 +1026,7 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
         tool,
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
-      const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+      let parsed = response?.toolInput ?? extractJsonPayload(rawText);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object
@@ -916,9 +1054,31 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
           return { op: "build", marker, ...(note == null ? {} : { note }) };
         });
       }
+
+      // The Stats tool estimates territorial components; arithmetic belongs to
+      // native code. Fill/recompute schema version, population and GDP aggregates
+      // BEFORE normal schema validation so the model is never trusted to keep
+      // population × GDP/capita arithmetic internally consistent.
+      let statsCoverageError = "";
+      if (taskKey === "countryStatSheet" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const decoded = decodeCountryStatComponents(
+          parsed.territorialComponents ?? parsed.territorialComponentsText,
+          variables?.statsTerritorialPlan,
+        );
+        statsCoverageError = normalizeString(decoded?.error);
+        parsed = finalizeCountryStatSheet({
+          ...parsed,
+          territorialComponents: decoded?.components || [],
+        });
+        delete parsed.territorialComponentsText;
+      }
+
       let validation = parsed
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      if (validation.valid && statsCoverageError) {
+        validation = { valid: false, error: statsCoverageError };
+      }
       if (validation.valid && validatePayload) {
         // finalAttempt tells the validator this is the last chance: callers use
         // it to switch from strict (return a corrective error for the retry) to
@@ -2794,6 +2954,143 @@ const buildTargetDossier = async (bundle, code) => {
   return lines.join("\n");
 };
 
+const canonicalStatsPolity = (token, world) => {
+  const text = normalizeString(token);
+  if (!text) return "";
+  const resolved = resolvePolityIdentity(text, world, {
+    allowUnknown: true,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return normalizeString(resolved?.resolved) || toCountryName(text) || text;
+};
+
+// Build a native legal-territory accounting basis for Stats. Unlike the old AIO,
+// this does not scrape rendered DOM/map prose. We have direct access to the region
+// catalog plus separate controller/sovereign ledgers, so temporary occupation can
+// stay militarily real without being counted as national population/GDP.
+// 7A.1.5: custom/hybrid regions can legitimately omit `country`. Resolve their
+// provenance from countryCode when available; otherwise keep the exact region name
+// as its own deterministic economic bucket. Never collapse unrelated blank-country
+// regions into one fake "Unclassified" component.
+const buildTargetStatsTerritorialBasis = async (bundle, code) => {
+  const world = normalizeWorldState(bundle.world);
+  const target = canonicalStatsPolity(code, world);
+  if (!target) return { context: "No target polity was resolved.", plan: [] };
+
+  const catalog = await loadRegionCatalog().catch(() => []);
+  if (!catalog.length) return { context: "No region catalog is available; use existing campaign records conservatively.", plan: [] };
+
+  const totalByBase = new Map();
+  const ownedByBase = new Map();
+  let occupiedByTarget = 0;
+  let targetOccupiedByOthers = 0;
+
+  const same = (a, b) => normalizeString(a).toLowerCase() === normalizeString(b).toLowerCase();
+
+  for (const region of catalog) {
+    const regionId = normalizeString(region?.id);
+    const rawCountryCode = normalizeString(region?.countryCode);
+    const mappedCountryCode = rawCountryCode
+      ? normalizeString(toCountryName(rawCountryCode))
+      : "";
+    // Some hybrid-map historical codes (e.g. GER) are not recognized by the
+    // stock owner-name registry. `toCountryName` then returns the input token
+    // unchanged. A raw code is not a meaningful economic geography label, so
+    // only trust the mapping when it actually resolved; otherwise keep the exact
+    // map-region name as the deterministic fallback.
+    const resolvedCodeGeography =
+      mappedCountryCode && mappedCountryCode.toLowerCase() !== rawCountryCode.toLowerCase()
+        ? mappedCountryCode
+        : "";
+    const baseGeography =
+      normalizeString(region?.country) ||
+      resolvedCodeGeography ||
+      normalizeString(region?.name) ||
+      regionId ||
+      "Unclassified region";
+    if (!regionId) continue;
+
+    totalByBase.set(baseGeography, (totalByBase.get(baseGeography) || 0) + 1);
+
+    const baseOwner = canonicalStatsPolity(baseGeography, world);
+    const controller = canonicalStatsPolity(
+      world.regionOwnershipOverrides?.[regionId] || baseOwner,
+      world,
+    );
+    const sovereign = canonicalStatsPolity(
+      world.regionSovereigntyOverrides?.[regionId] || controller || baseOwner,
+      world,
+    );
+
+    if (same(controller, target) && !same(sovereign, target)) occupiedByTarget += 1;
+    if (same(sovereign, target) && controller && !same(controller, target)) targetOccupiedByOthers += 1;
+    if (!same(sovereign, target)) continue;
+
+    if (!ownedByBase.has(baseGeography)) ownedByBase.set(baseGeography, []);
+    ownedByBase.get(baseGeography).push({
+      id: regionId,
+      name: normalizeString(region?.name) || regionId,
+    });
+  }
+
+  const rows = [...ownedByBase.entries()]
+    .map(([baseGeography, regions]) => ({
+      baseGeography,
+      regions,
+      total: totalByBase.get(baseGeography) || regions.length,
+    }))
+    .sort((a, b) => b.regions.length - a.regions.length || a.baseGeography.localeCompare(b.baseGeography));
+
+  if (!rows.length) {
+    return {
+      context: [
+        `Target: ${target}`,
+        "No legally sovereign map regions were resolved for this polity.",
+        "Do not silently substitute modern borders. If this is a landless polity, estimate only what the campaign canon actually supports.",
+      ].join("\n"),
+      plan: [],
+    };
+  }
+
+  // One native component per modern-base geography bucket in the legal map
+  // partition. Partial buckets remain one component whose estimate covers only
+  // the listed sovereign subregions. This is deliberately structural rather than
+  // historical-vocabulary-driven: the AI estimates values, never coverage.
+  const plannedRows = rows.slice(0, 64).map((row, index) => ({
+    index: index + 1,
+    geography: row.baseGeography,
+    regions: row.regions,
+    total: row.total,
+  }));
+
+  const lines = [
+    `Target: ${target}`,
+    `Legally sovereign mapped regions: ${rows.reduce((sum, row) => sum + row.regions.length, 0)}`,
+    `Authoritative numbered economic components: ${plannedRows.length}`,
+  ];
+
+  for (const row of plannedRows) {
+    const full = row.regions.length >= row.total;
+    const names = row.regions.slice(0, 30).map((region) => region.name);
+    lines.push(
+      `[${row.index}] ${row.geography}: ${row.regions.length}/${row.total} base regions (${full ? "FULL/NEAR-FULL" : "PARTIAL"})${
+        full ? "" : ` — ONLY these legal subregions: ${names.join(", ")}${row.regions.length > names.length ? ", …" : ""}`
+      }`,
+    );
+  }
+
+  if (rows.length > plannedRows.length) lines.push(`- ${rows.length - plannedRows.length} additional legal geography bucket(s) exceed the native 64-component cap; this should be treated as a validation warning, not silently invented.`);
+  if (occupiedByTarget > 0) lines.push(`Temporary occupations held by ${target} but legally sovereign to others: ${occupiedByTarget} region(s) — DO NOT add these inhabitants/GDP to the national component total.`);
+  if (targetOccupiedByOthers > 0) lines.push(`Legally sovereign ${target} regions under temporary foreign control: ${targetOccupiedByOthers} region(s) — keep them in legal population/GDP scope, but current occupation may economically depress/disrupt them if campaign evidence supports it.`);
+
+  return {
+    context: lines.join("\n"),
+    plan: plannedRows.map((row) => ({ index: row.index, geography: row.geography })),
+  };
+};
+
 export const generateCountryStats = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
@@ -2826,31 +3123,62 @@ export const generateCountryStats = async ({ code, name } = {}) => {
 export const generateCountryStatSheet = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
-  const target = name || code || "the polity";
-  const dossier = await buildTargetDossier(bundle, normalizeString(code));
+  const worldAtStart = normalizeWorldState(bundle.world);
+  const statCode = canonicalStatsPolity(code, worldAtStart) || normalizeString(code);
+  const target = name || statCode || code || "the polity";
+  const dossier = await buildTargetDossier(bundle, statCode);
+  const territorialBasis = await buildTargetStatsTerritorialBasis(bundle, statCode);
+  const territorialContext = territorialBasis.context;
+  const territorialPlan = territorialBasis.plan;
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
+  const previous = normalizeCountryStatSheet(worldAtStart.countryStats?.[statCode]);
+  const previousContext = previous
+    ? JSON.stringify(previous, null, 2).slice(0, 9000)
+    : "";
+
   const { payload } = await runJsonTask("countryStatSheet", {
     userMessage: [
-      `Compile the national stat sheet for ${target}${code ? ` (code ${code})` : ""}.`,
+      `Compile the persistent national stat sheet for ${target}${statCode ? ` (canonical polity ${statCode})` : ""}.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      `LEGAL TERRITORIAL BASIS:\n${territorialContext}`,
+      previousContext ? `PREVIOUS PERSISTENT STATS:\n${previousContext}` : "",
     ].filter(Boolean).join("\n\n"),
-    variables,
+    variables: {
+      ...variables,
+      statsTerritorialContext: territorialContext,
+      statsTerritorialPlan: territorialPlan,
+      statsPreviousContext: previousContext,
+    },
   });
-  // Persist into world state so the sheet SURVIVES date changes and the AI can mutate
-  // it via polityChanges.stats (see applyEventImpactsToWorld) — "stats persist and only
-  // change when the AI changes them". Re-read the world first to avoid clobbering a
-  // concurrent jump's write.
-  const statCode = normalizeString(code);
-  if (statCode && payload && typeof payload === "object") {
+
+  const finalized = finalizeCountryStatSheet(payload);
+
+  // Persist through the SAME native mutation boundary used by polityChanges.stats
+  // and intended for the expanded GM/editor. Components replace the previous
+  // component ledger; every derived population/GDP field is recomputed in JS.
+  if (statCode && finalized && typeof finalized === "object") {
     try {
       const world = normalizeWorldState(await readWorldState({ force: true }));
-      await writeWorldState({ ...world, countryStats: { ...world.countryStats, [statCode]: payload } });
+      const nextSheet = mergeCountryStatPatch(
+        world.countryStats?.[statCode],
+        finalized,
+        { replaceComponents: true },
+      );
+      await writeWorldState({
+        ...world,
+        countryStats: {
+          ...world.countryStats,
+          [statCode]: nextSheet,
+        },
+      });
+      return nextSheet;
     } catch (error) {
-      console.warn("[ai] failed to persist country stats:", error);
+      console.warn("[ai] failed to persist native country stats:", error);
     }
   }
-  return payload;
+
+  return finalized;
 };
 
 export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {

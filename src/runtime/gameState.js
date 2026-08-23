@@ -2,6 +2,7 @@
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
+import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { toCountryName } from "./ownerNames.js";
 import { isStockPolityName, resolvePolityIdentity, resolveTerritorialPolityIdentity } from "./polityIdentity.js";
@@ -1774,11 +1775,13 @@ export const normalizeWorldState = (world) => {
       .filter(([country, list]) => country && list.length),
   );
 
-  // Persisted per-country stat sheets: keep each code -> sheet-object entry as-is (the
-  // Stats pane tolerates missing fields). Explicit, not via the spread — new-field trap.
+  // Persisted per-country stat sheets. Normalize every record through the native
+  // Stats compatibility boundary: legacy sheets remain readable, while v1 component
+  // ledgers deterministically recompute population/GDP aggregates on every read.
   const countryStats = Object.fromEntries(
     Object.entries(nextWorld.countryStats ?? {})
-      .filter(([code, sheet]) => normalizeOptionalString(code) && sheet && typeof sheet === "object"),
+      .map(([code, sheet]) => [normalizeOptionalString(code), normalizeCountryStatSheet(sheet)])
+      .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
   return {
@@ -2057,47 +2060,34 @@ const mergePolityMetadata = ({ change, current = {}, canonicalName }) => ({
   ...(change.note ? { note: change.note } : {}),
 });
 
+// Public native mutation seam used by normal simulation today and intended for
+// the expanded GM/editor later. All writers go through the same compatibility +
+// deterministic aggregation path instead of directly editing UI-shaped fields.
+export const applyCountryStatPatchToWorld = (world, canonicalName, patch, options = {}) => {
+  if (!world || typeof world !== "object" || !canonicalName) return null;
+  if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
+
+  const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
+  if (next && typeof next === "object") world.countryStats[canonicalName] = next;
+  return next;
+};
+
 const applyPolityMetadataStores = (world, change, canonicalName) => {
   if (Number.isFinite(change.reputation)) {
     world.internationalReputation[canonicalName] = change.reputation;
 
-    if (world.countryStats?.[canonicalName]?.indices) {
-      world.countryStats[canonicalName] = {
-        ...world.countryStats[canonicalName],
-        indices: {
-          ...world.countryStats[canonicalName].indices,
-          internationalReputation: change.reputation,
-        },
-      };
+    if (world.countryStats?.[canonicalName]) {
+      applyCountryStatPatchToWorld(world, canonicalName, {
+        indices: { internationalReputation: change.reputation },
+      });
     }
   }
 
   if (change.stats && typeof change.stats === "object") {
-    if (!world.countryStats || typeof world.countryStats !== "object") {
-      world.countryStats = {};
-    }
-
-    const prev =
-      world.countryStats[canonicalName] &&
-      typeof world.countryStats[canonicalName] === "object"
-        ? world.countryStats[canonicalName]
-        : {};
-
-    const merged = { ...prev, ...change.stats };
-
-    for (const group of ["indices", "economy", "gdpBreakdown"]) {
-      if (change.stats[group] && typeof change.stats[group] === "object") {
-        merged[group] = {
-          ...(prev[group] || {}),
-          ...change.stats[group],
-        };
-      }
-    }
-
-    world.countryStats[canonicalName] = merged;
+    const merged = applyCountryStatPatchToWorld(world, canonicalName, change.stats);
 
     const rep = Number(
-      merged.indices?.internationalReputation,
+      merged?.indices?.internationalReputation,
     );
 
     if (Number.isFinite(rep)) {
