@@ -746,6 +746,61 @@ const isChatUnread = (chat, seen) => {
     return prev === undefined || chatMessageCount(chat) > prev;
 };
 
+// ── Ordering & date grouping ──────────────────────────────────────────────────
+// Sorted purely by last-message recency (a brand-new, still-empty chat counts
+// as the most recent — the player just opened it) rather than pinning unread
+// ones to the top: recency already surfaces anything newly active, and this
+// way the list reads as one clean timeline instead of two competing orders.
+// The unread dot/bold on each row (ChatListItem) is what still marks "new".
+
+const chatLastMessageTime = (chat) => {
+    const raw = chat.messages?.at(-1)?.time;
+    if (!raw) return null;
+    const ms = new Date(raw).getTime();
+    return Number.isFinite(ms) ? ms : null;
+};
+
+// The label a chat's row groups under — the in-game date its last message
+// carries (not the real-world calendar day, which would be meaningless
+// against a historical or alt-history timeline). Chats sharing a label render
+// under one header, in the order sortChatsByRecency already put them in.
+const chatGroupLabel = (chat) => {
+    const raw = chat.messages?.at(-1)?.time;
+    if (!raw) return "New";
+    const parsed = chatLastMessageTime(chat);
+    return parsed === null
+        ? "Undated"
+        : new Date(raw).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+};
+
+const sortChatsByRecency = (list) => [...list].sort((a, b) => {
+    const ta = chatLastMessageTime(a);
+    const tb = chatLastMessageTime(b);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return -1; // no messages yet ("New") floats above dated ones
+    if (tb === null) return 1;
+    return tb - ta; // most recent message first
+});
+
+// Clusters an already-ordered list into {label, chats[]} runs — consecutive
+// same-label chats become one section rather than repeating the header per row.
+const groupChatsByDate = (orderedList) => {
+    const groups = [];
+    for (const chat of orderedList) {
+        const label = chatGroupLabel(chat);
+        const current = groups[groups.length - 1];
+        if (current && current.label === label) current.chats.push(chat);
+        else groups.push({ label, chats: [chat] });
+    }
+    return groups;
+};
+
+const ChatGroupHeader = ({ label }) => (
+    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.05em", margin: "0.7rem 0 0.15rem", padding: "0 0.15rem", textTransform: "uppercase" }}>
+    {label}
+    </div>
+);
+
 // Sits above the chat list while isChatGenerationLikely() is true (an idle-
 // diplomacy roll or a jump/game-master command in flight) — the visible half
 // of "before the chat is generated": a note that's about to exist doesn't
@@ -831,8 +886,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
 
     // Which chats to flag as unread, snapshotted when the panel OPENS and held
     // until it closes — rows must not reshuffle under the cursor while the player
-    // is reading them. Reopening the panel is what re-sorts.
+    // is reading them. Reopening the panel is what re-sorts. displayOrder freezes
+    // the same way and for the same reason: a background message landing for some
+    // OTHER chat must not visibly jump it up the list mid-read.
     const [unreadIds, setUnreadIds] = useState(() => new Set());
+    const [displayOrder, setDisplayOrder] = useState([]);
     const snapshotTakenRef = useRef(false);
 
     useEffect(() => {
@@ -840,17 +898,22 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         if (snapshotTakenRef.current || !hasLoadedInitialData) return;
         snapshotTakenRef.current = true;
         setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, readSeen())).map((chat) => String(chat.id))));
+        setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
         // Everything on screen now counts as seen: the toolbar badge clears, and the
         // next open only flags what arrived in between.
         writeSeen(seenTotals(openChats));
     }, [isOpen, hasLoadedInitialData, openChats]);
 
-    // Unread first, everything else in the order it already had — a stable
-    // partition, so chats the player has read don't jump around too.
+    // Follows the frozen displayOrder — each id's LIVE chat object, so unread
+    // status and preview text still update in place — with anything that
+    // arrived after the snapshot (an idle-diplomacy note while the panel sat
+    // open) prepended rather than silently missing from the list.
+    const orderedIds = new Set(displayOrder);
     const orderedChats = [
-        ...openChats.filter((chat) => unreadIds.has(String(chat.id))),
-        ...openChats.filter((chat) => !unreadIds.has(String(chat.id))),
+        ...openChats.filter((chat) => !orderedIds.has(String(chat.id))),
+        ...displayOrder.map((id) => openChats.find((chat) => String(chat.id) === id)).filter(Boolean),
     ];
+    const groupedChats = groupChatsByDate(orderedChats);
 
     // Single writer for a chat's read state: updates BOTH the persisted baseline
     // (localStorage, read back on the next panel/toolbar check) and the in-memory
@@ -1054,7 +1117,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : orderedChats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
+                ) : groupedChats.map((group, index) => (
+                    <React.Fragment key={`${group.label}-${group.chats[0]?.id ?? index}`}>
+                    <ChatGroupHeader label={group.label} />
+                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
+                    </React.Fragment>
+                ))}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
