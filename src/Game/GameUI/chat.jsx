@@ -3,7 +3,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker, isChatGenerationLikely } from "../AI/gameplay.js";
 import { Actions } from "./actions";
 import {
     JSON_URLS,
@@ -136,6 +136,18 @@ const ThinkingDots = () => {
         return () => clearInterval(iv);
     }, []);
     return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
+};
+
+// Cycles 1-3 dots (never empty, unlike ThinkingDots' 0-3) — used where there's
+// no room for surrounding words, just the toolbar badge and the list banner
+// below signalling "something is being generated" on their own.
+const PulsingDots = () => {
+    const [dots, setDots] = useState(1);
+    useEffect(() => {
+        const iv = setInterval(() => setDots(d => (d % 3) + 1), 450);
+        return () => clearInterval(iv);
+    }, []);
+    return <>{".".repeat(dots)}</>;
 };
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -734,6 +746,19 @@ const isChatUnread = (chat, seen) => {
     return prev === undefined || chatMessageCount(chat) > prev;
 };
 
+// Sits above the chat list while isChatGenerationLikely() is true (an idle-
+// diplomacy roll or a jump/game-master command in flight) — the visible half
+// of "before the chat is generated": a note that's about to exist doesn't
+// read as a stuck panel while the player is looking right at an empty list.
+const GeneratingBanner = () => (
+    <div style={{ alignItems: "center", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
+    <span style={{ flexShrink: 0, fontSize: "1rem" }}>🖊</span>
+    <span style={{ color: "rgba(216,196,255,0.9)", fontSize: "0.78rem", fontWeight: 600 }}>
+    Diplomacy in progress<PulsingDots /><span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}> — a country may be reaching out</span>
+    </span>
+    </div>
+);
+
 // ── Chat list item ────────────────────────────────────────────────────────────
 
 const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false }) => {
@@ -793,7 +818,7 @@ export const requestDiplomaticChat = (country) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
 };
 
-const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
+const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGenerating = false }) => {
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -1024,6 +1049,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                {isGenerating && <GeneratingBanner />}
                 {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
@@ -1048,7 +1074,18 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
     const [unseenCount, setUnseenCount] = useState(0);
+    const [isGenerating, setIsGenerating] = useState(false);
     const setChatOpen = () => { onToggle(); };
+
+    // "Someone might be typing": isChatGenerationLikely() is a plain synchronous
+    // getter (idle-diplomacy roll or a jump/game-master command in flight), not
+    // an event — polled at a fast, animation-friendly cadence so the badge and
+    // the panel's banner (below) feel live rather than laggy. Runs regardless of
+    // isOpen (unlike the unread poll) since the panel's own banner needs it too.
+    useEffect(() => {
+        const iv = setInterval(() => setIsGenerating(isChatGenerationLikely()), 800);
+        return () => clearInterval(iv);
+    }, []);
 
     useEffect(() => {
         if (isOpen) setHasOpened(true);
@@ -1098,17 +1135,25 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     }, [isOpen, onToggle]);
         return (
             <>
-            {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} />}
-            <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
+            {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} isGenerating={isGenerating} />}
+            <button title={isGenerating ? "Chat — diplomacy in progress" : "Chat"} style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
             onClick={() => setChatOpen(o => !o)}>
             <span style={{ position: "relative", display: "inline-flex" }}>
                 💬
-                {unseenCount > 0 && !isOpen && (
+                {!isOpen && (isGenerating ? (
+                    // "Someone is typing" — a country may be drafting an approach.
+                    // Replaces the numeric badge (rather than sitting beside it) so
+                    // the icon says one thing at a time; the count returns on its
+                    // own once generation ends and the next 15s poll catches it.
+                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.3rem", borderRadius: "999px", background: "#7c3aed", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.68rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
+                        <PulsingDots />
+                    </span>
+                ) : unseenCount > 0 && (
                     <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.2rem", borderRadius: "999px", background: "#dc2626", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.62rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
                         {unseenCount > 9 ? "9+" : unseenCount}
                     </span>
-                )}
+                ))}
             </span>
             </button>
             </>

@@ -2423,6 +2423,15 @@ export const maybeGeneratePregameHistory = async () => {
 const IDLE_DIPLOMACY_CHANCE = 1 / 8;
 let idleDiplomacyInFlight = false;
 
+// Whether a country reaching out unprompted (idle diplomacy) or a broader
+// simulation (jump/auto-jump, a game-master command) that could itself emit
+// createdChats/diplomaticOutreach is currently in flight. Not a promise a chat
+// IS coming — most jumps don't create one — just "the AI is doing something
+// that could produce a new one right now". Polled by the chat UI (chat.jsx) to
+// show a "generating" state instead of leaving the badge looking idle while a
+// note is actually being drafted.
+export const isChatGenerationLikely = () => idleDiplomacyInFlight || isSimulationBusy();
+
 export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } = {}) => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
   if (Math.random() >= chance) return null;
