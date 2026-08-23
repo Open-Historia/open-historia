@@ -349,8 +349,8 @@ const AdvisorMessageRow = React.memo(({ msg, chatDiffers, chatDir, onOpenActions
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, messagesEndRef }) => (
-    <div style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, messagesEndRef, containerRef, onScroll }) => (
+    <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
         No messages yet. Ask your advisor something!
@@ -378,6 +378,21 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef            = useRef(null);
+    // The scrollable history div, and whether it should be kept pinned to the
+    // bottom as new content (streaming tokens, a new reply) arrives. Starts
+    // true (a fresh reply should follow); flips false the moment the player
+    // scrolls away from the bottom, so a still-streaming reply doesn't yank
+    // them back down while they're reading up through the history. Reset to
+    // true on the NEXT message the player sends — the pause is scoped to
+    // "while I'm reading this one", not permanent.
+    const messagesContainerRef      = useRef(null);
+    const shouldAutoScrollRef       = useRef(true);
+    const handleMessagesScroll = React.useCallback(() => {
+        const el = messagesContainerRef.current;
+        if (!el) return;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        shouldAutoScrollRef.current = distanceFromBottom < 60;
+    }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [activeTab, setActiveTab] = useState("advisor");
@@ -432,6 +447,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
     }, [hasBootstrapped, isAdvisorOpen]);
 
     useEffect(() => {
+        if (!shouldAutoScrollRef.current) return;
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
@@ -472,6 +488,10 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
 
         const userMessage = { role: "user", text, time: gameDate };
         setInput("");
+        // A fresh question re-engages auto-scroll even if the player had
+        // paused it reading up through history — the pause is scoped to the
+        // reply they scrolled away from, not the whole session.
+        shouldAutoScrollRef.current = true;
         setMessages(prev => [...prev, userMessage]);
         setIsLoading(true);
 
@@ -618,6 +638,8 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         chatDir={chatDir}
         onOpenActions={onOpenActions}
         messagesEndRef={messagesEndRef}
+        containerRef={messagesContainerRef}
+        onScroll={handleMessagesScroll}
         />
 
         {/* Input */}
