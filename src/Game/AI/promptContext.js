@@ -4,6 +4,7 @@ import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/country
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionDisplayText,
+  haversineKm,
   isPolityLandless,
   normalizeActionEntry,
   normalizeActions,
@@ -229,6 +230,29 @@ export const buildUnitsSummaryText = (world) => {
       : "unknown location";
     return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
   }).join("\n");
+};
+
+// Units still mid-journey on a multi-turn move or attack-approach order (world.
+// pendingUnitOrders) — orders beyond a single move/engagement's era-and-type
+// leash, issued by the player or a previous AI turn, NOT YET complete. Kept
+// separate from world.pendingUnitOrders' storage shape/clearActions entirely
+// (see gameState.js's pruneSatisfiedUnitOrders): these stay outstanding and
+// re-surface here every jump until the referenced unit actually arrives.
+export const buildPendingUnitOrdersText = (world) => {
+  const orders = normalizeArray(world?.pendingUnitOrders);
+  if (orders.length === 0) {
+    return "No units currently have a standing multi-turn order — nothing here needs continued advancing.";
+  }
+  const unitById = new Map(normalizeArray(world?.units).map((unit) => [unit.id, unit]));
+  return orders.map((order) => {
+    const unit = unitById.get(order.unitId);
+    if (!unit) return null;
+    const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+    const verb = order.kind === "attack" ? "advancing to engage" : "en route to";
+    const destination = order.targetLabel || `lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}`;
+    return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is ${verb} ${destination} — ` +
+      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}, about ${remaining} km still to go.`;
+  }).filter(Boolean).join("\n");
 };
 
 // Structures founded during play (world.markers): cities, military bases,
@@ -509,6 +533,7 @@ export const buildPromptContext = async (bundle, {
     lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
     markersSummary: buildMarkersSummaryText(bundle.world),
     numberOfRegions: String(regionCatalog.length),
+    pendingUnitOrders: buildPendingUnitOrdersText(bundle.world),
     plannedActions: buildActionHistoryText(bundle.actions),
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",

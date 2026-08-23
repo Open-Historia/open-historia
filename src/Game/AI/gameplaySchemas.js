@@ -250,6 +250,13 @@ const unitOpSchema = {
       properties: {
         op: { type: "string", enum: ["spawn"] },
         unit: unitSchema,
+        // unitSchema already carries its own `note`; this is here only because a
+        // model that has just written move/strength/remove — which DO take a
+        // top-level note — reaches for the same field out of habit on a spawn.
+        // Previously rejected outright (additionalProperties: false with no
+        // "note" here), which failed the WHOLE turn's structured output and
+        // forced a fallback simulation over one stray field on one op.
+        note: textSchema("Optional operational note (prefer unit.note instead)."),
       },
       required: ["op", "unit"],
       additionalProperties: false,

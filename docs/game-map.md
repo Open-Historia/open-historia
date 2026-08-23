@@ -303,16 +303,18 @@ Status drives styling — **pending** (player-requested, not yet AI-confirmed) u
 
 ### Controller — `unitsController.js`
 
-A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | move | attack`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
+A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `pendingOrders`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | move | attack`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
 
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
 | `deployUnit` | Add a `pending` unit (translucent) | placed locally | queues a "Deploy request" order; revert = remove |
-| `moveUnitTo` | Within era/type leash → move + `moving`; beyond `moveLeashKm` → stay put, `moving` | snaps or holds | queues Move / Long-range order |
-| `attackWith` | In `engagementRangeKm` → `resolveClash` (seeded, instant); out of range → approach order | strength/positions update, losers filtered out | queues Attack order (`regionTransfer` hint) |
-| `attackFeature` | Attack a city/marker; no local clash — positional only | closes on objective, reads `engaged` | queues assault order (`markerOps`/`regionTransfer` hints) |
+| `moveUnitTo` | Within era/type leash → move + `moving`; beyond `moveLeashKm` → stay put, `moving`, standing order created | snaps or holds | queues Move / Long-range order (+ `world.pendingUnitOrders` entry beyond leash) |
+| `attackWith` | In `engagementRangeKm` → `resolveClash` (seeded, instant); out of range → approach order, standing order created | strength/positions update, losers filtered out | queues Attack order (`regionTransfer` hint) (+ `world.pendingUnitOrders` entry out of range) |
+| `attackFeature` | Attack a city/marker; no local clash — positional only | closes on objective, reads `engaged` | queues assault order (`markerOps`/`regionTransfer` hints) (+ `world.pendingUnitOrders` entry out of range) |
 
-Player deploy is purely local; move/attack write to `world.units` immediately **and** queue a machine-readable `action` (via `queueOrder`) so the AI honours/contests them on the next time-jump. `queueOrder` records a `unitRevert` so deleting the queued action before the jump undoes the on-map change (#368). Combat maths (`resolveClash`, `distanceKm`, `engagementRangeKm`, `moveLeashKm`) live in `unitCombat.js`. `busy` suppresses the poll from clobbering an in-flight commit.
+Player deploy is purely local; move/attack write to `world.units` immediately **and** queue a machine-readable `action` (via `queueOrder`) so the AI honours/contests them on the next time-jump. `queueOrder` records a `unitRevert` so deleting the queued action before the jump undoes the on-map change (#368) — now including `pendingOrderId`, so deleting the action also cancels the standing order it created. Combat maths (`resolveClash`, `distanceKm`, `engagementRangeKm`, `moveLeashKm`) live in `unitCombat.js`. `busy` suppresses the poll from clobbering an in-flight commit.
+
+**Standing orders beyond a single leash** (`world.pendingUnitOrders`, `{id,unitId,kind,toLng,toLat,targetId,targetLabel,note,issuedAt,issuedRound}`) exist because the one-shot queued `action` above does not survive a jump: `clearActions` wipes the WHOLE actions queue after a single jump regardless of whether a multi-turn march actually finished. `setPendingOrder` (`unitsController.js`) upserts/replaces a unit's order (a fresh order or an in-leash move supersedes a prior one); `gameState.js`'s `pruneSatisfiedUnitOrders` drops an order once its unit is within ~60km of the destination or no longer exists, running on **every** `normalizeWorldState` call so it self-heals with no separate cleanup pass. `promptContext.js`'s `buildPendingUnitOrdersText` re-surfaces every still-outstanding order to the AI each jump (`[Standing Unit Orders]` in `gameplay.js`), independent of `clearActions`.
 
 ### Interaction dispatch — `Nations.jsx` `handleRegionClick`
 

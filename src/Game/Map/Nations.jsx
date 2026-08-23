@@ -934,8 +934,16 @@ const WorldMap = ({ isGlobe = false }) => {
 
   // Region id -> current owner (live overrides win). Drives the stock-tile fill,
   // and the click handler uses it to resolve era owner/unclaimed for the popup.
+  // Seeded from EVERY live override first — a plain stock map (no drawn geometry,
+  // so `customActive` is false) still needs GID_1 overrides resolvable here, or a
+  // region transferred by ID (e.g. an annexed Irish county) keeps showing its old
+  // owner in the click popup even though the fill paint (which reads the override
+  // object directly) already shows the new one.
   const ownerByRegionId = useMemo(() => {
     const lookup = new Map();
+    for (const [regionId, owner] of Object.entries(regionOwnershipOverrides)) {
+      lookup.set(regionId, owner ?? "");
+    }
     if (!customActive) return lookup;
     for (const feature of customRegionData?.features ?? []) {
       const props = feature.properties || {};

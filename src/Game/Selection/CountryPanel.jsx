@@ -108,7 +108,13 @@ const CountryInfoPanel = () => {
                 const owned = [];
                 const seen = new Set();
                 for (const region of catalog) {
-                    const effective = overrides[region.id] ?? region.countryCode;
+                    // Owners are always full country NAMES ("United Kingdom"), never GADM
+                    // codes (see ownerNames.js) — country.code here is one too. A region
+                    // with no transfer override falls back to its own country NAME
+                    // (region.country), not region.countryCode ("GBR"), or every native,
+                    // never-transferred region (England, Scotland, Wales...) fails the
+                    // match below and vanishes from its owner's region list.
+                    const effective = overrides[region.id] ?? region.country;
                     if (effective === country.code) {
                         owned.push(region.name);
                         seen.add(region.id);

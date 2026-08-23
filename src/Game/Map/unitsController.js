@@ -21,7 +21,15 @@ import {
 } from "../../runtime/gameState.js";
 import { resolveClash, distanceKm, engagementRangeKm, moveLeashKm } from "./unitCombat.js";
 
+// Stable id for a standing multi-turn order (world.pendingUnitOrders), shared
+// between the order entry and the unit's own orderId field. Generated
+// client-side (not left to the normalizer) so both can be stamped in the same
+// commit instead of a write-then-read-back round trip.
+const generateOrderId = () =>
+  `unitorder-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+
 let units = [];
+let pendingOrders = [];
 let playerCode = "";
 let round = 1;
 let gameDate = "";
@@ -57,6 +65,9 @@ export const setUnitsOverride = (list) => {
 
 export const getUnits = () => unitsOverride ?? units;
 export const getUnitById = (id) => (unitsOverride ?? units).find((unit) => unit.id === id) ?? null;
+// Standing multi-turn move/attack-approach orders still in progress — see
+// runtime/gameState.js's pruneSatisfiedUnitOrders for how these clear themselves.
+export const getPendingUnitOrders = () => pendingOrders;
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;
@@ -75,6 +86,7 @@ const refresh = async () => {
       readGameData({ force: true }),
     ]);
     units = world.units ?? [];
+    pendingOrders = world.pendingUnitOrders ?? [];
     playerCode = game.country ?? "";
     round = game.round ?? 1;
     gameDate = game.gameDate || game.startDate || "";
@@ -115,6 +127,35 @@ const commit = async (mutator) => {
   }
 };
 
+// Read-modify-write world.pendingUnitOrders — the same pattern as commit()
+// above, kept separate because it touches a different slice of world state and
+// most mutations (deploy, an in-leash move, a resolved attack) never need it.
+const commitPendingOrders = async (mutator) => {
+  busy = true;
+  try {
+    const world = await readWorldState({ force: true });
+    const nextOrders = mutator(world.pendingUnitOrders ?? []);
+    const saved = await writeWorldState({ ...world, pendingUnitOrders: nextOrders });
+    pendingOrders = saved.pendingUnitOrders ?? nextOrders;
+    emit();
+    return pendingOrders;
+  } catch (error) {
+    console.error("Failed to commit pending unit orders:", error);
+    return pendingOrders;
+  } finally {
+    busy = false;
+  }
+};
+
+// Replace whatever standing order a unit has (if any) with a fresh one, or
+// clear it entirely when `order` is null — a player re-order or an in-leash
+// move supersedes a prior long-range order rather than stacking another one.
+const setPendingOrder = (unitId, order) =>
+  commitPendingOrders((list) => [
+    ...list.filter((entry) => entry.unitId !== unitId),
+    ...(order ? [order] : []),
+  ]);
+
 // unitRevert records how to undo the order if the player deletes the queued
 // action before the next jump (#368): without it, a manual move stayed on the
 // map while the AI was never told about it.
@@ -137,10 +178,17 @@ const queueOrder = async (text, unitRevert = null) => {
 
 // Undo a queued manual order whose action the player deleted (#368): a pending
 // deploy is removed again, a moved unit snaps back to its recorded position,
-// and a long-range/approach order restores the unit's prior status.
+// and a long-range/approach order restores the unit's prior status. Also drops
+// the standing order it created (#368 predates pendingUnitOrders, but the same
+// "deleting the action should undo everything it did" rule applies to it too —
+// otherwise the unit keeps marching toward a destination the order for it no
+// longer exists to justify).
 export const revertUnitOrder = async (revert) => {
   const unitId = String(revert?.unitId ?? "").trim();
   if (!unitId) return;
+  if (revert.pendingOrderId) {
+    await commitPendingOrders((list) => list.filter((entry) => entry.id !== revert.pendingOrderId));
+  }
   if (revert.remove) {
     await commit((list) => list.filter((u) => u.id !== unitId));
     return;
@@ -152,6 +200,7 @@ export const revertUnitOrder = async (revert) => {
         ...u,
         ...(Number.isFinite(revert.lng) && Number.isFinite(revert.lat) ? { lng: revert.lng, lat: revert.lat } : {}),
         ...(revert.status ? { status: revert.status } : {}),
+        ...(revert.pendingOrderId ? { orderId: "" } : {}),
         updatedAt: new Date().toISOString(),
       };
     }));
@@ -192,26 +241,45 @@ export const moveUnitTo = async (unitId, lng, lat) => {
 
   // Beyond the era/type leash the unit does NOT teleport: it stays put with a
   // long-range order the AI advances (or rejects) realistically over turns.
+  // pendingUnitOrders (not just the one-shot queued action) is what keeps that
+  // instruction alive turn after turn — clearActions wipes the actions queue
+  // wholesale after a single jump, but an order this list is unaffected by it
+  // and re-surfaces every prompt until the unit actually arrives.
   if (distance > leash) {
+    const orderId = generateOrderId();
     await commit((list) =>
       list.map((u) =>
-        u.id === unitId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+        u.id === unitId ? { ...u, status: "moving", orderId, updatedAt: new Date().toISOString() } : u,
       ),
     );
+    await setPendingOrder(unitId, {
+      id: orderId,
+      unitId,
+      kind: "move",
+      toLng: lng,
+      toLat: lat,
+      targetLabel: `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`,
+      issuedAt: gameDate,
+      issuedRound: round,
+    });
     await queueOrder(
       `Long-range movement order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is ordered to ` +
         `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)} — about ${Math.round(distance)} km away, beyond a single ` +
         `${unit.type} move in this era (~${leash} km). Advance it realistically across turns given the era, terrain ` +
         `and transport available, or reject the order with an event explaining why it is infeasible.`,
-      { unitId: unit.id, status: unit.status },
+      { unitId: unit.id, status: unit.status, pendingOrderId: orderId },
     );
     return { resolved: false, distance, leash };
   }
 
+  // Within leash: the move completes right now, so any standing order this
+  // unit was previously mid-journey on is superseded — the player has taken
+  // direct control again.
+  if (unit.orderId) await setPendingOrder(unitId, null);
   await commit((list) =>
     list.map((u) =>
       u.id === unitId
-        ? { ...u, lng, lat, status: "moving", updatedAt: new Date().toISOString() }
+        ? { ...u, lng, lat, status: "moving", orderId: "", updatedAt: new Date().toISOString() }
         : u,
     ),
   );
@@ -233,21 +301,36 @@ export const attackWith = async (attackerId, targetId) => {
   const distance = distanceKm(attacker, defender);
   const range = engagementRangeKm(attacker.type, gameDate);
   if (distance > range) {
+    const orderId = generateOrderId();
     await commit((list) =>
       list.map((u) =>
-        u.id === attackerId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+        u.id === attackerId ? { ...u, status: "moving", orderId, updatedAt: new Date().toISOString() } : u,
       ),
     );
+    await setPendingOrder(attackerId, {
+      id: orderId,
+      unitId: attackerId,
+      kind: "attack",
+      toLng: defender.lng,
+      toLat: defender.lat,
+      targetId: defender.id,
+      targetLabel: `${defender.name} (id ${defender.id}, owner ${defender.ownerCode})`,
+      issuedAt: gameDate,
+      issuedRound: round,
+    });
     await queueOrder(
       `Attack order (approach required): ${attacker.name} (${attacker.type}, id ${attacker.id}, owner ${attacker.ownerCode}) ` +
         `is ordered against ${defender.name} (id ${defender.id}, owner ${defender.ownerCode}) about ${Math.round(distance)} km away — ` +
         `beyond its ~${range} km engagement reach for this era. March/sail/fly it toward the target realistically across turns ` +
         `and resolve the clash when contact is actually possible, or reject the order with an event explaining why it is infeasible.`,
-      { unitId: attacker.id, status: attacker.status },
+      { unitId: attacker.id, status: attacker.status, pendingOrderId: orderId },
     );
     return { resolved: false, distance, range };
   }
 
+  // In range now: the clash resolves immediately, superseding any standing
+  // approach order this attacker was previously mid-journey on.
+  if (attacker.orderId) await setPendingOrder(attackerId, null);
   const result = resolveClash(attacker, defender, round);
   await commit((list) =>
     list
@@ -260,6 +343,7 @@ export const attackWith = async (attackerId, targetId) => {
             status: survives ? "engaged" : "defeated",
             lng: survives && result.captured ? defender.lng : u.lng,
             lat: survives && result.captured ? defender.lat : u.lat,
+            orderId: "",
             updatedAt: new Date().toISOString(),
           };
         }
@@ -311,25 +395,40 @@ export const attackFeature = async (attackerId, target) => {
   const distance = distanceKm(attacker, point);
   const range = engagementRangeKm(attacker.type, gameDate);
   if (distance > range) {
+    const orderId = generateOrderId();
     await commit((list) =>
       list.map((u) =>
-        u.id === attackerId ? { ...u, status: "moving", updatedAt: new Date().toISOString() } : u,
+        u.id === attackerId ? { ...u, status: "moving", orderId, updatedAt: new Date().toISOString() } : u,
       ),
     );
+    await setPendingOrder(attackerId, {
+      id: orderId,
+      unitId: attackerId,
+      kind: "attack",
+      toLng: point.lng,
+      toLat: point.lat,
+      targetId: target.id || "",
+      targetLabel,
+      issuedAt: gameDate,
+      issuedRound: round,
+    });
     await queueOrder(
       `Attack order (approach required): ${attacker.name} (${attacker.type}, id ${attacker.id}, owner ${attacker.ownerCode}) ` +
         `is ordered to assault ${targetLabel} at ${at}, about ${Math.round(distance)} km away — beyond its ~${range} km ` +
         `engagement reach for this era. March/sail/fly it toward the objective realistically across turns and resolve the ` +
         `assault when contact is actually possible, or reject the order with an event explaining why it is infeasible.`,
-      { unitId: attacker.id, status: attacker.status },
+      { unitId: attacker.id, status: attacker.status, pendingOrderId: orderId },
     );
     return { resolved: false, distance, range };
   }
 
+  // In range now: the unit closes on the objective immediately, superseding
+  // any standing approach order it was previously mid-journey on.
+  if (attacker.orderId) await setPendingOrder(attackerId, null);
   await commit((list) =>
     list.map((u) =>
       u.id === attackerId
-        ? { ...u, lng: point.lng, lat: point.lat, status: "engaged", updatedAt: new Date().toISOString() }
+        ? { ...u, lng: point.lng, lat: point.lat, status: "engaged", orderId: "", updatedAt: new Date().toISOString() }
         : u,
     ),
   );

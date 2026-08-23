@@ -51,6 +51,12 @@ export const WORLD_DEFAULTS = {
   // share every existing read/write/poll/normalize path, exactly like units.
   markers: [],
   notes: "",
+  // Multi-turn move/attack-approach orders still in progress: {id, unitId, kind,
+  // toLng, toLat, targetId, targetLabel, note, issuedAt, issuedRound}. Independent
+  // of the actions queue (which a jump's single clearActions flag wipes wholesale)
+  // so a unit ordered across an ocean stays a live, re-surfaced instruction every
+  // turn until it actually arrives — see pruneSatisfiedUnitOrders below.
+  pendingUnitOrders: [],
   polityOverrides: {},
   // Region id -> claimant polity names: the world-data way to mark a region
   // DISPUTED (striped in the administrator's + claimants' colors). Same effect
@@ -180,6 +186,10 @@ const normalizeUnitRevert = (value) => {
     ...(lng !== null && lat !== null ? { lng, lat } : {}),
     ...(value.remove === true ? { remove: true } : {}),
     ...(normalizeOptionalString(value.status) ? { status: normalizeOptionalString(value.status) } : {}),
+    // The standing multi-turn order (world.pendingUnitOrders) this move/attack
+    // created, if any — so deleting the queued action also cancels the order
+    // instead of leaving an orphaned "keep advancing this unit" entry behind.
+    ...(normalizeOptionalString(value.pendingOrderId) ? { pendingOrderId: normalizeOptionalString(value.pendingOrderId) } : {}),
   };
 };
 
@@ -568,6 +578,74 @@ export const normalizeUnits = (units) =>
   normalizeArray(units)
     .map((entry, index) => normalizeUnitEntry(entry, index))
     .filter(Boolean);
+
+// Great-circle distance in km — shared by pending-order pruning here and the
+// standing-orders prompt text (promptContext.js), which is why it lives in
+// runtime rather than duplicating unitCombat.js's copy (a Game/Map-layer file
+// runtime code must not depend on).
+export const haversineKm = (lat1, lng1, lat2, lng2) => {
+  const EARTH_RADIUS_KM = 6371;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad((lat2 ?? 0) - (lat1 ?? 0));
+  const dLng = toRad((lng2 ?? 0) - (lng1 ?? 0));
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1 ?? 0)) * Math.cos(toRad(lat2 ?? 0)) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
+};
+
+const PENDING_ORDER_KIND_SET = new Set(["move", "attack"]);
+
+// A standing multi-turn order: a unit ordered beyond a single move/engagement's
+// leash keeps this outstanding — independent of the actions queue — until it
+// actually arrives. See unitsController.js (creates these) and
+// pruneSatisfiedUnitOrders below (clears them once satisfied).
+const normalizePendingUnitOrderEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") return null;
+  const unitId = normalizeOptionalString(entry.unitId);
+  const toLng = finiteOrNull(entry.toLng);
+  const toLat = finiteOrNull(entry.toLat);
+  if (!unitId || toLng === null || toLat === null) return null;
+  const kind = normalizeOptionalString(entry.kind).toLowerCase();
+
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`unitorder-${index}`),
+    unitId,
+    kind: PENDING_ORDER_KIND_SET.has(kind) ? kind : "move",
+    toLng,
+    toLat,
+    targetId: normalizeOptionalString(entry.targetId),
+    targetLabel: normalizeOptionalString(entry.targetLabel),
+    note: normalizeOptionalString(entry.note),
+    issuedAt: normalizeOptionalString(entry.issuedAt),
+    issuedRound: Number.isFinite(Number(entry.issuedRound)) ? Math.max(0, Math.trunc(Number(entry.issuedRound))) : 0,
+  };
+};
+
+export const normalizePendingUnitOrders = (orders) =>
+  normalizeArray(orders)
+    .map((entry, index) => normalizePendingUnitOrderEntry(entry, index))
+    .filter(Boolean);
+
+// A unit is considered to have arrived once it's within this of its ordered
+// destination — roughly a garrison's engagement range, "close enough that the
+// order has plainly been carried out" rather than an exact coordinate match,
+// which the AI's own incremental moves would rarely land on precisely.
+const PENDING_ORDER_ARRIVAL_KM = 60;
+
+// Drop any order whose unit no longer exists (destroyed/removed) or has
+// arrived (within PENDING_ORDER_ARRIVAL_KM of its destination). Runs on every
+// normalizeWorldState call — every read AND every write — so an order clears
+// itself the moment a move actually lands it, with no separate cleanup call
+// needed anywhere else, and player deletes of stale units never leave orphans.
+export const pruneSatisfiedUnitOrders = (units, orders) => {
+  const byId = new Map(normalizeArray(units).map((unit) => [unit.id, unit]));
+  return normalizeArray(orders).filter((order) => {
+    const unit = byId.get(order.unitId);
+    if (!unit) return false;
+    return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
+  });
+};
 
 // A structure built during play: any named point on the map — city, military
 // base, bunker, missile silo, embassy, port. `kind` is deliberately free-form
@@ -986,6 +1064,8 @@ export const normalizeWorldState = (world) => {
       .filter(([code, sheet]) => normalizeOptionalString(code) && sheet && typeof sheet === "object"),
   );
 
+  const units = normalizeUnits(nextWorld.units);
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
@@ -1041,7 +1121,11 @@ export const normalizeWorldState = (world) => {
     ),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
-    units: normalizeUnits(nextWorld.units),
+    units,
+    // Pruned against the units computed just above, on every read AND write, so
+    // an order clears itself the moment its unit actually arrives — see
+    // pruneSatisfiedUnitOrders.
+    pendingUnitOrders: pruneSatisfiedUnitOrders(units, normalizePendingUnitOrders(nextWorld.pendingUnitOrders)),
   };
 };
 

@@ -166,6 +166,16 @@ const TrashIcon = () => (
     </svg>
 );
 
+// Filled = currently unread (click to mark read, envelope "sealed"); outline =
+// currently read (click to mark unread, envelope "opened").
+const EnvelopeIcon = ({ filled }) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="m3.5 6.5 8.5 6 8.5-6" stroke={filled ? "rgba(17,24,39,0.9)" : "currentColor"} />
+    </svg>
+);
+
 
 
 
@@ -416,7 +426,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
-const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate }) => {
+const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, unread = false, onToggleRead }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -600,6 +610,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             Chat with {countries.map(c => c.name).join(", ") || "unknown participant"}
             </span>
+            <button onClick={() => onToggleRead?.()}
+            title={unread ? "Mark as read" : "Mark as unread"}
+            aria-label={unread ? "Mark as read" : "Mark as unread"}
+            style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
+            onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
+            <EnvelopeIcon filled={unread} />
+            </button>
             {/* Two-step, same as the list row: one click arms, the next confirms. */}
             <button title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"}
             aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"}
@@ -718,7 +736,7 @@ const isChatUnread = (chat, seen) => {
 
 // ── Chat list item ────────────────────────────────────────────────────────────
 
-const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
+const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false }) => {
     const [hovered, setHovered] = React.useState(false);
     // Deleting a chat is not undoable, so the bin arms first and deletes on the
     // second click. Resets whenever the pointer leaves the row, so a half-pressed
@@ -745,13 +763,22 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
         </div>
         </button>
         {hovered && (
+            <div style={{ position: "absolute", top: "50%", right: "0.6rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+            <button onClick={e => { e.stopPropagation(); onToggleRead?.(); }}
+            title={unread ? "Mark as read" : "Mark as unread"}
+            aria-label={unread ? "Mark as read" : "Mark as unread"}
+            style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
+            onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
+            <EnvelopeIcon filled={unread} /></button>
             <button onClick={e => { e.stopPropagation(); if (confirming) { onDelete(); } else { setConfirming(true); } }}
             title={confirming ? "Click again to delete this chat" : "Delete chat"}
             aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
-            style={{ position: "absolute", top: "50%", right: "0.6rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: "0.3rem", background: confirming ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirming ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,0.7)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirming ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
+            style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirming ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirming ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,0.7)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirming ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
             onMouseEnter={e => { if (!confirming) { e.currentTarget.style.color = "rgba(239,68,68,1)"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; } }}
             onMouseLeave={e => { if (!confirming) { e.currentTarget.style.color = "rgba(239,68,68,0.7)"; e.currentTarget.style.background = "none"; } }}>
             {confirming ? "Delete?" : <TrashIcon />}</button>
+            </div>
         )}
         </div>
     );
@@ -800,12 +827,43 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         ...openChats.filter((chat) => !unreadIds.has(String(chat.id))),
     ];
 
-    // Opening a chat marks it read, so messages that landed while the panel was
-    // already open don't come back flagged on the next open.
+    // Single writer for a chat's read state: updates BOTH the persisted baseline
+    // (localStorage, read back on the next panel/toolbar check) and the in-memory
+    // `unreadIds` the list is actually rendered from. Writing only the baseline —
+    // the old behaviour — left the list row still bold/"new" after being read,
+    // because `unreadIds` is a snapshot that nothing else ever mutated; the row
+    // only cleared once the panel was closed and reopened, which read as "read
+    // doesn't always stick."
+    const setChatReadState = (chat, read) => {
+        const id = String(chat.id);
+        const seen = { ...(readSeen() || {}) };
+        if (read) seen[id] = chatMessageCount(chat);
+        else delete seen[id]; // absent == unread, same convention isChatUnread already uses
+        writeSeen(seen);
+        setUnreadIds((prev) => {
+            const has = prev.has(id);
+            if (has === !read) return prev;
+            const next = new Set(prev);
+            if (read) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
+    // Opening a chat marks it read immediately (list row clears right away, not
+    // just in storage). The effect below keeps it marked read for as long as it
+    // stays the active chat, so messages that arrive WHILE the player is looking
+    // at it (an incoming reply, a background poll merge) don't get left stranded
+    // above the last-seen baseline and resurface as unread on the next visit.
     const openChatFromList = (chat) => {
         setActiveChat(chat);
-        writeSeen({ ...(readSeen() || {}), [String(chat.id)]: chatMessageCount(chat) });
+        setChatReadState(chat, true);
     };
+
+    useEffect(() => {
+        if (!activeChat) return;
+        setChatReadState(activeChat, true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeChat?.id, activeChat?.messages?.length]);
 
     useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
@@ -955,7 +1013,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
+                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate}
+                unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => setChatReadState(activeChat, unreadIds.has(String(activeChat.id)))} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -969,7 +1028,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : orderedChats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} />)}
+                ) : orderedChats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}

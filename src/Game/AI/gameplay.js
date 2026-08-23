@@ -474,6 +474,27 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nWhenever an event says a force is raised, mobilised, garrisoned, landed, reinforced, redeployed or moved, that event MUST carry the matching impacts.unitOps — a spawn for a force that now exists, a move for one that relocated. An event that describes troops without unitOps produces a story about an army the map never shows.\nWrite every coordinate as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06°E". Every unitOps spawn and move MUST use the real-world longitude and latitude of where the unit actually is or is going. The lng 0 / lat 0 shown in the output template is ONLY a placeholder \u2014 0,0 is open ocean off West Africa, never a valid position, and a unit placed there is discarded. Set lng and lat to the actual coordinates: use the values from [City Coordinates] for a unit at or near one of those cities, or the real coordinates of the region or front where the action happens.`;
   }
 
+  // Long-range move/attack orders (world.pendingUnitOrders) survive a jump's single
+  // clearActions flag on purpose - it wipes the actions queue wholesale, which used
+  // to make a unit ordered across an ocean stall after one partial nudge because
+  // nothing re-reminded the model it was still mid-journey. These are re-surfaced
+  // here every jump, independent of that flag, until the unit actually arrives (the
+  // engine clears an order on its own once a unit is close enough - the model never
+  // needs to remove one itself).
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const pending = normalizeString(variables.pendingUnitOrders);
+    if (pending && !pending.startsWith("No units")) {
+      systemPrompt = `${systemPrompt}\n\n[Standing Unit Orders]\nEach unit below is mid-journey on a multi-turn move or attack-approach order issued earlier and NOT YET complete - independent of this jump's clearActions, which does not touch these. Advance every one of them this turn with a partial impacts.unitOps "move" toward its listed destination, respecting the same era/type leash as any other move (see MILITARY FEASIBILITY below when present) - do not simply restate that a unit is "still marching" without emitting the move, or the map never shows the progress. Pair it with an event only when the story warrants a mention; a routine leg of an ongoing march does not need one. An order clears itself automatically once the unit is close enough to its destination - reject it instead (with an explanatory event) only if something has genuinely made the order infeasible.\n${pending}`;
+    }
+  }
+
+  // The map reading as if only the player fields an army: unitOps is fully general
+  // (any owner, not just the player), but a low events-per-jump budget plus
+  // player-centric framing meant other powers rarely got a reason to use it -
+  // their militaries existed only when something dramatic happened TO the player.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    systemPrompt = `${systemPrompt}\n\n[Other Powers' Militaries]\nThe map should not read as though only ${normalizeString(variables.playerPolity) || "the player's polity"} fields any forces. When a major or currently-relevant power (a scenario-defined actor, a country the player has clashed or negotiated with, a power actively at war or mobilizing) plausibly has forces in the field this period - mobilizing, patrolling a border, escorting a fleet, garrisoning a front, reinforcing an ally - reflect it with impacts.unitOps even when nothing dramatic is happening to the player specifically. A brief, minor event (or a line folded into a larger one) is enough to justify it; it does not need its own headline. Keep this proportionate: a country at peace far from any conflict does not need forces conjured for their own sake, and this must never be used to manufacture aggression toward the player that their own actions or the wider story do not warrant.`;
+  }
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
@@ -870,21 +891,24 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
 
 export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
-  const countries = await resolveInvitees(countriesInput, world);
-  if (countries.length === 0) return null;
-
-  // The initiating polity speaks first — and it is never the player. When the
-  // model names no speaker (or names the player), attribute the opener to the
-  // first non-player participant.
+  // The player is never a chat PARTICIPANT — they're who the chat is WITH — but
+  // the model sometimes names them alongside the real invitee ("France and
+  // <player>"). Left in, that turned an ordinary 1-on-1 note into a false "group
+  // chat" (extra turn-taking UI, wrong "Chat with X, Y" header) for no real
+  // second country. Filter them out before anything downstream counts heads.
   const playerKey = normalizeString(playerName).toUpperCase();
   const matchesPlayer = (country) =>
     playerKey && (normalizeString(country.name).toUpperCase() === playerKey || normalizeString(country.code).toUpperCase() === playerKey);
+  const countries = (await resolveInvitees(countriesInput, world)).filter((country) => !matchesPlayer(country));
+  if (countries.length === 0) return null;
+
+  // The initiating polity speaks first. When the model names no speaker, attribute
+  // the opener to the first (now player-free) participant.
   const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
   const initiator =
     countries.find((country) =>
-      speakerKey && !matchesPlayer(country)
+      speakerKey
       && (normalizeString(country.name).toUpperCase() === speakerKey || normalizeString(country.code).toUpperCase() === speakerKey))
-    ?? countries.find((country) => !matchesPlayer(country))
     ?? countries[0];
 
   const entry = normalizeChatEntry({
@@ -936,6 +960,54 @@ const regionKey = (value) => normalizeString(value)
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase()
   .replace(/\s+/g, " ");
+
+// Case/diacritic-insensitive identity for a chat's participant SET (order-blind:
+// "France, Spain" and "Spain, France" are the same conversation). Drives the
+// dedup below: a country picking up an old thread must land back in that thread,
+// not beside it in a freshly forked one.
+const chatParticipantKey = (countries) =>
+  (Array.isArray(countries) ? countries : [])
+    .map((country) => regionKey(country?.name))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+
+// Route freshly-generated chats into whichever existing OPEN thread already has
+// the same participants (appending their messages there) instead of always
+// forking a new one. `built` may itself contain chats that duplicate each other
+// (two events in the same turn both reaching out to France), so a match against
+// an entry already folded in THIS pass counts too, not just against `storageChats`.
+// A message landing in an ALREADY-open thread gets stamped with `stampTime` when
+// it has none of its own — the opener of a brand-new chat needs no extra date
+// (its title/event already dates it), but a note dropped into an ongoing
+// conversation reads as floating without one.
+const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "" } = {}) => {
+  let chats = [...storageChats];
+  const created = [];
+  const stamp = (messages) => (stampTime
+    ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
+    : messages);
+
+  for (const built of builtChats) {
+    const key = chatParticipantKey(built.countries);
+    const existingIdx = key ? chats.findIndex((chat) =>
+      chat.status !== "closed" && chatParticipantKey(chat.countries) === key) : -1;
+    if (existingIdx !== -1) {
+      chats = chats.map((chat, index) => (index === existingIdx
+        ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
+        : chat));
+      continue;
+    }
+    const createdIdx = key ? created.findIndex((chat) => chatParticipantKey(chat.countries) === key) : -1;
+    if (createdIdx !== -1) {
+      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...built.messages] };
+      continue;
+    }
+    created.push(built);
+  }
+
+  return [...created, ...chats];
+};
 
 const resolveRegionTransfers = async (containers, world) => {
   const catalog = await loadRegionCatalog().catch(() => []);
@@ -1506,8 +1578,8 @@ const applySimulationResult = async ({
   const nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
-  // write at the end merges these onto whatever is actually stored by then rather
-  // than putting the stale snapshot back. See the re-read before writeChatsState.
+  // write at the end folds these onto whatever is actually stored by then (see
+  // foldGeneratedChatsIntoStorage) rather than putting the stale snapshot back.
   const generatedChats = [];
 
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
@@ -1546,7 +1618,7 @@ const applySimulationResult = async ({
         fallbackTitle: event.title,
         playerName: baseGame.country,
       });
-      if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
+      if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
     }
   }
 
@@ -1557,7 +1629,7 @@ const applySimulationResult = async ({
     const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
       playerName: baseGame.country,
     });
-    if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
+    if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
   }
 
   if (result.mode === "jump" || result.mode === "auto") {
@@ -1580,9 +1652,17 @@ const applySimulationResult = async ({
   // on top resurrected deleted chats, and the AI's next message then landed in the
   // revived thread instead of opening a fresh one. Falls back to the snapshot if
   // the read fails, which is the old behaviour and never loses a generated chat.
+  //
+  // Folding (not prepending) matters just as much as the re-read: a country that
+  // already has an open thread with the player must have its new note land THERE,
+  // not beside it in a duplicate chat opened from scratch every time it speaks.
   let chatsToWrite;
   try {
-    chatsToWrite = [...generatedChats, ...normalizeChats(await readChatsState({ force: true }))];
+    chatsToWrite = foldGeneratedChatsIntoStorage(
+      normalizeChats(await readChatsState({ force: true })),
+      generatedChats,
+      { stampTime: nextGame.gameDate },
+    );
   } catch {
     chatsToWrite = nextChats;
   }
@@ -2378,25 +2458,10 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
     });
     if (!built) return null;
     const chats = normalizeChats(await readChatsState({ force: true }));
-    // A note from a country the player already has an open 1:1 with lands in
-    // that thread; anything else (including group approaches) opens a new chat.
-    const single = built.countries.length === 1 ? regionKey(built.countries[0].name) : "";
-    const existing = single
-      ? chats.find((chat) => chat.status !== "closed"
-          && Array.isArray(chat.countries)
-          && chat.countries.length === 1
-          && regionKey(chat.countries[0]?.name) === single)
-      : null;
-    let nextChats;
-    if (existing) {
-      const note = built.messages[0];
-      if (!note) return null;
-      nextChats = chats.map((chat) => (chat === existing
-        ? { ...chat, messages: [...chat.messages, { ...note, time: normalizeString(bundle.game?.gameDate) }] }
-        : chat));
-    } else {
-      nextChats = [built, ...chats];
-    }
+    // A note from a country the player already has an open thread with (1:1 or a
+    // standing group) lands in that thread; only a genuinely new set of
+    // participants opens a fresh chat.
+    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], { stampTime: normalizeString(bundle.game?.gameDate) });
     if (isSimulationBusy()) return null;
     await writeChatsState(nextChats);
     return built;

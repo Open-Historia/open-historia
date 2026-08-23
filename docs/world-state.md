@@ -89,8 +89,9 @@ Stored in world so they share every read/write/poll/normalize path with no serve
 |---|---|---|---|
 | `units` | `Unit[]` | `[]` | `normalizeUnitEntry` (`:475`): `{id,name,type,ownerCode,strength,lng,lat,regionId,status,note,source,orderId,createdAt,updatedAt}`. |
 | `markers` | `Marker[]` | `[]` | `normalizeMarkerEntry` (`:518`): built structures — `{id,name,kind,ownerCode,lng,lat,note,foundedAt,createdAt}`. |
+| `pendingUnitOrders` | `PendingUnitOrder[]` | `[]` | `normalizePendingUnitOrders`/`normalizePendingUnitOrderEntry` (`:625`,`:603`): `{id,unitId,kind,toLng,toLat,targetId,targetLabel,note,issuedAt,issuedRound}`. Standing multi-turn move/attack-approach orders — created by `unitsController.js` when a manual order exceeds a single move's era/type leash, surfaced to the AI every jump via `buildPendingUnitOrdersText` (`promptContext.js`) independent of the actions queue's `clearActions`, and auto-dropped by `pruneSatisfiedUnitOrders` (`:641`) once the unit is within ~60km of `toLng`/`toLat` or no longer exists. Pruned on **every** `normalizeWorldState` call (`:1128`), so this never needs a separate cleanup pass. |
 
-`Unit` enums (`:60`–`:64`): `type ∈ {infantry,armor,air,naval,artillery,garrison}` (default `infantry`); `status ∈ {idle,moving,engaged,defeated,pending}` (default `idle`; `pending` = a player deploy awaiting AI resolution, rendered translucent); `source ∈ {player,ai,scenario}` (default `scenario`). `strength` is clamped to `[0,1000]` by `clampUnitStrength` (`:71`). `marker.kind` is free-form (lowercased for stable styling), default `landmark`.
+`Unit` enums (`:60`–`:64`): `type ∈ {infantry,armor,air,naval,artillery,garrison}` (default `infantry`); `status ∈ {idle,moving,engaged,defeated,pending}` (default `idle`; `pending` = a player deploy awaiting AI resolution, rendered translucent); `source ∈ {player,ai,scenario}` (default `scenario`). `strength` is clamped to `[0,1000]` by `clampUnitStrength` (`:71`). `marker.kind` is free-form (lowercased for stable styling), default `landmark`. `PendingUnitOrder.kind ∈ {move,attack}` (default `move`).
 
 ### 2f. Turn machinery & narrative history
 
@@ -114,7 +115,7 @@ Stored in world so they share every read/write/poll/normalize path with no serve
 
 1. Spread defaults then the raw doc: `{ ...WORLD_DEFAULTS, ...nextWorld, … }` (`:856`). Unknown fields (scenario extras) survive; known fields are then overwritten by their normalized versions.
 2. Rebuild the maps with blank-key/blank-value filtering: `regionOwnershipOverrides`, `polityOverrides`, `regionClaimants` (≤4), `internationalReputation` (clamped ints), `countryTags` (via `normalizeTagList`).
-3. Normalize the arrays: `units`, `markers`, `actionSuggestions`, `simulationHistory`, `consolidatedHistory`, and singletons `activeCatalyst`, label config, `notes`, `language`, `simulationRules`, `startingTimelineText`.
+3. Normalize the arrays: `units`, `pendingUnitOrders` (pruned against the just-normalized `units`), `markers`, `actionSuggestions`, `simulationHistory`, `consolidatedHistory`, and singletons `activeCatalyst`, label config, `notes`, `language`, `simulationRules`, `startingTimelineText`.
 
 `writeWorldState` (`:988`) normalizes, calls `enqueueContentStrings(polityOverrides)` to translate edited names on write, then `writeJson(JSON_URLS.world, …, { pretty:true })`.
 
