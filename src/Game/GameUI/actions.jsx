@@ -285,12 +285,29 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             .catch(() => {});
         };
 
+        // Actions created/edited from OUTSIDE this panel (the advisor, chatting in
+        // its own drawer) used to be invisible here until the panel was closed and
+        // reopened. Poll and merge in additions — signature-gated so a tick with no
+        // actual change doesn't re-render/reset hover state on every row.
+        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}`).join("|");
+        const syncActions = () => {
+            readActionsState({ force: true })
+            .then((saved) => {
+                if (cancelled) return;
+                setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
+            })
+            .catch(() => {});
+        };
+
         fetchGameData();
+        syncActions();
         const interval = setInterval(fetchGameData, 5000);
+        const actionsInterval = setInterval(syncActions, 5000);
 
         return () => {
             cancelled = true;
             clearInterval(interval);
+            clearInterval(actionsInterval);
         };
     }, [isOpen]);
 
@@ -492,7 +509,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         <button
         type="button"
-        onClick={onOpenAdvisor}
+        // Opens the Advisor primed with a starter message (in its input box, not
+        // auto-sent) rather than blank — the advisor can create/edit/remove
+        // queued actions right from that conversation (see advisor.jsx), so this
+        // is the more direct route into the same plan-the-turn workflow the AI
+        // suggestions above offer.
+        onClick={() => onOpenAdvisor("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.")}
         style={{
             background: "rgba(109, 40, 217, 0.15)",
             border: "1px solid rgba(139, 92, 246, 0.4)",

@@ -180,6 +180,20 @@ export const buildActionHistoryText = (actions, { includeResolved = false, limit
   return lines.join("\n");
 };
 
+// Planned actions WITH their ids — every other action-history text is written
+// for the simulation model, which never references an action by id, so ids
+// would just be clutter there. The advisor is different: it needs a stable
+// handle to EDIT or REMOVE a specific queued action the player asks it to
+// amend, and copying the id verbatim is the only way to do that precisely
+// (matching by title/text is fragile — titles can collide or get reworded).
+export const buildPlannedActionsWithIdsText = (actions) => {
+  const planned = normalizeActions(actions).filter((action) => action.status === "planned");
+  if (planned.length === 0) return "No planned actions are currently queued.";
+  return planned
+    .map((action) => `- [id ${action.id}] (${action.kind === "chat" ? "chat" : "action"}) ${action.title}: ${buildActionDisplayText(action)}`)
+    .join("\n");
+};
+
 export const formatActionsForPrompt = (actions) => normalizeArray(actions)
   .map((entry) => {
     if (typeof entry === "string") return entry.trim();
@@ -535,6 +549,7 @@ export const buildPromptContext = async (bundle, {
     numberOfRegions: String(regionCatalog.length),
     pendingUnitOrders: buildPendingUnitOrdersText(bundle.world),
     plannedActions: buildActionHistoryText(bundle.actions),
+    plannedActionsWithIds: buildPlannedActionsWithIdsText(bundle.actions),
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),

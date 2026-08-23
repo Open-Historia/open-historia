@@ -217,7 +217,7 @@ When the menu is closed, `LibraryTopBar` renders a compact cluster (z 9997): a s
 
 | Tab | Component | Behavior |
 |---|---|---|
-| 🧭 Advisor | inline chat | Loads/saves history to `JSON_URLS.advisor`; `startChat()`/`loadHistory()` bootstrap; `sendMessage(text)` → advisor reply. Renders markdown (`react-markdown`) and inline ` ```chart ` blocks via `AdvisorChart` (Chart.js). 🗑 clears the chat; ✕ closes (the only exit on phones where the drawer covers 🧭) |
+| 🧭 Advisor | inline chat | Loads/saves history to `JSON_URLS.advisor`; `startChat()`/`loadHistory()` bootstrap; `sendMessage(text)` → advisor reply. Renders markdown (`react-markdown`) and inline ` ```chart ` blocks via `AdvisorChart` (Chart.js), plus ` ```actions ` blocks (JSON array) applied to the real queue by `applyAdvisorActions` — `readActionsState`/`writeActionsState`, the same storage `actions.jsx` uses — right when the reply arrives, then shown as an `AdvisorActionsCard` (added/updated/removed, with an "Open Actions" button). A `requestedPrompt` prop (from the Actions panel's "Help brainstorm actions" button, via `Main`'s `pendingAdvisorPrompt`) pre-fills — never auto-sends — the input once bootstrapped. 🗑 clears the chat; ✕ closes (the only exit on phones where the drawer covers 🧭) |
 | 📊 Stats | `StatsPane` | National stat sheet (see [§5.2](#52-statspane--srcgamegameuistatsjsx)) |
 
 ### 5.1 Advisor width state
@@ -286,10 +286,11 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 |---|---|---|
 | Composer (textarea) + ✈ send | `createManualAction` → `writeActionsState` | `src/runtime/gameState.js` |
 | ✦ sparkle | `refinePlayerAction(text)` rewrites the draft in place (no persist) | `src/Game/AI/gameplay.js` |
-| **Help brainstorm actions** | `onOpenAdvisor` (opens the advisor drawer) | `Main.openAdvisor` |
+| **Help brainstorm actions** | `onOpenAdvisor(seedPrompt)` — opens the advisor drawer AND pre-fills its input with a starter message | `Main.openAdvisor` |
 | **Get/Refresh AI suggestions** | `generateActionSuggestions({force:true})` → `SuggestionCard`s | AI |
 | Queue a suggestion | `normalizeSuggestionAction` → persisted; button flips to "✓ Queued" | — |
 | Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
+| *(passive)* Advisor-created/edited/removed actions | A 5s poll (`readActionsState({force:true})`, signature-gated) merges in changes `advisor.jsx`'s `applyAdvisorActions` made elsewhere, so they appear here without closing/reopening the panel | `src/Game/GameUI/advisor.jsx` |
 
 Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
 

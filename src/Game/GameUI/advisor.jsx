@@ -5,6 +5,7 @@ import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
+import { normalizeActionEntry, readActionsState, writeActionsState } from "../../runtime/gameState.js";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -35,13 +36,116 @@ const ThinkingDots = () => {
     return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
 };
 
+// Extracts one fenced ```<lang> block (JSON payload) from a reply and strips
+// it from the remaining text — shared by the chart block and the actions
+// block below, which both ride the same "prose + one machine-readable fence"
+// convention.
+const extractFencedJson = (text, lang) => {
+    const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```");
+    const match = text.match(regex);
+    if (!match) return { rest: text, json: null };
+    let json = null;
+    try { json = JSON.parse(match[1].trim()); } catch { json = null; }
+    return { rest: text.replace(regex, ""), json };
+};
+
 const parseMessage = (rawText) => {
-    const chartRegex = /```chart\s*([\s\S]*?)```/;
-    const match = rawText.match(chartRegex);
-    if (!match) return { text: rawText, chartConfig: null };
-    let chartConfig = null;
-    try { chartConfig = JSON.parse(match[1].trim()); } catch { chartConfig = null; }
-    return { text: rawText.replace(chartRegex, "").trim(), chartConfig };
+    const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
+    const { rest, json: actionsRaw } = extractFencedJson(afterChart, "actions");
+    return { text: rest.trim(), chartConfig, actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null };
+};
+
+// Applies the advisor's ```actions proposal to the real queue (readActionsState/
+// writeActionsState — the same storage the Actions panel reads and writes) and
+// reports what actually happened, so the confirmation card shows real outcomes
+// rather than just echoing the model's request back. Runs ONCE, right when a
+// reply arrives (see handleSend) — never at render time, since parseMessage
+// above runs on every re-render and must stay a pure read.
+const applyAdvisorActions = async (proposal) => {
+    if (!Array.isArray(proposal) || proposal.length === 0) return null;
+
+    const current = await readActionsState({ force: true });
+    let next = [...current];
+    const items = [];
+
+    for (const raw of proposal) {
+        if (!raw || typeof raw !== "object") continue;
+        const id = String(raw.id ?? "").trim();
+
+        if (raw.remove) {
+            if (!id) continue;
+            const before = next.length;
+            next = next.filter((action) => action.id !== id);
+            if (next.length < before) items.push({ change: "removed", title: raw.title || id });
+            continue;
+        }
+
+        const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
+        if (existingIndex !== -1) {
+            const existing = next[existingIndex];
+            const updated = {
+                ...existing,
+                ...(raw.title ? { title: String(raw.title) } : {}),
+                ...(raw.text ? { text: String(raw.text) } : {}),
+                ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
+            };
+            next[existingIndex] = updated;
+            items.push({ change: "updated", title: updated.title });
+            continue;
+        }
+
+        // No id, or an id that doesn't match anything current — either a genuinely
+        // new proposal, or the model referencing a stale/already-resolved id. Both
+        // land as a fresh queued action rather than being silently dropped.
+        const created = normalizeActionEntry({
+            title: raw.title,
+            text: raw.text,
+            kind: raw.kind === "chat" ? "chat" : "action",
+            source: "advisor",
+            status: "planned",
+        });
+        if (created) {
+            next.push(created);
+            items.push({ change: "added", title: created.title });
+        }
+    }
+
+    if (items.length === 0) return null;
+    await writeActionsState(next);
+    return items;
+};
+
+// Inline confirmation for what the advisor just did to the Actions queue —
+// the "review" half of "advisor creates, I review": nothing here is silent.
+const AdvisorActionsCard = ({ items, onOpenActions }) => {
+    const counts = items.reduce((acc, item) => {
+        acc[item.change] = (acc[item.change] ?? 0) + 1;
+        return acc;
+    }, {});
+    const summary = ["added", "updated", "removed"]
+        .filter((change) => counts[change])
+        .map((change) => `${counts[change]} ${change}`)
+        .join(", ");
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(216,196,255,0.95)" }}>📋 Actions {summary}</span>
+        {onOpenActions && (
+            <button type="button" onClick={onOpenActions} style={{ background: "none", border: "1px solid rgba(139,92,246,0.5)", borderRadius: "6px", color: "rgba(216,196,255,0.9)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Open Actions
+            </button>
+        )}
+        </div>
+        <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item, index) => (
+            <li key={index} style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
+            {item.change === "removed" ? "Removed: " : item.change === "updated" ? "Updated: " : "Added: "}{item.title}
+            </li>
+        ))}
+        </ul>
+        </div>
+    );
 };
 
 const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#a78bfa","#f87171","#38bdf8"];
@@ -184,7 +288,7 @@ const TabButton = ({ icon, label, active, onClick }) => (
     </button>
 );
 
-const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
+const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -246,6 +350,18 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
+    // A starter message from outside (the Actions panel's "Help brainstorm
+    // actions" button) lands in the input box, not auto-sent — the player still
+    // reviews/edits it before it becomes a real message. Waits for bootstrap so
+    // it never races the history-load effect above into stomping on a restored
+    // draft-less session.
+    useEffect(() => {
+        if (!requestedPrompt || !hasBootstrapped) return;
+        setInput(requestedPrompt);
+        onConsumeRequest?.();
+        inputRef.current?.focus();
+    }, [requestedPrompt, hasBootstrapped, onConsumeRequest]);
+
     const resizeTextarea = React.useCallback(() => {
         const el = inputRef.current;
         if (!el) {
@@ -290,15 +406,26 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
 
         try {
             const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full) });
+            // Apply any ```actions proposal in the reply to the real queue BEFORE
+            // finalising the message, so the confirmation card that renders with it
+            // reflects what actually happened — not a re-derivation done later at
+            // render time (which can't know what the queue looked like when this
+            // reply arrived).
+            const { json: actionsProposal } = extractFencedJson(reply, "actions");
+            const actionsSummary = await applyAdvisorActions(actionsProposal).catch((error) => {
+                console.error("Failed to apply advisor-proposed actions:", error);
+                return null;
+            });
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
-                    next[next.length - 1] = { role: "advisor", text: reply, time: gameDate };
+                    next[next.length - 1] = finalMessage;
                 } else {
-                    next.push({ role: "advisor", text: reply, time: gameDate });
+                    next.push(finalMessage);
                 }
                 saveMessages(next);
                 return next;
@@ -435,6 +562,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
                     <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
                 )}
                 {chartConfig && <AdvisorChart config={chartConfig} />}
+                {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
                 </div>
                 {msg.time && msg.role !== "user" && (
                     <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>

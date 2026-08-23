@@ -1171,6 +1171,29 @@ async function buildPromptVariables({
     });
 }
 
+// Lets the advisor create/edit/remove the player's queued Actions (the same
+// queue the Actions panel manages) as part of an ordinary chat reply, instead
+// of only through the separate "Get AI suggestions" flow. Appended at call
+// time (not baked into defaultPrompts.json's `advisor` text) so it reaches
+// games that carry their own frozen/scenario-authored advisor prompt too —
+// see the frozen-prompt caveat in gameplay.js's runJsonTask.
+const buildAdvisorActionsDirective = (plannedActionsWithIds) => `[Action Planning]
+You can create, edit, or remove the player's queued Actions directly from this conversation — the same queue the Actions panel manages, with no separate confirmation step. Because of that, only propose actions the two of you have actually settled on together in this conversation; never invent or queue one on your own initiative from an open-ended question, and never re-propose something the player already turned down.
+
+To act, end your reply with a fenced \`\`\`actions block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you're proposing or changed; the array itself is stripped from what the player sees). Each entry:
+- Create: {"title":"...","text":"...","kind":"action"} — kind is "action" unless it's specifically a diplomatic outreach, then "chat".
+- Edit an existing one: {"id":"<exact id copied from the list below>","title":"...","text":"..."} — only the fields you include change.
+- Remove an existing one: {"id":"<exact id copied from the list below>","remove":true}.
+IDs must be copied EXACTLY from [Current Planned Actions] below — never invented or guessed. Omit the \`\`\`actions block entirely when nothing should change (most replies need none).
+
+Example:
+\`\`\`actions
+[{"title":"Reinforce the eastern border","text":"Deploy two additional divisions to reinforce the frontier garrisons before the thaw."}]
+\`\`\`
+
+[Current Planned Actions]
+${plannedActionsWithIds}`;
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1192,7 +1215,8 @@ async function buildAdvisorSystemPrompt() {
     });
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    return renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
