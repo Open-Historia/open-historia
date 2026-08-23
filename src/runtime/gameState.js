@@ -70,6 +70,15 @@ export const WORLD_DEFAULTS = {
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
+  // Sparse canonical bilateral diplomatic state. Absence of a pair means the
+  // campaign has not established a material relation worth tracking; it is not
+  // equivalent to a hidden numeric zero.
+  relations: [],
+  // Formal treaties / alliances / guarantees / pacts. Kept separate from
+  // bilateral warmth and from actual belligerency in world.wars.
+  agreements: [],
+  // One-time legacy migration marker for the native diplomatic ledger.
+  diplomaticLedgerVersion: 0,
   // Persistent authoritative belligerency. Storylines explain WHY a conflict
   // matters; wars say WHO is mechanically at war with whom.
   wars: [],
@@ -91,8 +100,13 @@ const POLITY_OPERATION_SET = new Set(["update", "create", "rename", "restore", "
 const POLITY_STATUS_SET = new Set(["active", "dormant"]);
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
 const WORLD_WAR_STATUS_SET = new Set(["active", "ceasefire", "ended"]);
+const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
+const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
+const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
 const MAX_WORLD_STORYLINES = 96;
 const MAX_WORLD_WARS = 64;
+const MAX_WORLD_RELATIONS = 256;
+const MAX_WORLD_AGREEMENTS = 128;
 
 // Every caller of this parses a COORDINATE (lng/lat/toLng/toLat), which is why it
 // can afford to be lenient in ways a general number parser could not.
@@ -1710,6 +1724,120 @@ const normalizeWorldWars = (value) => {
     .slice(0, MAX_WORLD_WARS);
 };
 
+
+const resolveWorldDiplomaticPolity = (token, identityWorld) => {
+  const raw = normalizeOptionalString(token);
+  if (!raw) return "";
+  const resolved = resolvePolityIdentity(raw, identityWorld, {
+    allowUnknown: true,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return normalizeOptionalString(resolved?.resolved || toCountryName(raw) || raw);
+};
+
+const worldRelationPairKey = (a, b) => [normalizeOptionalString(a), normalizeOptionalString(b)]
+  .map((value) => value.toLocaleLowerCase())
+  .sort()
+  .join("||");
+
+const normalizeWorldRelation = (entry, identityWorld, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const aRaw = resolveWorldDiplomaticPolity(entry.a, identityWorld);
+  const bRaw = resolveWorldDiplomaticPolity(entry.b, identityWorld);
+  if (!aRaw || !bRaw || aRaw.toLocaleLowerCase() === bRaw.toLocaleLowerCase()) return null;
+  const ordered = [aRaw, bRaw].sort((a, b) => a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase()));
+  const scoreNumber = Number(entry.score);
+  const score = Number.isFinite(scoreNumber) ? Math.max(-100, Math.min(100, Math.round(scoreNumber))) : 0;
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_RELATION_STATUS_SET.has(rawStatus)
+    ? rawStatus
+    : score >= 55 ? "friendly"
+      : score >= 20 ? "cordial"
+        : score >= -10 ? "neutral"
+          : score >= -30 ? "cautious"
+            : score >= -60 ? "strained"
+              : "hostile";
+  return {
+    id: normalizeOptionalString(entry.id) || `relation-${index}`,
+    a: ordered[0],
+    b: ordered[1],
+    score,
+    status,
+    summary: normalizeTextLike(entry.summary),
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate),
+    sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
+    createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
+  };
+};
+
+const normalizeWorldRelations = (value, identityWorld) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldRelation(entry, identityWorld, index);
+    if (!normalized) return;
+    deduped.set(worldRelationPairKey(normalized.a, normalized.b), normalized);
+  });
+  return [...deduped.values()]
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score) || a.id.localeCompare(b.id))
+    .slice(0, MAX_WORLD_RELATIONS);
+};
+
+const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const id = normalizeOptionalString(entry.id) || `agreement-${index}`;
+  const parties = [...new Set(normalizeArray(entry.parties)
+    .map((party) => resolveWorldDiplomaticPolity(party, identityWorld))
+    .filter(Boolean))].slice(0, 12);
+  if (!id || parties.length < 2) return null;
+  const rawType = normalizeOptionalString(entry.type).toLowerCase().replace(/[ -]+/g, "_");
+  const type = WORLD_AGREEMENT_TYPE_SET.has(rawType) ? rawType : "other";
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_AGREEMENT_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const guarantor = type === "guarantee"
+    ? resolveWorldDiplomaticPolity(entry.guarantor || parties[0], identityWorld)
+    : "";
+  const beneficiary = type === "guarantee"
+    ? resolveWorldDiplomaticPolity(entry.beneficiary || parties[1], identityWorld)
+    : "";
+  return {
+    id,
+    title: normalizeOptionalString(entry.title) || id,
+    type,
+    status,
+    parties,
+    startedDate: canonicalizeDateString(entry.startedDate),
+    endedDate: ["ended", "expired"].includes(status)
+      ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate)
+      : "",
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
+    terms: normalizeTextLike(entry.terms),
+    ...(guarantor && beneficiary ? { guarantor, beneficiary } : {}),
+    sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
+    createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
+    ...(entry.migratedLegacy === true ? { migratedLegacy: true } : {}),
+  };
+};
+
+const normalizeWorldAgreements = (value, identityWorld) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldAgreement(entry, identityWorld, index);
+    if (normalized) deduped.set(normalized.id, normalized);
+  });
+  const statusRank = { active: 0, suspended: 1, ended: 2, expired: 3 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.startedDate || "").localeCompare(String(a.lastUpdatedDate || a.startedDate || "")) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_AGREEMENTS);
+};
+
 export const normalizeWorldState = (world) => {
   const nextWorld = world && typeof world === "object" ? world : {};
   const polityOverrides = Object.fromEntries(
@@ -1784,6 +1912,15 @@ export const normalizeWorldState = (world) => {
       .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
+  const diplomaticIdentityWorld = {
+    ...nextWorld,
+    polityOverrides,
+    regionOwnershipOverrides,
+    regionSovereigntyOverrides,
+  };
+  const relations = normalizeWorldRelations(nextWorld.relations, diplomaticIdentityWorld);
+  const agreements = normalizeWorldAgreements(nextWorld.agreements, diplomaticIdentityWorld);
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
@@ -1816,6 +1953,8 @@ export const normalizeWorldState = (world) => {
           catalyst: normalizeCatalyst(entry.catalyst),
           date: normalizeOptionalString(entry.date),
           eventIds: normalizeActionParticipants(entry.eventIds),
+          relationIds: normalizeActionParticipants(entry.relationIds),
+          agreementIds: normalizeActionParticipants(entry.agreementIds),
           fallbackReason: normalizeOptionalString(entry.fallbackReason),
           fromDate: normalizeOptionalString(entry.fromDate || entry.startDate),
           mode: normalizeOptionalString(entry.mode),
@@ -1840,6 +1979,11 @@ export const normalizeWorldState = (world) => {
     ),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
+    diplomaticLedgerVersion: Number.isFinite(Number(nextWorld.diplomaticLedgerVersion))
+      ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
+      : 0,
+    relations,
+    agreements,
     wars: normalizeWorldWars(nextWorld.wars),
     storylines: normalizeWorldStorylines(nextWorld.storylines),
     units: normalizeUnits(nextWorld.units),
@@ -2369,6 +2513,26 @@ const applyPolityChangeToWorld = ({ change, colors, event = null, phase, world }
       if (!store || typeof store !== "object" || Array.isArray(store)) continue;
       delete store[source.resolved];
     }
+
+    // A dissolved polity cannot keep an ACTIVE formal commitment dangling.
+    // Preserve the historical agreement record but close it at the dissolution
+    // event date. Bilateral relation history remains sparse archival state.
+    const dissolvedKey = normalizedPolityName(source.resolved);
+    const dissolutionDate = canonicalizeDateString(event?.date || "");
+    world.agreements = normalizeArray(world.agreements).map((agreement) => {
+      if (!agreement || typeof agreement !== "object") return agreement;
+      if (!["active", "suspended"].includes(normalizeOptionalString(agreement.status).toLowerCase())) return agreement;
+      const touches = normalizeArray(agreement.parties)
+        .some((party) => normalizedPolityName(party) === dissolvedKey);
+      if (!touches) return agreement;
+      return {
+        ...agreement,
+        status: "ended",
+        endedDate: dissolutionDate || canonicalizeDateString(agreement.lastUpdatedDate),
+        lastUpdatedDate: dissolutionDate || canonicalizeDateString(agreement.lastUpdatedDate),
+        terms: normalizeTextLike(agreement.terms),
+      };
+    });
 
     delete colors[source.resolved];
 

@@ -1,4 +1,5 @@
 import { buildCompactEconomicContext, isCompleteCountryStatSheet } from "../../runtime/countryStats.js";
+import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
 
 // OpenHistoria Continuum — Native World Director v0.5.0
 //
@@ -861,6 +862,11 @@ export const buildWorldInitiativeContext = (
   const candidates = [];
   const storylineAttention = selectStorylineAttention(bundle?.world || {}, originDate, horizonDate);
   const economicAttention = buildEconomicAttentionContext(bundle, storylineAttention);
+  const diplomaticAttention = buildBoundedDiplomaticContext(bundle?.world || {}, {
+    playerPolity: normalizeString(bundle?.game?.country),
+    selectedStorylines: storylineAttention.selected,
+    maxActors: 8,
+  });
 
   const recentEvents = normalizeArray(bundle?.events).slice(-RECENT_EVENT_WINDOW);
   recentEvents.forEach((event, index) => {
@@ -969,6 +975,10 @@ export const buildWorldInitiativeContext = (
     "After accounting for urgent continuity, inspect the independent causal evidence and structural background for other worthwhile developments. Do not invent filler to satisfy diversity; simply do not treat the hottest storyline as the only thing capable of happening.",
     "New autonomous processes may begin in any pass when current interests, structures, and capabilities justify them.",
     "",
+    "CANONICAL DIPLOMATIC STATE",
+    "This is a bounded slice of the persistent diplomatic ledger, not a dump of every country pair. Formal commitments, bilateral political climate, and actual wars are separate facts.",
+    diplomaticAttention.text,
+    "",
     "CANONICAL ECONOMIC CONSTRAINTS",
     "Only actors with an already-persisted native Stats baseline are listed here; absence means no canonical numeric baseline exists, not that the actor has infinite resources.",
     "Use these figures as causal capability/financing constraints, never as rigid action gates. A stressed polity can still mobilize, subsidize, build, or fight by borrowing, taxing, cutting elsewhere, seeking foreign finance, monetizing, or accepting inflation/debt/political consequences.",
@@ -1009,6 +1019,9 @@ export const buildWorldInitiativeContext = (
     attentionCount: storylineAttention.selected.length,
     attentionStorylines: storylineAttention.selected,
     economicActors: economicAttention,
+    diplomaticActors: diplomaticAttention.actors,
+    diplomaticRelations: diplomaticAttention.relations,
+    diplomaticAgreements: diplomaticAttention.agreements,
     scanned: {
       recentEvents: recentEvents.length,
       recentChats: recentChats.length,
@@ -1038,7 +1051,9 @@ export const buildWorldInitiativeContext = (
   console.info(
     `[OH Native World Director v${WORLD_DIRECTOR_VERSION}] ` +
     `${storylineAttention.selected.length}/${storylineAttention.all.length} storyline(s) selected, ` +
-    `${bounded.length} causal candidate(s), ${economicAttention.length} economic actor baseline(s), ${recentEvents.length} recent event(s), ${recentChats.length} recent chat(s)`,
+    `${bounded.length} causal candidate(s), ${economicAttention.length} economic actor baseline(s), ` +
+    `${diplomaticAttention.relations.length} relation(s), ${diplomaticAttention.agreements.length} agreement(s), ` +
+    `${recentEvents.length} recent event(s), ${recentChats.length} recent chat(s)`,
   );
 
   return {

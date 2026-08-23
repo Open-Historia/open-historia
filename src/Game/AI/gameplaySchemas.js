@@ -658,8 +658,18 @@ export const JUMP_FORWARD_SCHEMA = {
       description:
         "Compact newline-separated canonical war-state operations. Empty string when no belligerency changes. Record format is documented in the live prompt.",
     },
+    relationUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated bilateral relation updates. Empty string when no material bilateral political relation changes. Record format is documented in the live prompt.",
+    },
+    agreementUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated formal treaty/agreement lifecycle updates. Empty string when no formal commitment starts, changes, suspends, resumes, ends, or expires. Record format is documented in the live prompt.",
+    },
   },
-  required: ["events", "stopDate", "summary", "clearActions", "storylineUpdates", "warUpdates"],
+  required: ["events", "stopDate", "summary", "clearActions", "storylineUpdates", "warUpdates", "relationUpdates", "agreementUpdates"],
   additionalProperties: false,
 };
 
@@ -802,8 +812,18 @@ export const GAME_MASTER_SCHEMA = {
       description:
         "Compact canonical war-state operations caused by this GM intervention. Empty string when belligerency is unchanged.",
     },
+    relationUpdates: {
+      type: "string",
+      description:
+        "Compact bilateral relation updates caused by this GM intervention. Empty string when no relation changes.",
+    },
+    agreementUpdates: {
+      type: "string",
+      description:
+        "Compact formal agreement lifecycle updates caused by this GM intervention. Empty string when no agreement changes.",
+    },
   },
-  required: ["summary", "impacts", "warUpdates"],
+  required: ["summary", "impacts", "warUpdates", "relationUpdates", "agreementUpdates"],
   additionalProperties: false,
 };
 

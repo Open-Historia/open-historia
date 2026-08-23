@@ -16,6 +16,16 @@ import {
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
 } from "./nativeWarLedger.js";
+import {
+  applyDiplomaticUpdates,
+  bindAgreementUpdatesToEvents,
+  bindRelationUpdatesToEvents,
+  buildBoundedDiplomaticContext,
+  decodeAgreementUpdates,
+  decodeRelationUpdates,
+  migrateLegacyDiplomaticState,
+  validateDiplomaticLedgerPayload,
+} from "./nativeDiplomaticDirector.js";
 import { callAI } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
@@ -227,6 +237,10 @@ const cloneValue = (value) => {
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+const relationPairKeyForHistory = (a, b) => [normalizeString(a), normalizeString(b)]
+  .filter(Boolean)
+  .sort((left, right) => left.toLocaleLowerCase().localeCompare(right.toLocaleLowerCase()))
+  .join(" ↔ ");
 
 const parseIsoDate = (value) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizeString(value));
@@ -528,11 +542,20 @@ const buildTerritorialControlContext = async (worldLike) => {
 
 const buildTemplateVariables = async (bundle, options = {}) => {
   const variables = await buildPromptContext(bundle, options);
+  const chatFocusActors = normalizeArray(options?.chat?.countries)
+    .map((country) => normalizeString(country?.polityKey || country?.name || country?.code))
+    .filter(Boolean);
+  const diplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
+    playerPolity: normalizeString(bundle?.game?.country),
+    focusActors: chatFocusActors,
+    maxActors: 8,
+  });
   return {
     ...variables,
     playerPolityReputationContext: await buildPlayerPolityReputationText(bundle),
     territorialControlContext: await buildTerritorialControlContext(bundle.world),
     canonicalWarContext: buildCanonicalWarContext(bundle.world),
+    canonicalDiplomaticContext: diplomaticContext.text,
     unitsSummary:
       variables.unitsSummary +
       buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
@@ -547,7 +570,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — LEGAL SOVEREIGNTY only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final territorial settlement. Shape: {"regionId":"<exact id/name when known; otherwise exact grounded place wording>","regionName":"","fromCode":"<current legal sovereign>","toCode":"<new legal sovereign>"}. Do NOT use regionTransfers for a temporary battlefield capture or occupation.\n\n• regionControlOps — DE-FACTO CONTROL / ACTIVE FRONT state. Three ops:\n    {"op":"contest","regionId":"<region/place>","fromCode":"<current controller>","actorCode":"<challenger>","note":""}\n    {"op":"control","regionId":"<region/place>","fromCode":"<previous controller>","toCode":"<new controller>","note":""}\n    {"op":"clear_contest","regionId":"<region/place>","fromCode":"<current controller>","claimantCode":"<claimant to remove>","clearAll":false,"note":""}\n  Use contest when fighting makes a named region actively disputed without a decisive control change. Use control for wartime capture/occupation/liberation/retaking. Use clear_contest when withdrawal, ceasefire or settlement ends the active contest. ALWAYS set fromCode when you know the current controller so the geography resolver is bounded to that side's actual regions. The existing map stripes regionClaimants automatically; do not fake a legal treaty just to make the front move.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won in wartime, pair the advance with regionControlOps control; use regionTransfers only if that same event also legally settles sovereignty.\n\n• markerOps — Place, remove, or rename a named structure or city. Three ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWAR EVENT METADATA:\n• warId — REQUIRED on an event that declares/joins/ends a war OR depicts actual battlefield combat. It must identify the canonical conflict in world.wars.\n• combatants — REQUIRED for actual battle/offensive/invasion/bombardment/front-combat events. List the polity names directly fighting; at least one must come from each opposing side of warId.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• warUpdates — AUTHORITATIVE BELLIGERENCY changes. This is NOT a storyline and NOT optional when war status changes. One compact record per line:\n    warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note\n  ops: start | join-a | join-b | leave | ceasefire | resume | end\n  start: actors=Side A and opponents=Side B. join-a/join-b: actors are the joining polities. leave: actors are the leaving polities.\n  eventNumbersCSV is 1-based and points to the event(s) in THIS response establishing the transition. Every war transition must have a real linked event. A defensive alliance, mobilization, storyline, historical expectation, or hostile rhetoric does NOT itself create belligerency.\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.`;
+const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — LEGAL SOVEREIGNTY only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final territorial settlement. Shape: {"regionId":"<exact id/name when known; otherwise exact grounded place wording>","regionName":"","fromCode":"<current legal sovereign>","toCode":"<new legal sovereign>"}. Do NOT use regionTransfers for a temporary battlefield capture or occupation.\n\n• regionControlOps — DE-FACTO CONTROL / ACTIVE FRONT state. Three ops:\n    {"op":"contest","regionId":"<region/place>","fromCode":"<current controller>","actorCode":"<challenger>","note":""}\n    {"op":"control","regionId":"<region/place>","fromCode":"<previous controller>","toCode":"<new controller>","note":""}\n    {"op":"clear_contest","regionId":"<region/place>","fromCode":"<current controller>","claimantCode":"<claimant to remove>","clearAll":false,"note":""}\n  Use contest when fighting makes a named region actively disputed without a decisive control change. Use control for wartime capture/occupation/liberation/retaking. Use clear_contest when withdrawal, ceasefire or settlement ends the active contest. ALWAYS set fromCode when you know the current controller so the geography resolver is bounded to that side's actual regions. The existing map stripes regionClaimants automatically; do not fake a legal treaty just to make the front move.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won in wartime, pair the advance with regionControlOps control; use regionTransfers only if that same event also legally settles sovereignty.\n\n• markerOps — Place, remove, or rename a named structure or city. Three ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWAR EVENT METADATA:\n• warId — REQUIRED on an event that declares/joins/ends a war OR depicts actual battlefield combat. It must identify the canonical conflict in world.wars.\n• combatants — REQUIRED for actual battle/offensive/invasion/bombardment/front-combat events. List the polity names directly fighting; at least one must come from each opposing side of warId.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• warUpdates — AUTHORITATIVE BELLIGERENCY changes. This is NOT a storyline and NOT optional when war status changes. One compact record per line:\n    warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note\n  ops: start | join-a | join-b | leave | ceasefire | resume | end\n  start: actors=Side A and opponents=Side B. join-a/join-b: actors are the joining polities. leave: actors are the leaving polities.\n  eventNumbersCSV is 1-based and points to the event(s) in THIS response establishing the transition. Every war transition must have a real linked event. A defensive alliance, mobilization, storyline, historical expectation, or hostile rhetoric does NOT itself create belligerency.\n• relationUpdates — MATERIAL BILATERAL POLITICAL CLIMATE changes only. The ledger is sparse: do NOT create neutral-zero rows for untouched countries and do NOT update a pair merely because diplomats met. One compact record per line:\n    polityA~polityB~absoluteScore~status~eventNumbersCSV~summary\n  absoluteScore is -100..100; status is friendly | cordial | neutral | cautious | strained | hostile | rival. eventNumbersCSV is 1-based and must point to the event that materially changed the relationship. Formal alliance status is NOT encoded here; that lives in agreementUpdates. An alliance can be politically strained, and friendly states can have no alliance.\n• agreementUpdates — FORMAL TREATY / ALLIANCE / GUARANTEE lifecycle. One compact record per line:\n    agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms\n  ops: start | update | suspend | resume | end | expire\n  types: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other\n  A NEW signed/ratified/concluded formal commitment MUST use start and reference its establishing event. Negotiations/proposals alone create NO agreement. For guarantee, partiesCSV order is guarantor first, beneficiary second. For later operations reuse the stable agreementId; unchanged type/parties/title may be blank where runtime preserves them.\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.`;
 
 const runJsonTask = async (taskKey, {
   fallback,
@@ -832,11 +855,21 @@ Any emitted stats update must remain causally compatible with the event prose. E
   // whether ANOTHER participant should take the floor, not whether a bilateral
   // counterpart is allowed to ghost the player (1:1 replies are guaranteed by UI).
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n[Autonomous Diplomacy — live override]\nA.I.-controlled polities have their own diplomacy and may negotiate, threaten, align, mediate, trade, or make agreements without waiting for ${normalizeString(variables.playerPolity) || "the player"}. Private A.I.↔A.I. diplomacy belongs in the TIMELINE as events, with every lasting consequence expressed through the existing structured impacts (for example polityChanges for alignments/reputation, regionTransfers for legal settlements, unitOps for agreed military coordination). Do NOT create a hidden or fake NPC-only chat: the player is implicit in every diplomatic chat in this game. impacts.createdChats and top-level diplomaticOutreach are ONLY for situations where one or more A.I. polities actually contact the player. A group chat means those listed polities are jointly bringing the player into the discussion, not privately talking among themselves. Keep the combined total of createdChats + diplomaticOutreach to at most 3 per jump; fewer is usually better, and zero is correct when nobody has a reason to contact the player.`;
+    systemPrompt = `${systemPrompt}\n\n[Autonomous Diplomacy — live override]\nA.I.-controlled polities have their own diplomacy and may negotiate, threaten, align, mediate, trade, or make agreements without waiting for ${normalizeString(variables.playerPolity) || "the player"}. Private A.I.↔A.I. diplomacy belongs in the TIMELINE as events. Lasting bilateral political shifts use top-level relationUpdates; signed/ratified/concluded formal treaties, alliances, guarantees and pacts use top-level agreementUpdates; polityChanges remains for polity metadata/reputation, regionTransfers for legal territorial settlements, and unitOps for concrete military coordination. Do NOT create a hidden or fake NPC-only chat: the player is implicit in every diplomatic chat in this game. impacts.createdChats and top-level diplomaticOutreach are ONLY for situations where one or more A.I. polities actually contact the player. A group chat means those listed polities are jointly bringing the player into the discussion, not privately talking among themselves. Keep the combined total of createdChats + diplomaticOutreach to at most 3 per jump; fewer is usually better, and zero is correct when nobody has a reason to contact the player.`;
 
     const diplomaticContinuity = normalizeString(variables?.diplomaticContinuity);
     if (diplomaticContinuity) {
       systemPrompt = `${systemPrompt}\n\n[Diplomatic Consequence Bridge — LIVE 5E]\nDiplomatic chats are part of the causal world state, not decorative roleplay. Before choosing this period's events, review EVERY durable diplomatic memory below and ask: "Does anything said or agreed here require a new development during the interval from ${normalizeString(variables.dateReadable) || normalizeString(variables.date) || "the origin date"} through ${normalizeString(variables.targetDateReadable) || normalizeString(variables.targetDate) || "the target date"}?"\n\n${diplomaticContinuity}\n\nEvidence rule: the "Standing diplomatic memory" is a compressed continuity aid. The "Recent verbatim diplomatic evidence" is authoritative for the exact words, actor attribution, deadlines, and modal force of recent exchanges. If a summary weakens, strengthens, or otherwise conflicts with the verbatim evidence, FOLLOW THE VERBATIM EVIDENCE. A later acknowledgement, pleasantry, or statement of mutual understanding does NOT cancel an earlier threat, promise, agreement, or declared intent unless it explicitly retracts, supersedes, or modifies it.\n\nApply these rules:\n1. MUTUAL AGREEMENT + DUE DATE: if the player and another polity explicitly agreed that a meeting, consultation, withdrawal, exchange, conference, hand-over, coordinated operation, or other concrete follow-through WILL occur on a date inside this simulated interval, that follow-through is a PRESUMPTIVE TIMELINE EVENT. Generate it unless the supplied canon shows it was already fulfilled, explicitly cancelled/superseded, prevented by a new event, or genuinely too trivial to be newsworthy. If such a commitment is already OVERDUE at the origin date and no fulfillment/cancellation appears in canon, do not forget it either: generate the belated follow-through, cancellation, breach, postponement, or other concrete explanation that best fits the world.\n2. AGREEMENT WITHOUT A FIXED DATE: preserve it as an active commitment and let it shape events; generate implementation when the period/context naturally reaches it.\n3. UNILATERAL DECLARATION: if a polity explicitly said it WILL take an action, treat that declaration as strong evidence of intent, but still simulate whether circumstances permit execution. For the human-controlled ${normalizeString(variables.playerPolity) || "player polity"}, only treat an explicit player chat statement as authorization when it plainly commits to the action; vague discussion is not an order.\n4. THREAT / WARNING / SUSPICIOUS INFORMATION: these do NOT automatically force one scripted reaction. They create DECISION PRESSURE on the affected A.I. polity. You must evaluate that pressure as part of this jump instead of merely remembering the words.\n   - IMMINENT, EXPLICIT THREAT OR ULTIMATUM: a direct credible statement such as "we will invade you in 24 hours", "withdraw by tomorrow or we attack", or an equally immediate military threat is CRITICAL pressure. Unless there is a concrete reason the target believes the threat is impossible, unserious, already withdrawn, or otherwise neutralized, the threatened A.I. polity should normally take at least one timely protective or diplomatic action BEFORE the threatened deadline: mobilize/redeploy forces, raise military readiness, alert allies, issue a protest/ultimatum, seek guarantees, evacuate exposed assets, or another contextually rational response. Do NOT require it to choose a specific response; choose what that government would realistically do.\n   - AMBIGUOUS MILITARY / LOGISTICAL SIGNAL: information such as new depots, rail improvements, exercises, reconnaissance, or logistical hubs near a frontier is NOT proof of hostile intent. Evaluate trust, alliances, recent crises, geography, military balance, prior assurances, and the actor's reputation. A cautious government may increase readiness or investigate; a trusting government may deliberately do nothing extraordinary. Either is valid. Do not manufacture an event merely to prove that the signal was noticed.\n   - POLITICAL / ECONOMIC / DIPLOMATIC SIGNAL: sanctions threats, alliance feelers, guarantees, recognition disputes, trade pressure, or severe diplomatic warnings should likewise alter the affected A.I. polity's choices when consequential, but rhetoric alone need not create a timeline event.\n   - SILENCE IS A DECISION ONLY WHEN PLAUSIBLE: for serious but ambiguous signals, "no extraordinary action" may be the correct outcome and need not be narrated. For an imminent credible invasion threat, silent inaction should be exceptional and supported by the world context, not the default.\n5. REACTIVE CONSEQUENCES ARE OWN ACTIONS: when an A.I. polity reacts, simulate ITS response as a new world event or diplomatic outreach where appropriate. Do not convert the original speaker's words into the target's action. An A.I. protest/contact with the player may use diplomaticOutreach/createdChats; internal cabinet decisions, mobilization, alliance coordination, deployments, investigations, and similar responses belong in timeline events.\n6. PROPOSAL OR REQUEST: a proposal that was never accepted is NOT an agreement. Do not turn it into accomplished fact. The recipient may still react to the proposal itself if accepting, rejecting, countering, preparing, or seeking clarification would be strategically meaningful.\n7. FOLLOW-THROUGH MUST BE NEW: if the commitment's implementation or the reaction already appears in Event History, do not restate it. If a new event makes the commitment impossible, narrate the cancellation/failure/breach instead when that is important.\n8. STRUCTURE REAL CONSEQUENCES: when follow-through or reaction changes persistent state, emit the proper impacts in the SAME event. A meeting or cabinet decision with no mechanical effect may simply be an event. Actual mobilization/redeployment/reinforcement uses unitOps and should reuse existing units where appropriate; spawn only genuinely new mobilized formations. A legal territorial settlement uses regionTransfers; lasting alignment/reputation changes use polityChanges. Do not narrate a concrete military movement that the structured impacts fail to represent.\n9. REACTION TIMING: consequences should occur when a competent government would actually act. An ultimatum expiring in 24 hours may warrant same-day or next-day response; an ambiguous infrastructure signal may take days or weeks to trigger policy. Do not postpone a clearly time-sensitive reaction until after the danger has passed merely because other storylines are active.\n10. REACTION-TARGET INTEGRITY: for every consequential diplomatic memory, identify (a) the polity that originated the signal/request/threat, (b) the polity or polities affected by it, and (c) any explicit response or declared intent already stated by the affected polity. A new event by the ORIGINAL SIGNALING polity does NOT satisfy the affected polity's reaction audit. Example: Germany announces frontier logistics work to Russia; a later German readiness event is not a Russian reaction. Evaluate Russia separately.\n11. RECIPIENT-DECLARED INTENT: inspect the recent verbatim evidence as well as the summary. If the affected A.I. polity itself has already replied with language such as "we must take measures", "we will mobilize", "we intend to reinforce", "we shall consult our allies", or another clear statement of intended action, treat that as a UNILATERAL DECLARATION by that polity, not merely as generic concern. Unless later dialogue/canon EXPLICITLY retracts or supersedes it, the next suitable simulation interval should normally show concrete follow-through or a concrete reason it was delayed/abandoned. Mere acknowledgement or calmer diplomatic language is not a retraction. Preserve proportionality: "take necessary defensive measures" need not mean full mobilization, but it should not silently collapse into no action by default.\n12. INTERNAL DECISION AUDIT: before finalizing the event set, silently review each durable diplomatic memory that contains a threat, warning, declaration, request, or strategically significant disclosure. For EACH affected A.I. polity decide one of: REACT NOW / REACT LATER / NO EXTRAORDINARY REACTION. Check that any output event actually belongs to the affected polity whose reaction you are evaluating. Only output resulting world events/chats that are newsworthy; never output this audit or filler events saying a government "decided to do nothing."\n\nThis bridge does NOT mean every diplomatic sentence deserves an event. It means explicit commitments and consequential signals must participate in normal event selection instead of being disconnected from the simulation.`;
+    }
+  }
+
+  if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) {
+    const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
+    if (canonicalDiplomacy) {
+      systemPrompt = `${systemPrompt}
+
+[Canonical Diplomatic State — LIVE 7B]
+${canonicalDiplomacy}`;
     }
   }
 
@@ -2461,6 +2494,8 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
     events,
     storylineUpdates: "",
     warUpdates: "",
+    relationUpdates: "",
+    agreementUpdates: "",
     stopDate: targetDate,
     summary:
       plannedActions.length > 0
@@ -2686,6 +2721,15 @@ if (canonicalWarError) {
   throw new Error(`[canonical war-state] ${canonicalWarError}`);
 }
 
+const canonicalDiplomaticError = validateDiplomaticLedgerPayload({
+  events: territoryEvents,
+  relationUpdates: normalizeArray(result.relationUpdates),
+  agreementUpdates: normalizeArray(result.agreementUpdates),
+}, { world: baseWorld });
+if (canonicalDiplomaticError) {
+  throw new Error(`[canonical diplomatic-state] ${canonicalDiplomaticError}`);
+}
+
 const nextEvents = [...priorEvents, ...territoryEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
@@ -2735,6 +2779,16 @@ const nextEvents = [...priorEvents, ...territoryEvents];
               .map((entry) => normalizeString(entry?.id))
               .filter(Boolean),
           )],
+          relationIds: [...new Set(
+            normalizeArray(result.relationUpdates)
+              .map((entry) => relationPairKeyForHistory(entry?.a, entry?.b))
+              .filter(Boolean),
+          )],
+          agreementIds: [...new Set(
+            normalizeArray(result.agreementUpdates)
+              .map((entry) => normalizeString(entry?.id))
+              .filter(Boolean),
+          )],
           toDate: nextGame.gameDate,
         },
         ...normalizeWorldState(baseWorld).simulationHistory,
@@ -2749,8 +2803,17 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     round: nextGame.round,
   });
 
-  const storylineMerge = applyWorldStorylineUpdates({
+  const diplomaticMerge = applyDiplomaticUpdates({
     world: warMerge.world,
+    relationUpdates: normalizeArray(result.relationUpdates),
+    agreementUpdates: normalizeArray(result.agreementUpdates),
+    events: territoryEvents,
+    stopDate: nextGame.gameDate,
+    round: nextGame.round,
+  });
+
+  const storylineMerge = applyWorldStorylineUpdates({
+    world: diplomaticMerge.world,
     updates: normalizeArray(result.storylineUpdates),
     events: territoryEvents,
     stopDate: nextGame.gameDate,
@@ -3831,8 +3894,17 @@ const advanceWorkingBundleForWorldPass = async ({
     round: bundle.game.round || 1,
   });
 
-  const storylineMerge = applyWorldStorylineUpdates({
+  const diplomaticMerge = applyDiplomaticUpdates({
     world: warMerge.world,
+    relationUpdates: normalizeArray(result.relationUpdates),
+    agreementUpdates: normalizeArray(result.agreementUpdates),
+    events: freshEvents,
+    stopDate: nextGame.gameDate,
+    round: bundle.game.round || 1,
+  });
+
+  const storylineMerge = applyWorldStorylineUpdates({
+    world: diplomaticMerge.world,
     updates: normalizeArray(result.storylineUpdates),
     events: freshEvents,
     stopDate: nextGame.gameDate,
@@ -3902,8 +3974,24 @@ const formatDurationLabel = (days) => {
 export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
   beginSimulation();
   try {
-    const initialBundle = await readGameStateBundle({ force: true });
+    let initialBundle = await readGameStateBundle({ force: true });
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
+
+    const diplomaticMigration = migrateLegacyDiplomaticState({
+      world: initialBundle.world,
+      events: initialBundle.events,
+      chats: initialBundle.chats,
+      game: initialBundle.game,
+    });
+    if (diplomaticMigration.migrated) {
+      initialBundle = { ...initialBundle, world: diplomaticMigration.world };
+      console.info(
+        `[OH diplomacy migration 7B] scanned ${diplomaticMigration.scannedEvents} legacy event(s) and ` +
+        `${diplomaticMigration.scannedChats || 0} chat thread(s); seeded ${diplomaticMigration.agreementsAdded} agreement(s) ` +
+        `(${diplomaticMigration.chatAgreementsAdded || 0} from explicit standing-alliance chat evidence) and ` +
+        `${diplomaticMigration.relationsAdded} sparse relation(s).`,
+      );
+    }
 
     // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the
     // persisted game date itself advances in whole days.
@@ -3953,6 +4041,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     const accumulatedOutreach = [];
     const accumulatedStorylineUpdates = [];
     const accumulatedWarUpdates = [];
+    const accumulatedRelationUpdates = [];
+    const accumulatedAgreementUpdates = [];
     const accumulatedSummaries = [];
     const passGenerations = [];
     let latestCatalyst = null;
@@ -4018,7 +4108,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
           mode === "auto"
             ? `Simulate an auto-jump and stop at the next genuinely notable or player-relevant event. Return JSON only. ` +
               `Generate ONLY causally warranted new developments before that stop point, at most ${passMaxEvents} events. ` +
-              `There is no minimum event count or event-density quota. Return the compact storylineUpdates string for every due persistent process AND warUpdates for every canonical belligerency transition (empty string when none).`
+              `There is no minimum event count or event-density quota. Return compact storylineUpdates for every due persistent process, warUpdates for every canonical belligerency transition, relationUpdates for material bilateral political changes, and agreementUpdates for formal treaty/commitment lifecycle changes; use empty strings when a ledger does not change.`
             : `This is internal whole-world pass ${passIndex + 1} of ${windows.length} inside one user-requested fixed jump. ` +
               `Simulate ONLY ${passOriginDate} through ${passTargetDate} (${durationLabel}) and return JSON only. ` +
               `Generate ONLY causally warranted new developments, at most ${passMaxEvents} visible events. ` +
@@ -4026,7 +4116,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
               `Advance the scheduler-selected persistent storylines, but do NOT let one crisis monopolize the world: ` +
               `also evaluate independent diplomacy, domestic politics, economics, military change, regional pressures and genuinely new initiatives where current causes warrant them. ` +
               `Do not create filler for breadth. Return compact storylineUpdates for every due process and every new unresolved process, with semantic state through THIS pass stopDate. ` +
-              `Return warUpdates for every declaration/join/leave/ceasefire/resume/end in this pass; hard combat is legal only inside an active canonical war.`,
+              `Return warUpdates for every declaration/join/leave/ceasefire/resume/end in this pass; hard combat is legal only inside an active canonical war. Return relationUpdates only for material bilateral political shifts and agreementUpdates for every formal signed/ratified/concluded commitment or later lifecycle change; empty strings are correct when unchanged.`,
         validatePayload: async (candidate, { finalAttempt } = {}) => {
           const strict = !finalAttempt;
           const eventCount = normalizeArray(candidate?.events).length;
@@ -4059,6 +4149,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
           });
           if (warError) return warError;
 
+          const diplomaticError = validateDiplomaticLedgerPayload(candidate, {
+            world: workingBundle.world,
+          });
+          if (diplomaticError) return diplomaticError;
+
           const storylineError = validateWorldStorylinePayload(candidate, {
             existingStorylines: workingBundle.world?.storylines,
             selectedStorylines: worldInitiative.analysis?.attentionStorylines,
@@ -4086,6 +4181,14 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
         decodeWarUpdates(payload?.warUpdates),
         passEvents,
       );
+      const decodedRelationUpdates = bindRelationUpdatesToEvents(
+        decodeRelationUpdates(payload?.relationUpdates),
+        passEvents,
+      );
+      const decodedAgreementUpdates = bindAgreementUpdatesToEvents(
+        decodeAgreementUpdates(payload?.agreementUpdates),
+        passEvents,
+      );
 
       const passResult = {
         catalyst: payload?.catalyst ?? null,
@@ -4095,6 +4198,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
         outreach: normalizeArray(payload?.diplomaticOutreach),
         storylineUpdates: decodedStorylineUpdates,
         warUpdates: decodedWarUpdates,
+        relationUpdates: decodedRelationUpdates,
+        agreementUpdates: decodedAgreementUpdates,
         stopDate: normalizeString(payload?.stopDate) || passTargetDate,
         summary: normalizeString(payload?.summary),
         generation,
@@ -4113,6 +4218,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       accumulatedOutreach.push(...normalizeArray(passResult.outreach));
       accumulatedStorylineUpdates.push(...decodedStorylineUpdates);
       accumulatedWarUpdates.push(...decodedWarUpdates);
+      accumulatedRelationUpdates.push(...decodedRelationUpdates);
+      accumulatedAgreementUpdates.push(...decodedAgreementUpdates);
       if (passResult.summary) accumulatedSummaries.push(passResult.summary);
       if (passResult.catalyst) latestCatalyst = passResult.catalyst;
       clearActions = clearActions || passResult.clearActions;
@@ -4125,7 +4232,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
 
       console.info(
         `[OH world-pass ${passIndex + 1}/${windows.length}] produced ${advanced.freshEvents.length} new event(s), ` +
-        `${decodedStorylineUpdates.length} storyline update(s), ${decodedWarUpdates.length} war update(s); ` +
+        `${decodedStorylineUpdates.length} storyline update(s), ${decodedWarUpdates.length} war update(s), ` +
+        `${decodedRelationUpdates.length} relation update(s), ${decodedAgreementUpdates.length} agreement update(s); ` +
         `${normalizeArray(workingBundle.world?.storylines).length} storyline(s), ` +
         `${normalizeArray(workingBundle.world?.wars).filter((war) => war?.status !== "ended").length} current conflict(s).`,
       );
@@ -4149,6 +4257,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       outreach: accumulatedOutreach,
       storylineUpdates: accumulatedStorylineUpdates,
       warUpdates: accumulatedWarUpdates,
+      relationUpdates: accumulatedRelationUpdates,
+      agreementUpdates: accumulatedAgreementUpdates,
       stopDate: targetDate,
       summary: accumulatedSummaries.filter(Boolean).join(" ").slice(0, 5000),
       generation: finalGeneration,
@@ -4188,6 +4298,8 @@ export const applyGameMasterCommand = async (requestText) => {
         regionControlOps: [],
       },
       warUpdates: "",
+      relationUpdates: "",
+      agreementUpdates: "",
       summary: "No deterministic GM fallback changes were inferred from the request.",
     }),
     userMessage: "Apply the GM request as JSON only.",
@@ -4230,6 +4342,25 @@ export const applyGameMasterCommand = async (requestText) => {
     throw new Error(`[canonical war-state] ${gmWarError}`);
   }
 
+  const gmRelationUpdates = bindRelationUpdatesToEvents(
+    decodeRelationUpdates(payload?.relationUpdates)
+      .map((update) => ({ ...update, eventIndexes: [0], eventIds: [] })),
+    [gmEvent],
+  );
+  const gmAgreementUpdates = bindAgreementUpdatesToEvents(
+    decodeAgreementUpdates(payload?.agreementUpdates)
+      .map((update) => ({ ...update, eventIndexes: [0], eventIds: [] })),
+    [gmEvent],
+  );
+  const gmDiplomaticError = validateDiplomaticLedgerPayload({
+    events: [gmEvent],
+    relationUpdates: gmRelationUpdates,
+    agreementUpdates: gmAgreementUpdates,
+  }, { world: bundle.world });
+  if (gmDiplomaticError) {
+    throw new Error(`[canonical diplomatic-state] ${gmDiplomaticError}`);
+  }
+
   return applySimulationResult({
     baseActions: bundle.actions,
     baseChats: bundle.chats,
@@ -4242,6 +4373,8 @@ export const applyGameMasterCommand = async (requestText) => {
       clearActions: false,
       events: [gmEvent],
       warUpdates: gmWarUpdates,
+      relationUpdates: gmRelationUpdates,
+      agreementUpdates: gmAgreementUpdates,
       storylineUpdates: [],
       mode: "game-master",
       stopDate: bundle.game.gameDate,
