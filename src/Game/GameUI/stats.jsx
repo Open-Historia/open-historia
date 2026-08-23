@@ -4,6 +4,7 @@ import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
@@ -144,11 +145,309 @@ const EconomyCard = ({ label, value, sub, tone }) => (
 
 const stabilityColor = (value) => (value < 40 ? "#ef4444" : value < 70 ? "#f59e0b" : "#22c55e");
 
+const cleanText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+const lowerText = (value) => cleanText(value).toLocaleLowerCase();
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
+const canonicalPolityKey = (value, world) => {
+    const raw = cleanText(value);
+    if (!raw) return "";
+    try {
+        const resolved = resolvePolityIdentity(raw, world, {
+            allowUnknown: true,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        if (cleanText(resolved?.resolved)) return cleanText(resolved.resolved);
+    } catch {
+        // Diplomacy UI must remain readable even if an old save contains a stale name.
+    }
+    return raw;
+};
+
+const polityDisplayName = (world, value) => {
+    const key = canonicalPolityKey(value, world);
+    if (!key) return "Unknown polity";
+    const direct = world?.polityOverrides?.[key];
+    if (cleanText(direct?.name)) return cleanText(direct.name);
+    for (const [candidateKey, candidate] of Object.entries(world?.polityOverrides || {})) {
+        if (lowerText(candidateKey) === lowerText(key)) return cleanText(candidate?.name) || cleanText(candidateKey);
+    }
+    return key;
+};
+
+// Match the canonical 7B rule: score is authoritative and the semantic
+// relation band is derived deterministically from it. Old saves may still
+// contain a stale status string; the UI deliberately does not trust it.
+const relationStatusForScore = (score = 0) => {
+    const numeric = Math.max(-100, Math.min(100, Math.round(Number(score) || 0)));
+    if (numeric >= 55) return "friendly";
+    if (numeric >= 20) return "cordial";
+    if (numeric >= -10) return "neutral";
+    if (numeric >= -30) return "cautious";
+    if (numeric >= -60) return "strained";
+    if (numeric > -90) return "hostile";
+    return "rival";
+};
+
+const relationTone = (score = 0) => {
+    const key = relationStatusForScore(score);
+    if (["hostile", "rival"].includes(key)) return "#f87171";
+    if (key === "strained") return "#fb923c";
+    if (key === "cautious") return "#fbbf24";
+    if (key === "friendly") return "#34d399";
+    if (key === "cordial") return "#60a5fa";
+    return "#cbd5e1";
+};
+
+const formatRelationScore = (value) => {
+    const number = Math.max(-100, Math.min(100, Math.round(Number(value) || 0)));
+    return `${number > 0 ? "+" : ""}${number}`;
+};
+
+const prettyToken = (value) => cleanText(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const statusBadgeStyle = (tone) => ({
+    backgroundColor: `${tone}1f`,
+    border: `1px solid ${tone}66`,
+    borderRadius: "999px",
+    color: tone,
+    display: "inline-flex",
+    fontSize: "0.58rem",
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    lineHeight: 1,
+    padding: "0.18rem 0.38rem",
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+});
+
+const agreementStatusTone = (status) => {
+    const key = lowerText(status);
+    if (key === "active") return "#34d399";
+    if (key === "suspended") return "#fbbf24";
+    return "#94a3b8";
+};
+
+const warStatusTone = (status) => (lowerText(status) === "active" ? "#f87171" : "#fbbf24");
+
+const RelationMeter = ({ score, tone }) => {
+    const value = Math.max(-100, Math.min(100, Number(score) || 0));
+    const width = `${Math.abs(value) / 2}%`;
+    return (
+        <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "999px", height: "5px", marginTop: "0.38rem", overflow: "hidden", position: "relative" }}>
+        <div style={{ backgroundColor: "rgba(255,255,255,0.22)", height: "100%", left: "50%", position: "absolute", top: 0, width: "1px" }} />
+        <div style={{ backgroundColor: tone, borderRadius: "999px", height: "100%", left: value >= 0 ? "50%" : `calc(50% - ${width})`, position: "absolute", top: 0, width }} />
+        </div>
+    );
+};
+
+const DiplomacyMetric = ({ label, value, tone = "#e5e7eb" }) => (
+    <div style={{ ...cardStyle, minWidth: 0, padding: "0.55rem 0.6rem" }}>
+    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+    {label}
+    </div>
+    <div data-no-translate style={{ color: tone, fontSize: "1rem", fontWeight: 900, marginTop: "0.2rem" }}>{value}</div>
+    </div>
+);
+
+const DiplomacySection = ({ world, targetCountry }) => {
+    const diplomacy = useMemo(() => {
+        if (!world || !targetCountry) return null;
+        const target = canonicalPolityKey(targetCountry, world);
+        const targetKey = lowerText(target);
+        if (!targetKey) return null;
+
+        const relations = asArray(world.relations)
+            .map((relation) => {
+                const a = canonicalPolityKey(relation?.a, world);
+                const b = canonicalPolityKey(relation?.b, world);
+                const aKey = lowerText(a);
+                const bKey = lowerText(b);
+                if (aKey !== targetKey && bKey !== targetKey) return null;
+                const counterpart = aKey === targetKey ? b : a;
+                return {
+                    ...relation,
+                    counterpart,
+                    counterpartName: polityDisplayName(world, counterpart),
+                    displayStatus: relationStatusForScore(relation?.score),
+                };
+            })
+            .filter(Boolean)
+            .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || left.counterpartName.localeCompare(right.counterpartName));
+
+        const agreements = asArray(world.agreements)
+            .map((agreement) => {
+                const parties = asArray(agreement?.parties).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
+                if (!parties.some((party) => lowerText(party) === targetKey)) return null;
+                const counterparts = parties
+                    .filter((party) => lowerText(party) !== targetKey)
+                    .map((party) => polityDisplayName(world, party));
+                return { ...agreement, counterparts };
+            })
+            .filter(Boolean)
+            .sort((left, right) => {
+                const rank = { active: 0, suspended: 1, ended: 2, expired: 3 };
+                return (rank[lowerText(left.status)] ?? 9) - (rank[lowerText(right.status)] ?? 9) ||
+                    String(right.lastUpdatedDate || right.startedDate || "").localeCompare(String(left.lastUpdatedDate || left.startedDate || ""));
+            });
+
+        const currentWars = asArray(world.wars)
+            .filter((war) => ["active", "ceasefire"].includes(lowerText(war?.status)))
+            .map((war) => {
+                const sideA = asArray(war?.sideA).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
+                const sideB = asArray(war?.sideB).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
+                const onA = sideA.some((party) => lowerText(party) === targetKey);
+                const onB = sideB.some((party) => lowerText(party) === targetKey);
+                if (!onA && !onB) return null;
+                const opponents = (onA ? sideB : sideA).map((party) => polityDisplayName(world, party));
+                return { ...war, opponents };
+            })
+            .filter(Boolean)
+            .sort((left, right) => String(right.lastUpdatedDate || right.startedDate || "").localeCompare(String(left.lastUpdatedDate || left.startedDate || "")));
+
+        return {
+            relations,
+            agreements,
+            currentWars,
+            activeAgreements: agreements.filter((agreement) => lowerText(agreement.status) === "active").length,
+        };
+    }, [world, targetCountry]);
+
+    if (!diplomacy) return null;
+
+    return (
+        <>
+        <div style={sectionTitleStyle}>🤝 Diplomacy</div>
+        <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+        <DiplomacyMetric label="Relations" value={diplomacy.relations.length} tone="#60a5fa" />
+        <DiplomacyMetric label="Active agreements" value={diplomacy.activeAgreements} tone="#34d399" />
+        <DiplomacyMetric label="Conflicts" value={diplomacy.currentWars.length} tone={diplomacy.currentWars.length ? "#f87171" : "#94a3b8"} />
+        </div>
+
+        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
+        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.55rem 0.65rem" }}>
+        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800 }}>Bilateral relations</span>
+        <span style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.6rem" }}>−100 to +100</span>
+        </div>
+        {diplomacy.relations.length ? diplomacy.relations.map((relation, index) => {
+            const tone = relationTone(relation.score);
+            return (
+                <div key={relation.id || `${relation.counterpart}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                <div style={{ alignItems: "flex-start", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+                <div style={{ minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.88)", fontSize: "0.74rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {relation.counterpartName}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", marginTop: "0.12rem" }}>
+                {relation.summary || "Tracked bilateral relationship."}
+                </div>
+                </div>
+                <div style={{ alignItems: "flex-end", display: "flex", flexDirection: "column", flexShrink: 0, gap: "0.2rem" }}>
+                <span data-no-translate style={{ color: tone, fontSize: "0.9rem", fontWeight: 900 }}>{formatRelationScore(relation.score)}</span>
+                <span style={statusBadgeStyle(tone)}>{prettyToken(relation.displayStatus)}</span>
+                </div>
+                </div>
+                <RelationMeter score={relation.score} tone={tone} />
+                </div>
+            );
+        }) : (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
+            No tracked bilateral relations. An absent record is not the same as explicit neutrality.
+            </div>
+        )}
+        </div>
+
+        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
+        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>
+        Formal agreements
+        </div>
+        {diplomacy.agreements.length ? diplomacy.agreements.map((agreement, index) => {
+            const tone = agreementStatusTone(agreement.status);
+            const counterpartText = agreement.counterparts.length ? agreement.counterparts.join(" · ") : "Multilateral agreement";
+            return (
+                <div key={agreement.id || `${agreement.title}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
+                <div style={{ minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750 }}>{agreement.title || "Untitled agreement"}</div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
+                {prettyToken(agreement.type || "other")} · {counterpartText}
+                </div>
+                {agreement.lastUpdatedDate && (
+                    <div data-no-translate style={{ color: "rgba(255,255,255,0.28)", fontSize: "0.58rem", marginTop: "0.12rem" }}>
+                    Updated {agreement.lastUpdatedDate}
+                    </div>
+                )}
+                </div>
+                <span style={statusBadgeStyle(tone)}>{prettyToken(agreement.status || "active")}</span>
+                </div>
+                </div>
+            );
+        }) : (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
+            No canonical formal agreements involving this polity.
+            </div>
+        )}
+        </div>
+
+        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
+        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>
+        Current conflicts
+        </div>
+        {diplomacy.currentWars.length ? diplomacy.currentWars.map((war, index) => {
+            const tone = warStatusTone(war.status);
+            return (
+                <div key={war.id || `${war.title}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
+                <div style={{ minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750 }}>
+                vs {war.opponents.length ? war.opponents.join(" · ") : "Unknown opponent"}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
+                {war.title || "Canonical conflict"}{war.startedDate ? ` · since ${war.startedDate}` : ""}
+                </div>
+                </div>
+                <span style={statusBadgeStyle(tone)}>{prettyToken(war.status || "active")}</span>
+                </div>
+                </div>
+            );
+        }) : (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
+            No active or ceasefire canonical conflicts involving this polity.
+            </div>
+        )}
+        </div>
+        </>
+    );
+};
+
+const statsSubtabStyle = (selected) => ({
+    alignItems: "center",
+    backgroundColor: selected ? "rgba(59,130,246,0.13)" : "rgba(255,255,255,0.025)",
+    border: `1px solid ${selected ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.09)"}`,
+    borderRadius: "8px",
+    color: selected ? "#bfdbfe" : "rgba(255,255,255,0.58)",
+    cursor: "pointer",
+    display: "flex",
+    flex: 1,
+    fontSize: "0.72rem",
+    fontWeight: 800,
+    justifyContent: "center",
+    minHeight: "2.45rem",
+    padding: "0.45rem 0.55rem",
+    transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
+});
+
 const StatsPane = ({ active }) => {
     const { activeGameId } = useLibraryState();
     const [player, setPlayer] = useState({ code: "", date: "", gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
+    const [worldSnapshot, setWorldSnapshot] = useState(null);
+    const [statsView, setStatsView] = useState("diplomacy");
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
     // Is the PLAYER stateless (holds no territory)? A landless player's code may
@@ -185,6 +484,7 @@ const StatsPane = ({ active }) => {
                 if (player.gameKey !== nextPlayer.gameKey) {
                     setTargetCountry(code);
                     setState({ status: "idle", sheet: null, error: "" });
+                    setWorldSnapshot(null);
                 } else {
                     setTargetCountry((target) => target || code);
                 }
@@ -221,7 +521,7 @@ const StatsPane = ({ active }) => {
         return () => setRegionClickObserver(null);
     }, [active]);
 
-    const loadSheet = useCallback(async ({ force = false } = {}) => {
+    const loadSheet = useCallback(async ({ force = false, forceReassess = false } = {}) => {
         const code = targetCountry;
         if (!code) return;
         const cacheKey = `${player.gameKey}:${code}`;
@@ -264,7 +564,7 @@ const StatsPane = ({ active }) => {
                 if (liveName) generationName = liveName;
             } catch { /* display-name lookup is non-fatal */ }
 
-            const generated = await generateCountryStatSheet({ code, name: generationName });
+            const generated = await generateCountryStatSheet({ code, name: generationName, forceReassess });
             const validation = validateGameplayPayload("countryStatSheet", generated);
             if (!validation.valid) throw new Error(`The stat sheet failed validation: ${validation.error}`);
             // generateCountryStatSheet already receives the previous persistent sheet as
@@ -292,10 +592,15 @@ const StatsPane = ({ active }) => {
         loadSheet();
         readWorldState({ force: false })
             .then((world) => {
+                setWorldSnapshot(world || {});
                 setPolity(world?.polityOverrides?.[targetCountry] ?? null);
                 setPlayerLandless(isPolityLandless(world, player.code));
             })
-            .catch(() => { setPolity(null); setPlayerLandless(false); });
+            .catch(() => {
+                setWorldSnapshot(null);
+                setPolity(null);
+                setPlayerLandless(false);
+            });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [active, targetCountry, player.date]);
 
@@ -391,22 +696,38 @@ const StatsPane = ({ active }) => {
                 </>
             )}
             </div>
-            {state.status !== "loading" && (
+            {statsView === "economy" && state.status !== "loading" && (
                 <button
-                onClick={() => loadSheet({ force: true })}
-                title="Regenerate this stat sheet"
+                onClick={(event) => loadSheet({ force: true, forceReassess: event.shiftKey })}
+                title="Refresh stat sheet · Shift+click = force fresh baseline"
+                aria-label="Refresh stat sheet; hold Shift while clicking to force a fresh baseline"
                 style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1rem", padding: 0 }}
                 >↻</button>
             )}
             </div>
 
-            {state.status === "loading" && (
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.9rem" }}>
+            <button
+            type="button"
+            aria-pressed={statsView === "diplomacy"}
+            onClick={() => setStatsView("diplomacy")}
+            style={statsSubtabStyle(statsView === "diplomacy")}
+            >🤝 Diplomacy</button>
+            <button
+            type="button"
+            aria-pressed={statsView === "economy"}
+            onClick={() => setStatsView("economy")}
+            style={statsSubtabStyle(statsView === "economy")}
+            >📈 Economy</button>
+            </div>
+
+            {statsView === "economy" && state.status === "loading" && (
                 <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.82rem", marginTop: "1rem" }}>
-                Compiling the stat sheet…
+                Compiling national statistics…
                 </p>
             )}
 
-            {state.status === "error" && (
+            {statsView === "economy" && state.status === "error" && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>
                 {state.error}
                 <button
@@ -416,7 +737,17 @@ const StatsPane = ({ active }) => {
                 </div>
             )}
 
-            {sheet && state.status === "ready" && (
+            {statsView === "diplomacy" && worldSnapshot && (
+                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} />
+            )}
+
+            {statsView === "diplomacy" && !worldSnapshot && (
+                <p style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.76rem", marginTop: "1rem" }}>
+                Loading diplomatic state…
+                </p>
+            )}
+
+            {statsView === "economy" && sheet && state.status === "ready" && (
                 <>
                 {/* National stability */}
                 <div style={{ ...cardStyle, marginTop: "1rem" }}>

@@ -12,6 +12,7 @@ import { openCountryPanel } from "./CountryPanel.jsx";
 let _setSelection = null;
 let _currentSelection = null;
 let _dismiss = null;
+let _selectionRequestSerial = 0;
 // Cheats' click-to-annex/edit tools grab the next map click(s) instead of the
 // normal region popup. The interceptor returns true to consume the click.
 let _clickInterceptor = null;
@@ -20,17 +21,91 @@ export const setRegionClickInterceptor = (fn) => {
     _clickInterceptor = typeof fn === "function" ? fn : null;
 };
 
-// Passive tap on every region click (the Stats tab watches which country the
-// player is inspecting). Never consumes the click — popups still open.
+// Passive tap on every normal region click (the Stats tab watches which country
+// the player is inspecting). Never consumes the click — popups still open.
 let _clickObserver = null;
 
 export const setRegionClickObserver = (fn) => {
     _clickObserver = typeof fn === "function" ? fn : null;
 };
 
-export const onRegionSelected = (props) => {
+const cleanSelectionValue = (value) => String(value ?? "").trim();
+
+const currentRegionId = (props) =>
+    cleanSelectionValue(
+        props?.GID_1 ??
+        props?.gid_1 ??
+        props?.id ??
+        "",
+    );
+
+// Normalize selection identity at the source boundary.
+//
+// Base-map vector tiles keep their original country metadata forever, even after
+// conquest, annexation, occupation, editor changes, or other live ownership
+// mutations. Every downstream region-click consumer should therefore see the
+// current canonical controller from world.regionOwnershipOverrides when one is
+// present. The original geographic GID_0 is retained in `gid0` as provenance.
+//
+// This replaces the old DevTools Region Owner Fix with a native, universal path:
+// no country names, ISO assumptions, React-fiber surgery, or Stats-specific patch.
+const resolveLiveSelectionProps = async (props) => {
+    if (!props || typeof props !== "object") return props;
+
+    const regionId = currentRegionId(props);
+    if (!regionId) return props;
+
+    let world;
+    try {
+        // Region ownership may have changed seconds ago through cheats, GM/editor,
+        // war control, or normal simulation. Force a fresh read for click identity
+        // rather than trusting stale tile metadata or a long-lived UI cache.
+        world = await readWorldState({ force: true });
+    } catch {
+        return props;
+    }
+
+    const overrides =
+        world?.regionOwnershipOverrides &&
+        typeof world.regionOwnershipOverrides === "object"
+            ? world.regionOwnershipOverrides
+            : {};
+
+    if (!Object.prototype.hasOwnProperty.call(overrides, regionId)) {
+        return props;
+    }
+
+    const rawController = cleanSelectionValue(overrides[regionId]);
+    const resolvedController = rawController
+        ? resolvePolityIdentity(rawController, world, {
+            allowUnknown: true,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        }).resolved || rawController
+        : "";
+
+    const baseGid0 = cleanSelectionValue(
+        props.gid0 ??
+        props.GID_0 ??
+        "",
+    );
+
+    return {
+        ...props,
+        // Current controller/owner is authoritative for every normal consumer.
+        COUNTRY: resolvedController,
+        GID_0: resolvedController,
+        owner: resolvedController,
+        // Keep the baked geographic/base identity separately for provenance.
+        gid0: baseGid0,
+    };
+};
+
+const commitRegionSelection = (props) => {
+    if (!props || typeof props !== "object") return;
+
     try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
-    if (_clickInterceptor && _clickInterceptor(props)) return;
 
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
@@ -49,12 +124,33 @@ export const onRegionSelected = (props) => {
     }
 };
 
+export const onRegionSelected = (props) => {
+    // Cheat/editor click interceptors operate on the raw click synchronously and
+    // remain authoritative. A consumed click is not a normal inspection click.
+    if (_clickInterceptor && _clickInterceptor(props)) return;
+
+    const serial = ++_selectionRequestSerial;
+
+    resolveLiveSelectionProps(props)
+        .then((liveProps) => {
+            // Ignore an older async owner lookup if the user clicked elsewhere.
+            if (serial !== _selectionRequestSerial) return;
+            commitRegionSelection(liveProps);
+        })
+        .catch(() => {
+            if (serial !== _selectionRequestSerial) return;
+            commitRegionSelection(props);
+        });
+};
+
 export const onOceanClicked = () => {
+    _selectionRequestSerial++;
     if (_currentSelection) _dismiss?.();
 };
 
 // Dismiss the region popup when another selection (e.g. a unit) takes over.
 export const dismissRegionPopup = () => {
+    _selectionRequestSerial++;
     if (_currentSelection) _dismiss?.();
 };
 

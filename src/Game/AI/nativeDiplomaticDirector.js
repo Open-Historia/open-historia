@@ -15,7 +15,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
-export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.2";
+export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.3";
 
 const SEP = "~";
 const MAX_RELATION_UPDATES_PER_PASS = 20;
@@ -145,16 +145,19 @@ export const relationIdForPair = (a, b, world = null) => {
   return key ? `relation-${stableHash(key)}` : "";
 };
 
-const normalizeRelationStatus = (value, score = 0) => {
-  const explicit = lower(value);
-  if (RELATION_STATUS_SET.has(explicit)) return explicit;
-  const numeric = Number(score);
+// The numeric score is the canonical bilateral-climate value. Status is a
+// deterministic presentation/reasoning band derived from that score, never a
+// second independently authoritative opinion. This prevents contradictory
+// states such as +25 / strained and +18 / cordial.
+const normalizeRelationStatus = (_value, score = 0) => {
+  const numeric = clamp(Math.round(Number(score) || 0), -100, 100);
   if (numeric >= 55) return "friendly";
   if (numeric >= 20) return "cordial";
   if (numeric >= -10) return "neutral";
   if (numeric >= -30) return "cautious";
   if (numeric >= -60) return "strained";
-  return "hostile";
+  if (numeric > -90) return "hostile";
+  return "rival";
 };
 
 const normalizeAgreementType = (value) => {
@@ -168,7 +171,9 @@ const normalizeAgreementStatus = (value, fallback = "active") => {
 };
 
 const normalizedRelations = (world) => array(normalizeWorldState(world)?.relations)
-  .map((entry) => entry && typeof entry === "object" ? entry : null)
+  .map((entry) => entry && typeof entry === "object"
+    ? { ...entry, status: normalizeRelationStatus(entry.status, entry.score) }
+    : null)
   .filter(Boolean)
   .slice(0, MAX_RELATIONS);
 
