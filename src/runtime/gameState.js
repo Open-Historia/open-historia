@@ -1274,6 +1274,14 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
   for (const event of normalizeEvents(events)) {
     for (const transfer of event.impacts.regionTransfers) {
       nextWorld.regionOwnershipOverrides[transfer.regionId] = transfer.toCode;
+      // A transfer resolves whatever dispute the scenario seed declared for this
+      // region (regionClaimants — see Nations.jsx's stripe rendering): without
+      // this, regionClaimants is never written by anything else, so a region
+      // handed over cleanly (a negotiated cession, a conceded claim) kept
+      // rendering permanently striped with its old claimant forever, out of step
+      // with regionOwnershipOverrides (and the country panel's "Regions Owned")
+      // agreeing the transfer already happened.
+      delete nextWorld.regionClaimants[transfer.regionId];
     }
 
     for (const change of event.impacts.polityChanges) {

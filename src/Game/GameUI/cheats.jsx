@@ -702,10 +702,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <button
             type="button"
             onClick={() => beginClickMode("Click a region to inspect it", async (props) => {
+                const id = String(props.GID_1 ?? "");
+                // regionClaimants (the striped-disputed marker) never clears itself —
+                // a clean regionTransfer resolves it going forward, but a region
+                // disputed before that fix (or disputed by scenario design) needs a
+                // way to inspect/clear it directly. Read it alongside the click.
+                const world = await readWorldState({ force: true }).catch(() => null);
                 setFields({
-                    id: String(props.GID_1 ?? ""),
+                    id,
                     name: props.NAME_1 || "",
                     owner: props.owner || props.GID_0 || "",
+                    claimants: (world?.regionClaimants?.[id] ?? []).join(", "),
                 });
                 setStatus("");
                 // One region at a time: back to the panel to edit it.
@@ -724,18 +731,39 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} />
                 <label style={labelStyle}>Owner</label>
                 <PolitySelect polities={polities} value={fields.owner ?? ""} onChange={(code) => setFields({ ...fields, owner: code })} placeholder="Unclaimed" />
+                <label style={labelStyle}>Disputed by (comma-separated claimants; blank = not disputed)</label>
+                <input
+                style={inputStyle}
+                value={fields.claimants ?? ""}
+                onChange={(event) => setFields({ ...fields, claimants: event.target.value })}
+                placeholder="e.g. Russia — renders the region striped on the map"
+                />
                 <button
                 type="button"
                 disabled={busy}
                 onClick={() => runBusy(async () => {
                     const world = await readWorldState({ force: true });
                     const notes = [];
+                    // Both region.json fields below are collected into ONE write —
+                    // two sequential writeWorldState calls each spreading the same
+                    // pre-write `world` would have the second silently undo the
+                    // first (it would spread the STALE regionOwnershipOverrides).
+                    const worldPatch = {};
                     if (fields.owner) {
-                        await writeWorldState({
-                            ...world,
-                            regionOwnershipOverrides: { ...world.regionOwnershipOverrides, [fields.id]: fields.owner },
-                        });
+                        worldPatch.regionOwnershipOverrides = { ...world.regionOwnershipOverrides, [fields.id]: fields.owner };
                         notes.push(`owner → ${nameOf(fields.owner)}`);
+                    }
+                    const nextClaimants = (fields.claimants ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+                    const prevClaimants = world.regionClaimants?.[fields.id] ?? [];
+                    if (nextClaimants.join("|") !== prevClaimants.join("|")) {
+                        const regionClaimants = { ...world.regionClaimants };
+                        if (nextClaimants.length) regionClaimants[fields.id] = nextClaimants;
+                        else delete regionClaimants[fields.id];
+                        worldPatch.regionClaimants = regionClaimants;
+                        notes.push(nextClaimants.length ? `disputed by → ${nextClaimants.join(", ")}` : "dispute cleared");
+                    }
+                    if (Object.keys(worldPatch).length) {
+                        await writeWorldState({ ...world, ...worldPatch });
                     }
                     // Names can only be renamed on maps with their own geometry
                     // (map-editor scenarios); the stock world's names live in
