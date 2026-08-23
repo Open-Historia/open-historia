@@ -785,13 +785,26 @@ const chatGroupLabel = (chat) => {
         : new Date(ms).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
 };
 
+// A brand-new, still-empty chat ("New") and a chat with real messages that
+// just happen to carry no usable date ("Undated") both resolve to `null` from
+// chatLastMessageTime — but they don't belong in the same spot: "New" is
+// current (the player just opened it) and belongs at the top, "Undated" is
+// unknown-age history and belongs at the bottom, not floated above chats that
+// DO have a real, recent date.
+const chatSortKey = (chat) => {
+    if (!chat.messages?.length) return "new";
+    const ms = chatLastMessageTime(chat);
+    return ms === null ? "undated" : ms;
+};
+
 const sortChatsByRecency = (list) => [...list].sort((a, b) => {
-    const ta = chatLastMessageTime(a);
-    const tb = chatLastMessageTime(b);
-    if (ta === null && tb === null) return 0;
-    if (ta === null) return -1; // no messages yet ("New") floats above dated ones
-    if (tb === null) return 1;
-    return tb - ta; // most recent message first
+    const ka = chatSortKey(a);
+    const kb = chatSortKey(b);
+    if (ka === "new") return kb === "new" ? 0 : -1;
+    if (kb === "new") return 1;
+    if (ka === "undated") return kb === "undated" ? 0 : 1;
+    if (kb === "undated") return -1;
+    return kb - ka; // both dated — most recent message first
 });
 
 // Clusters an already-ordered list into {label, chats[]} runs — consecutive
