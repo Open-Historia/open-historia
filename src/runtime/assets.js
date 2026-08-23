@@ -160,6 +160,27 @@ const jsonLoadedUrls = new Set();
 const isNoStoreJsonUrl = (url) =>
   url === JSON_URLS.regionsGeojson || url === JSON_URLS.citiesGeojson;
 
+// Runtime state is mutable under a stable URL for the lifetime of a game.
+// Cache Storage's old freshness test compared only Content-Length, which is
+// insufficient for records such as game.json: "1913-11-28", "1914-01-18",
+// and "1915-01-18" can all serialize to the same byte length.
+//
+// Keep persistent caching for the genuinely heavy scenario assets, but never
+// let mutable game state be satisfied from Cache Storage. In-memory caching
+// still works normally, and writeJson/primeJson still update that cache.
+const isMutableRuntimeJsonUrl = (url) =>
+  url === JSON_URLS.advisor ||
+  url === JSON_URLS.actions ||
+  url === JSON_URLS.chat ||
+  url === JSON_URLS.colors ||
+  url === JSON_URLS.flags ||
+  url === JSON_URLS.tags ||
+  url === JSON_URLS.events ||
+  url === JSON_URLS.game ||
+  url === JSON_URLS.prompts ||
+  url === JSON_URLS.snapshots ||
+  url === JSON_URLS.world;
+
 const pmtilesProtocol = new Protocol();
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
@@ -341,31 +362,42 @@ const persistResponse = async (url, response) => {
 const buildRuntimeCacheUrl = (key) =>
   `${origin || "https://pax-historia.local"}/__runtime-cache/${encodeURIComponent(key)}.json`;
 
-const fetchWithPersistence = async (url, { signal } = {}) => {
-  const cached = await readPersistedResponse(url);
-  if (cached) {
-    // Updates replace assets on disk; a cached copy must not outlive them.
-    // Cheap freshness check: byte size against the server's copy. If the
-    // server can't answer (offline), the cached copy still serves.
-    try {
-      const head = await fetch(url, { method: "HEAD", signal });
-      const serverLength = head.ok ? head.headers.get("content-length") : null;
-      const cachedLength = cached.headers.get("content-length");
-      if (!serverLength || !cachedLength || serverLength === cachedLength) {
+const fetchWithPersistence = async (
+  url,
+  { bypassPersistentCache = false, signal } = {},
+) => {
+  if (!bypassPersistentCache) {
+    const cached = await readPersistedResponse(url);
+    if (cached) {
+      // Updates replace assets on disk; a cached copy must not outlive them.
+      // Cheap freshness check: byte size against the server's copy. This is
+      // acceptable for token-versioned static/heavy assets, but NOT for mutable
+      // runtime JSON (which bypasses this path entirely).
+      try {
+        const head = await fetch(url, { method: "HEAD", signal });
+        const serverLength = head.ok ? head.headers.get("content-length") : null;
+        const cachedLength = cached.headers.get("content-length");
+        if (!serverLength || !cachedLength || serverLength === cachedLength) {
+          return { response: cached, fromCache: true };
+        }
+        // Sizes differ: fall through and refetch the fresh copy.
+      } catch {
         return { response: cached, fromCache: true };
       }
-      // Sizes differ: fall through and refetch the fresh copy.
-    } catch {
-      return { response: cached, fromCache: true };
     }
   }
 
-  const response = await fetch(url, { cache: "force-cache", signal });
+  const response = await fetch(url, {
+    cache: bypassPersistentCache ? "no-store" : "force-cache",
+    signal,
+  });
   if (!response.ok) {
     throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
   }
 
-  persistResponse(url, response.clone());
+  if (!bypassPersistentCache) {
+    persistResponse(url, response.clone());
+  }
   return { response, fromCache: false };
 };
 
@@ -570,7 +602,10 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
   }
 
   const request = (async () => {
-    const { response } = await fetchWithPersistence(url, { signal });
+    const { response } = await fetchWithPersistence(url, {
+      bypassPersistentCache: isMutableRuntimeJsonUrl(url),
+      signal,
+    });
     const data = await response.json();
     // Recorded INSIDE the try, before the catch below: a failed read must leave
     // this false so loadRegionCatalog retries instead of pinning a stock-only
@@ -659,14 +694,16 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
 
   primeJson(url, saved);
   invalidateDerivedCachesForWrite(url);
-  persistResponse(
-    url,
-    new Response(savedPayload, {
-      headers: jsonHeadersFor(savedPayload),
-      status: 200,
-      statusText: "OK",
-    }),
-  );
+  if (!isMutableRuntimeJsonUrl(url)) {
+    persistResponse(
+      url,
+      new Response(savedPayload, {
+        headers: jsonHeadersFor(savedPayload),
+        status: 200,
+        statusText: "OK",
+      }),
+    );
+  }
 
   return cloneJson(saved);
 };

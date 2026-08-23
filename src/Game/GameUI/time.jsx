@@ -1279,12 +1279,11 @@ const DateWidget = ({
     const [fallbackWarning, setFallbackWarning] = useState("");
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
-    // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
-    // stale read from a genuinely newer one — and never revert a just-completed jump.
-    const gameStampRef = React.useRef({ round: 0, date: "" });
-    React.useEffect(() => {
-        gameStampRef.current = { round: Number(gameData?.round) || 0, date: gameData?.gameDate || "" };
-    }, [gameData]);
+    // Async state-read fence. A monotonic round/date guard breaks legitimate
+    // rollback/restore because canonical state is allowed to move backwards.
+    // Instead, only reject reads that became stale while they were in flight.
+    // Starting a newer poll or completing a local jump/undo invalidates older reads.
+    const stateReadEpochRef = React.useRef(0);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
@@ -1333,6 +1332,10 @@ const DateWidget = ({
         let cancelled = false;
 
         const loadState = async () => {
+            // Only the newest read in this component generation may apply. This
+            // prevents an older overlapping poll from landing after a newer one.
+            const readEpoch = ++stateReadEpochRef.current;
+
             try {
                 const [game, nextEvents, world] = await Promise.all([
                     readGameData({ force: true }),
@@ -1340,21 +1343,13 @@ const DateWidget = ({
                                                                     readWorldState({ force: true }),
                 ]);
 
-                if (cancelled) {
+                if (cancelled || readEpoch !== stateReadEpochRef.current) {
                     return;
                 }
 
-                // Never let this background poll overwrite a fresher turn with an older
-                // read. A jump advances the round (and date); if the store read comes
-                // back behind what's already on screen — a write still settling, an
-                // eventually-consistent read, a poll that fired mid-jump — applying it
-                // would revert the date and wipe the just-generated events. Skip it.
-                const local = gameStampRef.current;
-                const polledRound = Number(game?.round) || 0;
-                const polledDate = game?.gameDate || "";
-                if (polledRound < local.round || (polledRound === local.round && polledDate < local.date)) {
-                    return;
-                }
+                // Trust canonical persisted state even when its round/date moved
+                // backwards (Undo, external restore, debug restore). Stale in-flight
+                // reads are handled by the epoch fence above rather than chronology.
 
                 setGameData(game);
                 setEvents(nextEvents);
@@ -1439,6 +1434,10 @@ const DateWidget = ({
             const result = mode === "auto"
             ? await simulateAutoJump({ days, signal: controller.signal })
             : await simulateTimelineJump({ days, signal: controller.signal });
+
+            // Invalidate every poll that started before this local mutation
+            // completed; none of them may overwrite the freshly returned turn.
+            stateReadEpochRef.current += 1;
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -1488,6 +1487,9 @@ const DateWidget = ({
         try {
             const result = await rollBackToSnapshot(0);
             if (result) {
+                // Same fence as runJump: an older poll may still be in flight
+                // while Undo legitimately moves the canonical date backwards.
+                stateReadEpochRef.current += 1;
                 setGameData(result.bundle.game);
                 setEvents(result.bundle.events);
                 setWorldState(result.bundle.world);
