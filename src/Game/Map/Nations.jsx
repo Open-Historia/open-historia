@@ -641,9 +641,15 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const props = features[0].properties ?? {};
     const regionId = props.GID_1 ?? props.id ?? "";
-    // On custom maps, stock-tile hits carry modern props only — resolve the era
-    // owner (possibly "" = unclaimed) from the ownership lookup.
-    const owner = props.owner ?? (ownerLookupRef.current.size ? ownerLookupRef.current.get(regionId) : undefined);
+    // The live lookup wins: it already folds in regionOwnershipOverrides (see
+    // ownerByRegionId), so a transferred region resolves to its NEW owner even
+    // though the feature's own `owner` prop is a snapshot baked into
+    // regions.geojson at scenario-generation time and never updated as the game
+    // plays out. `props.owner` is only a fallback for stock-tile hits (GADM tiles
+    // carry no `owner` property at all) and custom regions the lookup has never
+    // heard of. `??` (not `||`) so a resolved "" (explicitly unclaimed) is kept
+    // rather than falling through.
+    const owner = (ownerLookupRef.current.size ? ownerLookupRef.current.get(regionId) : undefined) ?? props.owner;
     // The region's underlying real country, as GADM knows it. A code, and staying
     // one: it comes off the baked tiles.
     const gid0 = props.gid0 ?? props.GID_0 ?? "";
