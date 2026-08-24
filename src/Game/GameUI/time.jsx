@@ -1669,6 +1669,16 @@ const DateWidget = ({
         const { world: stagedWorld } = applyEventImpactsToWorld({
             colors: {},
             events: revealed,
+            // Same motion the persisted turn used (applySimulationResult), or the
+            // reveal would show units teleporting to positions the saved world
+            // never had. The residual advance past the last event is not replayed
+            // here — the reveal is a partial state by definition, and the map's
+            // position tween absorbs the difference when the override clears.
+            motion: {
+                originDate: record.fromDate || "",
+                round: record.round || 0,
+                tick: 0,
+            },
             world: stagedBase.world,
         });
         setWorldStateOverride(stagedWorld);

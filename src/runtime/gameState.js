@@ -4,6 +4,14 @@ import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
+import {
+  DEFAULT_PATROL_RADIUS_KM,
+  daysBetweenDates,
+  haversineKm,
+  maxTravelKm,
+  patrolPoint,
+  stepToward,
+} from "./unitMotion.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -50,12 +58,20 @@ export const WORLD_DEFAULTS = {
   // and rendered as map markers beside the stock cities. Stored here so they
   // share every existing read/write/poll/normalize path, exactly like units.
   markers: [],
+  // Bumped by every idle world pulse (see gameplay.js). It is the third component
+  // of a patrolling unit's position seed, which is what lets a fleet on station
+  // visibly reposition between pulses even though no game time has passed. Listed
+  // in the normalizeWorldState return too — this spread is overwritten by the
+  // incoming world, so a field declared only here never survives a round trip.
+  idlePulseTick: 0,
   notes: "",
-  // Multi-turn move/attack-approach orders still in progress: {id, unitId, kind,
-  // toLng, toLat, targetId, targetLabel, note, issuedAt, issuedRound}. Independent
-  // of the actions queue (which a jump's single clearActions flag wipes wholesale)
-  // so a unit ordered across an ocean stays a live, re-surfaced instruction every
-  // turn until it actually arrives — see pruneSatisfiedUnitOrders below.
+  // Standing multi-turn orders the ENGINE advances: {id, unitId, kind, toLng,
+  // toLat, radiusKm, untilRound, targetId, targetLabel, note, issuedAt,
+  // issuedRound}. kind is "move" (travel to a destination) or "patrol" (work a
+  // station centred on it). Independent of the actions queue (which a jump's
+  // single clearActions flag wipes wholesale), so a unit ordered across an ocean
+  // keeps advancing every turn until it arrives — see advanceStandingOrders and
+  // pruneSatisfiedUnitOrders below.
   pendingUnitOrders: [],
   polityOverrides: {},
   // Region id -> claimant polity names: the world-data way to mark a region
@@ -78,6 +94,28 @@ const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
 const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
+// What a formation is DOING, as distinct from `status`, which is its lifecycle.
+// Posture is what makes the map readable at a glance — "massing" on a border and
+// "exercise" on the same border are the same counter and a completely different
+// message. Deliberately NOT "garrison": that would collide with the unit TYPE of
+// the same name and make `posture === "garrison"` checks ambiguous.
+export const UNIT_POSTURES = [
+  "holding",
+  "massing",
+  "patrol",
+  "transit",
+  "exercise",
+  "blockade",
+  "withdrawing",
+];
+const UNIT_POSTURE_SET = new Set(UNIT_POSTURES);
+
+// Units the map may hold for A.I. polities. The player's own forces are exempt
+// from both caps and are filtered out before counting (see enforceUnitVolume) —
+// they can disband their own, so neither cap should apply to them nor should
+// their units eat another power's headroom.
+export const MAX_UNITS_GLOBAL = 80;
+export const MAX_UNITS_PER_POLITY = 12;
 
 // Every caller of this parses a COORDINATE (lng/lat/toLng/toLat), which is why it
 // can afford to be lenient in ways a general number parser could not.
@@ -119,10 +157,22 @@ const finiteOrNull = (value) => {
   return Number.isFinite(num) ? sign * num : null;
 };
 
+// Strength is a PERCENTAGE of the formation's established strength, 0-100.
+//
+// It used to be an abstract 1-1000 the model picked freely, which is exactly why
+// it read as random: nothing anchored it, so "340" meant whatever the model felt
+// that turn. As a percentage it has a fixed referent — 78 means three quarters of
+// what this formation should have — and `composition` carries what it actually is
+// ("1 aircraft carrier, 2 frigates"). Attrition finally means something.
+//
+// Saves on the old scale are coerced rather than migrated: anything over 100 is
+// divided by 10. The old default of 100 lands on 100%, which is the correct
+// reading of a freshly-raised unit anyway.
 export const clampUnitStrength = (value) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return 100;
-  return Math.max(0, Math.min(1000, Math.round(num)));
+  const percent = num > 100 ? num / 10 : num;
+  return Math.max(0, Math.min(100, Math.round(percent)));
 };
 
 const cloneValue = (value) => {
@@ -554,6 +604,7 @@ export const normalizeUnitEntry = (entry, index = 0) => {
   const type = normalizeOptionalString(entry.type).toLowerCase();
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const source = normalizeOptionalString(entry.source).toLowerCase();
+  const posture = normalizeOptionalString(entry.posture).toLowerCase();
   const timestamp = new Date().toISOString();
 
   return {
@@ -566,7 +617,22 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     lat,
     regionId: normalizeOptionalString(entry.regionId),
     status: UNIT_STATUS_SET.has(status) ? status : "idle",
+    // What the formation is made of, in words — "1 aircraft carrier, 2 frigates".
+    // Together with `note` this is what turns a coloured dot into something the
+    // player can actually reason about.
+    composition: normalizeOptionalString(entry.composition),
+    // One present-tense sentence: "Patrolling the North Atlantic approaches".
     note: normalizeOptionalString(entry.note),
+    // Intent, not lifecycle. Unknown values fall back to "" rather than a default,
+    // so an absent posture stays absent instead of asserting something untrue.
+    posture: UNIT_POSTURE_SET.has(posture) ? posture : "",
+    // "No confirmed line of support" — a covert insertion OR a presence the player
+    // has only just detected. Engine-assigned (see applyUnitOpBatch); never taken
+    // from the model, or it would claim covert whenever convenient.
+    covert: entry.covert === true,
+    // The event that created or last moved this unit, so the popup can say what
+    // put it there and click through to it.
+    eventId: normalizeOptionalString(entry.eventId),
     source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
     orderId: normalizeOptionalString(entry.orderId),
     createdAt: normalizeOptionalString(entry.createdAt) || timestamp,
@@ -579,34 +645,33 @@ export const normalizeUnits = (units) =>
     .map((entry, index) => normalizeUnitEntry(entry, index))
     .filter(Boolean);
 
-// Great-circle distance in km — shared by pending-order pruning here and the
-// standing-orders prompt text (promptContext.js), which is why it lives in
-// runtime rather than duplicating unitCombat.js's copy (a Game/Map-layer file
-// runtime code must not depend on).
-export const haversineKm = (lat1, lng1, lat2, lng2) => {
-  const EARTH_RADIUS_KM = 6371;
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const dLat = toRad((lat2 ?? 0) - (lat1 ?? 0));
-  const dLng = toRad((lng2 ?? 0) - (lng1 ?? 0));
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1 ?? 0)) * Math.cos(toRad(lat2 ?? 0)) * Math.sin(dLng / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
-};
+// Great-circle distance in km. The implementation now lives in unitMotion.js —
+// which is import-free, so its tests run without a full install — and is
+// re-exported here because promptContext.js and the order pruning below have
+// always imported it from this module. There used to be two copies of this
+// function (here and unitCombat.js's `distanceKm`); now there is one.
+export { haversineKm };
 
-const PENDING_ORDER_KIND_SET = new Set(["move", "attack"]);
+const PENDING_ORDER_KIND_SET = new Set(["move", "patrol"]);
 
-// A standing multi-turn order: a unit ordered beyond a single move/engagement's
-// leash keeps this outstanding — independent of the actions queue — until it
-// actually arrives. See unitsController.js (creates these) and
-// pruneSatisfiedUnitOrders below (clears them once satisfied).
+// A standing multi-turn order the engine advances every turn: "move" travels to
+// a destination, "patrol" works a station centred on it. Independent of the
+// actions queue. See applyUnitOpBatch (mints them), advanceStandingOrders
+// (advances them) and pruneSatisfiedUnitOrders (clears them once satisfied).
 const normalizePendingUnitOrderEntry = (entry, index = 0) => {
   if (!entry || typeof entry !== "object") return null;
   const unitId = normalizeOptionalString(entry.unitId);
   const toLng = finiteOrNull(entry.toLng);
   const toLat = finiteOrNull(entry.toLat);
   if (!unitId || toLng === null || toLat === null) return null;
-  const kind = normalizeOptionalString(entry.kind).toLowerCase();
+  const rawKind = normalizeOptionalString(entry.kind).toLowerCase();
+  // Saves from before player-issued attacks were removed carry kind "attack".
+  // Coerce rather than drop: the destination and targetLabel are still good, so
+  // the unit simply keeps advancing on the same objective and the AI narrates
+  // what happens when it gets there — which is how combat always resolved anyway.
+  const kind = rawKind === "attack" ? "move" : rawKind;
+  const numberOr = (value, fallback) =>
+    Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : fallback;
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`unitorder-${index}`),
@@ -614,11 +679,16 @@ const normalizePendingUnitOrderEntry = (entry, index = 0) => {
     kind: PENDING_ORDER_KIND_SET.has(kind) ? kind : "move",
     toLng,
     toLat,
+    // Station radius for a patrol order; 0 (and meaningless) for a move order.
+    radiusKm: Math.min(2000, numberOr(entry.radiusKm, 0)),
+    // Round after which the order lapses; 0 means it never does. Patrols get a
+    // finite life so a fleet does not circle the same station forever.
+    untilRound: numberOr(entry.untilRound, 0),
     targetId: normalizeOptionalString(entry.targetId),
     targetLabel: normalizeOptionalString(entry.targetLabel),
     note: normalizeOptionalString(entry.note),
     issuedAt: normalizeOptionalString(entry.issuedAt),
-    issuedRound: Number.isFinite(Number(entry.issuedRound)) ? Math.max(0, Math.trunc(Number(entry.issuedRound))) : 0,
+    issuedRound: numberOr(entry.issuedRound, 0),
   };
 };
 
@@ -643,6 +713,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
   return normalizeArray(orders).filter((order) => {
     const unit = byId.get(order.unitId);
     if (!unit) return false;
+    // A patrol order is never "satisfied" by proximity — its destination IS the
+    // station the unit is meant to be sitting on, so the arrival test below would
+    // delete every patrol the instant it was created. It ends by expiry
+    // (untilRound, in advanceStandingOrders) or when its unit goes away.
+    if (order.kind === "patrol") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
@@ -790,12 +865,16 @@ const normalizeUnitOp = (entry) => {
     const toLng = finiteOrNull(entry.toLng ?? entry.lng);
     const toLat = finiteOrNull(entry.toLat ?? entry.lat);
     if (toLng === null || toLat === null || (toLng === 0 && toLat === 0)) return null;
+    const posture = normalizeOptionalString(entry.posture).toLowerCase();
     return {
       op,
       unitId,
       toLng,
       toLat,
       regionId: normalizeOptionalString(entry.regionId),
+      // Re-posturing on the move is how "this force is now massing rather than
+      // in transit" reaches the map without a second op.
+      posture: UNIT_POSTURE_SET.has(posture) ? posture : "",
       note: normalizeOptionalString(entry.note),
     };
   }
@@ -811,40 +890,344 @@ const normalizeUnitOp = (entry) => {
   return null;
 };
 
-// Apply a batch of unit ops to a unit list (pure). Ops referencing unknown ids
-// are silently ignored; units reduced to <=0 strength are dropped.
-export const applyUnitOps = (units, ops) => {
+// The owner's known footprint: every point on the map that power visibly holds.
+// Region polygons are not available in the runtime layer (loadRegionCatalog
+// yields names and ids, no geometry), so this is built from the point data world
+// state actually carries — their units and their structures — plus whatever
+// extra anchors a caller can supply.
+export const buildOwnerFootprint = (world, ownerCode, extraAnchors = []) => {
+  const owner = toCountryName(normalizeOptionalString(ownerCode));
+  if (!owner) return [];
+  const sameOwner = (value) =>
+    toCountryName(normalizeOptionalString(value)).toLowerCase() === owner.toLowerCase();
+
+  const points = [];
+  for (const unit of normalizeArray(world?.units)) {
+    if (sameOwner(unit?.ownerCode) && Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat)) {
+      points.push({ lng: unit.lng, lat: unit.lat });
+    }
+  }
+  for (const marker of normalizeArray(world?.markers)) {
+    if (sameOwner(marker?.ownerCode) && Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat)) {
+      points.push({ lng: marker.lng, lat: marker.lat });
+    }
+  }
+  for (const anchor of normalizeArray(extraAnchors)) {
+    if (Number.isFinite(anchor?.lng) && Number.isFinite(anchor?.lat)) {
+      points.push({ lng: anchor.lng, lat: anchor.lat });
+    }
+  }
+  return points;
+};
+
+const nearestKm = (point, anchors) => {
+  let best = Infinity;
+  for (const anchor of anchors) {
+    const distance = haversineKm(point.lat, point.lng, anchor.lat, anchor.lng);
+    if (distance < best) best = distance;
+  }
+  return best;
+};
+
+// Is a spawn supported by its owner's known footprint?
+//
+// The point is NOT to refuse implausible spawns. The unit layer is the player's
+// intelligence picture, not ground truth: a submarine shadowing their fleet has
+// been there for months, and the turn it appears is the turn they detected it.
+// Refusing that would break exactly the stories worth telling. So nothing is ever
+// dropped for being far from home — the distance only decides whether the unit is
+// drawn as an established presence or an unconfirmed one.
+//
+// The threshold is "30 days of this type's travel", which makes it era- and
+// type-aware off the same speed table for free: a modern navy reads as globally
+// supported (~18,000 km, correct), a 1400 army does not (~420 km, also correct).
+const isUnsupportedSpawn = (point, anchors, type, gameDate) => {
+  // An unknown footprint is not a suspicious one — world.units is empty at the
+  // start of most scenarios, and gating on that would ghost every first spawn.
+  if (anchors.length === 0) return false;
+  const radius = Math.max(600, Math.min(15000, maxTravelKm(type, gameDate, 30)));
+  return nearestKm(point, anchors) > radius;
+};
+
+// How many rounds a minted patrol order runs for before it lapses. Long enough
+// that stating posture "patrol" once keeps a fleet on station for a good while,
+// short enough that it does not circle the same water forever.
+const PATROL_ORDER_ROUNDS = 12;
+
+// Apply a batch of unit ops to a unit list AND the standing-order list (pure).
+// Ops referencing unknown ids are silently ignored; units reduced to <=0 strength
+// are dropped.
+//
+// context: { markers, gameDate, elapsedDays, round, extraAnchors, eventId }
+//   elapsedDays === null | undefined  ->  no travel clamp (the old behaviour, and
+//   what a non-Gregorian scenario date must fall back to).
+export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
+  const { gameDate = "", elapsedDays = null, round = 0, extraAnchors = [], eventId = "" } = context;
   let next = normalizeUnits(units);
-  for (const op of normalizeArray(ops)) {
+  let nextOrders = normalizePendingUnitOrders(orders);
+  const markers = normalizeArray(context.markers);
+  const stamp = () => new Date().toISOString();
+  // Normalize defensively. Ops arriving from applyEventImpactsToWorld have been
+  // through normalizeEventImpacts already (and normalizeUnitOp is idempotent),
+  // but the idle pulse and tests hand us raw model output — and a raw spawn has
+  // none of the unit fields this function reads.
+  const batch = normalizeArray(ops).map((op) => normalizeUnitOp(op)).filter(Boolean);
+
+  const dropOrder = (unitId) => {
+    nextOrders = nextOrders.filter((order) => order.unitId !== unitId);
+  };
+  const upsertOrder = (order) => {
+    nextOrders = [...nextOrders.filter((entry) => entry.unitId !== order.unitId), order];
+  };
+
+  for (const op of batch) {
     if (op.op === "spawn") {
       // Idempotent: skip a spawn whose unit id is already present, so a re-applied
       // op batch can't duplicate a unit (mirrors the event-restatement de-dup).
       const spawnId = op.unit?.id;
-      if (!spawnId || !next.some((unit) => unit.id === spawnId)) next.push(op.unit);
-    } else if (op.op === "move") {
+      if (spawnId && next.some((unit) => unit.id === spawnId)) continue;
+
+      const unit = { ...op.unit };
+      const anchors = buildOwnerFootprint({ units: next, markers }, unit.ownerCode, extraAnchors);
+      if (isUnsupportedSpawn(unit, anchors, unit.type, gameDate)) {
+        // A fixed installation is the one thing that cannot simply be detected
+        // into existence — it has to be built. Downgrade it to the troops it
+        // would take rather than dropping the op, because a silently dropped op
+        // leaves the event narrating a deployment the map never shows, which is
+        // the failure describeUnitOpRejection exists to make visible.
+        if (unit.type === "garrison") unit.type = "infantry";
+        unit.covert = true;
+        if (!unit.posture) unit.posture = "transit";
+      }
+      if (eventId && !unit.eventId) unit.eventId = eventId;
+      next.push(unit);
+
+      if (unit.posture === "patrol") {
+        upsertOrder(
+          normalizePendingUnitOrderEntry({
+            unitId: unit.id,
+            kind: "patrol",
+            toLng: unit.lng,
+            toLat: unit.lat,
+            radiusKm: DEFAULT_PATROL_RADIUS_KM[unit.type] ?? 0,
+            untilRound: round ? round + PATROL_ORDER_ROUNDS : 0,
+            issuedRound: round,
+          }),
+        );
+      }
+      continue;
+    }
+
+    if (op.op === "move") {
+      next = next.map((unit) => {
+        if (unit.id !== op.unitId) return unit;
+        // Garrisons are fixed by definition — a move op on one is a mistake, not
+        // an order (the same doctrine buildMilitaryFeasibilityText already states).
+        if (unit.type === "garrison") return unit;
+
+        const budget =
+          elapsedDays === null || elapsedDays === undefined
+            ? Infinity
+            : maxTravelKm(unit.type, gameDate, elapsedDays);
+        const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
+        const posture = op.posture || unit.posture;
+
+        if (step.arrived) {
+          dropOrder(unit.id);
+          if (posture === "patrol") {
+            upsertOrder(
+              normalizePendingUnitOrderEntry({
+                unitId: unit.id,
+                kind: "patrol",
+                toLng: step.lng,
+                toLat: step.lat,
+                radiusKm: DEFAULT_PATROL_RADIUS_KM[unit.type] ?? 0,
+                untilRound: round ? round + PATROL_ORDER_ROUNDS : 0,
+                issuedRound: round,
+              }),
+            );
+          }
+        } else {
+          // Too far for the time that has passed. Move as far as the unit could
+          // actually get and keep a standing order to the FULL destination, so
+          // the journey continues by itself next turn. This is what makes
+          // over-long move ops safe for the model to write.
+          upsertOrder(
+            normalizePendingUnitOrderEntry({
+              unitId: unit.id,
+              kind: "move",
+              toLng: op.toLng,
+              toLat: op.toLat,
+              note: op.note,
+              issuedAt: gameDate,
+              issuedRound: round,
+            }),
+          );
+        }
+
+        return {
+          ...unit,
+          lng: step.lng,
+          lat: step.lat,
+          regionId: op.regionId || unit.regionId,
+          status: step.arrived && posture === "patrol" ? "idle" : "moving",
+          posture,
+          orderId: "",
+          ...(eventId ? { eventId } : {}),
+          updatedAt: stamp(),
+        };
+      });
+      continue;
+    }
+
+    if (op.op === "strength") {
       next = next.map((unit) =>
         unit.id === op.unitId
           ? {
               ...unit,
-              lng: op.toLng,
-              lat: op.toLat,
-              regionId: op.regionId || unit.regionId,
-              status: "moving",
-              updatedAt: new Date().toISOString(),
+              strength: op.strength,
+              status: op.strength <= 0 ? "defeated" : unit.status,
+              ...(eventId ? { eventId } : {}),
+              updatedAt: stamp(),
             }
           : unit,
       );
-    } else if (op.op === "strength") {
-      next = next.map((unit) =>
-        unit.id === op.unitId
-          ? { ...unit, strength: op.strength, status: op.strength <= 0 ? "defeated" : unit.status, updatedAt: new Date().toISOString() }
-          : unit,
-      );
-    } else if (op.op === "remove") {
+      continue;
+    }
+
+    if (op.op === "remove") {
       next = next.filter((unit) => unit.id !== op.unitId);
+      dropOrder(op.unitId);
     }
   }
-  return next.filter((unit) => unit.strength > 0 && unit.status !== "defeated");
+
+  const survivors = next.filter((unit) => unit.strength > 0 && unit.status !== "defeated");
+  return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
+};
+
+// Back-compat shape: units in, units out. applyUnitOpBatch is the real one and
+// is what applyEventImpactsToWorld calls; this keeps the documented array
+// contract for any caller that still expects it.
+export const applyUnitOps = (units, ops, context = {}) =>
+  applyUnitOpBatch(units, [], ops, context).units;
+
+// Advance every standing order by the time that has passed. This is what makes
+// units move realistically turn after turn without a single token being spent:
+// a move order steps toward its destination at the unit's own pace, and a patrol
+// order repositions deterministically around its station.
+export const advanceStandingOrders = (world, { fromDate, toDate, round = 0, tick = 0 } = {}) => {
+  const units = normalizeUnits(world?.units);
+  const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
+  if (orders.length === 0) return world;
+
+  const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
+  const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
+  const expired = new Set();
+  const stamp = new Date().toISOString();
+
+  const nextUnits = units.map((unit) => {
+    const order = ordersByUnit.get(unit.id);
+    if (!order) return unit;
+
+    if (order.untilRound && round > order.untilRound) {
+      expired.add(order.id);
+      return { ...unit, orderId: "", posture: "", status: "idle", updatedAt: stamp };
+    }
+
+    if (order.kind === "patrol") {
+      const point = patrolPoint(
+        { lng: order.toLng, lat: order.toLat },
+        order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0,
+        `${unit.id}|${round}|${tick}`,
+      );
+      return { ...unit, lng: point.lng, lat: point.lat, posture: "patrol", updatedAt: stamp };
+    }
+
+    if (unit.type === "garrison") return unit;
+    const step = stepToward(
+      unit,
+      { lng: order.toLng, lat: order.toLat },
+      maxTravelKm(unit.type, toDate || fromDate, elapsed),
+    );
+    return {
+      ...unit,
+      lng: step.lng,
+      lat: step.lat,
+      // On arrival the order is pruned below; the unit stops reading as "moving".
+      status: step.arrived ? "idle" : "moving",
+      updatedAt: stamp,
+    };
+  });
+
+  const kept = orders.filter((order) => !expired.has(order.id));
+  return {
+    ...world,
+    units: nextUnits,
+    pendingUnitOrders: pruneSatisfiedUnitOrders(nextUnits, kept),
+  };
+};
+
+// Keep the map legible. Applies to A.I. polities ONLY: the player's own forces
+// are filtered out before anything is counted, so neither cap constrains them and
+// their units never eat another power's headroom — the player manages their own
+// order of battle by disbanding.
+//
+// Deliberately NOT run from normalizeWorldState: that runs on every read, and
+// pruning there would delete units on a read racing a write and fight the map's
+// 5s poll. Call it from the turn commit and the idle pulse instead.
+export const enforceUnitVolume = (world, { playerCode = "" } = {}) => {
+  const units = normalizeUnits(world?.units);
+  const player = toCountryName(normalizeOptionalString(playerCode)).toLowerCase();
+  const isPlayers = (unit) =>
+    unit.source === "player" ||
+    (player && toCountryName(unit.ownerCode).toLowerCase() === player);
+
+  const mine = units.filter(isPlayers);
+  const theirs = units.filter((unit) => !isPlayers(unit));
+  if (theirs.length === 0) return world;
+
+  // A total order, so the same world always prunes to the same list — a rollback
+  // and re-run must not produce a different map.
+  const significance = (a, b) =>
+    b.strength - a.strength ||
+    Number(a.covert) - Number(b.covert) ||
+    String(a.createdAt).localeCompare(String(b.createdAt)) ||
+    String(a.id).localeCompare(String(b.id));
+  // Never prune a formation that is mid-fight or is a player deployment awaiting
+  // adjudication — both are live story beats, not surplus scenery.
+  const protectedUnit = (unit) => unit.status === "engaged" || unit.status === "pending";
+
+  const byOwner = new Map();
+  for (const unit of theirs) {
+    const key = toCountryName(unit.ownerCode).toLowerCase();
+    if (!byOwner.has(key)) byOwner.set(key, []);
+    byOwner.get(key).push(unit);
+  }
+
+  let survivors = [];
+  for (const owned of byOwner.values()) {
+    const keep = owned.filter(protectedUnit);
+    const trimmable = owned.filter((unit) => !protectedUnit(unit)).sort(significance);
+    survivors = survivors.concat(keep, trimmable.slice(0, Math.max(0, MAX_UNITS_PER_POLITY - keep.length)));
+  }
+
+  if (survivors.length > MAX_UNITS_GLOBAL) {
+    const keep = survivors.filter(protectedUnit);
+    const trimmable = survivors.filter((unit) => !protectedUnit(unit)).sort(significance);
+    survivors = keep.concat(trimmable.slice(0, Math.max(0, MAX_UNITS_GLOBAL - keep.length)));
+  }
+
+  if (survivors.length === theirs.length) return world;
+
+  const nextUnits = [...mine, ...survivors];
+  return {
+    ...world,
+    units: nextUnits,
+    pendingUnitOrders: pruneSatisfiedUnitOrders(
+      nextUnits,
+      normalizePendingUnitOrders(world?.pendingUnitOrders),
+    ),
+  };
 };
 
 const normalizeEventImpacts = (value) => {
@@ -1088,6 +1471,9 @@ export const normalizeWorldState = (world) => {
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
     lastJumpTargetDate: normalizeOptionalString(nextWorld.lastJumpTargetDate),
+    idlePulseTick: Number.isFinite(Number(nextWorld.idlePulseTick))
+      ? Math.max(0, Math.trunc(Number(nextWorld.idlePulseTick)))
+      : 0,
     notes: normalizeOptionalString(nextWorld.notes),
     polityOverrides,
     regionClaimants,
@@ -1298,9 +1684,15 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
   return preview;
 };
 
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) => {
+// motion: { originDate, round, tick } enables realistic travel. Each event gets a
+// budget of exactly the days between the previous event and its own date, so an
+// op on day 3 of a 90-day jump only moves three days' worth. Passing motion: null
+// (the default) leaves moves unclamped, i.e. exactly the old behaviour — which is
+// also the right fallback for a scenario whose dates are not Gregorian.
+export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, motion = null }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
+  let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
   // Every owner written below goes through here first. The model reads the story
   // it just wrote, so the turn after a polity is renamed it hands back the NEW
   // name — and storing that verbatim splits one country into two owners, one of
@@ -1414,11 +1806,27 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
     if (event.impacts.unitOps?.length) {
       // A battalion's owner is the same namespace: spawned under a display name
       // it would fly a phantom country's colours beside its own army.
-      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps.map((op) =>
-        (op.op === "spawn" && op.unit?.ownerCode
-          ? { ...op, unit: { ...op.unit, ownerCode: resolveOwner(op.unit.ownerCode) } }
-          : op)));
+      const applied = applyUnitOpBatch(
+        nextWorld.units,
+        nextWorld.pendingUnitOrders,
+        event.impacts.unitOps.map((op) =>
+          (op.op === "spawn" && op.unit?.ownerCode
+            ? { ...op, unit: { ...op.unit, ownerCode: resolveOwner(op.unit.ownerCode) } }
+            : op)),
+        {
+          markers: nextWorld.markers,
+          gameDate: event.date || cursorDate,
+          elapsedDays: motion ? daysBetweenDates(cursorDate, event.date) : null,
+          round: motion?.round ?? 0,
+          eventId: event.id,
+        },
+      );
+      nextWorld.units = applied.units;
+      nextWorld.pendingUnitOrders = applied.orders;
     }
+    // Advance the cursor even for events that moved no units, so the NEXT event's
+    // budget is measured from this event rather than from the start of the jump.
+    if (motion && event.date) cursorDate = event.date;
 
     if (event.impacts.markerOps?.length) {
       const before = normalizeMarkers(nextWorld.markers);
