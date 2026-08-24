@@ -19,7 +19,7 @@ import {
 } from "../../runtime/gameState.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
-import { applyGameMasterCommand } from "../AI/gameplay.js";
+import { applyGameMasterPreview, previewGameMasterCommand } from "../AI/gameplay.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
 
 // Phase 8A.1: Cheats 2.0 visual shell. Tool semantics are intentionally unchanged in this slice.
@@ -1141,7 +1141,16 @@ const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
             if (entry.eventIds.length) return true;
             const source = cleanEventText(entry?.source).toLowerCase();
             const mode = cleanEventText(entry?.mode).toLowerCase();
-            if (source === "manual" || mode === "manual-event") {
+            // Manual and GM-authored history entries exist only to make their linked
+            // canonical events visible in time.jsx. If the Event Editor deletes the
+            // event, remove the empty history shell too; structured world effects are
+            // deliberately left untouched.
+            if (
+                source === "manual" ||
+                mode === "manual-event" ||
+                source === "gm-console" ||
+                mode === "game-master"
+            ) {
                 changed = true;
                 return false;
             }
@@ -1929,6 +1938,9 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
+    const [gmMode, setGmMode] = useState("world-intervention");
+    const [gmPreview, setGmPreview] = useState(null);
+    const [gmApplyResult, setGmApplyResult] = useState(null);
     const [target, setTarget] = useState("");
     const [fields, setFields] = useState({});
     const [items, setItems] = useState(null);
@@ -1982,6 +1994,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     useEffect(() => {
         setItems(null);
         setEditingId(null);
+        setGmPreview(null);
+        setGmApplyResult(null);
         setSearch("");
         setFields({});
         setTarget("");
@@ -2038,35 +2052,449 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     }
 
     if (tool === "master-ai") {
+        const transaction = gmPreview?.transaction ?? null;
+        const gmApplied = Boolean(gmApplyResult?.applied);
+        const events = Array.isArray(transaction?.events) ? transaction.events : [];
+        const statPatches = Array.isArray(transaction?.countryStatPatches) ? transaction.countryStatPatches : [];
+        const warUpdates = Array.isArray(transaction?.warUpdates) ? transaction.warUpdates : [];
+        const relationUpdates = Array.isArray(transaction?.relationUpdates) ? transaction.relationUpdates : [];
+        const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
+        const outreach = Array.isArray(transaction?.diplomaticOutreach) ? transaction.diplomaticOutreach : [];
+        const impactCounts = events.reduce((acc, event) => {
+            const impacts = event?.impacts ?? {};
+            acc.territory += (Array.isArray(impacts.regionTransfers) ? impacts.regionTransfers.length : 0)
+                + (Array.isArray(impacts.regionControlOps) ? impacts.regionControlOps.length : 0);
+            acc.polities += Array.isArray(impacts.polityChanges) ? impacts.polityChanges.length : 0;
+            acc.units += Array.isArray(impacts.unitOps) ? impacts.unitOps.length : 0;
+            acc.markers += Array.isArray(impacts.markerOps) ? impacts.markerOps.length : 0;
+            acc.chats += Array.isArray(impacts.createdChats) ? impacts.createdChats.length : 0;
+            return acc;
+        }, { territory: 0, polities: 0, units: 0, markers: 0, chats: 0 });
+
+        const eventOps = (field) => events.flatMap((event, eventIndex) =>
+            (Array.isArray(event?.impacts?.[field]) ? event.impacts[field] : []).map((op, opIndex) => ({
+                ...op,
+                _eventIndex: eventIndex,
+                _eventTitle: event?.title || `Event ${eventIndex}`,
+                _opIndex: opIndex,
+            }))
+        );
+        const sovereigntyOps = eventOps("regionTransfers");
+        const controlOps = eventOps("regionControlOps");
+        const polityOps = eventOps("polityChanges");
+        const unitOps = eventOps("unitOps");
+        const markerOps = eventOps("markerOps");
+        const eventChats = eventOps("createdChats");
+
+        const compactJson = (value) => {
+            try { return JSON.stringify(value); } catch { return String(value ?? ""); }
+        };
+        const eventRef = (entry) => `event ${entry._eventIndex}`;
+        const exactRowStyle = {
+            background: "rgba(255,255,255,0.028)",
+            border: "1px solid rgba(255,255,255,0.065)",
+            borderRadius: 7,
+            color: "rgba(255,255,255,0.66)",
+            fontSize: "0.65rem",
+            lineHeight: 1.38,
+            marginTop: "0.24rem",
+            padding: "0.42rem 0.5rem",
+            wordBreak: "break-word",
+        };
+        const subsectionTitle = (title, count, note = "") => (
+            <div style={{ alignItems: "baseline", display: "flex", gap: "0.35rem", justifyContent: "space-between", marginTop: "0.48rem" }}>
+                <div style={{ color: "rgba(255,255,255,0.76)", fontSize: "0.67rem", fontWeight: 750, letterSpacing: "0.02em" }}>
+                    {title} <span style={{ color: "rgba(147,197,253,0.72)", fontWeight: 600 }}>({count})</span>
+                </div>
+                {note ? <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.58rem", textAlign: "right" }}>{note}</div> : null}
+            </div>
+        );
+
+        const modeOptions = [
+            {
+                id: "direct",
+                title: "Direct / OOC correction",
+                description: "Exact canonical/admin edits with the smallest possible scope.",
+            },
+            {
+                id: "exact-event",
+                title: "Exact Event",
+                description: "Author one timeline event and all structured effects it establishes.",
+            },
+            {
+                id: "world-intervention",
+                title: "World Intervention",
+                description: "Orchestrate a coherent multi-event, cross-system change.",
+            },
+        ];
+
+        const countChip = (label, value) => (
+            <span
+                key={label}
+                style={{
+                    background: value ? "rgba(59,130,246,0.13)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${value ? "rgba(96,165,250,0.28)" : "rgba(255,255,255,0.08)"}`,
+                    borderRadius: 999,
+                    color: value ? "rgba(219,234,254,0.95)" : "rgba(255,255,255,0.42)",
+                    fontSize: "0.66rem",
+                    padding: "0.18rem 0.42rem",
+                }}
+            >
+                {label} {value}
+            </span>
+        );
+
         return (
             <>
-            {header(meta.title, meta.subtitle)}
-            <div style={{ overflowY: "auto" }}>
-            <label style={labelStyle}>Command</label>
-            <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder='Anything — "give Poland all of Germany", "start a golden age in Egypt", "sink the British fleet"…'
-            rows={4}
-            style={{ ...inputStyle, resize: "vertical" }}
-            />
-            <button
-            type="button"
-            disabled={busy || !text.trim()}
-            onClick={() => runBusy(async () => {
-                const result = await applyGameMasterCommand(text.trim());
-                setText("");
-                const summary = result?.world?.lastJumpSummary || result?.summary || "";
-                return summary ? `Done — ${summary}` : "The Game Master applied your command.";
-            })}
-            style={{ ...primaryButtonStyle, marginTop: "0.6rem", opacity: busy ? 0.6 : 1, width: "100%" }}
-            >
-            {busy ? "Rewriting the world…" : "Execute"}
-            </button>
-            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.5rem" }}>
-            The AI interprets the command, applies its impacts to the map and countries, and records it as a game-master event.
-            </div>
-            {statusLine}
+            {header(meta.title, "Unified GM · natural-language canonical transaction planner")}
+            <div style={{ overflowY: "auto", paddingRight: "0.15rem" }}>
+                <div style={{
+                    background: "rgba(30,64,175,0.09)",
+                    border: "1px solid rgba(96,165,250,0.18)",
+                    borderRadius: 9,
+                    color: "rgba(219,234,254,0.82)",
+                    fontSize: "0.72rem",
+                    lineHeight: 1.45,
+                    marginBottom: "0.7rem",
+                    padding: "0.55rem 0.65rem",
+                }}>
+                    <strong style={{ color: "#bfdbfe" }}>8B.2 · Preview → Apply.</strong> Generate a transaction, inspect every canonical operation, then apply that exact preview. Apply performs no second AI call, revalidates the live world immediately before writing, and never advances the date or round.
+                </div>
+
+                <label style={labelStyle}>Mode</label>
+                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
+                    {modeOptions.map((option) => {
+                        const active = gmMode === option.id;
+                        return (
+                            <button
+                                key={option.id}
+                                type="button"
+                                disabled={busy}
+                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmApplyResult(null); }}
+                                style={{
+                                    ...buttonStyle,
+                                    alignItems: "flex-start",
+                                    background: active ? "rgba(59,130,246,0.16)" : "rgba(255,255,255,0.035)",
+                                    borderColor: active ? "rgba(96,165,250,0.42)" : "rgba(255,255,255,0.1)",
+                                    flexDirection: "column",
+                                    gap: "0.18rem",
+                                    justifyContent: "flex-start",
+                                    minHeight: 74,
+                                    padding: "0.55rem",
+                                    textAlign: "left",
+                                }}
+                            >
+                                <span style={{ color: active ? "#dbeafe" : "rgba(255,255,255,0.8)", fontSize: "0.74rem" }}>{option.title}</span>
+                                <span style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.63rem", fontWeight: 400, lineHeight: 1.3 }}>{option.description}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <label style={labelStyle}>GM request</label>
+                <textarea
+                    value={text}
+                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmApplyResult(null); }}
+                    placeholder={gmMode === "direct"
+                        ? 'Example: "Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event."'
+                        : gmMode === "exact-event"
+                            ? 'Example: "On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45."'
+                            : 'Example: "Russia enters a constitutional crisis; Finland gains broad autonomy, Polish unrest spreads, Nicholas II replaces the government, and Russia asks Germany for consultations."'}
+                    rows={5}
+                    style={{ ...inputStyle, resize: "vertical" }}
+                />
+                <button
+                    type="button"
+                    disabled={busy || !text.trim()}
+                    onClick={() => runBusy(async () => {
+                        const result = await previewGameMasterCommand(text.trim(), { mode: gmMode });
+                        setGmPreview(result);
+                        setGmApplyResult(null);
+                        return result?.summary
+                            ? `Preview ready — ${result.summary}`
+                            : "GM transaction preview ready. Nothing has been applied.";
+                    })}
+                    style={{ ...primaryButtonStyle, marginTop: "0.6rem", opacity: busy || !text.trim() ? 0.6 : 1, width: "100%" }}
+                >
+                    {busy ? "Planning canonical transaction…" : gmPreview ? "Regenerate Preview" : "Generate Preview"}
+                </button>
+                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.69rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
+                    AI interpretation is constrained by the live native GM schema. Wars, relations and agreements are structured objects now — no encoded string mini-language and no turn simulation path.
+                </div>
+
+                {gmPreview && (
+                    <div style={{
+                        background: "rgba(0,0,0,0.18)",
+                        border: "1px solid rgba(255,255,255,0.11)",
+                        borderRadius: 10,
+                        marginTop: "0.8rem",
+                        padding: "0.7rem",
+                    }}>
+                        <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between" }}>
+                            <div>
+                                <div style={{ color: gmApplied ? "#86efac" : "#93c5fd", fontSize: "0.65rem", fontWeight: 800, letterSpacing: "0.08em" }}>{gmApplied ? "APPLIED · CANON UPDATED" : "PREVIEW ONLY · NOTHING CHANGED"}</div>
+                                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", marginTop: "0.16rem" }}>
+                                    {gmPreview.date || "Current date"} · {gmPreview.mode} · source {gmPreview?.generation?.source || "unknown"}
+                                </div>
+                            </div>
+                            <span style={{ border: "1px solid rgba(74,222,128,0.25)", borderRadius: 999, color: "#86efac", fontSize: "0.62rem", padding: "0.2rem 0.42rem" }}>
+                                {gmApplied ? "APPLIED" : "VALIDATED"}
+                            </span>
+                        </div>
+
+                        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
+                            {gmPreview.summary || "No summary returned."}
+                        </div>
+
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.6rem" }}>
+                            {countChip("events", events.length)}
+                            {countChip("territory", impactCounts.territory)}
+                            {countChip("polities", impactCounts.polities)}
+                            {countChip("stats", statPatches.length)}
+                            {countChip("units", impactCounts.units)}
+                            {countChip("markers", impactCounts.markers)}
+                            {countChip("wars", warUpdates.length)}
+                            {countChip("relations", relationUpdates.length)}
+                            {countChip("agreements", agreementUpdates.length)}
+                            {countChip("chats", impactCounts.chats + outreach.length)}
+                        </div>
+
+                        {events.length > 0 && (
+                            <div style={{ marginTop: "0.7rem" }}>
+                                <div style={{ ...labelStyle, marginBottom: "0.3rem", marginTop: 0 }}>Authored events</div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                    {events.map((event, index) => (
+                                        <div key={event.id || `${event.date}-${index}`} style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.55rem" }}>
+                                            <div style={{ color: "rgba(147,197,253,0.82)", fontSize: "0.61rem" }}>EVENT {index} · {event.date || "undated"}</div>
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
+                                                {[
+                                                    String(event.importance || "minor").toUpperCase(),
+                                                    String(event.kind || "world").toUpperCase(),
+                                                    ...(event.notable ? ["NOTABLE"] : []),
+                                                    ...(event.playerRelated ? ["PLAYER-RELATED"] : []),
+                                                    ...(event.warId ? [`WAR · ${event.warId}`] : []),
+                                                ].map((badge) => (
+                                                    <span key={badge} style={{
+                                                        background: "rgba(255,255,255,0.045)",
+                                                        border: "1px solid rgba(255,255,255,0.09)",
+                                                        borderRadius: 999,
+                                                        color: "rgba(255,255,255,0.5)",
+                                                        fontSize: "0.56rem",
+                                                        padding: "0.14rem 0.34rem",
+                                                    }}>{badge}</span>
+                                                ))}
+                                            </div>
+                                            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.74rem", fontWeight: 650, marginTop: "0.22rem" }}>{event.title}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.54)", fontSize: "0.68rem", lineHeight: 1.35, marginTop: "0.2rem" }}>{event.description}</div>
+                                            {Array.isArray(event.combatants) && event.combatants.length > 0 ? (
+                                                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.24rem" }}>Combatants: {event.combatants.join(" · ")}</div>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ marginTop: "0.72rem" }}>
+                            <div style={{ ...labelStyle, marginBottom: "0.15rem", marginTop: 0 }}>Exact canonical changes</div>
+                            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", lineHeight: 1.35 }}>
+                                These are the individual operations the Apply step would execute. Authored prose above is not a substitute for these state changes.
+                            </div>
+
+                            {(sovereigntyOps.length > 0 || controlOps.length > 0) && (
+                                <div style={{ marginTop: "0.5rem" }}>
+                                    {subsectionTitle("Territory · legal sovereignty", sovereigntyOps.length, sovereigntyOps.length ? "legal owner changes" : "unchanged")}
+                                    {sovereigntyOps.length === 0 ? (
+                                        <div style={{ ...exactRowStyle, color: "rgba(134,239,172,0.72)" }}>
+                                            NONE · legal sovereignty remains with the current sovereigns.
+                                        </div>
+                                    ) : sovereigntyOps.map((entry, index) => (
+                                        <div key={`sovereignty-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{entry.regionName || entry.regionId || "Unknown region"}</strong>
+                                            {` · ${entry.fromCode || "unclaimed"} → ${entry.toCode || "unclaimed"}`}
+                                            <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                            {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
+                                        </div>
+                                    ))}
+
+                                    {subsectionTitle("Territory · de-facto control / contest", controlOps.length, "does not change legal sovereignty")}
+                                    {controlOps.length === 0 ? (
+                                        <div style={exactRowStyle}>NONE</div>
+                                    ) : controlOps.map((entry, index) => {
+                                        const region = entry.regionName || entry.regionId || "Unknown region";
+                                        let detail = entry.op || "operation";
+                                        if (entry.op === "contest") detail = `CONTEST · current controller ${entry.fromCode || "unknown"} · challenger ${entry.actorCode || "unknown"}`;
+                                        if (entry.op === "control") detail = `CONTROL · ${entry.fromCode || "unknown"} → ${entry.toCode || "unknown"}`;
+                                        if (entry.op === "clear_contest") detail = `CLEAR CONTEST · controller ${entry.fromCode || "unknown"}${entry.clearAll ? " · all claimants" : ` · claimant ${entry.claimantCode || "unknown"}`}`;
+                                        return (
+                                            <div key={`control-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>{region}</strong> · {detail}
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {polityOps.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Polities", polityOps.length)}
+                                    {polityOps.map((entry, index) => {
+                                        const stableIdentity = entry.code || entry.name || "Unknown polity";
+                                        const displayName = String(entry.name || "").trim();
+                                        const hasDistinctDisplayName = displayName && displayName.toLocaleLowerCase() !== String(stableIdentity).trim().toLocaleLowerCase();
+                                        const details = Object.fromEntries(Object.entries(entry).filter(([key, value]) =>
+                                            !key.startsWith("_") && !["operation", "code", "name"].includes(key) && value !== "" && value !== undefined && value !== null
+                                        ));
+                                        return (
+                                            <div key={`polity-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                    {String(entry.operation || "update").toUpperCase()} · {stableIdentity}{hasDistinctDisplayName ? ` → ${displayName}` : ""}
+                                                </strong>
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                {hasDistinctDisplayName ? (
+                                                    <div style={{ color: "rgba(147,197,253,0.62)", marginTop: "0.14rem" }}>
+                                                        Stable identity: {stableIdentity} · current/display name: {displayName}
+                                                    </div>
+                                                ) : null}
+                                                {Object.keys(details).length > 0 ? <div style={{ color: "rgba(255,255,255,0.44)", marginTop: "0.14rem" }}>{compactJson(details)}</div> : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {statPatches.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Authoritative Stats baselines", statPatches.length)}
+                                    {statPatches.map((entry, index) => (
+                                        <div key={`stat-${entry.country}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{entry.country}</strong> · {compactJson(entry.patch)}
+                                            {Array.isArray(entry.eventIndexes) && entry.eventIndexes.length > 0 ? <span style={{ color: "rgba(255,255,255,0.34)" }}> · events {entry.eventIndexes.join(", ")}</span> : null}
+                                            {entry.reason ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.reason}</div> : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {unitOps.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Military units", unitOps.length)}
+                                    {unitOps.map((entry, index) => {
+                                        let detail = compactJson(Object.fromEntries(Object.entries(entry).filter(([key]) => !key.startsWith("_"))));
+                                        if (entry.op === "spawn") detail = `SPAWN · ${entry.unit?.name || "unnamed"} · ${entry.unit?.ownerCode || "unknown owner"} · ${entry.unit?.type || "unit"} · strength ${entry.unit?.strength ?? "?"} · ${entry.unit?.regionId || `${entry.unit?.lat ?? "?"}, ${entry.unit?.lng ?? "?"}`}`;
+                                        if (entry.op === "move") detail = `MOVE · ${entry.unitId || "unknown unit"} → ${entry.regionId || `${entry.toLat ?? "?"}, ${entry.toLng ?? "?"}`}`;
+                                        if (entry.op === "attack") detail = `ATTACK · ${entry.unitId || "unknown unit"} → ${entry.targetUnitId || "unknown target"}`;
+                                        if (entry.op === "strength") detail = `STRENGTH · ${entry.unitId || "unknown unit"} → ${entry.strength ?? "?"}`;
+                                        if (entry.op === "remove") detail = `REMOVE · ${entry.unitId || "unknown unit"}`;
+                                        return <div key={`unit-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}><strong style={{ color: "rgba(255,255,255,0.88)" }}>{detail}</strong><span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>{entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}</div>;
+                                    })}
+                                </div>
+                            )}
+
+                            {markerOps.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Map features", markerOps.length)}
+                                    {markerOps.map((entry, index) => {
+                                        let detail = `${String(entry.op || "operation").toUpperCase()} · ${entry.name || entry.marker?.name || "unnamed feature"}`;
+                                        if (entry.op === "build") detail += ` · ${entry.marker?.kind || "feature"} · owner ${entry.marker?.ownerCode || "none"} · ${entry.marker?.lat ?? "?"}, ${entry.marker?.lng ?? "?"}`;
+                                        if (entry.op === "rename") detail += ` → ${entry.newName || "unnamed"}`;
+                                        return <div key={`marker-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}><strong style={{ color: "rgba(255,255,255,0.88)" }}>{detail}</strong><span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>{entry.note || entry.marker?.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note || entry.marker?.note}</div> : null}</div>;
+                                    })}
+                                </div>
+                            )}
+
+                            {warUpdates.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Wars", warUpdates.length, "world.wars")}
+                                    {warUpdates.map((entry, index) => (
+                                        <div key={`war-${entry.id}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || "update").toUpperCase()} · {entry.id}</strong>
+                                            <div style={{ marginTop: "0.12rem" }}>Actors: {entry.actors?.join(", ") || "—"}{entry.opponents?.length ? ` · Opponents: ${entry.opponents.join(", ")}` : ""}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.36)", marginTop: "0.1rem" }}>Events: {entry.eventIndexes?.join(", ") || "—"}{entry.note ? ` · ${entry.note}` : ""}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {relationUpdates.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Relations", relationUpdates.length, "world.relations")}
+                                    {relationUpdates.map((entry, index) => (
+                                        <div key={`relation-${entry.a}-${entry.b}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{entry.a} ↔ {entry.b}</strong> · {entry.score} · {entry.status}
+                                            <div style={{ color: "rgba(255,255,255,0.38)", marginTop: "0.1rem" }}>Events: {entry.eventIndexes?.join(", ") || "—"}{entry.summary ? ` · ${entry.summary}` : ""}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {agreementUpdates.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Agreements", agreementUpdates.length, "world.agreements")}
+                                    {agreementUpdates.map((entry, index) => (
+                                        <div key={`agreement-${entry.id}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || "update").toUpperCase()} · {entry.id}</strong> · {entry.type}
+                                            <div style={{ marginTop: "0.12rem" }}>Parties: {entry.parties?.join(", ") || "—"}{entry.title ? ` · ${entry.title}` : ""}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.38)", marginTop: "0.1rem" }}>Events: {entry.eventIndexes?.join(", ") || "—"}{entry.terms ? ` · ${entry.terms}` : ""}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {(eventChats.length > 0 || outreach.length > 0) && (
+                                <div>
+                                    {subsectionTitle("Diplomatic chats", eventChats.length + outreach.length)}
+                                    {eventChats.map((entry, index) => (
+                                        <div key={`event-chat-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>EVENT CHAT · {entry.title || "Untitled"}</strong> · speaker {entry.speaker || "unknown"}
+                                            <div style={{ marginTop: "0.12rem" }}>Participants: {(entry.countries || []).map((country) => country?.name || country).filter(Boolean).join(", ") || "—"}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.1rem" }}>{entry.openingMessage || ""}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.3)", marginTop: "0.1rem" }}>{eventRef(entry)}</div>
+                                        </div>
+                                    ))}
+                                    {outreach.map((entry, index) => (
+                                        <div key={`outreach-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>OUTREACH · {entry.title || "Untitled"}</strong> · speaker {entry.speaker || "unknown"}
+                                            <div style={{ marginTop: "0.12rem" }}>Participants: {(entry.countries || []).map((country) => country?.name || country).filter(Boolean).join(", ") || "—"}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.1rem" }}>{entry.openingMessage || ""}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <button
+                            type="button"
+                            disabled={busy || gmApplied}
+                            title={gmApplied ? "This exact transaction has already been applied." : "Apply exactly the validated preview above. No second AI call."}
+                            onClick={() => runBusy(async () => {
+                                const result = await applyGameMasterPreview(gmPreview);
+                                setGmApplyResult(result);
+                                await refresh();
+                                return result?.summary
+                                    ? `Applied — ${result.summary}`
+                                    : `Applied GM transaction ${result?.transactionId || ""}.`;
+                            })}
+                            style={{
+                                ...primaryButtonStyle,
+                                cursor: busy || gmApplied ? "not-allowed" : "pointer",
+                                marginTop: "0.75rem",
+                                opacity: busy || gmApplied ? 0.52 : 1,
+                                width: "100%",
+                            }}
+                        >
+                            {busy ? "Applying canonical transaction…" : gmApplied ? "Applied ✓" : "Apply Transaction"}
+                        </button>
+                        <div style={{ color: gmApplied ? "rgba(134,239,172,0.72)" : "rgba(255,255,255,0.4)", fontSize: "0.64rem", lineHeight: 1.35, marginTop: "0.35rem", textAlign: "center" }}>
+                            {gmApplied
+                                ? `Applied as ${gmApplyResult.transactionId}. Date and round were not advanced.`
+                                : "Apply uses this exact preview, revalidates current canon, writes through native seams, and records a persistent GM audit entry."}
+                        </div>
+                    </div>
+                )}
+                {statusLine}
             </div>
             </>
         );

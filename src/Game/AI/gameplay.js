@@ -27,8 +27,12 @@ import {
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
 import { callAI } from "./main.jsx";
-import { normalizePromptPack } from "./gameplayPrompts.js";
-import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
+import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
+import {
+  decodeGameMasterTransportPayload,
+  getGameplayTool,
+  validateGameplayPayload,
+} from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
@@ -584,7 +588,10 @@ const runJsonTask = async (taskKey, {
 }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
+  const promptTemplate = taskKey === "gameMaster"
+    ? NATIVE_GAME_MASTER_PROMPT
+    : prompts.tasks[taskKey];
+  let systemPrompt = renderTemplate(promptTemplate, {
     ...variables,
     ...helperValues,
   });
@@ -613,11 +620,14 @@ const runJsonTask = async (taskKey, {
   if (taskKey === "countryStatSheet") {
     systemPrompt = `${systemPrompt}
 
-[Native Country Stats — LIVE 7A.2]
-This is a PERSISTENT campaign stat sheet, not a disposable modern-country lookup. The supplied LEGAL TERRITORIAL BASIS is authoritative for the polity's demographic/economic scope. A polity name is never shorthand for modern or textbook historical borders. Temporary battlefield occupation/control does not automatically become part of national population/GDP; legal sovereignty is the territorial accounting basis.
+[Native Country Stats — LIVE 7A.2 / 8B.2.13]
+This is a PERSISTENT campaign stat sheet, not a disposable modern-country lookup. Native code has already selected the authoritative territorial ACCOUNTING MODE and partition below; the model MUST NOT choose a different mode from prose, modern borders, or historical expectation.
 
-LEGAL TERRITORIAL BASIS:
+AUTHORITATIVE TERRITORIAL BASIS:
 ${normalizeString(variables?.statsTerritorialContext) || "No territorial basis was resolved; use the target dossier conservatively."}
+
+PRE-SEPARATION / DONOR COMPONENT REFERENCES:
+${normalizeString(variables?.statsTerritorialReferenceContext) || "None available. Estimate from the supplied territorial basis and campaign context."}
 
 PREVIOUS PERSISTENT STATS / CONTINUITY ANCHOR:
 ${normalizeString(variables?.statsPreviousContext) || "No previous persistent stat sheet exists; establish a fresh baseline."}
@@ -625,24 +635,31 @@ ${normalizeString(variables?.statsPreviousContext) || "No previous persistent st
 FRESH ECONOMIC / DEMOGRAPHIC EVIDENCE NOT YET ACCOUNTED IN THAT BASELINE:
 ${normalizeString(variables?.statsEconomicEvidenceContext) || "None. Preserve continuity; the absence of fresh evidence is not permission to reroll the economy."}
 
+TERRITORIAL ACCOUNTING CONTRACT — REQUIRED:
+- LEGAL SOVEREIGNTY is the normal accounting mode. Temporary foreign battlefield occupation does NOT automatically become part of the occupier's national population/GDP, and occupied legally-sovereign territory remains in the legal sovereign's national scope.
+- Native code may instead explicitly select DE-FACTO STATE ADMINISTRATION for an active territorial polity that lacks a usable legal-sovereign map basis but actually administers territory as a state/breakaway/provisional government. ONLY when that mode is explicitly printed in the authoritative basis do controlled regions become this polity's Stats scope.
+- DE-FACTO STATE ADMINISTRATION is NOT a loophole for ordinary foreign occupiers. The model must never switch modes itself.
+- If a de-facto state is administering territory still legally claimed by another polity, both ledgers may legitimately overlap at the world level: the legal sovereign's sheet describes its de-jure realm while the de-facto state's sheet describes the population/economy it actually administers. Do not "fix" that by deleting territory from either side unless canonical sovereignty/control changes.
+- When native code supplies a donor/reference component from the displaced legal sovereign, use it as a continuity anchor. For an EXACT/FULL matching component, preserve roughly that population/productivity unless campaign evidence justifies change. For a PARTIAL parent component, NEVER copy the whole donor population; estimate only the explicitly listed controlled subregions.
+
 CONTINUITY CONTRACT — REQUIRED:
-- The previous persistent sheet is the numeric baseline, not a suggestion. Reassess it from fresh campaign evidence and elapsed time; do NOT regenerate a new textbook estimate from scratch.
+- The previous persistent sheet is the numeric baseline, not a suggestion, EXCEPT where the authoritative territorial mode/coverage has changed and the old component layout no longer represents the current scope.
 - Events already accounted in the baseline may still appear elsewhere in broad history/context. Do NOT apply them a second time. Only the FRESH evidence block above is newly account-able evidence for this reassessment.
-- If legal territory is unchanged and there is little/no fresh evidence, surviving component populations/productivity and macro indicators should remain close to their previous values. Slow demographic/productivity drift over elapsed time is fine; unexplained discontinuities are not.
-- A short-span component population or GDP/capita re-baseline of roughly 50% or more needs a real supplied campaign cause affecting that component or the whole polity. Native JavaScript applies a conservative final guard as a second line of defense.
-- A legal annexation/cession can add/remove/change native components. Temporary battlefield occupation alone cannot.
+- If the authoritative territorial basis is unchanged and there is little/no fresh evidence, surviving component populations/productivity and macro indicators should remain close to their previous values. Slow demographic/productivity drift over elapsed time is fine; unexplained discontinuities are not.
+- A short-span component population or GDP/capita re-baseline of roughly 50% or more needs either a real supplied campaign cause OR an authoritative territorial coverage/mode change that makes the old component non-comparable. Native JavaScript applies a conservative final guard as a second line of defense.
+- Legal annexation/cession can add/remove/change normal legal components. In explicitly selected DE-FACTO STATE ADMINISTRATION mode, de-facto control changes can add/remove/change administrative components because control is the native accounting basis for that special polity.
 - Never use modern-country wealth/population stereotypes to overwrite the campaign baseline.
 
 COMPONENT METHOD — REQUIRED:
-- Native code has already partitioned the legal territorial basis into NUMBERED components shown below. You MUST NOT choose, rename, split, merge, add, or omit geographies.
+- Native code has already partitioned the authoritative territorial basis into NUMBERED components shown below. You MUST NOT choose, rename, split, merge, add, or omit geographies.
 - Return territorialComponentsText with EXACTLY ONE row for EVERY numbered component, in this exact transport format: index~group~population~gdpPerCapita
 - Example rows: 1~core~4100000~4200 OR 2~overseas/dependent~800000~900
 - index MUST be the supplied integer component index. Native JavaScript binds that index back to the authoritative geography name; geography names therefore do NOT appear in your response.
 - Allowed group values: core | integrated | overseas/dependent.
-- For PARTIAL components, population/GDP estimates cover ONLY the explicitly listed legal subregions, never the entire modern base geography.
+- For PARTIAL components, population/GDP estimates cover ONLY the explicitly listed subregions, never the entire parent geography.
 - Estimate EACH numbered component's current population and GDP/capita independently. Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
-- group is only an economic/display bucket: core | integrated | overseas/dependent. It is NOT a sovereignty, alliance, customs-union, or constitutional judgment. A partial modern-base geography may still be core/integrated if those exact subregions are constitutionally part of the polity.
-- Previous component names are a continuity/economic reference only. If they conflict with the current numbered legal basis, the current numbered basis wins and native code will rebind continuity going forward.
+- group is only an economic/display bucket: core | integrated | overseas/dependent. It is NOT a sovereignty, alliance, customs-union, recognition, or constitutional judgment.
+- Previous component names are a continuity/economic reference only. If they conflict with the current numbered authoritative basis, the current numbered basis wins and native code will rebind continuity going forward.
 - gdpPerCapita inside each component is expressed in 2026-EUR-equivalent purchasing-value/accounting terms ONLY so different components and eras can be aggregated. It does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED. Native JavaScript will decode territorialComponentsText and recompute them after your response.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
@@ -650,7 +667,7 @@ COMPONENT METHOD — REQUIRED:
 - GDP breakdown must sum to exactly 100.
 - Never invent a war, reform, boom, depression, trade bloc, annexation, reconstruction program, tax change, loan, or fiscal shock absent from supplied campaign evidence.
 
-This live instruction supersedes older frozen country-stat prompts and all earlier 7A.1 free-form component transport rules.`;
+This live instruction supersedes older frozen country-stat prompts and all earlier 7A.1/7A.2 territorial wording.`;
   }
 
   // Structured event quotations are appended at call time because campaign prompt
@@ -897,7 +914,7 @@ ${canonicalDiplomacy}`;
   }
 
   if (taskKey === "gameMaster") {
-    systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
   }
 
   // The consolidator's summary REPLACES what it covers, so anything it leaves out
@@ -925,8 +942,12 @@ ${canonicalDiplomacy}`;
   // answers "ESP" gets canonicalised on ingest, but it also then reasons about "ESP"
   // and "Spain" as if they were two powers, so state the rule rather than only
   // repairing the output.
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor", "gameMaster", "territoryDirector"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor", "territoryDirector"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Polity Names]\nEvery polity is identified ONLY by its full country name, exactly as written in the map description — "Spain", "United States", "Soviet Union". NEVER use a country code or abbreviation such as "ESP", "USA" or "SOV", anywhere, in any field. This applies to every owner field despite their names: toCode, fromCode, ownerCode and a polity's code all take the FULL NAME. A code is not a shorter way of writing a country here; it is a different, non-existent polity, and using one creates a phantom country on the map beside the real one.`;
+  }
+
+  if (taskKey === "gameMaster") {
+    systemPrompt = `${systemPrompt}\n\n[GM Polity Identity vs Current Name — LIVE 8B.1.4]\nNever use ISO/map abbreviations. For territorial, war, relation, agreement, unit-owner and other canonical references, use the stable full polity identity. In impacts.polityChanges specifically, code is the stable historical/campaign identity and name is the OPTIONAL current regime/display name. Example: a Polish independence uprising may restore code=\"Poland\" while the event establishes name=\"Polish Provisional Government\". The display name does NOT create a second polity. UPDATE is only for an already-current active polity; it must never be used to establish independence or awaken a dormant historical identity. Choose a provisional/junta/republic/monarchy/etc. name only when the event itself supports that governing form; otherwise leaving name blank (so the stable identity is displayed) is better than inventing unsupported politics. This live rule supersedes any older instruction that treats polityChanges.code and polityChanges.name as interchangeable.`;
   }
 
   // Units kept landing at 0,0 (null island) because the model copied the lng:0,lat:0
@@ -1098,6 +1119,12 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       let parsed = response?.toolInput ?? extractJsonPayload(rawText);
+      let transportDecodeError = "";
+      if (taskKey === "gameMaster" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const decoded = decodeGameMasterTransportPayload(parsed);
+        transportDecodeError = normalizeString(decoded?.error);
+        parsed = decoded?.payload;
+      }
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object
@@ -1144,9 +1171,11 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
         delete parsed.territorialComponentsText;
       }
 
-      let validation = parsed
-        ? validateGameplayPayload(taskKey, parsed)
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      let validation = transportDecodeError
+        ? { valid: false, error: transportDecodeError }
+        : parsed
+          ? validateGameplayPayload(taskKey, parsed)
+          : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
       if (validation.valid && statsCoverageError) {
         validation = { valid: false, error: statsCoverageError };
       }
@@ -1636,21 +1665,103 @@ const GEOGRAPHY_RESOLVER_BATCH_SIZE = 6;
 const GEOGRAPHY_RESOLVER_MAX_CANDIDATES = 140;
 const GEOGRAPHY_RESOLVER_MAX_AREA_REGIONS = 12;
 
-const resolveRegionTransfers = async (containers, world, { ownershipMode = "sovereignty" } = {}) => {
-  const catalog = await loadRegionCatalog().catch(() => []);
+const resolveRegionTransfers = async (containers, world, {
+  ownershipMode = "sovereignty",
+  enforceNarratedCityCoverage = false,
+} = {}) => {
+  // Phase 8B.2.10: resolve against the geography that is ACTUALLY rendered for
+  // this scenario. loadRegionCatalog() is intentionally broad and may contain
+  // stock GADM rows alongside custom/historical scenario rows; letting those two
+  // corpora compete is what made friendly names such as "Masovia" capable of
+  // pointing at a real-but-wrong province.
+  //
+  // The current regionsGeojson is the map truth. Use it as the primary corpus
+  // whenever it exists, retaining stock catalog data only as a compatibility
+  // fallback for maps that do not expose rendered region features.
+  const [mergedCatalog, renderedRegionsGeojson] = await Promise.all([
+    loadRegionCatalog().catch(() => []),
+    readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true }).catch(() => null),
+  ]);
+
+  const renderedFeatures = normalizeArray(renderedRegionsGeojson?.features);
+  const renderedCatalog = renderedFeatures
+    .map((feature) => {
+      const props = feature?.properties ?? {};
+      const id = normalizeString(
+        props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id,
+      );
+      const name = normalizeString(
+        props.name ?? props.NAME_1 ?? props.Name ?? props.regionName,
+      );
+      if (!id || !name) return null;
+
+      const countryCode = normalizeString(
+        props.gid0 ?? props.GID_0 ?? props.gid_0 ?? props.countryCode,
+      );
+      const country = normalizeString(
+        props.owner ??
+        props.COUNTRY ??
+        props.Country ??
+        props.country ??
+        toCountryName(countryCode) ??
+        "",
+      );
+
+      return {
+        id,
+        name,
+        country,
+        countryCode,
+        geometry: feature?.geometry ?? null,
+        aliases: [
+          props.sourceBaseRegionName,
+          props.sourceBaseRegionId,
+          props.NAME_1,
+          props.VARNAME_1,
+        ].map(normalizeString).filter(Boolean),
+      };
+    })
+    .filter(Boolean);
+
+  const catalog = renderedCatalog.length > 0 ? renderedCatalog : mergedCatalog;
+
   // Without a catalog we cannot tell a good id from a bad one, and dropping real
   // transfers would be worse than phantom keys — leave the payload alone.
   if (catalog.length === 0) return [];
 
   const byId = new Map();
   const byName = new Map();
+  const byAliasId = new Map();
+
+  const addNameAlias = (token, region) => {
+    const key = regionKey(token);
+    if (!key) return;
+    const bucket = byName.get(key);
+    if (bucket) {
+      if (!bucket.some((entry) => entry.id === region.id)) bucket.push(region);
+    } else {
+      byName.set(key, [region]);
+    }
+  };
+
+  const addIdAlias = (token, region) => {
+    const key = normalizeString(token);
+    if (!key || key === region.id) return;
+    const bucket = byAliasId.get(key);
+    if (bucket) {
+      if (!bucket.some((entry) => entry.id === region.id)) bucket.push(region);
+    } else {
+      byAliasId.set(key, [region]);
+    }
+  };
+
   for (const region of catalog) {
     byId.set(region.id, region);
-    const key = regionKey(region.name);
-    if (!key) continue;
-    const bucket = byName.get(key);
-    if (bucket) bucket.push(region);
-    else byName.set(key, [region]);
+    addNameAlias(region.name, region);
+    for (const alias of normalizeArray(region.aliases)) {
+      addNameAlias(alias, region);
+      addIdAlias(alias, region);
+    }
   }
 
   const worldState = normalizeWorldState(world);
@@ -1712,6 +1823,192 @@ const resolveRegionTransfers = async (containers, world, { ownershipMode = "sove
     return catalog.filter((region) => ownerKeyOf(region.id) === key);
   };
 
+  // Phase 8B.2.9: city-grounded territory operations must follow the ACTUAL
+  // rendered scenario geometry, not a historically plausible region label. A
+  // 1915 event may say "Warsaw and Masovia", while this scenario's Warsaw marker
+  // is physically inside the map region "Mazowieckie" and a different region is
+  // literally named "Masovia". Exact-name matching alone therefore can be wrong.
+  //
+  // Custom/era scenarios already carry both authoritative city points and region
+  // polygons. Use those assets deterministically before accepting a friendly
+  // region-name match. This keeps the geography decision in map truth rather than
+  // asking the model to guess which similar historical label the scenario author
+  // meant. Pure stock maps keep the existing resolver path.
+  const pointInRing = ([x, y], ring) => {
+    if (!Array.isArray(ring) || ring.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const a = ring[i];
+      const b = ring[j];
+      const xi = Number(a?.[0]);
+      const yi = Number(a?.[1]);
+      const xj = Number(b?.[0]);
+      const yj = Number(b?.[1]);
+      if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+      const crosses = ((yi > y) !== (yj > y)) &&
+        (x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  };
+
+  const pointInPolygonCoordinates = (point, polygon) => {
+    if (!Array.isArray(polygon) || polygon.length === 0) return false;
+    if (!pointInRing(point, polygon[0])) return false;
+    // Holes negate the outer-ring hit.
+    for (let index = 1; index < polygon.length; index += 1) {
+      if (pointInRing(point, polygon[index])) return false;
+    }
+    return true;
+  };
+
+  const pointInGeometry = (point, geometry) => {
+    if (!Array.isArray(point) || point.length < 2 || !geometry) return false;
+    if (geometry.type === "Polygon") {
+      return pointInPolygonCoordinates(point, geometry.coordinates);
+    }
+    if (geometry.type === "MultiPolygon") {
+      return normalizeArray(geometry.coordinates)
+        .some((polygon) => pointInPolygonCoordinates(point, polygon));
+    }
+    return false;
+  };
+
+  let cityAnchorContext = null;
+  if (worldState.customCities) {
+    try {
+      const citiesGeojson = await readJson(
+        JSON_URLS.citiesGeojson,
+        { defaultValue: null, force: true },
+      ).catch(() => null);
+
+      const regionGeometryById = new Map();
+      for (const region of catalog) {
+        if (region?.id && region?.geometry) regionGeometryById.set(region.id, region.geometry);
+      }
+
+      // Compatibility fallback for a map whose primary catalog came from
+      // loadRegionCatalog() rather than rendered features.
+      if (regionGeometryById.size === 0) {
+        for (const feature of renderedFeatures) {
+          const props = feature?.properties ?? {};
+          const id = normalizeString(
+            props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id,
+          );
+          if (id && feature?.geometry) regionGeometryById.set(id, feature.geometry);
+        }
+      }
+
+      const cities = normalizeArray(citiesGeojson?.features)
+        .map((feature) => {
+          const props = feature?.properties ?? {};
+          const coordinates = feature?.geometry?.type === "Point"
+            ? feature.geometry.coordinates
+            : null;
+          const name = normalizeString(props.city || props.name);
+          const aliases = new Set([name]);
+          const renamed = normalizeString(worldState.cityRenames?.[name.toLowerCase()]);
+          if (renamed) aliases.add(renamed);
+          return {
+            aliases: [...aliases].filter(Boolean),
+            coordinates,
+            name,
+          };
+        })
+        .filter((city) => city.name && Array.isArray(city.coordinates) && city.coordinates.length >= 2);
+
+      if (cities.length && regionGeometryById.size) {
+        cityAnchorContext = { cities, regionGeometryById };
+      }
+    } catch (error) {
+      console.warn("[geo resolver] custom city/region anchor data unavailable; using normal geography resolver.", error);
+    }
+  }
+
+  const mentionedCitiesIn = (text) => {
+    if (!cityAnchorContext) return [];
+    const haystack = ` ${regionKey(text)} `;
+    if (!haystack.trim()) return [];
+    const matches = [];
+    for (const city of cityAnchorContext.cities) {
+      const matched = city.aliases.some((alias) => {
+        const key = regionKey(alias);
+        return key.length >= 3 && haystack.includes(` ${key} `);
+      });
+      if (matched) matches.push(city);
+    }
+    return matches;
+  };
+
+  const containingRegionIdsForCity = (city, candidates) => {
+    if (!cityAnchorContext || !city || !Array.isArray(candidates) || candidates.length === 0) return [];
+    const hits = [];
+    for (const region of candidates) {
+      const geometry = cityAnchorContext.regionGeometryById.get(region.id);
+      if (geometry && pointInGeometry(city.coordinates, geometry)) hits.push(region.id);
+    }
+    return [...new Set(hits)];
+  };
+
+  const cityAnchoredRegionId = (transfer, candidates) => {
+    if (!cityAnchorContext || !Array.isArray(candidates) || candidates.length === 0) return "";
+
+    // Phase 8B.2.11: city anchoring is intentionally LOCAL to this operation.
+    // Never fall through to the whole event description here: one event commonly
+    // names several simultaneous captures, and using event-wide prose allowed the
+    // Warsaw marker to hijack a perfectly exact "Piotrków" operation.
+    const contexts = [
+      normalizeString(transfer?.note),
+      `${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`,
+    ];
+
+    let anchors = [];
+    for (const context of contexts) {
+      anchors = mentionedCitiesIn(context);
+      if (anchors.length) break;
+    }
+    if (anchors.length === 0) return "";
+
+    const containing = new Set();
+    for (const city of anchors) {
+      const hits = containingRegionIdsForCity(city, candidates);
+      // A city point must identify exactly one losing-side region. Boundary points,
+      // overlapping bad geometry, or missing geometry fail safe instead of guessing.
+      if (hits.length !== 1) continue;
+      containing.add(hits[0]);
+    }
+
+    return containing.size === 1 ? [...containing][0] : "";
+  };
+
+  // If the event prose explicitly says control is being established/expanded/
+  // consolidated in a named city, that city's rendered region must be present in
+  // the structured control ops. This catches the exact partial-coverage failure
+  // where prose says "Płock, Częstochowa and Warsaw" but the transaction only
+  // carries operations for the first two.
+  const NARRATED_CONTROL_TARGET_CUE = /\b(?:captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n\w*|liberat\w*|retak\w*|recaptur\w*|takes?\s+(?:de[- ]?facto\s+)?control|assumes?\s+(?:de[- ]?facto\s+)?control|establish(?:es|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|expand(?:s|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|extend(?:s|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|consolidat(?:e|es|ed|ing)(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control)\b/i;
+
+  const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const cityClaimedAsControlTarget = (text, city) => {
+    const haystack = regionKey(text);
+    if (!haystack) return false;
+
+    for (const alias of city.aliases) {
+      const key = regionKey(alias);
+      if (key.length < 3) continue;
+      const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(key)}(?=$|[^a-z0-9])`, "g");
+      for (const match of haystack.matchAll(pattern)) {
+        const cityIndex = Number(match.index || 0) + normalizeString(match[1]).length;
+        const before = haystack.slice(Math.max(0, cityIndex - 220), cityIndex);
+        const clause = before.split(/[.!?;\n]/).pop() || before;
+        if (NARRATED_CONTROL_TARGET_CUE.test(clause)) return true;
+      }
+    }
+
+    return false;
+  };
+
   const expandWholeCountry = (transfer) => {
     const target = resolveOwnerName(
       normalizeString(transfer?.regionId) ||
@@ -1735,12 +2032,28 @@ const resolveRegionTransfers = async (containers, world, { ownershipMode = "sove
     }));
   };
 
-  const deterministicResolve = (transfer) => {
-    if (byId.has(normalizeString(transfer?.regionId))) {
-      return normalizeString(transfer.regionId);
+  const deterministicResolve = (transfer, event) => {
+    const requestedId = normalizeString(transfer?.regionId);
+    if (byId.has(requestedId)) {
+      return requestedId;
     }
 
     const fromKey = canonicalOwnerKey(transfer?.fromCode);
+
+    const aliasedIds = byAliasId.get(requestedId) ?? [];
+    if (aliasedIds.length === 1) return aliasedIds[0].id;
+    if (aliasedIds.length > 1 && fromKey) {
+      const owned = aliasedIds.filter((region) => ownerKeyOf(region.id) === fromKey);
+      if (owned.length === 1) return owned[0].id;
+    }
+    const ownedCandidates = fromKey ? regionsOwnedBy(transfer?.fromCode) : [];
+
+    // A city explicitly named INSIDE THIS OPERATION may disambiguate a historical
+    // or friendly label (e.g. regionId "Masovia" + note "Warsaw"). Crucially this
+    // no longer reads the event-wide prose, so another city in the same event
+    // cannot hijack an exact rendered region such as Piotrków.
+    const anchored = cityAnchoredRegionId(transfer, ownedCandidates);
+    if (anchored) return anchored;
 
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
       const query = regionKey(candidate);
@@ -1813,13 +2126,16 @@ const resolveRegionTransfers = async (containers, world, { ownershipMode = "sove
         }
       }
 
-      const regionId = deterministicResolve(transfer);
+      const regionId = deterministicResolve(transfer, event);
       if (regionId) {
         const row = byId.get(regionId);
         const normalized = {
           ...transfer,
           regionId,
-          regionName: normalizeString(transfer?.regionName) || row?.name || "",
+          // Preview/apply must expose the ACTUAL canonical map region we resolved,
+          // not keep an AI-authored historical/friendly label that can hide a bad
+          // mapping (e.g. prose says one place while regionId points elsewhere).
+          regionName: row?.name || normalizeString(transfer?.regionName) || regionId,
         };
         pushUniqueTransfer(resolved, normalized);
         destinationByRegion.set(regionId, regionKey(transfer?.toCode));
@@ -1925,7 +2241,11 @@ const resolveRegionTransfers = async (containers, world, { ownershipMode = "sove
       const response = await runJsonTask("geographyResolver", {
         fallback,
         userMessage:
-          "Resolve every supplied unresolved geography item using only its supplied candidateRegions. Return exactly one resolution per item index.",
+          "Resolve every supplied unresolved geography item using only its supplied candidateRegions. " +
+          "Resolve by REAL geographic meaning, not spelling similarity. Use the event title/description as disambiguating evidence: " +
+          "if the event anchors the change on a named city, choose only the candidate region that actually contains that city; the city anchor outranks a merely similar or historically related sourcePlace label. " +
+          "historical areas must map to their genuine modern/scenario equivalents, not a similarly named neighboring region. " +
+          "If you are not highly certain, return UNRESOLVED rather than guessing. Return exactly one resolution per item index.",
         variables: {
           geographyResolverItems: JSON.stringify(items, null, 2),
         },
@@ -2083,6 +2403,51 @@ const resolveRegionTransfers = async (containers, world, { ownershipMode = "sove
     );
   }
 
+  if (enforceNarratedCityCoverage && cityAnchorContext) {
+    for (const { impacts, path, event } of containers) {
+      const controlOps = normalizeArray(impacts?.regionTransfers)
+        .filter((entry) => normalizeString(entry?.op).toLowerCase() === "control");
+      if (controlOps.length === 0) continue;
+
+      const eventText = [
+        normalizeString(event?.title),
+        normalizeString(event?.description) || normalizeString(event?.summary),
+      ].filter(Boolean).join(". ");
+      if (!eventText) continue;
+
+      const resolvedRegionIds = new Set(
+        controlOps.map((entry) => normalizeString(entry?.regionId)).filter(Boolean),
+      );
+
+      for (const city of cityAnchorContext.cities) {
+        if (!cityClaimedAsControlTarget(eventText, city)) continue;
+
+        const hits = containingRegionIdsForCity(city, catalog);
+        if (hits.length !== 1) continue;
+        const regionId = hits[0];
+        if (resolvedRegionIds.has(regionId)) continue;
+
+        const row = byId.get(regionId);
+        unresolved.push({
+          kind: "narrated-city-coverage",
+          label: city.name,
+          cityName: city.name,
+          regionId,
+          regionName: row?.name || regionId,
+          fromCode: "",
+          path,
+          candidates: row ? [row] : [],
+        });
+
+        console.warn(
+          `[geo resolver] ${path}.regionControlOps narration claims control changes in ` +
+            `${city.name}, but no control op targets its rendered region ` +
+            `${row?.name || regionId} (${regionId}).`,
+        );
+      }
+    }
+  }
+
   return unresolved;
 };
 
@@ -2118,6 +2483,7 @@ const resolveRegionControlOps = async (containers, world) => {
 
   const unresolved = await resolveRegionTransfers(proxyContainers, world, {
     ownershipMode: "control",
+    enforceNarratedCityCoverage: true,
   });
 
   for (let index = 0; index < containers.length; index += 1) {
@@ -2170,14 +2536,42 @@ const buildTransferFeedback = (unresolved) => {
 };
 
 const buildControlFeedback = (unresolved) => {
-  const base = buildTransferFeedback(unresolved)
-    .replaceAll(".regionTransfers", ".regionControlOps")
-    .replaceAll("these regionTransfers", "these regionControlOps")
-    .replaceAll("applied transfer", "applied control operation")
-    .replaceAll("currently owned by", "currently controlled by")
-    .replaceAll("current owner", "current controller")
-    .replaceAll("drop a transfer", "drop a control operation");
-  return base;
+  const coverage = normalizeArray(unresolved)
+    .filter((entry) => entry?.kind === "narrated-city-coverage");
+  const ordinary = normalizeArray(unresolved)
+    .filter((entry) => entry?.kind !== "narrated-city-coverage");
+
+  const chunks = [];
+  if (ordinary.length > 0) {
+    chunks.push(
+      buildTransferFeedback(ordinary)
+        .replaceAll(".regionTransfers", ".regionControlOps")
+        .replaceAll("these regionTransfers", "these regionControlOps")
+        .replaceAll("applied transfer", "applied control operation")
+        .replaceAll("currently owned by", "currently controlled by")
+        .replaceAll("current owner", "current controller")
+        .replaceAll("drop a transfer", "drop a control operation"),
+    );
+  }
+
+  for (const entry of coverage) {
+    chunks.push(
+      `${entry.path}.regionControlOps: event narration explicitly says de-facto control changes in ` +
+        `${entry.cityName || entry.label}, which the rendered map places in ` +
+        `${entry.regionName} (${entry.regionId}), but no control operation targets that region. ` +
+        `Add the matching control operation using regionId "${entry.regionId}" and regionName ` +
+        `"${entry.regionName}" with the correct current controller/fromCode and new controller/toCode, ` +
+        `or revise the event prose so it does not claim control changed there.`,
+    );
+  }
+
+  if (coverage.length > 0) {
+    chunks.push(
+      "Resend the same transaction with every narrated city/territory control change represented by a matching regionControlOps entry. Do not silently drop a named control change merely because another nearby region was resolved successfully.",
+    );
+  }
+
+  return chunks.join("\n");
 };
 
 // Also canonicalizes region ids in place (see resolveRegionTransfers): runJsonTask
@@ -3232,91 +3626,320 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous }) => {
 const buildTargetStatsTerritorialBasis = async (bundle, code) => {
   const world = normalizeWorldState(bundle.world);
   const target = canonicalStatsPolity(code, world);
-  if (!target) return { context: "No target polity was resolved.", plan: [] };
+  if (!target) {
+    return {
+      context: "No target polity was resolved.",
+      plan: [],
+      mode: "none",
+      referenceContext: "",
+    };
+  }
 
-  const catalog = await loadRegionCatalog().catch(() => []);
-  if (!catalog.length) return { context: "No region catalog is available; use existing campaign records conservatively.", plan: [] };
+  // 8B.2.13: Stats must use the SAME scenario geography that the player actually
+  // sees. loadRegionCatalog() is deliberately broad: stock GADM rows are merged
+  // with scenario/custom rows and its cache may outlive individual runtime fetches.
+  // That is useful for name resolution, but it is not authoritative enough for
+  // territorial accounting on hybrid maps. The rendered regionsGeojson is the
+  // current map partition and therefore wins whenever it exists. Stock/merged
+  // catalog data is retained only as a compatibility fallback for maps that do not
+  // expose a rendered region FeatureCollection.
+  const [mergedCatalog, renderedRegionsGeojson] = await Promise.all([
+    loadRegionCatalog({ force: true }).catch(() => []),
+    readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true }).catch(() => null),
+  ]);
+
+  const renderedCatalog = normalizeArray(renderedRegionsGeojson?.features)
+    .map((feature) => {
+      const props = feature?.properties ?? {};
+      const id = normalizeString(
+        props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id,
+      );
+      const name = normalizeString(
+        props.name ?? props.NAME_1 ?? props.Name ?? props.regionName,
+      );
+      if (!id || !name) return null;
+
+      const countryCode = normalizeString(
+        props.gid0 ?? props.GID_0 ?? props.gid_0 ?? props.countryCode,
+      );
+      const mappedCountryCode = countryCode
+        ? normalizeString(toCountryName(countryCode))
+        : "";
+      const resolvedCodeGeography =
+        mappedCountryCode && mappedCountryCode.toLowerCase() !== countryCode.toLowerCase()
+          ? mappedCountryCode
+          : "";
+
+      // IMPORTANT: economic/base geography is provenance, not current owner.
+      // Custom scenario regions frequently have owner="Russian Empire" while the
+      // actual economic bucket is their exact local region name (Łódź, Kielce, ...).
+      // Conversely stock-like features with a real gid0 can safely group under the
+      // resolved base geography (e.g. POL -> Poland). Never use props.owner as the
+      // geography label merely because it is the current/seed sovereign.
+      const baseGeography =
+        normalizeString(props.country ?? props.COUNTRY ?? props.Country) ||
+        resolvedCodeGeography ||
+        name ||
+        id;
+
+      // Base owner is a separate concept from base geography. This is the fallback
+      // legal owner when a save has no explicit override for this feature.
+      const baseOwner = normalizeString(
+        props.owner ?? props.COUNTRY ?? props.Country ?? props.country,
+      ) || resolvedCodeGeography || mappedCountryCode || "";
+
+      return {
+        id,
+        name,
+        countryCode,
+        baseGeography,
+        baseOwner,
+      };
+    })
+    .filter(Boolean);
+
+  const fallbackCatalog = normalizeArray(mergedCatalog)
+    .map((region) => {
+      const id = normalizeString(region?.id);
+      const name = normalizeString(region?.name) || id;
+      if (!id || !name) return null;
+
+      const rawCountryCode = normalizeString(region?.countryCode);
+      const mappedCountryCode = rawCountryCode
+        ? normalizeString(toCountryName(rawCountryCode))
+        : "";
+      const resolvedCodeGeography =
+        mappedCountryCode && mappedCountryCode.toLowerCase() !== rawCountryCode.toLowerCase()
+          ? mappedCountryCode
+          : "";
+      const country = normalizeString(region?.country);
+      const baseGeography = country || resolvedCodeGeography || name || id;
+      const baseOwner = country || resolvedCodeGeography || mappedCountryCode || "";
+
+      return {
+        id,
+        name,
+        countryCode: rawCountryCode,
+        baseGeography,
+        baseOwner,
+      };
+    })
+    .filter(Boolean);
+
+  const catalog = renderedCatalog.length > 0 ? renderedCatalog : fallbackCatalog;
+  if (!catalog.length) {
+    return {
+      context: "No region catalog is available; use existing campaign records conservatively.",
+      plan: [],
+      mode: "none",
+      referenceContext: "",
+    };
+  }
+
+  const same = (a, b) =>
+    normalizeString(canonicalStatsPolity(a, world)).toLowerCase() ===
+    normalizeString(canonicalStatsPolity(b, world)).toLowerCase();
 
   const totalByBase = new Map();
-  const ownedByBase = new Map();
+  const legalByBase = new Map();
+  const controlledByBase = new Map();
+  const displacedSovereigns = new Set();
+
   let occupiedByTarget = 0;
   let targetOccupiedByOthers = 0;
+  let nativeHomelandControlled = 0;
 
-  const same = (a, b) => normalizeString(a).toLowerCase() === normalizeString(b).toLowerCase();
+  const pushRegion = (map, baseGeography, region) => {
+    if (!map.has(baseGeography)) map.set(baseGeography, []);
+    map.get(baseGeography).push(region);
+  };
 
   for (const region of catalog) {
     const regionId = normalizeString(region?.id);
-    const rawCountryCode = normalizeString(region?.countryCode);
-    const mappedCountryCode = rawCountryCode
-      ? normalizeString(toCountryName(rawCountryCode))
-      : "";
-    // Some hybrid-map historical codes (e.g. GER) are not recognized by the
-    // stock owner-name registry. `toCountryName` then returns the input token
-    // unchanged. A raw code is not a meaningful economic geography label, so
-    // only trust the mapping when it actually resolved; otherwise keep the exact
-    // map-region name as the deterministic fallback.
-    const resolvedCodeGeography =
-      mappedCountryCode && mappedCountryCode.toLowerCase() !== rawCountryCode.toLowerCase()
-        ? mappedCountryCode
-        : "";
-    const baseGeography =
-      normalizeString(region?.country) ||
-      resolvedCodeGeography ||
-      normalizeString(region?.name) ||
-      regionId ||
-      "Unclassified region";
-    if (!regionId) continue;
+    const baseGeography = normalizeString(region?.baseGeography) || normalizeString(region?.name) || regionId;
+    if (!regionId || !baseGeography) continue;
 
     totalByBase.set(baseGeography, (totalByBase.get(baseGeography) || 0) + 1);
 
-    const baseOwner = canonicalStatsPolity(baseGeography, world);
+    const baseOwner = canonicalStatsPolity(region?.baseOwner, world);
     const controller = canonicalStatsPolity(
       world.regionOwnershipOverrides?.[regionId] || baseOwner,
       world,
     );
+    // Sovereignty must never be inferred from a temporary controller when the
+    // rendered feature already supplies a base legal owner. Old saves with no
+    // sovereignty ledger are migrated by normalizeWorldState; this fallback is
+    // therefore only a final compatibility guard.
     const sovereign = canonicalStatsPolity(
-      world.regionSovereigntyOverrides?.[regionId] || controller || baseOwner,
+      world.regionSovereigntyOverrides?.[regionId] || baseOwner || controller,
       world,
     );
 
-    if (same(controller, target) && !same(sovereign, target)) occupiedByTarget += 1;
-    if (same(sovereign, target) && controller && !same(controller, target)) targetOccupiedByOthers += 1;
-    if (!same(sovereign, target)) continue;
-
-    if (!ownedByBase.has(baseGeography)) ownedByBase.set(baseGeography, []);
-    ownedByBase.get(baseGeography).push({
+    const row = {
       id: regionId,
       name: normalizeString(region?.name) || regionId,
-    });
+      sovereign,
+    };
+
+    if (same(controller, target)) {
+      pushRegion(controlledByBase, baseGeography, row);
+
+      if (!same(sovereign, target)) {
+        occupiedByTarget += 1;
+        if (sovereign) displacedSovereigns.add(sovereign);
+
+        // Strong native evidence that the controlled land is the polity's own
+        // homeland/base geography rather than an arbitrary foreign occupation.
+        if (same(baseGeography, target)) nativeHomelandControlled += 1;
+      }
+    }
+
+    if (same(sovereign, target) && controller && !same(controller, target)) {
+      targetOccupiedByOthers += 1;
+    }
+
+    if (!same(sovereign, target)) continue;
+    pushRegion(legalByBase, baseGeography, row);
   }
 
-  const rows = [...ownedByBase.entries()]
+  const targetOverrideEntry = Object.entries(world.polityOverrides || {})
+    .find(([key, record]) => [
+      key,
+      record?.code,
+      record?.name,
+      ...normalizeArray(record?.aliases),
+    ].some((value) => value && same(value, target)));
+
+  const targetOverride = targetOverrideEntry?.[1] || null;
+  const targetExplicitlyActive =
+    normalizeString(targetOverride?.status).toLowerCase() === "active";
+
+  // Structured lifecycle evidence is universal and identity-safe. Merely being a
+  // CREATEd/RESTOREd polity is not by itself enough (a government-in-exile or newly
+  // created foreign invader must not absorb whatever it happens to occupy). Stronger
+  // evidence exists when the establishing event ALSO assigns territory/control to the
+  // polity. No country names, historical keywords, or scenario-specific ids.
+  let lifecycleEstablished = false;
+  let foundingTerritoryEstablished = false;
+  for (const event of normalizeArray(bundle?.events)) {
+    const changes = normalizeArray(event?.impacts?.polityChanges);
+    const establishesTarget = changes.some((change) => {
+      const operation = normalizeString(change?.operation).toLowerCase();
+      return ["create", "restore"].includes(operation) &&
+        (same(change?.code, target) || same(change?.name, target));
+    });
+
+    if (!establishesTarget) continue;
+    lifecycleEstablished = true;
+
+    const grantsControl = normalizeArray(event?.impacts?.regionControlOps)
+      .some((operation) =>
+        ["control", "control_flip"].includes(normalizeString(operation?.op).toLowerCase()) &&
+        same(operation?.toCode, target));
+
+    const grantsSovereignty = normalizeArray(event?.impacts?.regionTransfers)
+      .some((transfer) => same(transfer?.toCode, target));
+
+    if (grantsControl || grantsSovereignty) foundingTerritoryEstablished = true;
+  }
+
+  // Canonical war context is supporting evidence, especially for older saves whose
+  // lifecycle-establishing event may have been consolidated away. It is NOT enough
+  // by itself to convert a normal foreign occupation into national Stats scope.
+  let opposedToDisplacedSovereign = false;
+  for (const war of normalizeArray(world?.wars)) {
+    if (!["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) continue;
+
+    const sideA = normalizeArray(war?.sideA);
+    const sideB = normalizeArray(war?.sideB);
+    const targetInA = sideA.some((party) => same(party, target));
+    const targetInB = sideB.some((party) => same(party, target));
+    if (!targetInA && !targetInB) continue;
+
+    const opponents = targetInA ? sideB : sideA;
+    if (opponents.some((party) =>
+      [...displacedSovereigns].some((sovereign) => same(party, sovereign)))) {
+      opposedToDisplacedSovereign = true;
+      break;
+    }
+  }
+
+  const legalRegionCount = [...legalByBase.values()]
+    .reduce((sum, regions) => sum + regions.length, 0);
+  const controlledRegionCount = [...controlledByBase.values()]
+    .reduce((sum, regions) => sum + regions.length, 0);
+
+  // Universal de-facto-state rule.
+  //
+  // Normal states stay on LEGAL SOVEREIGNTY accounting, even while occupying
+  // foreign territory. Controller-based accounting is selected ONLY when:
+  //   1) there is no usable legal-sovereign mapped basis;
+  //   2) the polity actually controls mapped territory;
+  //   3) it is an explicitly active campaign polity; and
+  //   4) native evidence identifies those holdings as its territorial state base,
+  //      not ordinary foreign occupation.
+  const deFactoStatehoodEvidence = Boolean(
+    nativeHomelandControlled > 0 ||
+    foundingTerritoryEstablished ||
+    (lifecycleEstablished && opposedToDisplacedSovereign)
+  );
+
+  const useDeFactoStateBasis = Boolean(
+    legalRegionCount === 0 &&
+    controlledRegionCount > 0 &&
+    targetExplicitlyActive &&
+    deFactoStatehoodEvidence,
+  );
+
+  const selectedByBase = useDeFactoStateBasis ? controlledByBase : legalByBase;
+  const mode = useDeFactoStateBasis ? "de_facto_state" : "legal";
+
+  if (useDeFactoStateBasis) {
+    console.info(
+      `[stats 8B.2.13] ${target}: DE-FACTO STATE ADMINISTRATION selected — ` +
+        `${controlledRegionCount} controlled region(s), 0 legal-sovereign region(s), ` +
+        `rendered-geography=${renderedCatalog.length ? "yes" : "fallback"}, ` +
+        `own-base=${nativeHomelandControlled}, lifecycle=${lifecycleEstablished ? "yes" : "no"}, ` +
+        `founding-territory=${foundingTerritoryEstablished ? "yes" : "no"}, ` +
+        `war-with-displaced-sovereign=${opposedToDisplacedSovereign ? "yes" : "no"}.`,
+    );
+  } else if (legalRegionCount === 0 && controlledRegionCount > 0) {
+    console.info(
+      `[stats 8B.2.13] ${target}: ${controlledRegionCount} controlled region(s) excluded from national Stats; ` +
+        `de-facto state qualification failed (active=${targetExplicitlyActive ? "yes" : "no"}, ` +
+        `own-base=${nativeHomelandControlled}, lifecycle=${lifecycleEstablished ? "yes" : "no"}, ` +
+        `founding-territory=${foundingTerritoryEstablished ? "yes" : "no"}, ` +
+        `war-with-displaced-sovereign=${opposedToDisplacedSovereign ? "yes" : "no"}).`,
+    );
+  }
+
+  const rows = [...selectedByBase.entries()]
     .map(([baseGeography, regions]) => ({
       baseGeography,
       regions,
       total: totalByBase.get(baseGeography) || regions.length,
     }))
-    .sort((a, b) => b.regions.length - a.regions.length || a.baseGeography.localeCompare(b.baseGeography));
+    .sort((a, b) =>
+      b.regions.length - a.regions.length ||
+      a.baseGeography.localeCompare(b.baseGeography));
 
   if (!rows.length) {
     return {
       context: [
         `Target: ${target}`,
+        "Accounting mode: LEGAL SOVEREIGNTY",
         "No legally sovereign map regions were resolved for this polity.",
+        controlledRegionCount > 0
+          ? `The polity controls ${controlledRegionCount} region(s), but native statehood safeguards did NOT classify those holdings as a de-facto national administrative basis. Ordinary occupation therefore remains excluded from national population/GDP.`
+          : "No de-facto controlled mapped regions were resolved either.",
         "Do not silently substitute modern borders. If this is a landless polity, estimate only what the campaign canon actually supports.",
       ].join("\n"),
       plan: [],
+      mode,
+      referenceContext: "",
     };
   }
 
-  // One native component per base-geography bucket in the legal map partition.
-  // IMPORTANT: NEVER truncate legal territory for transport convenience. A previous
-  // 64-component cap silently dropped the tail of large/composite polities (exactly
-  // the kind of bug exposed when Austria-Hungary absorbed the Hungarian map regions),
-  // which made population/GDP totals structurally impossible to get right. The model
-  // may estimate economic values, but native code owns coverage and EVERY legal bucket
-  // must be represented. Partial buckets remain one component whose estimate covers
-  // only the listed sovereign subregions.
   const plannedRows = rows.map((row, index) => ({
     index: index + 1,
     geography: row.baseGeography,
@@ -3324,43 +3947,130 @@ const buildTargetStatsTerritorialBasis = async (bundle, code) => {
     total: row.total,
   }));
 
+  console.info(
+    `[stats 8B.2.13] ${target}: authoritative ${mode} component plan (${plannedRows.length})`,
+    plannedRows.map((row) => ({
+      index: row.index,
+      geography: row.geography,
+      coverage: `${row.regions.length}/${row.total}`,
+      regions: row.regions.map((region) => `${region.name} [${region.id}]`),
+    })),
+  );
+
   if (plannedRows.length > 64) {
     console.info(
-      `[stats 7A.2] ${target} has ${plannedRows.length} legal economic geography buckets; processing ALL of them (legacy 64-component truncation disabled).`,
+      `[stats 8B.2.13] ${target} has ${plannedRows.length} authoritative economic geography buckets in ${mode} mode; processing ALL of them (legacy 64-component truncation disabled).`,
     );
   }
 
   const lines = [
     `Target: ${target}`,
-    `Legally sovereign mapped regions: ${rows.reduce((sum, row) => sum + row.regions.length, 0)}`,
-    `Authoritative numbered economic components: ${plannedRows.length} (ALL legal buckets; none truncated)`,
+    `Accounting mode: ${useDeFactoStateBasis ? "DE-FACTO STATE ADMINISTRATION" : "LEGAL SOVEREIGNTY"}`,
+    useDeFactoStateBasis
+      ? `De-facto administered mapped regions: ${controlledRegionCount}. Legal-sovereign mapped regions: 0.`
+      : `Legally sovereign mapped regions: ${legalRegionCount}.`,
+    `Authoritative numbered economic components: ${plannedRows.length} (ALL selected buckets; none truncated)`,
   ];
+
+  if (useDeFactoStateBasis) {
+    lines.push(
+      "SPECIAL STATEHOOD RULE: native code selected controller-based Stats because this active polity has no usable legal-sovereign map basis but does administer territory as a state actor. Count ONLY the controlled regions listed below. This rule must NOT be generalized by the model to ordinary foreign occupation.",
+    );
+    lines.push(
+      `Native qualification evidence: own-base controlled regions=${nativeHomelandControlled}; lifecycle create/restore=${lifecycleEstablished ? "yes" : "no"}; founding event granted territory/control=${foundingTerritoryEstablished ? "yes" : "no"}; active/ceasefire conflict with displaced sovereign=${opposedToDisplacedSovereign ? "yes" : "no"}.`,
+    );
+  }
 
   for (const row of plannedRows) {
     const full = row.regions.length >= row.total;
     const names = row.regions.slice(0, 30).map((region) => region.name);
     lines.push(
       `[${row.index}] ${row.geography}: ${row.regions.length}/${row.total} base regions (${full ? "FULL/NEAR-FULL" : "PARTIAL"})${
-        full ? "" : ` — ONLY these legal subregions: ${names.join(", ")}${row.regions.length > names.length ? ", …" : ""}`
+        full
+          ? ""
+          : ` — ONLY these ${useDeFactoStateBasis ? "controlled" : "legal"} subregions: ${names.join(", ")}${row.regions.length > names.length ? ", …" : ""}`
       }`,
     );
   }
 
-  if (occupiedByTarget > 0) lines.push(`Temporary occupations held by ${target} but legally sovereign to others: ${occupiedByTarget} region(s) — DO NOT add these inhabitants/GDP to the national component total.`);
-  if (targetOccupiedByOthers > 0) lines.push(`Legally sovereign ${target} regions under temporary foreign control: ${targetOccupiedByOthers} region(s) — keep them in legal population/GDP scope, but current occupation may economically depress/disrupt them if campaign evidence supports it.`);
+  if (!useDeFactoStateBasis && occupiedByTarget > 0) {
+    lines.push(
+      `Temporary occupations held by ${target} but legally sovereign to others: ${occupiedByTarget} region(s) — DO NOT add these inhabitants/GDP to the national component total.`,
+    );
+  }
 
-  const fingerprintSource = plannedRows
-    .map((row) => [
+  if (targetOccupiedByOthers > 0) {
+    lines.push(
+      `Legally sovereign ${target} regions under temporary foreign control: ${targetOccupiedByOthers} region(s) — keep them in legal population/GDP scope, but current occupation may economically depress/disrupt them if campaign evidence supports it.`,
+    );
+  }
+
+  // For a de-facto state, the displaced legal sovereign often already has a mature
+  // component ledger for the same geography. Expose exact canonical donor rows as
+  // continuity anchors. This is universal data reuse, not scenario-specific data.
+  const referenceLines = [];
+  if (useDeFactoStateBasis) {
+    for (const row of plannedRows) {
+      const sourcePolities = [...new Set(
+        row.regions
+          .map((region) => canonicalStatsPolity(region?.sovereign, world))
+          .filter((source) => source && !same(source, target)),
+      )];
+
+      for (const source of sourcePolities) {
+        const sourceSheet = normalizeCountryStatSheet(world?.countryStats?.[source]);
+        const sourceComponents = normalizeArray(sourceSheet?.territorialComponents);
+        const donor = sourceComponents.find((component) =>
+          normalizeString(component?.geography).toLowerCase() ===
+          normalizeString(row.geography).toLowerCase());
+
+        const donorPopulation = Number(donor?.population);
+        const donorGdpPerCapita = Number(donor?.gdpPerCapita);
+        if (
+          !donor ||
+          !Number.isFinite(donorPopulation) ||
+          donorPopulation < 0 ||
+          !Number.isFinite(donorGdpPerCapita) ||
+          donorGdpPerCapita <= 0
+        ) {
+          continue;
+        }
+
+        const full = row.regions.length >= row.total;
+        referenceLines.push(
+          `[${row.index}] ${row.geography} ← ${source}: canonical donor component population=${Math.round(donorPopulation)}, gdpPerCapita=${donorGdpPerCapita}. ${
+            full
+              ? "Current scope is FULL/NEAR-FULL for this base bucket; treat this as a strong pre-separation continuity anchor."
+              : `Current scope is PARTIAL (${row.regions.length}/${row.total}); DO NOT copy the donor's whole population. Estimate ONLY the listed controlled subregions while using donor productivity/demography as context.`
+          }`,
+        );
+      }
+    }
+  }
+
+  if (referenceLines.length) {
+    console.info(
+      `[stats 8B.2.13] ${target}: donor/reference component anchors`,
+      referenceLines,
+    );
+  }
+
+  const fingerprintSource = [
+    `mode=${mode}`,
+    `geographySource=${renderedCatalog.length ? "rendered" : "fallback"}`,
+    ...plannedRows.map((row) => [
       row.geography,
       row.total,
       row.regions.map((region) => region.id).sort().join(","),
-    ].join("|"))
-    .join("\n");
+    ].join("|")),
+  ].join("\n");
 
   return {
     context: lines.join("\n"),
     plan: plannedRows.map((row) => ({ index: row.index, geography: row.geography })),
     fingerprint: `territory-${stableStatsHash(fingerprintSource)}`,
+    mode,
+    referenceContext: referenceLines.join("\n"),
   };
 };
 
@@ -3429,6 +4139,8 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   const territorialContext = territorialBasis.context;
   const territorialPlan = territorialBasis.plan;
   const territorialFingerprint = normalizeString(territorialBasis.fingerprint);
+  const territorialBasisMode = normalizeString(territorialBasis.mode) || "legal";
+  const territorialReferenceContext = normalizeString(territorialBasis.referenceContext);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
   const previous = normalizeCountryStatSheet(worldAtStart.countryStats?.[statCode]);
   const previousComplete = isCompleteCountryStatSheet(previous);
@@ -3520,18 +4232,18 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   }
 
   if (forceReassess) {
-    console.warn(`[stats 7A.2] MANUAL HARD REASSESS for ${statCode}; rebuilding the stat baseline from current legal territory and campaign context.`);
+    console.warn(`[stats 8B.2.13] MANUAL HARD REASSESS for ${statCode}; rebuilding the stat baseline from the current authoritative territorial basis (${territorialBasisMode}).`);
   }
 
   // A hard audit intentionally removes the previous numeric anchor. This is NOT normal
   // gameplay continuity; it is a user-invoked repair/QA path for a baseline suspected to
-  // be stale or wrong. The current legal-territory plan remains native/authoritative.
+  // be stale or wrong. The current native territorial plan remains authoritative.
   const previousContext = !forceReassess && previous
     ? JSON.stringify(previous, null, 2).slice(0, 9000)
     : "";
   const evidenceContext = forceReassess
     ? [
-        "MANUAL HARD STAT AUDIT requested by the user. Establish a fresh current baseline from the CURRENT authoritative legal territorial basis and campaign canon.",
+        "MANUAL HARD STAT AUDIT requested by the user. Establish a fresh current baseline from the CURRENT authoritative territorial basis and campaign canon. Respect the native accounting mode exactly.",
         "Do not preserve old component population/GDP estimates merely for continuity; they are being audited because they may be stale or incorrect.",
         "Do not invent territorial changes or historical catastrophes absent from the supplied campaign. Estimate every numbered component independently for the current date, then let native aggregation derive totals.",
         rawEconomicEvidence.text ? `Recent relevant campaign evidence to respect: ${rawEconomicEvidence.text}` : "No additional recent target-specific economic evidence was found.",
@@ -3540,16 +4252,21 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       ? [
           "Legacy territorial continuity bootstrap: the previous complete sheet predates an exact territorial fingerprint.",
           "Treat older economic/demographic events as ALREADY reflected in that baseline; do not apply them again.",
-          "Reconcile the previous values with the CURRENT authoritative legal territorial basis. Preserve continuity for unchanged components, but add/remove/re-estimate components required by the current legal map.",
+          "Reconcile the previous values with the CURRENT authoritative territorial basis. Preserve continuity for unchanged components, but add/remove/re-estimate components required by the current native accounting plan.",
         ].join(" ")
-      : economicEvidence.text;
+      : [
+          economicEvidence.text,
+          territorialBasisMode === "de_facto_state"
+            ? "Native accounting mode is DE-FACTO STATE ADMINISTRATION. The current component plan represents territory actually administered by this active state actor despite unresolved legal sovereignty. Use donor component references where supplied; do not preserve a stale generic whole-polity component when it conflicts with the authoritative controlled-region plan."
+            : "",
+        ].filter(Boolean).join(" ");
 
   const { payload } = await runJsonTask("countryStatSheet", {
     userMessage: [
       `Compile the persistent national stat sheet for ${target}${statCode ? ` (canonical polity ${statCode})` : ""}.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
-      `LEGAL TERRITORIAL BASIS:\n${territorialContext}`,
+      `AUTHORITATIVE TERRITORIAL BASIS:\n${territorialContext}`,
       previousContext ? `PREVIOUS PERSISTENT STATS:\n${previousContext}` : "",
       `FRESH ECONOMIC / DEMOGRAPHIC EVIDENCE:\n${evidenceContext || "None newly unaccounted."}`,
     ].filter(Boolean).join("\n\n"),
@@ -3557,6 +4274,8 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       ...variables,
       statsTerritorialContext: territorialContext,
       statsTerritorialPlan: territorialPlan,
+      statsTerritorialBasisMode: territorialBasisMode,
+      statsTerritorialReferenceContext: territorialReferenceContext,
       statsPreviousContext: previousContext,
       statsEconomicEvidenceContext: evidenceContext,
     },
@@ -4408,107 +5127,1133 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
 export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
   simulateTimelineJump({ days, mode: "auto", signal });
 
-export const applyGameMasterCommand = async (requestText) => {
+const GAME_MASTER_MODE_SET = new Set(["direct", "exact-event", "world-intervention"]);
+
+const gmPatchHasContent = (patch) => {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  return Object.entries(patch).some(([, value]) => {
+    if (value == null) return false;
+    if (typeof value === "object" && !Array.isArray(value)) return Object.keys(value).length > 0;
+    return true;
+  });
+};
+
+const validateGameMasterStatPatches = (patches, world, events) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const eventCount = normalizeArray(events).length;
+
+  for (let index = 0; index < normalizeArray(patches).length; index += 1) {
+    const entry = patches[index];
+    const requested = normalizeString(entry?.country);
+    const resolution = resolvePolityIdentity(requested, normalizedWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    const canonical = normalizeString(resolution?.resolved);
+    if (!canonical) {
+      return `$.countryStatPatches[${index}].country could not resolve existing polity "${requested}".`;
+    }
+    if (!gmPatchHasContent(entry?.patch)) {
+      return `$.countryStatPatches[${index}].patch must contain at least one requested Stats field.`;
+    }
+
+    for (const eventIndex of normalizeArray(entry?.eventIndexes)) {
+      if (!Number.isInteger(Number(eventIndex)) || Number(eventIndex) < 0 || Number(eventIndex) >= eventCount) {
+        return `$.countryStatPatches[${index}].eventIndexes contains an index outside this transaction's events array.`;
+      }
+    }
+
+    const breakdown = entry?.patch?.gdpBreakdown;
+    if (breakdown && typeof breakdown === "object") {
+      const total = Number(breakdown.agriculture) + Number(breakdown.industry) + Number(breakdown.services);
+      if (!Number.isFinite(total) || Math.abs(total - 100) > 0.001) {
+        return `$.countryStatPatches[${index}].patch.gdpBreakdown must total exactly 100.`;
+      }
+    }
+
+    const aggregateRebaseRequested =
+      Number.isFinite(Number(entry?.patch?.population?.total)) ||
+      Number.isFinite(Number(entry?.patch?.economy?.gdp));
+    const sheet = normalizedWorld?.countryStats?.[canonical];
+    const hasComponentBaseline = Array.isArray(sheet?.territorialComponents) && sheet.territorialComponents.length > 0;
+    if (aggregateRebaseRequested && !hasComponentBaseline) {
+      return `$.countryStatPatches[${index}] requests a population/GDP re-baseline for ${canonical}, but that polity has no component-backed canonical Stats baseline yet.`;
+    }
+  }
+
+  return "";
+};
+
+const normalizeGameMasterStatPatches = (patches, world) => {
+  const normalizedWorld = normalizeWorldState(world);
+  return normalizeArray(patches).map((entry) => {
+    const resolution = resolvePolityIdentity(entry?.country, normalizedWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    return {
+      ...entry,
+      country: normalizeString(resolution?.resolved) || normalizeString(entry?.country),
+      eventIndexes: normalizeArray(entry?.eventIndexes)
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0),
+    };
+  });
+};
+
+const gameMasterPolityKey = (value) => normalizeString(value).toLowerCase();
+
+const resolveGameMasterLifecycleIdentity = (token, world) => {
+  const requested = normalizeString(token);
+  if (!requested) return "";
+  // Callers already hand us the live/normalized world. Re-normalizing it here is
+  // surprisingly expensive when this helper is used while scanning map ownership.
+  const resolution = resolvePolityIdentity(requested, world, {
+    allowUnknown: false,
+    // Do NOT ask the generic identity resolver whether a stock/base name is
+    // "active". Its stock-base compatibility path intentionally permits ordinary
+    // modern maps with no polity registry, but that is not enough evidence for GM
+    // lifecycle semantics in a historical save (1915 Poland was the bug here).
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return normalizeString(resolution?.resolved);
+};
+
+// GM lifecycle needs PRESENT political existence, not merely "this name exists in
+// the stock GADM vocabulary". Build that truth from the authoritative scenario map
+// plus explicit lifecycle status. Hybrid/historical maps are the important edge case:
+// loadRegionCatalog() contains BOTH stock GADM geography and custom scenario regions,
+// so treating every catalog country as current can resurrect a base-map polity that the
+// scenario deliberately replaced (1915 Poland inside the Russian Empire was exactly
+// that bug). When custom scenario geometry exists, its owner/COUNTRY fields are the
+// base political truth; stock catalog countries are only a fallback for a pure stock map.
+// IMPORTANT: collect UNIQUE owner tokens first, then resolve them once.
+const buildGameMasterActivePolitySet = async (world) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const active = new Set();
+  const ownerTokens = new Set();
+
+  const collect = (token) => {
+    const raw = normalizeString(token);
+    if (raw) ownerTokens.add(raw);
+  };
+
+  for (const [key, entry] of Object.entries(normalizedWorld.polityOverrides || {})) {
+    if (normalizeString(entry?.status).toLowerCase() === "active") collect(key);
+  }
+
+  // Runtime overrides are always authoritative regardless of map type. Legal
+  // sovereigns remain current actors even if all of their land is occupied.
+  for (const owner of Object.values(normalizedWorld.regionOwnershipOverrides || {})) collect(owner);
+  for (const owner of Object.values(normalizedWorld.regionSovereigntyOverrides || {})) collect(owner);
+
+  const scenarioRegions = await readJson(JSON_URLS.regionsGeojson, {
+    defaultValue: null,
+  }).catch(() => null);
+  const scenarioFeatures = normalizeArray(scenarioRegions?.features);
+
+  if (scenarioFeatures.length > 0) {
+    // Region Inspector uses the same provenance order: explicit scenario owner first,
+    // then COUNTRY, then the geography code only as a last compatibility fallback.
+    // Do NOT also scan stock catalog countries in this branch; on a hybrid map those
+    // stock shapes are geographic vocabulary, not proof of present political existence.
+    for (const feature of scenarioFeatures) {
+      const props = feature?.properties || {};
+      collect(
+        props.owner ||
+        props.COUNTRY ||
+        props.Country ||
+        props.country ||
+        toCountryName(props.GID_0 || props.gid0 || props.gid_0) ||
+        "",
+      );
+    }
+  } else {
+    // Pure stock map: catalog countries really are the base current controllers.
+    const catalog = await loadRegionCatalog().catch(() => []);
+    for (const region of catalog) {
+      const regionId = normalizeString(region?.id);
+      collect(
+        (regionId && normalizedWorld.regionOwnershipOverrides?.[regionId]) ||
+        region?.country ||
+        toCountryName(region?.countryCode) ||
+        "",
+      );
+    }
+  }
+
+  // Resolve each distinct polity only once. A continental map may have thousands of
+  // regions but normally only a few dozen distinct current owners.
+  for (const raw of ownerTokens) {
+    const resolved =
+      resolveGameMasterLifecycleIdentity(raw, normalizedWorld) ||
+      toCountryName(raw) ||
+      raw;
+    const key = gameMasterPolityKey(resolved);
+    if (key) active.add(key);
+  }
+
+  return active;
+};
+
+// Phase 8B.2.5: the AI authors the CURRENT regime/display name, but native code
+// owns stable polity identity and existence semantics. Most importantly, a stock
+// map name is NOT proof that the polity currently exists. That distinction is what
+// separates "Poland is a known geography" from "Poland is an active state" in 1915.
+const normalizeGameMasterPolityLifecycle = (candidate, world, baseActivePolities = new Set()) => {
+  const active = new Set(baseActivePolities);
+
+  for (const event of normalizeArray(candidate?.events)) {
+    const changes = event?.impacts?.polityChanges;
+    if (!Array.isArray(changes)) continue;
+
+    event.impacts.polityChanges = changes.map((change) => {
+      if (!change || typeof change !== "object" || Array.isArray(change)) return change;
+      const operation = normalizeString(change.operation).toLowerCase();
+      const code = normalizeString(change.code);
+      if (!code) return change;
+
+      const knownIdentity = resolveGameMasterLifecycleIdentity(code, world);
+      const knownKey = gameMasterPolityKey(knownIdentity || code);
+      const activeIdentity = knownKey && active.has(knownKey) ? (knownIdentity || code) : "";
+
+      let normalizedChange = change;
+
+      if (["create", "update"].includes(operation) && knownIdentity && !activeIdentity) {
+        normalizedChange = {
+          ...change,
+          operation: "restore",
+          code: knownIdentity,
+        };
+      } else if (operation === "restore" && knownIdentity) {
+        normalizedChange = {
+          ...change,
+          code: knownIdentity,
+        };
+      }
+
+      const finalOperation = normalizeString(normalizedChange?.operation).toLowerCase();
+      const finalCode =
+        resolveGameMasterLifecycleIdentity(normalizedChange?.code, world) ||
+        toCountryName(normalizeString(normalizedChange?.code)) ||
+        normalizeString(normalizedChange?.code);
+      const finalKey = gameMasterPolityKey(finalCode);
+
+      if (["create", "restore"].includes(finalOperation) && finalKey) active.add(finalKey);
+      if (finalOperation === "dissolve" && finalKey) active.delete(finalKey);
+
+      return normalizedChange;
+    });
+  }
+
+  return candidate;
+};
+
+// Phase 8B.1.5: bind obvious war metadata from the transaction's own linked
+// warUpdates before canonical validation. The AI occasionally emits a correct
+// START/JOIN/etc. record linked to event 0 but forgets to repeat that same war id
+// on the event. That relationship is deterministic, so preview normalization may
+// repair it without another AI call or any world mutation. For a START event, the
+// opposing sides also provide an unambiguous combatants fallback. Ambiguous or
+// conflicting multi-war links are deliberately left untouched so the canonical
+// validator still fails closed.
+const normalizeGameMasterWarEventBindings = (candidate) => {
+  const events = normalizeArray(candidate?.events);
+  const updates = decodeWarUpdates(candidate?.warUpdates);
+  if (!events.length || !updates.length) return candidate;
+
+  const eventIndexById = new Map(
+    events
+      .map((event, index) => [normalizeString(event?.id), index])
+      .filter(([id]) => Boolean(id)),
+  );
+  const updatesByEventIndex = new Map();
+
+  const link = (index, update) => {
+    if (!Number.isInteger(index) || index < 0 || index >= events.length) return;
+    if (!updatesByEventIndex.has(index)) updatesByEventIndex.set(index, []);
+    updatesByEventIndex.get(index).push(update);
+  };
+
+  for (const update of updates) {
+    for (const index of normalizeArray(update?.eventIndexes)) {
+      link(Number(index), update);
+    }
+    for (const eventId of normalizeArray(update?.eventIds)) {
+      const index = eventIndexById.get(normalizeString(eventId));
+      if (Number.isInteger(index)) link(index, update);
+    }
+  }
+
+  for (const [eventIndex, linkedUpdates] of updatesByEventIndex.entries()) {
+    const event = events[eventIndex];
+    if (!event || typeof event !== "object") continue;
+
+    const warIds = [...new Set(
+      linkedUpdates
+        .map((update) => normalizeString(update?.id))
+        .filter(Boolean),
+    )];
+
+    if (!normalizeString(event.warId) && warIds.length === 1) {
+      event.warId = warIds[0];
+    }
+
+    const eventWarId = normalizeString(event.warId);
+    if (!eventWarId || normalizeArray(event.combatants).length >= 2) continue;
+
+    const startUpdate = linkedUpdates.find((update) =>
+      normalizeString(update?.id) === eventWarId &&
+      normalizeString(update?.op).toLowerCase() === "start"
+    );
+    if (!startUpdate) continue;
+
+    const combatants = [...new Set([
+      ...normalizeArray(startUpdate.actors),
+      ...normalizeArray(startUpdate.opponents),
+    ]
+      .map((value) => normalizeString(value))
+      .filter(Boolean))]
+      .slice(0, 8);
+
+    if (combatants.length >= 2) event.combatants = combatants;
+  }
+
+  return candidate;
+};
+
+const validateGameMasterPolityLifecycle = (candidate, world, baseActivePolities = new Set()) => {
+  const active = new Set(baseActivePolities);
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(candidate?.events).length; eventIndex += 1) {
+    const event = normalizeArray(candidate?.events)[eventIndex];
+    const changes = normalizeArray(event?.impacts?.polityChanges);
+
+    for (let changeIndex = 0; changeIndex < changes.length; changeIndex += 1) {
+      const change = changes[changeIndex];
+      const operation = normalizeString(change?.operation).toLowerCase();
+      const code = normalizeString(change?.code);
+      if (!code) continue;
+
+      const knownIdentity = resolveGameMasterLifecycleIdentity(code, world);
+      const stableIdentity = knownIdentity || toCountryName(code) || code;
+      const stableKey = gameMasterPolityKey(stableIdentity);
+      const activeIdentity = stableKey && active.has(stableKey) ? stableIdentity : "";
+
+      if (operation === "create" && activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to CREATE "${code}", but it already resolves to active polity "${activeIdentity}". Use update/rename for the existing polity instead of creating a duplicate identity.`;
+      }
+
+      if (operation === "restore" && activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to RESTORE "${code}", but "${activeIdentity}" is already active. Use update/rename if the current regime or display name is changing.`;
+      }
+
+      if (operation === "update" && !activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to UPDATE "${code}", but that polity is not currently active. Use restore for a known historical/dormant identity or create for a genuinely new polity.`;
+      }
+
+      if (["create", "restore"].includes(operation) && stableKey) active.add(stableKey);
+      if (operation === "dissolve" && stableKey) active.delete(stableKey);
+    }
+  }
+
+  return "";
+};
+
+const validateGameMasterBreakawaySovereignty = (candidate) => {
+  const createdPolities = new Set();
+  for (const event of normalizeArray(candidate?.events)) {
+    for (const change of normalizeArray(event?.impacts?.polityChanges)) {
+      const operation = normalizeString(change?.operation).toLowerCase();
+      if (!["create", "restore"].includes(operation)) continue;
+      const code = normalizeString(change?.code);
+      const name = normalizeString(change?.name);
+      if (code) createdPolities.add(code.toLowerCase());
+      if (name) createdPolities.add(name.toLowerCase());
+    }
+  }
+  if (!createdPolities.size) return "";
+
+  const activeBreakawayPairs = [];
+  for (const update of normalizeArray(candidate?.warUpdates)) {
+    if (normalizeString(update?.op).toLowerCase() !== "start") continue;
+    const sideA = normalizeArray(update?.actors).map((value) => normalizeString(value)).filter(Boolean);
+    const sideB = normalizeArray(update?.opponents).map((value) => normalizeString(value)).filter(Boolean);
+    for (const a of sideA) {
+      for (const b of sideB) {
+        if (createdPolities.has(a.toLowerCase()) || createdPolities.has(b.toLowerCase())) {
+          activeBreakawayPairs.push([a, b]);
+        }
+      }
+    }
+  }
+  if (!activeBreakawayPairs.length) return "";
+
+  const opposingPair = (fromCode, toCode) => activeBreakawayPairs.some(([a, b]) => {
+    const from = normalizeString(fromCode).toLowerCase();
+    const to = normalizeString(toCode).toLowerCase();
+    return (a.toLowerCase() === to && b.toLowerCase() === from)
+      || (b.toLowerCase() === to && a.toLowerCase() === from);
+  });
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(candidate?.events).length; eventIndex += 1) {
+    const event = normalizeArray(candidate?.events)[eventIndex];
+    const transfers = normalizeArray(event?.impacts?.regionTransfers);
+    for (let transferIndex = 0; transferIndex < transfers.length; transferIndex += 1) {
+      const transfer = transfers[transferIndex];
+      const toCode = normalizeString(transfer?.toCode);
+      const fromCode = normalizeString(transfer?.fromCode);
+      if (!createdPolities.has(toCode.toLowerCase()) || !opposingPair(fromCode, toCode)) continue;
+      return `$.events[${eventIndex}].impacts.regionTransfers[${transferIndex}] attempts to transfer LEGAL sovereignty from "${fromCode}" to newly created belligerent "${toCode}" while their independence war is starting. A unilateral declaration, uprising, revolution or secession does not itself change legal sovereignty. Keep the prior sovereign legally in place and represent the disputed territory with regionControlOps (normally contest; use control only for territory the breakaway has decisively captured/administers). Legal sovereignty can move later through explicit recognition, cession, annexation or settlement.`;
+    }
+  }
+
+  return "";
+};
+
+const normalizeGameMasterIsoDate = (value) => {
+  const raw = normalizeString(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+  const parsed = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10) === raw ? raw : "";
+};
+
+const GAME_MASTER_REQUEST_MONTHS = Object.freeze({
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+});
+
+const gameMasterRequestDateFromParts = (yearValue, monthValue, dayValue) => {
+  const year = Number(yearValue);
+  const day = Number(dayValue);
+  const monthToken = normalizeString(monthValue).toLowerCase();
+  const month = Number.isFinite(Number(monthValue))
+    ? Number(monthValue)
+    : GAME_MASTER_REQUEST_MONTHS[monthToken];
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return "";
+  return normalizeGameMasterIsoDate(
+    `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+  );
+};
+
+const extractExplicitGameMasterRequestDates = (requestText) => {
+  const request = normalizeString(requestText);
+  if (!request) return [];
+  const dates = new Set();
+  const add = (value) => {
+    const normalized = normalizeGameMasterIsoDate(value);
+    if (normalized) dates.add(normalized);
+  };
+
+  for (const match of request.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
+    add(`${match[1]}-${match[2]}-${match[3]}`);
+  }
+
+  const monthPattern = "January|February|March|April|May|June|July|August|September|Sept|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
+  const dayFirst = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthPattern})\\s*,?\\s+(\\d{4})\\b`, "gi");
+  for (const match of request.matchAll(dayFirst)) {
+    add(gameMasterRequestDateFromParts(match[3], match[2], match[1]));
+  }
+
+  const monthFirst = new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(\\d{4})\\b`, "gi");
+  for (const match of request.matchAll(monthFirst)) {
+    add(gameMasterRequestDateFromParts(match[3], match[1], match[2]));
+  }
+
+  return [...dates].sort();
+};
+
+const validateGameMasterRequestedExactDate = (candidate, { mode, request }) => {
+  if (mode !== "exact-event") return "";
+  const requestedDates = extractExplicitGameMasterRequestDates(request);
+  // Only enforce when the administrator supplied one unambiguous explicit date.
+  // Requests that mention several historical dates need semantic interpretation.
+  if (requestedDates.length !== 1) return "";
+
+  const expectedDate = requestedDates[0];
+  const eventDate = normalizeGameMasterIsoDate(normalizeArray(candidate?.events)[0]?.date);
+  if (eventDate === expectedDate) return "";
+
+  return `The administrator explicitly requested the Exact Event date ${expectedDate}, but $.events[0].date is ${eventDate || "blank/invalid"}. Exact Event preview must preserve an explicit requested date exactly; do not silently backdate, forward-date, or otherwise reinterpret it.`;
+};
+
+const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
+  const event = normalizeArray(candidate?.events)[eventIndex];
+  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
+  for (const field of [
+    "regionTransfers",
+    "regionControlOps",
+    "polityChanges",
+    "createdChats",
+    "unitOps",
+    "markerOps",
+  ]) {
+    if (normalizeArray(impacts[field]).length > 0) return true;
+  }
+
+  const linked = (entries) => normalizeArray(entries).some((entry) =>
+    normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex));
+
+  return linked(candidate?.countryStatPatches)
+    || linked(candidate?.warUpdates)
+    || linked(candidate?.relationUpdates)
+    || linked(candidate?.agreementUpdates);
+};
+
+const validateGameMasterChronology = (candidate, game) => {
+  const currentDate = normalizeGameMasterIsoDate(game?.gameDate || game?.startDate);
+  if (!currentDate) return "";
+
+  const events = normalizeArray(candidate?.events);
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const eventDate = normalizeGameMasterIsoDate(events[eventIndex]?.date);
+    if (!eventDate || eventDate <= currentDate) continue;
+    if (!gameMasterEventHasCanonicalEffects(candidate, eventIndex)) continue;
+
+    return `$.events[${eventIndex}] is dated ${eventDate}, after the current game date ${currentDate}, but it establishes canonical state changes. GM Apply never advances time, so a future-dated event cannot make wars, relations, agreements, territory, polities, Stats, units, markers, or chats true in the present. Nothing was applied. Keep the requested future date and advance the simulation first, or revise the event/effects to a date on or before ${currentDate}.`;
+  }
+
+  return "";
+};
+
+const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, request = "" }) => {
+  if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
+  if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
+
+  // Normalize lifecycle identity before any downstream validation. Present-state
+  // activity is derived from the live map, not merely from stock/base-map names.
+  // This mutates only the in-memory PREVIEW payload; no save/world writes happen.
+  const activePolities = await buildGameMasterActivePolitySet(world);
+  normalizeGameMasterPolityLifecycle(candidate, world, activePolities);
+  normalizeGameMasterWarEventBindings(candidate);
+
+  if (normalizeString(candidate.mode) !== mode) {
+    return `$.mode must echo the selected GM mode "${mode}".`;
+  }
+
+  const events = normalizeArray(candidate.events);
+  if (mode === "exact-event" && events.length !== 1) {
+    return `Exact Event mode requires exactly one event; received ${events.length}.`;
+  }
+  if (mode === "world-intervention" && events.length === 0) {
+    return "World Intervention mode requires at least one authored event so the intervention has canonical historical context.";
+  }
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!normalizeString(event?.date)) return `$.events[${index}].date must not be blank.`;
+    if (!normalizeString(event?.title)) return `$.events[${index}].title must not be blank.`;
+    if (!normalizeString(event?.description)) return `$.events[${index}].description must not be blank.`;
+  }
+
+  const requestedDateError = validateGameMasterRequestedExactDate(candidate, { mode, request });
+  if (requestedDateError) return requestedDateError;
+
+  const chronologyError = validateGameMasterChronology(candidate, game);
+  if (chronologyError) return chronologyError;
+
+  const lifecycleError = validateGameMasterPolityLifecycle(candidate, world, activePolities);
+  if (lifecycleError) return lifecycleError;
+
+  const breakawaySovereigntyError = validateGameMasterBreakawaySovereignty(candidate);
+  if (breakawaySovereigntyError) return breakawaySovereigntyError;
+
+  // Resolve/validate map, unit, marker and chat operations now, while this is
+  // still a preview. This may conservatively resolve a grounded place label to
+  // an exact map region, but it never writes world state.
+  const worldChangeError = await validateGeneratedWorldChanges(candidate, world, { strictTransfers: true });
+  if (worldChangeError) return worldChangeError;
+
+  const statError = validateGameMasterStatPatches(candidate.countryStatPatches, world, candidate.events);
+  if (statError) return statError;
+
+  const normalizedEvents = normalizeArray(candidate.events)
+    .map((entry, index) => normalizeGeneratedEvent({
+      ...entry,
+      source: entry?.source || "game-master-preview",
+    }, index))
+    .filter(Boolean);
+
+  const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), normalizedEvents);
+  const warError = validateCanonicalWarEvents({
+    events: normalizedEvents,
+    updates: warUpdates,
+    world,
+  });
+  if (warError) return `[canonical war-state] ${warError}`;
+
+  const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), normalizedEvents);
+  const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), normalizedEvents);
+  const diplomaticError = validateDiplomaticLedgerPayload({
+    events: normalizedEvents,
+    relationUpdates,
+    agreementUpdates,
+  }, { world });
+  if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
+
+  return "";
+};
+
+const gameMasterCanonicalPolityKey = (token, world) => {
+  const raw = normalizeString(token);
+  if (!raw) return "";
+  const resolution = resolvePolityIdentity(raw, normalizeWorldState(world), {
+    allowUnknown: false,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return gameMasterPolityKey(normalizeString(resolution?.resolved) || toCountryName(raw) || raw);
+};
+
+// GM Apply must never report success merely because the common mutation seam
+// returned an object. Verify every previewed territorial consequence against the
+// in-memory post-apply world before ANY persistence happens.
+const verifyGameMasterTerritoryPostconditions = (events, world) => {
+  const normalizedWorld = normalizeWorldState(world);
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(events).length; eventIndex += 1) {
+    const event = normalizeArray(events)[eventIndex];
+    const impacts = event?.impacts || {};
+
+    for (let transferIndex = 0; transferIndex < normalizeArray(impacts.regionTransfers).length; transferIndex += 1) {
+      const transfer = normalizeArray(impacts.regionTransfers)[transferIndex];
+      const regionId = normalizeString(transfer?.regionId);
+      const expected = gameMasterCanonicalPolityKey(transfer?.toCode, normalizedWorld);
+      const actual = gameMasterCanonicalPolityKey(
+        normalizedWorld.regionSovereigntyOverrides?.[regionId],
+        normalizedWorld,
+      );
+      if (!regionId || !expected || actual !== expected) {
+        return `legal-sovereignty operation ${eventIndex}:${transferIndex} did not take effect for ${regionId || "unknown region"} (expected ${normalizeString(transfer?.toCode) || "target"}, got ${normalizeString(normalizedWorld.regionSovereigntyOverrides?.[regionId]) || "no canonical sovereign override"}).`;
+      }
+    }
+
+    for (let controlIndex = 0; controlIndex < normalizeArray(impacts.regionControlOps).length; controlIndex += 1) {
+      const control = normalizeArray(impacts.regionControlOps)[controlIndex];
+      const op = normalizeString(control?.op).toLowerCase();
+      const regionId = normalizeString(control?.regionId);
+      if (!regionId) {
+        return `de-facto control operation ${eventIndex}:${controlIndex} has no canonical region id after preview validation.`;
+      }
+
+      if (op === "control" || op === "control_flip") {
+        const expected = gameMasterCanonicalPolityKey(control?.toCode, normalizedWorld);
+        const actualRaw = normalizedWorld.regionOwnershipOverrides?.[regionId];
+        const actual = gameMasterCanonicalPolityKey(actualRaw, normalizedWorld);
+        if (!expected || actual !== expected) {
+          return `de-facto control operation ${eventIndex}:${controlIndex} did not take effect for ${regionId} (expected ${normalizeString(control?.toCode) || "target"}, got ${normalizeString(actualRaw) || "no controller override"}).`;
+        }
+      }
+
+      if (op === "contest") {
+        const expected = gameMasterCanonicalPolityKey(control?.actorCode || control?.claimantCode, normalizedWorld);
+        const claimants = normalizeArray(normalizedWorld.regionClaimants?.[regionId])
+          .map((value) => gameMasterCanonicalPolityKey(value, normalizedWorld))
+          .filter(Boolean);
+        if (!expected || !claimants.includes(expected)) {
+          return `contest operation ${eventIndex}:${controlIndex} did not take effect for ${regionId} (expected claimant ${normalizeString(control?.actorCode || control?.claimantCode) || "unknown"}).`;
+        }
+      }
+    }
+  }
+
+  return "";
+};
+
+const hashGameMasterText = (value) => {
+  let hash = 2166136261;
+  const text = String(value ?? "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const createGameMasterTransactionId = () => {
+  const random = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+    : Math.random().toString(36).slice(2, 14);
+  return `gm-${Date.now().toString(36)}-${random || "transaction"}`;
+};
+
+// Fingerprint only canonical state the GM planner is allowed to mutate/read while
+// authoring a transaction. If any of it changes between Preview and Apply, the
+// transaction fails closed and the administrator must regenerate instead of having
+// native code silently reinterpret an old preview against a new world.
+const gameMasterStateFingerprint = ({ game = {}, world = {}, events = [], colors = {} } = {}) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const relevant = {
+    game: {
+      country: normalizeString(game?.country),
+      gameDate: normalizeString(game?.gameDate),
+      round: Number(game?.round) || 0,
+      startDate: normalizeString(game?.startDate),
+    },
+    colors,
+    events: normalizeEvents(events).map((event) => ({
+      id: event.id,
+      date: event.date,
+      title: event.title,
+      description: event.description,
+      impacts: event.impacts,
+      warId: event.warId,
+      combatants: event.combatants,
+    })),
+    world: {
+      polityOverrides: normalizedWorld.polityOverrides,
+      regionOwnershipOverrides: normalizedWorld.regionOwnershipOverrides,
+      regionSovereigntyOverrides: normalizedWorld.regionSovereigntyOverrides,
+      regionClaimants: normalizedWorld.regionClaimants,
+      countryStats: normalizedWorld.countryStats,
+      countryTags: normalizedWorld.countryTags,
+      internationalReputation: normalizedWorld.internationalReputation,
+      units: normalizedWorld.units,
+      markers: normalizedWorld.markers,
+      cityRenames: normalizedWorld.cityRenames,
+      wars: normalizedWorld.wars,
+      relations: normalizedWorld.relations,
+      agreements: normalizedWorld.agreements,
+    },
+  };
+  return hashGameMasterText(JSON.stringify(relevant));
+};
+
+const gameMasterTransactionCandidate = (transaction) => ({
+  mode: normalizeString(transaction?.mode),
+  summary: normalizeString(transaction?.summary),
+  events: cloneValue(normalizeArray(transaction?.events)),
+  countryStatPatches: cloneValue(normalizeArray(transaction?.countryStatPatches)),
+  warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
+  relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
+  agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
+  diplomaticOutreach: cloneValue(normalizeArray(transaction?.diplomaticOutreach)),
+});
+
+const gameMasterAcceptedOperationLabels = (transaction) => {
+  const labels = [];
+  for (const [eventIndex, event] of normalizeArray(transaction?.events).entries()) {
+    labels.push(`event:${eventIndex}:${normalizeString(event?.id)}`);
+    const impacts = event?.impacts || {};
+    for (const [field, prefix] of [
+      ["regionTransfers", "sovereignty"],
+      ["regionControlOps", "control"],
+      ["polityChanges", "polity"],
+      ["unitOps", "unit"],
+      ["markerOps", "marker"],
+      ["createdChats", "event-chat"],
+    ]) {
+      normalizeArray(impacts[field]).forEach((_, index) => labels.push(`${prefix}:${eventIndex}:${index}`));
+    }
+  }
+  normalizeArray(transaction?.countryStatPatches).forEach((entry, index) => labels.push(`stats:${index}:${normalizeString(entry?.country)}`));
+  normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
+  normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.diplomaticOutreach).forEach((_, index) => labels.push(`outreach:${index}`));
+  return labels.filter(Boolean).slice(0, 128);
+};
+
+const gameMasterHistoryEntry = ({ transaction, game, eventIds, summary, transactionId }) => {
+  const dates = normalizeArray(transaction?.events).map((event) => normalizeString(event?.date)).filter(Boolean).sort();
+  const fallbackDate = normalizeString(game?.gameDate || game?.startDate);
+  const fromDate = dates[0] || fallbackDate;
+  const toDate = dates.at(-1) || fallbackDate;
+  return {
+    catalyst: null,
+    date: toDate,
+    eventIds,
+    fallbackReason: "",
+    fromDate,
+    mode: "game-master",
+    plannedActions: [],
+    round: Math.max(0, Math.trunc(Number(game?.round) || 0)),
+    source: "gm-console",
+    summary: normalizeString(summary) || "GM Console transaction applied.",
+    toDate,
+    transactionId,
+  };
+};
+
+const insertGameMasterHistoryEntry = (historyInput, entry) => {
+  const history = [...normalizeArray(historyInput)];
+  const entryDate = normalizeString(entry?.toDate || entry?.date || entry?.fromDate);
+  let insertAt = history.findIndex((item) => {
+    const itemDate = normalizeString(item?.toDate || item?.date || item?.fromDate);
+    return entryDate && itemDate && entryDate > itemDate;
+  });
+  if (insertAt < 0) insertAt = history.length;
+  history.splice(insertAt, 0, entry);
+  return history;
+};
+
+// GM-authored timeline records are only UI/history links; the canonical event ledger
+// remains the source of truth. If an Event Editor deletion removed the linked event,
+// discard the now-orphaned GM history record so the Events panel cannot get stuck on
+// an empty, stale record (for example an old future-dated GM test event).
+const pruneOrphanedGameMasterHistory = (historyInput, eventsInput) => {
+  const knownEventIds = new Set(
+    normalizeArray(eventsInput)
+      .map((event) => normalizeString(event?.id))
+      .filter(Boolean),
+  );
+
+  return normalizeArray(historyInput)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      const source = normalizeString(entry?.source).toLowerCase();
+      const mode = normalizeString(entry?.mode).toLowerCase();
+      if (source !== "gm-console" && mode !== "game-master") return entry;
+
+      const before = normalizeArray(entry?.eventIds).map(normalizeString).filter(Boolean);
+      const after = before.filter((eventId) => knownEventIds.has(eventId));
+      if (after.length === 0) return null;
+      if (after.length === before.length) return entry;
+      return { ...entry, eventIds: after };
+    })
+    .filter(Boolean);
+};
+
+// Phase 8B.1: generate and validate a GM transaction WITHOUT persisting it.
+// Preview receives stable transaction/event IDs now so 8B.2 applies exactly the
+// object the administrator inspected; Apply never asks the AI to reinterpret it.
+export const previewGameMasterCommand = async (requestText, { mode = "world-intervention" } = {}) => {
+  const request = normalizeString(requestText);
+  const selectedMode = normalizeString(mode).toLowerCase();
+  if (!request) throw new Error("Enter a GM request first.");
+  if (!GAME_MASTER_MODE_SET.has(selectedMode)) throw new Error(`Unsupported GM mode "${selectedMode}".`);
+
   beginSimulation();
   try {
-  const bundle = await readGameStateBundle({ force: true });
-  const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-  const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
-  const { generation, payload } = await runJsonTask("gameMaster", {
-    fallback: () => ({
-      impacts: {
-        polityChanges: [],
-        regionTransfers: [],
-        regionControlOps: [],
+    const [bundle, colors] = await Promise.all([
+      readGameStateBundle({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const variables = {
+      ...(await buildTemplateVariables(bundle, { gameMasterRequest: request })),
+      gameMasterMode: selectedMode,
+    };
+
+    const { generation, payload } = await runJsonTask("gameMaster", {
+      userMessage: `Generate a ${selectedMode} GM transaction preview for the administrator request. Do not apply anything.`,
+      validatePayload: (candidate) => validateGameMasterPreviewPayload(candidate, {
+        mode: selectedMode,
+        world: bundle.world,
+        game: bundle.game,
+        request,
+      }),
+      variables,
+    });
+
+    const transactionId = createGameMasterTransactionId();
+    const events = normalizeArray(payload?.events)
+      .map((entry, index) => normalizeGeneratedEvent({
+        ...entry,
+        id: `event-manual-${transactionId}-${index + 1}`,
+        source: "game-master",
+      }, index))
+      .filter(Boolean);
+    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
+    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
+    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
+    const countryStatPatches = normalizeGameMasterStatPatches(payload?.countryStatPatches, bundle.world);
+
+    return {
+      id: transactionId,
+      mode: selectedMode,
+      request,
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      baseFingerprint: gameMasterStateFingerprint({ game: bundle.game, world: bundle.world, events: bundle.events, colors }),
+      summary: normalizeString(payload?.summary),
+      transaction: {
+        id: transactionId,
+        mode: selectedMode,
+        summary: normalizeString(payload?.summary),
+        events,
+        countryStatPatches,
+        warUpdates,
+        relationUpdates,
+        agreementUpdates,
+        diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
       },
-      warUpdates: "",
-      relationUpdates: "",
-      agreementUpdates: "",
-      summary: "No deterministic GM fallback changes were inferred from the request.",
-    }),
-    userMessage: "Apply the GM request as JSON only.",
-    validatePayload: (candidate, { finalAttempt } = {}) =>
-      validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: !finalAttempt }),
-    variables,
-  });
-
-  const gmWarUpdatesRaw = decodeWarUpdates(payload?.warUpdates);
-  const gmWarId = normalizeString(gmWarUpdatesRaw[0]?.id);
-
-  const gmEvent = normalizeGeneratedEvent({
-    date: bundle.game.gameDate,
-    description: normalizeString(payload?.summary),
-    warId: gmWarId,
-    combatants: [],
-    impacts: payload?.impacts,
-    importance: "major",
-    kind: "game-master",
-    notable: true,
-    playerRelated: true,
-    title: "Game master intervention",
-    source: generation.source,
-  });
-
-  if (!gmEvent) {
-    throw new Error("The game master request did not produce a valid change set.");
-  }
-
-  const gmWarUpdates = bindWarUpdatesToEvents(
-    gmWarUpdatesRaw.map((update) => ({ ...update, eventIndexes: [0], eventIds: [] })),
-    [gmEvent],
-  );
-  const gmWarError = validateCanonicalWarEvents({
-    events: [gmEvent],
-    updates: gmWarUpdates,
-    world: bundle.world,
-  });
-  if (gmWarError) {
-    throw new Error(`[canonical war-state] ${gmWarError}`);
-  }
-
-  const gmRelationUpdates = bindRelationUpdatesToEvents(
-    decodeRelationUpdates(payload?.relationUpdates)
-      .map((update) => ({ ...update, eventIndexes: [0], eventIds: [] })),
-    [gmEvent],
-  );
-  const gmAgreementUpdates = bindAgreementUpdatesToEvents(
-    decodeAgreementUpdates(payload?.agreementUpdates)
-      .map((update) => ({ ...update, eventIndexes: [0], eventIds: [] })),
-    [gmEvent],
-  );
-  const gmDiplomaticError = validateDiplomaticLedgerPayload({
-    events: [gmEvent],
-    relationUpdates: gmRelationUpdates,
-    agreementUpdates: gmAgreementUpdates,
-  }, { world: bundle.world });
-  if (gmDiplomaticError) {
-    throw new Error(`[canonical diplomatic-state] ${gmDiplomaticError}`);
-  }
-
-  return applySimulationResult({
-    baseActions: bundle.actions,
-    baseChats: bundle.chats,
-    baseColors,
-    baseEvents: bundle.events,
-    baseGame: bundle.game,
-    baseWorld: bundle.world,
-    result: {
-      catalyst: null,
-      clearActions: false,
-      events: [gmEvent],
-      warUpdates: gmWarUpdates,
-      relationUpdates: gmRelationUpdates,
-      agreementUpdates: gmAgreementUpdates,
-      storylineUpdates: [],
-      mode: "game-master",
-      stopDate: bundle.game.gameDate,
-      summary: gmEvent.description,
       generation,
-    },
-  });
+      previewOnly: true,
+    };
   } finally {
     endSimulation();
   }
+};
+
+// Phase 8B.2: apply the EXACT already-previewed transaction. There is no AI call,
+// no turn simulation, no date advance and no round increment. The preview is
+// revalidated against a freshly-read canonical world immediately before any write.
+export const applyGameMasterPreview = async (preview) => {
+  const transactionId = normalizeString(preview?.id || preview?.transaction?.id);
+  const mode = normalizeString(preview?.mode || preview?.transaction?.mode).toLowerCase();
+  const request = normalizeString(preview?.request);
+  if (!transactionId || !preview?.transaction || typeof preview.transaction !== "object") {
+    throw new Error("This GM preview is missing its transaction identity. Generate a fresh preview.");
+  }
+  if (!GAME_MASTER_MODE_SET.has(mode)) throw new Error(`Unsupported GM mode "${mode}".`);
+  if (!normalizeString(preview?.baseFingerprint)) {
+    throw new Error("This preview predates the 8B.2 safety fingerprint. Generate a fresh preview before applying.");
+  }
+
+  beginSimulation();
+  try {
+    const [bundle, colors] = await Promise.all([
+      readGameStateBundle({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const liveWorld = normalizeWorldState(bundle.world);
+
+    if (normalizeArray(liveWorld.gmAudit).some((entry) => normalizeString(entry?.transactionId) === transactionId)) {
+      throw new Error(`GM transaction ${transactionId} has already been applied.`);
+    }
+
+    const liveFingerprint = gameMasterStateFingerprint({ game: bundle.game, world: liveWorld, events: bundle.events, colors });
+    if (liveFingerprint !== normalizeString(preview.baseFingerprint)) {
+      throw new Error("Canonical state changed after this preview was generated. Nothing was applied; regenerate the preview against the current world.");
+    }
+
+    const transaction = cloneValue(preview.transaction);
+    const candidate = gameMasterTransactionCandidate(transaction);
+    const candidateBeforeValidation = JSON.stringify(candidate);
+    const validationError = await validateGameMasterPreviewPayload(candidate, {
+      mode,
+      world: liveWorld,
+      game: bundle.game,
+      request: preview.request,
+    });
+    if (validationError) throw new Error(`GM transaction is no longer valid: ${validationError}`);
+    if (JSON.stringify(candidate) !== candidateBeforeValidation) {
+      throw new Error("Current canonical validation would reinterpret this preview. Nothing was applied; regenerate it so the changed operation is visible before approval.");
+    }
+
+    const events = normalizeArray(transaction.events).map((event) => cloneValue(event));
+    const priorEvents = normalizeEvents(bundle.events);
+    const freshEvents = dedupeGeneratedEvents(priorEvents, events);
+    if (freshEvents.length !== events.length) {
+      throw new Error("One or more authored GM events duplicate existing canonical history. Nothing was applied; regenerate or make the event wording/date explicit.");
+    }
+    const existingIds = new Set(priorEvents.map((event) => normalizeString(event?.id)).filter(Boolean));
+    const duplicateId = events.find((event) => existingIds.has(normalizeString(event?.id)));
+    if (duplicateId) throw new Error(`Authored GM event id ${duplicateId.id} already exists. Nothing was applied; regenerate the preview.`);
+
+    const impactMerge = applyEventImpactsToWorld({
+      colors,
+      events,
+      game: bundle.game,
+      world: liveWorld,
+    });
+    let nextWorld = impactMerge.world;
+    const nextColors = impactMerge.colors;
+
+    const territoryPostconditionError = verifyGameMasterTerritoryPostconditions(events, nextWorld);
+    if (territoryPostconditionError) {
+      throw new Error(
+        `A previewed territorial operation failed during the in-memory Apply: ${territoryPostconditionError} Nothing was persisted.`,
+      );
+    }
+
+    const statCountries = [];
+    for (const entry of normalizeArray(transaction.countryStatPatches)) {
+      const country = normalizeString(entry?.country);
+      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch));
+      if (!nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
+      statCountries.push(country);
+      const reputation = Number(nextSheet?.indices?.internationalReputation);
+      if (Number.isFinite(reputation)) {
+        nextWorld.internationalReputation = {
+          ...(nextWorld.internationalReputation || {}),
+          [country]: Math.max(0, Math.min(100, Math.round(reputation))),
+        };
+      }
+    }
+
+    const warMerge = applyWarUpdates({
+      world: nextWorld,
+      updates: normalizeArray(transaction.warUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (warMerge.appliedIds.length !== normalizeArray(transaction.warUpdates).length) {
+      throw new Error("A canonical war operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = warMerge.world;
+
+    const diplomaticMerge = applyDiplomaticUpdates({
+      world: nextWorld,
+      relationUpdates: normalizeArray(transaction.relationUpdates),
+      agreementUpdates: normalizeArray(transaction.agreementUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (diplomaticMerge.appliedRelationIds.length !== normalizeArray(transaction.relationUpdates).length) {
+      throw new Error("A canonical relation operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    if (diplomaticMerge.appliedAgreementIds.length !== normalizeArray(transaction.agreementUpdates).length) {
+      throw new Error("A canonical agreement operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = diplomaticMerge.world;
+
+    const generatedChats = [];
+    for (const event of events) {
+      for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
+        const nextChat = await buildGeneratedChat(createdChat, event.id, nextWorld, {
+          fallbackTitle: event.title,
+          playerName: bundle.game.country,
+        });
+        if (!nextChat) throw new Error(`A diplomatic chat linked to event "${event.title}" could not be built. Nothing was persisted.`);
+        generatedChats.unshift(nextChat);
+      }
+    }
+    for (const chatLike of normalizeArray(transaction.diplomaticOutreach)) {
+      const nextChat = await buildGeneratedChat({ ...chatLike, source: "gm-outreach" }, "", nextWorld, {
+        playerName: bundle.game.country,
+      });
+      if (!nextChat) throw new Error("A GM diplomatic outreach operation could not be built. Nothing was persisted.");
+      generatedChats.unshift(nextChat);
+    }
+
+    let chatsToWrite = reconcileChatsForPlayer(bundle.chats, nextWorld, bundle.game.country);
+    if (generatedChats.length) {
+      const liveChats = await readChatsState({ force: true, world: nextWorld, playerCountry: bundle.game.country });
+      chatsToWrite = mergeIncomingChats(liveChats, generatedChats, nextWorld, { playerCountry: bundle.game.country });
+    }
+
+    const nextEvents = [...priorEvents, ...events];
+    // Repair orphaned GM timeline links before inserting this transaction. This is
+    // intentionally limited to GM-owned history records and never touches ordinary
+    // turn history.
+    nextWorld.simulationHistory = pruneOrphanedGameMasterHistory(
+      nextWorld.simulationHistory,
+      nextEvents,
+    );
+    const eventIds = events.map((event) => normalizeString(event?.id)).filter(Boolean);
+    const warIds = [...new Set(warMerge.appliedIds.map(normalizeString).filter(Boolean))];
+    const relationIds = [...new Set(diplomaticMerge.appliedRelationIds.map(normalizeString).filter(Boolean))];
+    const agreementIds = [...new Set(diplomaticMerge.appliedAgreementIds.map(normalizeString).filter(Boolean))];
+    const chatIds = generatedChats.map((chat) => normalizeString(chat?.id)).filter(Boolean);
+    const summary = normalizeString(transaction.summary || preview.summary);
+
+    if (eventIds.length) {
+      nextWorld.simulationHistory = insertGameMasterHistoryEntry(
+        nextWorld.simulationHistory,
+        gameMasterHistoryEntry({ transaction, game: bundle.game, eventIds, summary, transactionId }),
+      );
+    }
+
+    const auditRecord = {
+      id: `audit-${transactionId}`,
+      transactionId,
+      appliedAt: new Date().toISOString(),
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      mode,
+      request,
+      summary,
+      source: "gm-console",
+      status: "applied",
+      transaction: cloneValue(transaction),
+      acceptedOperations: gameMasterAcceptedOperationLabels(transaction),
+      rejectedOperations: [],
+      eventIds,
+      warIds,
+      relationIds,
+      agreementIds,
+      chatIds,
+      statCountries: [...new Set(statCountries.filter(Boolean))],
+    };
+    nextWorld.gmAudit = [auditRecord, ...normalizeArray(nextWorld.gmAudit)].slice(0, 64);
+
+    // Canonical persistence only. Deliberately omit actions/game writes, rollback
+    // snapshots and oh:turn-complete: a GM edit is administrative authority, not a turn.
+    // Avoid rewriting unrelated assets when this transaction did not touch them.
+    const touchedEvents = events.length > 0;
+    const touchedChats = generatedChats.length > 0;
+    const touchedColors = JSON.stringify(nextColors) !== JSON.stringify(colors);
+    const writes = [writeWorldState(nextWorld)];
+    if (touchedEvents) writes.push(writeEventsState(nextEvents));
+    if (touchedChats) {
+      writes.push(writeChatsState(chatsToWrite, { world: nextWorld, playerCountry: bundle.game.country }));
+    }
+    if (touchedColors) writes.push(writeJson(JSON_URLS.colors, nextColors, { pretty: true }));
+
+    try {
+      await Promise.all(writes);
+    } catch (error) {
+      // Storage is file-based rather than transactional. Restore every asset this GM
+      // transaction may have touched so a single failed write does not leave half an
+      // intervention in canon. Best-effort rollback errors are logged separately.
+      const rollbackWrites = [writeWorldState(bundle.world)];
+      if (touchedEvents) rollbackWrites.push(writeEventsState(bundle.events));
+      if (touchedChats) {
+        rollbackWrites.push(writeChatsState(bundle.chats, { world: bundle.world, playerCountry: bundle.game.country }));
+      }
+      if (touchedColors) rollbackWrites.push(writeJson(JSON_URLS.colors, colors, { pretty: true }));
+      const rollbackResults = await Promise.allSettled(rollbackWrites);
+      const rollbackFailed = rollbackResults.some((result) => result.status === "rejected");
+      if (rollbackFailed) console.error("[GM 8B.2] persistence rollback was incomplete.", rollbackResults);
+      throw new Error(
+        rollbackFailed
+          ? `GM persistence failed and rollback was incomplete: ${error?.message || error}`
+          : `GM persistence failed; the pre-apply state was restored: ${error?.message || error}`,
+      );
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:gm-transaction-applied", { detail: { transactionId } }));
+      if (events.some((event) => normalizeArray(event?.impacts?.markerOps).length > 0)) {
+        window.dispatchEvent(new Event("oh:cities-updated"));
+      }
+    }
+
+    return {
+      applied: true,
+      transactionId,
+      auditId: auditRecord.id,
+      mode,
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      summary,
+      eventIds,
+      warIds,
+      relationIds,
+      agreementIds,
+      chatIds,
+      statCountries: auditRecord.statCountries,
+    };
+  } finally {
+    endSimulation();
+  }
+};
+
+// Kept for stale callers, but direct prose execution remains forbidden. The UI must
+// always generate and expose a preview before any canonical write can happen.
+export const applyGameMasterCommand = async () => {
+  throw new Error("Direct GM execution is disabled. Generate a preview and apply that exact transaction through the GM Console.");
 };
 
 // ---- Pre-game history -------------------------------------------------------

@@ -26,6 +26,11 @@ export const WORLD_DEFAULTS = {
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
   internationalReputation: {},
+  // Immutable audit trail of explicitly applied GM Console transactions. This is
+  // administrative history, not a second world-state model: the transaction snapshot
+  // records what the administrator previewed/applied while canonical state still lives
+  // in the normal ledgers below.
+  gmAudit: [],
   // Persisted per-country stat sheets (code -> the full sheet), seeded on first view
   // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
   // stop regenerating/drifting every date change.
@@ -111,6 +116,7 @@ const MAX_WORLD_STORYLINES = 96;
 const MAX_WORLD_WARS = 64;
 const MAX_WORLD_RELATIONS = 256;
 const MAX_WORLD_AGREEMENTS = 128;
+const MAX_GM_AUDIT = 64;
 
 // Every caller of this parses a COORDINATE (lng/lat/toLng/toLat), which is why it
 // can afford to be lenient in ways a general number parser could not.
@@ -1120,6 +1126,43 @@ export const normalizePendingEventOutreach = (entries) =>
     .filter(Boolean)
     .slice(-80);
 
+// Phase 8B.2: bounded canonical audit trail for applied GM transactions. The record
+// intentionally keeps the exact previewed transaction so later debugging can answer
+// "what did the administrator actually authorize?" without pretending the audit is
+// itself authoritative world state.
+export const normalizeGameMasterAudit = (entries) =>
+  normalizeArray(entries)
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const id = normalizeOptionalString(entry.id) || generateId(`gm-audit-${index}`);
+      const transactionId = normalizeOptionalString(entry.transactionId || entry.id);
+      if (!transactionId) return null;
+      return {
+        ...cloneValue(entry),
+        id,
+        transactionId,
+        appliedAt: normalizeOptionalString(entry.appliedAt),
+        date: normalizeOptionalString(entry.date),
+        mode: normalizeOptionalString(entry.mode),
+        request: normalizeTextLike(entry.request),
+        summary: normalizeTextLike(entry.summary),
+        round: Number.isFinite(Number(entry.round)) ? Math.max(0, Math.trunc(Number(entry.round))) : 0,
+        eventIds: normalizeActionParticipants(entry.eventIds),
+        warIds: normalizeActionParticipants(entry.warIds),
+        relationIds: normalizeActionParticipants(entry.relationIds),
+        agreementIds: normalizeActionParticipants(entry.agreementIds),
+        chatIds: normalizeActionParticipants(entry.chatIds),
+        statCountries: normalizeActionParticipants(entry.statCountries),
+        acceptedOperations: normalizeArray(entry.acceptedOperations).map(normalizeTextLike).filter(Boolean).slice(0, 128),
+        rejectedOperations: normalizeArray(entry.rejectedOperations).map(normalizeTextLike).filter(Boolean).slice(0, 128),
+        status: normalizeOptionalString(entry.status) || "applied",
+        source: normalizeOptionalString(entry.source) || "gm-console",
+        transaction: entry.transaction && typeof entry.transaction === "object" ? cloneValue(entry.transaction) : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_GM_AUDIT);
+
 // One AI-authored mutation to the built-structure list: build | remove.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -1986,6 +2029,7 @@ export const normalizeWorldState = (world) => {
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     internationalReputation,
+    gmAudit: normalizeGameMasterAudit(nextWorld.gmAudit),
     labelFont: normalizeOptionalString(nextWorld.labelFont),
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),

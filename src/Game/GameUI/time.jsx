@@ -229,7 +229,9 @@ const resolveRegionName = (transfer, regionLookup) => {
 };
 
 const getEventMapChangeCount = (event) =>
-(event?.impacts?.regionTransfers?.length || 0) + (event?.impacts?.polityChanges?.length || 0);
+    (event?.impacts?.regionTransfers?.length || 0) +
+    (event?.impacts?.regionControlOps?.length || 0) +
+    (event?.impacts?.polityChanges?.length || 0);
 
 const collectEventTags = (event, { polityLookup, regionLookup }) => {
     const labels = new Set();
@@ -516,7 +518,8 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
     entry.date;
     const toDate = entry.toDate || entry.date || game?.gameDate || "";
     const fromDate = fallbackStartDate || toDate;
-    const events = (entry.eventIds ?? []).map((eventId) => eventLookup.get(eventId)).filter(Boolean);
+    const referencedEventIds = (entry.eventIds ?? []).filter(Boolean);
+    const events = referencedEventIds.map((eventId) => eventLookup.get(eventId)).filter(Boolean);
     const plannedActions = filterPlannedActions(entry.plannedActions || entry.actions);
     const mapChangeCount = events.reduce((sum, event) => sum + getEventMapChangeCount(event), 0);
     const tags = new Set();
@@ -547,6 +550,7 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
+        referencedEventCount: referencedEventIds.length,
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
         source: entry.source || "ai",
@@ -1208,7 +1212,7 @@ const TimelineHistoryPanel = ({
         {!record ? (
             <EmptyPanelState text="No event chain is available yet." />
         ) : totalEvents === 0 ? (
-            <EmptyPanelState text="No world events were recorded for this time skip." />
+            <EmptyPanelState text="No world events were recorded for this timeline entry." />
         ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {visibleEvents.map((event, index) => {
@@ -1522,7 +1526,86 @@ const DateWidget = ({
         .filter(Boolean);
     }, [eventLookup, gameData, lookups, worldState]);
 
-    const latestTurnRecord = historyRecords[0] || null;
+    // The legacy Events panel used historyRecords[0] unconditionally. That assumes
+    // every simulationHistory row is a normal turn and that no stale/future/manual
+    // presentation records can sit ahead of the current canonical timeline. Native
+    // manual events and GM transactions break that assumption.
+    //
+    // Pick the latest record that is actually relevant to the current game date:
+    // - ignore future-dated history while the clock is still earlier;
+    // - ignore fully orphaned records whose event IDs no longer resolve;
+    // - on the same date, prefer a record that still has real events;
+    // - if several same-date records have events (turn + manual/GM), prefer the later
+    //   auxiliary entry in history order so the newly-authored event is what opens.
+    const latestTurnRecord = useMemo(() => {
+        if (!historyRecords.length) {
+            return null;
+        }
+
+        const rawCurrentDate = String(gameData?.gameDate || gameData?.startDate || "").trim();
+        const parsedCurrentDate = rawCurrentDate ? dayjs(rawCurrentDate) : null;
+        const hasComparableCurrentDate = Boolean(parsedCurrentDate && parsedCurrentDate.isValid());
+
+        const viable = historyRecords.filter((record) => {
+            const orphaned =
+            Number(record?.referencedEventCount || 0) > 0 &&
+            (record?.events?.length || 0) === 0;
+            if (orphaned) {
+                return false;
+            }
+
+            if (!hasComparableCurrentDate) {
+                return true;
+            }
+
+            const rawRecordDate = String(record?.toDate || record?.date || record?.fromDate || "").trim();
+            const parsedRecordDate = rawRecordDate ? dayjs(rawRecordDate) : null;
+            if (!parsedRecordDate || !parsedRecordDate.isValid()) {
+                return true;
+            }
+
+            return !parsedRecordDate.isAfter(parsedCurrentDate, "day");
+        });
+
+        const candidates = viable.length ? viable : historyRecords;
+        let best = null;
+        let bestDate = null;
+
+        for (const record of candidates) {
+            const rawRecordDate = String(record?.toDate || record?.date || record?.fromDate || "").trim();
+            const parsedRecordDate = rawRecordDate ? dayjs(rawRecordDate) : null;
+            const comparable = Boolean(parsedRecordDate && parsedRecordDate.isValid());
+
+            if (!best) {
+                best = record;
+                bestDate = comparable ? parsedRecordDate : null;
+                continue;
+            }
+
+            if (!comparable) {
+                continue;
+            }
+
+            if (!bestDate || parsedRecordDate.isAfter(bestDate, "day")) {
+                best = record;
+                bestDate = parsedRecordDate;
+                continue;
+            }
+
+            if (parsedRecordDate.isSame(bestDate, "day")) {
+                const bestHasEvents = (best?.events?.length || 0) > 0;
+                const nextHasEvents = (record?.events?.length || 0) > 0;
+
+                if ((nextHasEvents && !bestHasEvents) || nextHasEvents === bestHasEvents) {
+                    best = record;
+                    bestDate = parsedRecordDate;
+                }
+            }
+        }
+
+        return best || candidates[0] || null;
+    }, [gameData, historyRecords]);
+
     const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
     ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
     : "";
