@@ -285,6 +285,31 @@ const balancedJsonCandidates = (text) => {
   return candidates.sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
 };
 
+// Some openai-compatible endpoints/models (seen with nvidia/nemotron models)
+// are asked to call the tool (tool_choice: "required") but don't actually
+// populate tool_calls — they answer with a normal text message that just
+// writes out what a tool call would look like, e.g.
+// `[{ "name": "submit_jump_result", "parameters": { events: [...], ... } }]`,
+// sometimes wrapped in an extra array. response.toolInput is null in that
+// case (there is no real tool_calls entry to extract), and extractJsonPayload
+// happily parses the text into that wrapper shape rather than the bare
+// arguments object the schema expects, so it fails validation (or, if the
+// wrapping breaks strict JSON parsing, fails to parse at all) and the whole
+// turn is discarded to the canned fallback. Unwrap it back to the actual
+// arguments object so the real content underneath still gets applied.
+const unwrapMimickedToolCall = (value, toolName) => {
+  let current = value;
+  for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
+    current = current[0];
+  }
+  if (!current || typeof current !== "object" || Array.isArray(current)) return value;
+  const args = current.parameters ?? current.arguments ?? current.input;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return value;
+  const name = normalizeString(current.name);
+  if (toolName && name && name !== toolName) return value;
+  return args;
+};
+
 export const extractJsonPayload = (rawText) => {
   // Reasoning models (and several Ollama chat templates) prepend a think block
   // the strict parser chokes on; the answer follows it.
@@ -558,7 +583,7 @@ const runJsonTask = async (taskKey, {
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       lastRawText = rawText;
-      const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+      const parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object

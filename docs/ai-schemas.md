@@ -404,6 +404,8 @@ When a model answers in prose instead of a tool call, `runJsonTask` must dig the
 
 This ladder is what lets local/self-hosted models without tool support still play; hosted providers normally return clean `toolInput` and skip it entirely.
 
+**`unwrapMimickedToolCall`** (`gameplay.js`, applied to whatever `extractJsonPayload` returns): some openai-compatible endpoints are sent `tool_choice: "required"` but never populate `tool_calls` — the model instead writes prose JSON that just *describes* the call, e.g. `[{ "name": "submit_jump_result", "parameters": { … } }]`, sometimes double-wrapped in an extra array (seen with `nvidia/nemotron-*` models). That shape parses fine as JSON but doesn't match any gameplay schema, so it used to fail validation (or, if the extra wrapping broke strict parsing entirely, hit the same `"did not contain parseable JSON"` fallback). The unwrapper collapses single-element array wrapping, then — only when the remaining object looks like `{ name, parameters|arguments|input }` and `name` matches the task's tool (or no tool name is available to check) — returns the inner arguments object instead. A normal, already-correctly-shaped payload has no `name`/`parameters` fields and passes through untouched.
+
 ---
 
 ## 10. Where to look when…
