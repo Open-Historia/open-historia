@@ -230,12 +230,13 @@ const parseParties = (value) => unique(
 const decodeRelationLine = (line, index) => {
   const [a, b, scoreRaw, status, eventNumbers, summary] = splitFixedFields(line, 5);
   const score = Number(scoreRaw);
+  const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
   return {
     id: `relation-update-${index}`,
     a: clean(a),
     b: clean(b),
-    score: Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null,
-    status: lower(status),
+    score: normalizedScore,
+    status: normalizeRelationStatus(status, normalizedScore ?? 0),
     eventIndexes: parseEventNumbers(eventNumbers),
     eventIds: [],
     summary: clean(summary),
@@ -248,12 +249,13 @@ export const decodeRelationUpdates = (value) => {
       if (typeof entry === "string") return decodeRelationLine(entry, index);
       if (!entry || typeof entry !== "object") return null;
       const score = Number(entry.score);
+      const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
       return {
         id: clean(entry.id) || `relation-update-${index}`,
         a: clean(entry.a),
         b: clean(entry.b),
-        score: Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null,
-        status: lower(entry.status),
+        score: normalizedScore,
+        status: normalizeRelationStatus(entry.status, normalizedScore ?? 0),
         eventIndexes: array(entry.eventIndexes).map(Number).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 16),
         eventIds: unique(entry.eventIds, 24),
         summary: clean(entry.summary),
