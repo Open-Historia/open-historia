@@ -21,7 +21,7 @@ import {
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
-import { toCountryName } from "../../runtime/ownerNames.js";
+import { ownerIdentityKey, toCountryName } from "../../runtime/ownerNames.js";
 import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
@@ -140,12 +140,10 @@ const shallowEqualColors = (a, b) => {
 };
 
 // Case/diacritic/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
-// and "COTE D'IVOIRE" all reach the same palette entry.
-const ownerFoldKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+// and "COTE D'IVOIRE" all reach the same palette entry. Shared with the world
+// state's own owner canonicalisation, so the palette and the map agree on what
+// counts as one polity.
+const ownerFoldKey = ownerIdentityKey;
 
 // ---- Disputed-region stripes ------------------------------------------------
 // A region whose `claimants` list names the countries contesting it renders
@@ -750,7 +748,11 @@ const WorldMap = ({ isGlobe = false }) => {
           if (ownerFoldKey(key) === fold) return rgb;
         }
         for (const [key, entry] of Object.entries(polityOverrides ?? {})) {
-          const names = [key, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])];
+          // The DISPLAY name belongs in here too: a rename writes `name`, not an
+          // alias, so a legacy save still holding regions under the era name
+          // ("Third Reich" beside "Germany") would otherwise paint them a
+          // procedural fallback colour instead of the country's own.
+          const names = [key, entry?.name, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])];
           if (!names.some((name) => ownerFoldKey(name) === fold)) continue;
           const rgb = parseColorToRgb(entry?.color);
           if (rgb) return rgb;

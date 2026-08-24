@@ -2,7 +2,7 @@
 import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
-import { toCountryName } from "../../runtime/ownerNames.js";
+import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -1052,23 +1052,11 @@ const resolveRegionTransfers = async (containers, world) => {
   // Owner comparisons are case- and diacritic-insensitive, and the model may
   // name a polity by its era DISPLAY name or an alias ("Second Polish
   // Republic") while ownership is keyed by the owner token ("Poland") —
-  // canonicalize through the polity registry before comparing.
-  const ownerAlias = new Map();
-  for (const [token, entry] of Object.entries(worldState.polityOverrides ?? {})) {
-    const canonical = regionKey(token);
-    if (!canonical) continue;
-    ownerAlias.set(canonical, canonical);
-    const displayName = regionKey(entry?.name);
-    if (displayName) ownerAlias.set(displayName, canonical);
-    for (const alias of entry?.aliases ?? []) {
-      const aliasKey = regionKey(alias);
-      if (aliasKey) ownerAlias.set(aliasKey, canonical);
-    }
-  }
-  const canonicalOwnerKey = (token) => {
-    const key = regionKey(token);
-    return ownerAlias.get(key) ?? key;
-  };
+  // canonicalize through the polity registry before comparing. The same alias
+  // map the world state is written through (ownerNames.js), so what counts as
+  // "the same polity" cannot drift between resolving a transfer and storing it.
+  const ownerAliases = buildOwnerAliasMap(worldState.polityOverrides);
+  const canonicalOwnerKey = (token) => regionKey(canonicalOwnerName(token, ownerAliases));
   const ownerKeyOf = (regionId) => {
     // A legacy save can still hold a code here; canonicalise so it keys as the same
     // owner as everything else rather than as a second, phantom power.
