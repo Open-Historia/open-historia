@@ -20,6 +20,13 @@ import {
     readGameData,
     readWorldState,
 } from "../../runtime/gameState.js";
+import {
+    buildFocusContext,
+    buildPlaceCatalog,
+    deriveEventFocusBounds,
+    mergeFeatureParts,
+    tileGeometryParts,
+} from "./eventFocus.js";
 import { setWorldStateOverride } from "../Map/useWorldState.js";
 import { setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -270,65 +277,10 @@ const buildEventLookup = (events) => new Map((events ?? []).map((event) => [even
 let regionBoundsPromise = null;
 let countryBoundsPromise = null;
 
-const tilePointToLngLat = (px, py, extent = 4096) => {
-    const lng = (px / extent) * 360 - 180;
-    const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * py) / extent)));
-    const lat = latRad * (180 / Math.PI);
-    return [lng, lat];
-};
-
-const extendBounds = (currentBounds, nextBounds) => {
-    if (!nextBounds) {
-        return currentBounds;
-    }
-
-    if (!currentBounds) {
-        return nextBounds;
-    }
-
-    return [
-        [
-            Math.min(currentBounds[0][0], nextBounds[0][0]),
-            Math.min(currentBounds[0][1], nextBounds[0][1]),
-        ],
-        [
-            Math.max(currentBounds[1][0], nextBounds[1][0]),
-            Math.max(currentBounds[1][1], nextBounds[1][1]),
-        ],
-    ];
-};
-
-const geometryToBounds = (geometry, extent = 4096) => {
-    let minLng = Number.POSITIVE_INFINITY;
-    let minLat = Number.POSITIVE_INFINITY;
-    let maxLng = Number.NEGATIVE_INFINITY;
-    let maxLat = Number.NEGATIVE_INFINITY;
-
-    for (const ring of geometry ?? []) {
-        for (const point of ring ?? []) {
-            const [lng, lat] = tilePointToLngLat(point.x, point.y, extent);
-            minLng = Math.min(minLng, lng);
-            minLat = Math.min(minLat, lat);
-            maxLng = Math.max(maxLng, lng);
-            maxLat = Math.max(maxLat, lat);
-        }
-    }
-
-    if (
-        !Number.isFinite(minLng) ||
-        !Number.isFinite(minLat) ||
-        !Number.isFinite(maxLng) ||
-        !Number.isFinite(maxLat)
-    ) {
-        return null;
-    }
-
-    return [
-        [minLng, minLat],
-        [maxLng, maxLat],
-    ];
-};
-
+// Bounds for every feature in an archive's overview tile (0/0/0 — the tile the
+// game already treats as the complete country/region catalog), keyed by the id
+// the events refer to. Rings are kept apart until the merge so an outlying
+// island can be told from the mainland and dropped (see mergeFeatureParts).
 const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
     const pmtiles = getPmtilesArchive(archiveUrl);
     const tileData = await pmtiles.getZxy(0, 0, 0);
@@ -343,7 +295,7 @@ const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
     }
 
     const extent = layer.extent || 4096;
-    const boundsLookup = new Map();
+    const partsByKey = new Map();
 
     for (let index = 0; index < layer.length; index += 1) {
         const feature = layer.feature(index);
@@ -356,16 +308,26 @@ const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
             continue;
         }
 
-        const featureBounds = geometryToBounds(feature.loadGeometry(), extent);
-        if (!featureBounds) {
+        const parts = tileGeometryParts(feature.loadGeometry(), extent);
+        if (parts.length === 0) {
             continue;
         }
 
         const normalizedKey = String(key);
-        boundsLookup.set(
-            normalizedKey,
-            extendBounds(boundsLookup.get(normalizedKey) || null, featureBounds),
-        );
+        const bucket = partsByKey.get(normalizedKey);
+        if (bucket) {
+            bucket.push(...parts);
+        } else {
+            partsByKey.set(normalizedKey, parts);
+        }
+    }
+
+    const boundsLookup = new Map();
+    for (const [key, parts] of partsByKey) {
+        const bounds = mergeFeatureParts(parts);
+        if (bounds) {
+            boundsLookup.set(key, bounds);
+        }
     }
 
     return boundsLookup;
@@ -405,67 +367,6 @@ const loadCountryBounds = async () => {
     return countryBoundsPromise;
 };
 
-const getEventFocusBounds = (event, { countryBounds, regionBounds }) => {
-    let resolvedBounds = null;
-
-    for (const transfer of event?.impacts?.regionTransfers ?? []) {
-        const regionId = String(transfer?.regionId ?? "");
-        if (!regionId) {
-            continue;
-        }
-
-        resolvedBounds = extendBounds(resolvedBounds, regionBounds.get(regionId) || null);
-    }
-
-    for (const change of event?.impacts?.polityChanges ?? []) {
-        const code = String(change?.code ?? "");
-        if (!code) {
-            continue;
-        }
-
-        resolvedBounds = extendBounds(resolvedBounds, countryBounds.get(code) || null);
-    }
-
-    return resolvedBounds;
-};
-
-// Every event moves the camera. When the impacts don't pin a location, fall
-// back to the chat participants, then to the countries the event's text
-// actually mentions.
-const deriveEventFocusBounds = (event, { countryBounds, regionBounds, polityLookup }) => {
-    const impactBounds = getEventFocusBounds(event, { countryBounds, regionBounds });
-    if (impactBounds) {
-        return impactBounds;
-    }
-
-    let bounds = null;
-    for (const chat of event?.impacts?.createdChats ?? []) {
-        for (const country of chat?.countries ?? []) {
-            if (country?.code) {
-                bounds = extendBounds(bounds, countryBounds.get(String(country.code)) || null);
-            }
-        }
-    }
-    if (bounds) {
-        return bounds;
-    }
-
-    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
-    for (const [code, name] of polityLookup) {
-        // Very short names ("Chad") false-match inside other words rarely
-        // enough to accept; sub-4-character names don't.
-        if (!name || String(name).length < 4) {
-            continue;
-        }
-
-        if (haystack.includes(String(name).toLowerCase())) {
-            bounds = extendBounds(bounds, countryBounds.get(code) || null);
-        }
-    }
-
-    return bounds;
-};
-
 const getMapInstance = (mapRef) => mapRef?.current?.getMap?.() ?? mapRef?.current ?? null;
 
 const focusMapOnBounds = (mapRef, bounds) => {
@@ -486,6 +387,12 @@ const focusMapOnBounds = (mapRef, bounds) => {
         north += 0.45;
     }
 
+    // Padding bigger than the viewport makes fitBounds throw, and 80px is a
+    // quarter of a phone screen — scale it down on small canvases.
+    const canvas = map.getCanvas?.();
+    const shortSide = Math.min(canvas?.clientWidth || 0, canvas?.clientHeight || 0);
+    const padding = shortSide > 0 ? Math.max(16, Math.min(80, Math.round(shortSide * 0.12))) : 40;
+
     map.fitBounds(
         [
             [west, south],
@@ -495,7 +402,7 @@ const focusMapOnBounds = (mapRef, bounds) => {
             duration: 1800,
             essential: true,
             maxZoom: 6.8,
-            padding: 80,
+            padding,
         },
     );
 };
@@ -1275,9 +1182,9 @@ const DateWidget = ({
     const [events, setEvents] = useState([]);
     const [worldState, setWorldState] = useState(null);
     const [countryBounds, setCountryBounds] = useState(new Map());
-    const [polityLookup, setPolityLookup] = useState(new Map());
+    const [countryCatalog, setCountryCatalog] = useState([]);
     const [regionBounds, setRegionBounds] = useState(new Map());
-    const [regionLookup, setRegionLookup] = useState(new Map());
+    const [regionCatalog, setRegionCatalog] = useState([]);
     const [localOpenPanel, setLocalOpenPanel] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
@@ -1317,9 +1224,9 @@ const DateWidget = ({
                 }
 
                 setCountryBounds(nextCountryBounds);
-                setPolityLookup(new Map((countries ?? []).map((entry) => [entry.code, entry.name])));
+                setCountryCatalog(countries ?? []);
                 setRegionBounds(nextRegionBounds);
-                setRegionLookup(new Map((regions ?? []).map((entry) => [entry.id, entry])));
+                setRegionCatalog(regions ?? []);
             } catch (lookupError) {
                 if (!cancelled) {
                     console.error("Failed to load timeline lookups:", lookupError);
@@ -1508,6 +1415,17 @@ const DateWidget = ({
         }
     };
 
+    // Display-name lookups for the timeline's own labels, off the same catalogs
+    // the camera resolves places from.
+    const polityLookup = useMemo(
+        () => new Map(countryCatalog.map((entry) => [entry.code, entry.name])),
+        [countryCatalog],
+    );
+    const regionLookup = useMemo(
+        () => new Map(regionCatalog.map((entry) => [entry.id, entry])),
+        [regionCatalog],
+    );
+
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
@@ -1626,17 +1544,49 @@ const DateWidget = ({
         setVisibleEventCount(1);
     }, [latestTurnRecord?.id]);
 
+    // Half of what the camera needs to turn the names an event carries
+    // ("Ireland", "Donetsk") into a place on the map: the half that only moves
+    // when the map data itself does.
+    const focusCatalog = useMemo(() => buildPlaceCatalog({
+        countries: countryCatalog,
+        countryBounds,
+        regionBounds,
+        regions: regionCatalog,
+    }), [countryBounds, countryCatalog, regionBounds, regionCatalog]);
+
+    // The other half is the live world (era polities, who owns what), which the
+    // 5s poll replaces wholesale. Reading it through a ref keeps that poll from
+    // re-running the camera effect — which would re-fly to the event already on
+    // screen every few seconds — and the finished context is cached so it is
+    // rebuilt only when an event is actually revealed against a newer world.
+    const focusWorldRef = React.useRef(null);
+    const focusContextRef = React.useRef({ catalog: null, context: null, world: null });
+
+    useEffect(() => {
+        focusWorldRef.current = worldState;
+    }, [worldState]);
+
     // The camera follows EVERY revealed event — impacts pin the exact spot,
-    // otherwise the countries the event involves do. Opt out via the
-    // "Disable camera movement during events" map setting.
+    // otherwise the polities the event involves do, and its own words are the
+    // last resort. Opt out via the "Disable camera movement during events" map
+    // setting.
     useEffect(() => {
         if (!activeVisibleEvent || disableEventCamera) {
             return;
         }
 
-        const bounds = deriveEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds, polityLookup });
-        focusMapOnBounds(mapRef, bounds);
-    }, [activeVisibleEvent, countryBounds, disableEventCamera, mapRef, polityLookup, regionBounds]);
+        const world = focusWorldRef.current;
+        const cached = focusContextRef.current;
+        if (cached.catalog !== focusCatalog || cached.world !== world || !cached.context) {
+            focusContextRef.current = {
+                catalog: focusCatalog,
+                context: buildFocusContext({ catalog: focusCatalog, world }),
+                world,
+            };
+        }
+
+        focusMapOnBounds(mapRef, deriveEventFocusBounds(activeVisibleEvent, focusContextRef.current.context));
+    }, [activeVisibleEvent, disableEventCamera, focusCatalog, mapRef]);
 
     const revealNextEvent = () => {
         setVisibleEventCount((current) => {
