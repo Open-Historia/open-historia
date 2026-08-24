@@ -12,12 +12,14 @@
 // three things the model cannot work out for itself: whose territory a formation
 // is in, how far it is from whose border, and what it is already under orders to do.
 //
-// DELIBERATELY IMPORT-FREE apart from the motion math, so it can be tested
-// without a full install (see forcePosture.test.js). The territory index it
-// consumes is built by territoryOutlines.js, which is where the PMTiles and
-// turf dependencies live.
+// DELIBERATELY free of browser-only imports, so it can be tested without a full
+// install (see forcePosture.test.js). That includes createTerritoryIndex at the
+// bottom: territoryOutlines.js does nothing but fetch and decode the region
+// tile, then hands the rings here, which keeps the border geometry testable
+// without the map binaries.
 
 import { haversineKm } from "../../runtime/unitMotion.js";
+import { regionOwnerName } from "./regionVocab.js";
 
 const norm = (value) => String(value ?? "").trim();
 const lower = (value) => norm(value).toLowerCase();
@@ -45,9 +47,9 @@ const bearingFrom = (from, to) => {
   return BEARINGS[Math.round(((degrees + 360) % 360) / 45) % 8];
 };
 
-// Where a formation is, in political terms. `territories` is
-// { ownerName: { rings, contains(point) } } as built by territoryOutlines.js;
-// an empty index simply drops these clauses rather than failing.
+// Where a formation is, in political terms, from createTerritoryIndex's locate().
+// A null index (the map binaries are unavailable) simply drops these clauses
+// rather than failing the whole prompt build.
 const describePlace = (unit, territories) => {
   if (!territories || typeof territories.locate !== "function") return "";
   const placed = territories.locate({ lng: unit.lng, lat: unit.lat });
@@ -153,4 +155,144 @@ export const buildForcePostureText = (units, orders, territories, playerCode) =>
       return `${header}:\n${lines}`;
     })
     .join("\n");
+};
+
+// ---------------------------------------------------------------------------
+// Territory index
+// ---------------------------------------------------------------------------
+// Built here rather than in territoryOutlines.js so the geometry can be tested
+// without the region PMTiles: that module does nothing but fetch and decode the
+// tile, then hand the rings to this.
+
+// Only index the powers the question could plausibly be about. Indexing all ~200
+// countries would hold geometry nobody is going to ask about.
+const MAX_OWNERS = 24;
+// Further than this is "the other side of the world", not a border.
+const MAX_REPORTED_KM = 4000;
+
+// Ray casting on the tile's own ring vertices. Accurate enough at this
+// resolution, and cheaper than wrapping every ring as a GeoJSON polygon with
+// winding order honoured just to answer "is this inside Belarus".
+const ringContains = (ring, lng, lat) => {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+};
+
+// Distance to the nearest point on the ring's EDGES, not merely to its vertices.
+// Vertex-only distance overstates badly wherever a border runs straight for a
+// while: against a box whose only vertices are its corners, a point 222 km from
+// the near edge measured as 598 km, because the corners were the closest things
+// it could see. Real coastlines are denser than that, but z0 geometry is coarse
+// and long straight segments are common enough to matter.
+//
+// The projection is equirectangular, scaled by cos(lat) — flat-earth, but only
+// ever used to find WHERE on the segment the closest point lies; the distance
+// itself is then measured great-circle. At the scale of a border crossing that
+// is well inside the error the coarse geometry already carries.
+const ringDistanceKm = (ring, lng, lat) => {
+  if (ring.length === 0) return Infinity;
+  const scale = Math.cos((lat * Math.PI) / 180) || 1e-6;
+  let best = Infinity;
+
+  for (let i = 0; i < ring.length; i += 1) {
+    const [aLng, aLat] = ring[i];
+    const [bLng, bLat] = ring[(i + 1) % ring.length];
+
+    const ax = (aLng - lng) * scale;
+    const ay = aLat - lat;
+    const bx = (bLng - lng) * scale;
+    const by = bLat - lat;
+    const dx = bx - ax;
+    const dy = by - ay;
+
+    let closestLng = aLng;
+    let closestLat = aLat;
+    const lengthSq = dx * dx + dy * dy;
+    if (lengthSq > 0) {
+      const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSq));
+      closestLng = aLng + (bLng - aLng) * t;
+      closestLat = aLat + (bLat - aLat) * t;
+    }
+
+    const km = haversineKm(lat, lng, closestLat, closestLng);
+    if (km < best) best = km;
+  }
+  return best;
+};
+
+/**
+ * Turn decoded region outlines into the locate() index buildForcePostureText uses.
+ *
+ * Ownership follows the LIVE map via regionVocab's regionOwnerName — an explicit
+ * regionOwnershipOverrides entry wins, else the region's base country — so a
+ * polity the campaign invented ("Free Ireland") is as locatable as a stock one.
+ *
+ * @param outlines Map(regionId -> {country, countryCode, rings})
+ */
+export const createTerritoryIndex = (outlines, world, { owners = [] } = {}) => {
+  if (!outlines || outlines.size === 0) return null;
+  const wanted = new Set(owners.map(lower).filter(Boolean).slice(0, MAX_OWNERS));
+  if (wanted.size === 0) return null;
+
+  const overrides = world?.regionOwnershipOverrides ?? {};
+  const byOwner = new Map();
+  for (const [id, outline] of outlines) {
+    const owner = regionOwnerName(
+      { id, country: outline.country, countryCode: outline.countryCode },
+      overrides,
+    );
+    if (!owner || !wanted.has(lower(owner))) continue;
+    if (!byOwner.has(owner)) byOwner.set(owner, []);
+    byOwner.get(owner).push(...outline.rings);
+  }
+  if (byOwner.size === 0) return null;
+
+  return {
+    owners: [...byOwner.keys()],
+    /**
+     * @returns {{inside: string, nearest: string, nearestKm: number}|null}
+     *   `inside` is the polity whose territory contains the point ("" at sea),
+     *   `nearest` the closest OTHER polity's border, with its distance.
+     */
+    locate: ({ lng, lat }) => {
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+
+      let inside = "";
+      for (const [owner, rings] of byOwner) {
+        if (rings.some((ring) => ringContains(ring, lng, lat))) {
+          inside = owner;
+          break;
+        }
+      }
+
+      let nearest = "";
+      let nearestKm = Infinity;
+      for (const [owner, rings] of byOwner) {
+        // The interesting distance is to somebody ELSE's border; a unit sitting
+        // in its own country is zero km from its own, which says nothing.
+        if (inside && lower(owner) === lower(inside)) continue;
+        for (const ring of rings) {
+          const km = ringDistanceKm(ring, lng, lat);
+          if (km < nearestKm) {
+            nearestKm = km;
+            nearest = owner;
+          }
+        }
+      }
+
+      if (nearestKm > MAX_REPORTED_KM) {
+        nearest = "";
+        nearestKm = Infinity;
+      }
+      if (!inside && !nearest) return null;
+      return { inside, nearest, nearestKm };
+    },
+  };
 };

@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForcePostureText } from "./forcePosture.js";
+import { buildForcePostureText, createTerritoryIndex } from "./forcePosture.js";
 
 const unit = (over = {}) => ({
   id: "u1",
@@ -160,4 +160,79 @@ test("units without usable coordinates are skipped", () => {
     "Ukraine",
   );
   assert.match(text, /No military forces/);
+});
+
+// ---- createTerritoryIndex --------------------------------------------------
+// The border geometry, tested against hand-built rings rather than the region
+// PMTiles — which is the whole reason it lives in this module and not in
+// territoryOutlines.js.
+
+const square = (west, south, east, north) => [
+  [west, south], [east, south], [east, north], [west, north], [west, south],
+];
+
+// Two adjacent 10-degree boxes meeting at longitude 0.
+const outlines = new Map([
+  ["A.1", { country: "Westland", countryCode: "WST", rings: [square(-10, 0, 0, 10)] }],
+  ["B.1", { country: "Eastland", countryCode: "EST", rings: [square(0, 0, 10, 10)] }],
+]);
+
+const index = () => createTerritoryIndex(outlines, {}, { owners: ["Westland", "Eastland"] });
+
+test("createTerritoryIndex returns null when there is no geometry to index", () => {
+  assert.equal(createTerritoryIndex(new Map(), {}, { owners: ["Westland"] }), null);
+  assert.equal(createTerritoryIndex(null, {}, { owners: ["Westland"] }), null);
+});
+
+test("createTerritoryIndex returns null when no owner was asked for", () => {
+  assert.equal(createTerritoryIndex(outlines, {}, { owners: [] }), null);
+});
+
+test("createTerritoryIndex only indexes the owners it was asked about", () => {
+  const only = createTerritoryIndex(outlines, {}, { owners: ["Westland"] });
+  assert.deepEqual(only.owners, ["Westland"]);
+});
+
+test("locate names the territory a point sits inside", () => {
+  assert.equal(index().locate({ lng: -5, lat: 5 }).inside, "Westland");
+  assert.equal(index().locate({ lng: 5, lat: 5 }).inside, "Eastland");
+});
+
+test("locate reports the distance to the OTHER power's border, not its own", () => {
+  // 2 degrees west of the shared meridian, at the equator: ~222 km.
+  const placed = index().locate({ lng: -2, lat: 5 });
+  assert.equal(placed.inside, "Westland");
+  assert.equal(placed.nearest, "Eastland");
+  assert.ok(placed.nearestKm > 180 && placed.nearestKm < 260, `got ${placed.nearestKm} km`);
+});
+
+test("a point at sea has no containing territory but still names the nearest coast", () => {
+  const placed = index().locate({ lng: -14, lat: 5 });
+  assert.equal(placed.inside, "");
+  assert.equal(placed.nearest, "Westland");
+});
+
+test("a point on the far side of the world reports no border at all", () => {
+  assert.equal(index().locate({ lng: 170, lat: -60 }), null);
+});
+
+test("locate rejects unusable coordinates", () => {
+  assert.equal(index().locate({ lng: Number.NaN, lat: 5 }), null);
+});
+
+test("ownership follows the live map, so a re-owned region moves with its new holder", () => {
+  const world = { regionOwnershipOverrides: { "B.1": "Westland" } };
+  const reowned = createTerritoryIndex(outlines, world, { owners: ["Westland", "Eastland"] });
+  assert.deepEqual(reowned.owners, ["Westland"]);
+  assert.equal(reowned.locate({ lng: 5, lat: 5 }).inside, "Westland");
+});
+
+test("the digest turns a locate() result into the clause the advisor reads", () => {
+  const massing = {
+    id: "x", name: "III Corps", type: "armor", ownerCode: "Westland", strength: 90,
+    composition: "2 divisions", posture: "massing", status: "idle", covert: false, note: "",
+    lng: -2, lat: 5,
+  };
+  const text = buildForcePostureText([massing], [], index(), "Eastland");
+  assert.match(text, /inside Westland, about \d+ km from the Eastland border/);
 });
