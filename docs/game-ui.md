@@ -76,7 +76,7 @@ Every fixed element declares its own `zIndex`. From back to front (source-verifi
 | 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**, **⏻**) | `libraryBar.jsx:1993` / `:2061` |
 | 9998 | Timeline panels (`panelSurface`), **Actions** panel, **Chat** panel | `time.jsx:149`, `actions.jsx:427`, `chat.jsx:851` |
 | 9999 | `DateWidget` pill, bottom `Toolbar`, `Search`, `Other` flag badge, 🧭 `AdvisorButton`, ⋮ `SettingsButton`, `SettingsMenu`, `ForcesPanel` body, `WebGLWarningPopup` | shared `baseStyle`/`widgetSurface` |
-| 10000 | Forces **mode banner** (deploy/move/attack hint) | `forces.jsx:156` |
+| 10000 | Forces **mode banner** (deploy hint) | `forces.jsx` |
 | 10028 | "Loading games and scenarios…" indicator | `libraryBar.jsx:2565` |
 | 10040 | **Advisor drawer** | `advisor.jsx:320` |
 | 10045 | **Cheats panel** | `cheats.jsx:280` |
@@ -303,8 +303,8 @@ Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game`
 | Element | Behavior | Connects to |
 |---|---|---|
 | Unit list | `subscribeUnits`/`getUnits`; split into "Your units" (`getPlayerCode`) and dimmed "Other forces". Clicking a unit `flyTo`s it | `src/Game/Map/unitsController.js` |
-| Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–1000), optional name → `setInteractionMode({kind:"deploy", params})` then closes the panel | unitsController |
-| **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy/move/attack) + Cancel (`clearInteractionMode`) | interaction-mode state |
+| Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–100, percent of established strength), optional name and composition → `setInteractionMode({kind:"deploy", params})` then closes the panel | unitsController |
+| **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy is the only mode) + Cancel (`clearInteractionMode`) | interaction-mode state |
 
 Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re-renders once the lookup warms). `TYPE_GLYPH`/`TYPE_LABEL` map unit types to icons/labels; strength color-codes >600 green / >250 amber / else red.
 

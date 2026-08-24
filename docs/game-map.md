@@ -297,33 +297,40 @@ Fed from `world.markers` (structures founded during play — bases, silos, embas
 |---|---|---|
 | `units-fill` | circle | owner colour; radius scales with zoom |
 | `units-icons` | symbol | the type glyph |
-| `units-strength` | symbol | numeric strength, offset below (`minzoom 3`) |
+| `units-strength` | symbol | strength as a percentage, offset below (`minzoom 3`) |
+| `units-heading` | line | dashed great-circle line from a unit to its standing `move` order's destination (`minzoom 3`) |
+| `units-station` | line | dashed geodesic ring around a `patrol` order's station |
 
-Status drives styling — **pending** (player-requested, not yet AI-confirmed) units are translucent (`circle-opacity 0.32`) with a blue stroke; **moving** = amber stroke; **engaged** = red stroke; else white.
+Status and confidence drive styling — **pending** (player-requested, not yet AI-confirmed) units are translucent (`circle-opacity 0.32`) with a blue stroke; **covert** (no confirmed line of support, shown to the player as *Unconfirmed*) are translucent with a violet stroke and draw at ~0.75 radius; **moving** = amber stroke; **engaged** = red stroke; else white.
+
+> The zoom `interpolate` in `circle-radius` must stay the **outermost** expression. MapLibre rejects a nested one and drops the whole layer — which also silently breaks unit clicking, since `Nations.jsx` hit-tests `units-fill` by name. The covert size adjustment therefore lives inside each zoom stop.
+
+**Positions are tweened, not snapped.** The controller emits a new list (its 5s poll, or a commit) and the counters glide over ~1.2s. The tween runs *outside* React: one render per data change declares the layers, then each frame calls `setData` straight on the MapLibre source, so moving a counter never costs a React render. A unit seen for the first time starts where it is, and a jump beyond 40° snaps (that is a re-spawn or a staged-reveal swap, not a march). The station ring is generated in JS rather than by a circle layer, whose radius is in screen pixels and would swell and shrink with the zoom instead of marking a fixed patch of ocean.
 
 ### Controller — `unitsController.js`
 
-A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `pendingOrders`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | move | attack`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
+A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `pendingOrders`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
+
+Units are a **visual representation of what the events say**, not a wargame the player plays. There is no manual movement and no manual combat: the AI owns where forces go and what happens when they meet, and the engine (`runtime/unitMotion.js`, via `advanceStandingOrders`) advances standing orders realistically every turn. What the player keeps is stating intent.
 
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
 | `deployUnit` | Add a `pending` unit (translucent) | placed locally | queues a "Deploy request" order; revert = remove |
-| `moveUnitTo` | Within era/type leash → move + `moving`; beyond `moveLeashKm` → stay put, `moving`, standing order created | snaps or holds | queues Move / Long-range order (+ `world.pendingUnitOrders` entry beyond leash) |
-| `attackWith` | In `engagementRangeKm` → `resolveClash` (seeded, instant); out of range → approach order, standing order created | strength/positions update, losers filtered out | queues Attack order (`regionTransfer` hint) (+ `world.pendingUnitOrders` entry out of range) |
-| `attackFeature` | Attack a city/marker; no local clash — positional only | closes on objective, reads `engaged` | queues assault order (`markerOps`/`regionTransfer` hints) (+ `world.pendingUnitOrders` entry out of range) |
+| `requestUnitOrders` | None — intent only | none | queues a free-text order naming the unit |
+| `removeUnit` | Disband one of your own | removed locally | none |
 
-Player deploy is purely local; move/attack write to `world.units` immediately **and** queue a machine-readable `action` (via `queueOrder`) so the AI honours/contests them on the next time-jump. `queueOrder` records a `unitRevert` so deleting the queued action before the jump undoes the on-map change (#368) — now including `pendingOrderId`, so deleting the action also cancels the standing order it created. Combat maths (`resolveClash`, `distanceKm`, `engagementRangeKm`, `moveLeashKm`) live in `unitCombat.js`. `busy` suppresses the poll from clobbering an in-flight commit.
+`queueOrder` records a `unitRevert` so deleting the queued action before the jump undoes the on-map change (#368). `revertUnitOrder` keeps its `lng`/`lat`/`status`/`pendingOrderId` branches even though nothing produces them any more: actions queued by the old manual-order UI are still sitting in existing saves, and deleting one has to undo everything it did. `busy` suppresses the poll from clobbering an in-flight commit.
 
-**Standing orders beyond a single leash** (`world.pendingUnitOrders`, `{id,unitId,kind,toLng,toLat,targetId,targetLabel,note,issuedAt,issuedRound}`) exist because the one-shot queued `action` above does not survive a jump: `clearActions` wipes the WHOLE actions queue after a single jump regardless of whether a multi-turn march actually finished. `setPendingOrder` (`unitsController.js`) upserts/replaces a unit's order (a fresh order or an in-leash move supersedes a prior one); `gameState.js`'s `pruneSatisfiedUnitOrders` drops an order once its unit is within ~60km of the destination or no longer exists, running on **every** `normalizeWorldState` call so it self-heals with no separate cleanup pass. `promptContext.js`'s `buildPendingUnitOrdersText` re-surfaces every still-outstanding order to the AI each jump (`[Standing Unit Orders]` in `gameplay.js`), independent of `clearActions`.
+**Standing orders** (`world.pendingUnitOrders`, `{id,unitId,kind,toLng,toLat,radiusKm,untilRound,...}`) are now the engine's, not the player's. `applyUnitOpBatch` mints a `move` order when an AI move exceeds what the unit could travel in the elapsed time (so the journey continues by itself next turn) and a `patrol` order when a unit takes `posture: "patrol"` (so a fleet works its station for `PATROL_ORDER_ROUNDS` turns for zero tokens). They exist outside the actions queue because `clearActions` wipes that queue wholesale after a single jump regardless of whether a multi-turn march finished. `gameState.js`'s `pruneSatisfiedUnitOrders` drops an order once its unit is within ~60km of the destination or no longer exists, running on **every** `normalizeWorldState` call — with one exception that matters: a `patrol` order is exempt from the arrival test, because its destination *is* the station its unit sits on and the test would otherwise delete every patrol the instant it was created. `promptContext.js`'s `buildPendingUnitOrdersText` surfaces outstanding orders to the AI each jump as *context only* (`[Standing Unit Orders]` in `gameplay.js`); emitting a move for one would advance the unit twice.
 
 ### Interaction dispatch — `Nations.jsx` `handleRegionClick`
 
-The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMode()`:
+The map's single `click` handler routes by `getInteractionMode()`:
 
-- **deploy/move/attack modes** intercept the click as a *target* (`deployUnit` / `moveUnitTo` / `attackWith` or `attackFeature`), then `clearInteractionMode()`.
+- **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`. It is the only such mode left.
 - **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`/`cities-labels`) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
 
-The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system).
+The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system). It replays through `applyEventImpactsToWorld` with the same `motion` the persisted turn used, or the reveal would show units in positions the saved world never had.
 
 ---
 
