@@ -214,10 +214,19 @@ const unitSchema = {
     ownerCode: nonEmptyTextSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
     strength: {
       type: "integer",
-      description: "Unit strength from 1 to 1000.",
+      description:
+        "How much of its ESTABLISHED strength this formation actually has, as a "
+        + "percentage. 100 is a fresh full-strength formation; 60 is worn down; 20 is "
+        + "a shell. This is not a power score - put the formation's real size in "
+        + "`composition`.",
       minimum: 1,
-      maximum: 1000,
+      maximum: 100,
     },
+    composition: nonEmptyTextSchema(
+      "What the formation is actually made of, in a few words - \"1 aircraft carrier, "
+      + "2 frigates\", \"3 tank regiments\", \"two rifle divisions\". A counter with no "
+      + "composition tells the player nothing.",
+    ),
     lng: {
       type: "number",
       description: "Longitude of the unit location.",
@@ -236,9 +245,20 @@ const unitSchema = {
       description: "Optional unit status.",
       enum: ["idle", "moving", "engaged", "pending"],
     },
-    note: textSchema("Brief operational note."),
+    posture: {
+      type: "string",
+      description:
+        "What this formation is DOING, which is how the player reads intent off the "
+        + "map. \"patrol\" is special: the engine keeps a patrolling unit working its "
+        + "station on its own, turn after turn, so state it once and leave it.",
+      enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing"],
+    },
+    note: textSchema(
+      "One short present-tense sentence on what this formation is doing and where - "
+      + "\"Patrolling the North Atlantic approaches\". Shown to the player verbatim.",
+    ),
   },
-  required: ["name", "type", "ownerCode", "strength", "lng", "lat"],
+  required: ["name", "type", "ownerCode", "strength", "composition", "lng", "lat"],
   additionalProperties: false,
 };
 
@@ -269,6 +289,13 @@ const unitOpSchema = {
         toLng: { type: "number", minimum: -180, maximum: 180 },
         toLat: { type: "number", minimum: -90, maximum: 90 },
         regionId: textSchema("Destination region identifier, when known."),
+        posture: {
+          type: "string",
+          description:
+            "Re-state what the formation is doing if the move changes it - a force "
+            + "that was in transit and is now massing on a border, say.",
+          enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing"],
+        },
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "toLng", "toLat"],
@@ -279,7 +306,12 @@ const unitOpSchema = {
       properties: {
         op: { type: "string", enum: ["strength"] },
         unitId: nonEmptyTextSchema("Existing unit identifier."),
-        strength: { type: "integer", minimum: 0, maximum: 1000 },
+        strength: {
+          type: "integer",
+          description: "The formation's remaining percentage of established strength. 0 destroys it.",
+          minimum: 0,
+          maximum: 100,
+        },
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "strength"],
@@ -580,9 +612,15 @@ export const PREGAME_HISTORY_SCHEMA = {
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
 // may send a short note to their inbox. `chat: null` means nobody plausibly
 // would right now - silence is the common, correct answer.
+// The between-rounds world pulse. Still named idleDiplomacy because the task KEY
+// is stored in every game's frozen prompt pack and every scenario's prompts.json —
+// renaming it would orphan the player's own edits under a key nothing reads.
 export const IDLE_DIPLOMACY_SCHEMA = {
   type: "object",
-  description: "At most one short unprompted diplomatic note to the player, or null for silence.",
+  description:
+    "A quiet moment between rounds: at most one short unprompted diplomatic note, "
+    + "and at most two small unit movements that follow from the world as it already "
+    + "stands. All of it is optional, and silence is a normal answer.",
   properties: {
     chat: {
       anyOf: [
@@ -590,7 +628,33 @@ export const IDLE_DIPLOMACY_SCHEMA = {
         createdChatSchema,
       ],
     },
+    unitOps: {
+      type: "array",
+      description:
+        "At most two unit operations. Prefer moving or re-posturing an EXISTING unit "
+        + "over spawning a new one. An empty array is the normal answer.",
+      maxItems: 2,
+      items: unitOpSchema,
+    },
+    sighting: {
+      anyOf: [
+        { type: "null", description: "Nothing worth reporting to the player." },
+        {
+          type: "object",
+          description:
+            "One short intelligence report, ONLY when the movement is inside or near "
+            + "the player's sphere and their services would plausibly have seen it.",
+          properties: {
+            title: nonEmptyTextSchema("Short headline, e.g. \"Naval build-up off Murmansk\"."),
+            description: nonEmptyTextSchema("One or two sentences in the voice of an intelligence report."),
+          },
+          required: ["title", "description"],
+          additionalProperties: false,
+        },
+      ],
+    },
   },
+  // Only chat is required, so an answer in the old shape still validates.
   required: ["chat"],
   additionalProperties: false,
 };
@@ -819,7 +883,9 @@ export const COUNTRY_STAT_SHEET_TOOL = makeTool(
 
 export const IDLE_DIPLOMACY_TOOL = makeTool(
   "submit_idle_diplomacy",
-  "Submit at most one short unprompted diplomatic note to the player, or null for silence.",
+  "Submit the quiet-moment world pulse: at most one short unprompted diplomatic note, "
+  + "at most two small unit movements, and at most one intelligence sighting. Every part "
+  + "is optional and silence is a normal answer.",
   IDLE_DIPLOMACY_SCHEMA,
 );
 
