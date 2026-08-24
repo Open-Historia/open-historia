@@ -303,10 +303,25 @@ const unwrapMimickedToolCall = (value, toolName) => {
     current = current[0];
   }
   if (!current || typeof current !== "object" || Array.isArray(current)) return value;
-  const args = current.parameters ?? current.arguments ?? current.input;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return value;
   const name = normalizeString(current.name);
   if (toolName && name && name !== toolName) return value;
+  // getGameplayTool returns null for tasks with no registered tool, so a name
+  // match can't always be demanded. When there is nothing to check against,
+  // require the wrapper to be NOTHING BUT an envelope — a real payload that
+  // happened to carry `name`/`parameters` would bring its own other fields
+  // along, and unwrapping it would throw the rest of the turn away.
+  if (!toolName || !name) {
+    const envelopeKeys = new Set(["name", "parameters", "arguments", "input"]);
+    if (Object.keys(current).some((key) => !envelopeKeys.has(key))) return value;
+  }
+  let args = current.parameters ?? current.arguments ?? current.input;
+  // The openai wire format these models are imitating carries `arguments` as a
+  // JSON *string*, not an object — which is exactly what a model reproducing
+  // that format from memory tends to write, so it is the likeliest shape here.
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { return value; }
+  }
+  if (!args || typeof args !== "object" || Array.isArray(args)) return value;
   return args;
 };
 
