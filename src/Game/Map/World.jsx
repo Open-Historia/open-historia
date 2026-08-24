@@ -54,6 +54,30 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
+// Terrain relief is dramatic from orbit and ruinous up close, and MapLibre takes
+// a single exaggeration number (no zoom expression), so it is retuned per frame
+// from this curve: [zoom, exaggeration], linearly interpolated, flat outside the
+// ends. The taper is set so the exaggerated relief stays a small fraction of the
+// camera's altitude at every zoom — see applyTerrainExaggeration.
+const TERRAIN_EXAGGERATION_STOPS = [
+  [4, 15],
+  [6, 9],
+  [8, 4],
+  [10, 1.6],
+  [12, 0.8],
+];
+
+const terrainExaggerationForZoom = (zoom) => {
+  const stops = TERRAIN_EXAGGERATION_STOPS;
+  if (!Number.isFinite(zoom) || zoom <= stops[0][0]) return stops[0][1];
+  for (let i = 1; i < stops.length; i += 1) {
+    const [z0, e0] = stops[i - 1];
+    const [z1, e1] = stops[i];
+    if (zoom <= z1) return e0 + ((e1 - e0) * (zoom - z0)) / (z1 - z0);
+  }
+  return stops[stops.length - 1][1];
+};
+
 const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
@@ -185,16 +209,41 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   );
   // Globe terrain is unsupported by MapLibre and can leave its shader cache invalid
   // when projections change. Keep the setting enabled and restore it on flat maps.
+  // Exaggeration is seeded for wherever the camera currently sits;
+  // applyTerrainExaggeration keeps it tracking the zoom from there.
   const terrain = useMemo(
     () =>
       terrainEnabled && !isGlobe && !customBg && !bgDeclared
         ? {
             source: "terrain-source",
-            exaggeration: 15,
+            exaggeration: terrainExaggerationForZoom(viewStateRef.current?.zoom ?? 3.5),
           }
         : null,
     [terrainEnabled, isGlobe, customBg, bgDeclared],
   );
+  // Retune the exaggeration as the camera comes in. A fixed 15x is what the
+  // whole-world view wants — at 12,000 km across, real relief is invisible —
+  // but the same 15x up close raises the Tibetan plateau 67 km and the Alps
+  // 60 km, well above the camera by z10, so the view ends up inside/under the
+  // mesh: the surface disappears (black) and clicks land nowhere, because
+  // queryRenderedFeatures unprojects through the terrain depth buffer and a
+  // displaced surface answers for the wrong lat/lng. Terrarium tiles carry
+  // bathymetry as well (a mid-Pacific z5 tile is negative across every pixel,
+  // down to -5,529 m), so 15x sank the open ocean into an 80 km pit whose
+  // walls no tile covers — the black patches at sea, and the reason zooming
+  // over water drifted (recalculateZoomAndCenter keeps the camera a fixed
+  // height above the point under the cursor, and that point was 60 km down).
+  const applyTerrainExaggeration = useCallback((zoom) => {
+    const activeTerrain = mapRef?.current?.getMap?.()?.terrain;
+    if (!activeTerrain) return;
+    const next = terrainExaggerationForZoom(zoom);
+    if (Math.abs(next - activeTerrain.exaggeration) < 0.02) return;
+    // Assigning is deliberate: Terrain reads .exaggeration live (both the
+    // vertex-shader uniform and getElevation), whereas map.setTerrain() would
+    // rebuild the terrain and its render-to-texture cache on every zoom tick.
+    activeTerrain.exaggeration = next;
+    mapRef.current.getMap().triggerRepaint?.();
+  }, [mapRef]);
   // Render at reduced pixel density when zoomed far out: the whole-world view
   // draws every region, border and label at once, and full native resolution
   // there spends frames on detail nobody can see at that scale. Hysteresis
@@ -213,16 +262,20 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const handleMove = useCallback(({ viewState }) => {
     viewStateRef.current = viewState;
     applyDynamicPixelRatio(viewState.zoom);
-  }, [applyDynamicPixelRatio]);
+    applyTerrainExaggeration(viewState.zoom);
+  }, [applyDynamicPixelRatio, applyTerrainExaggeration]);
   const handleIdle = useCallback(() => {
     // The soft ratio applies from the very first frame settled at world zoom —
     // not only after the player first moves the camera.
     applyDynamicPixelRatio(viewStateRef.current?.zoom ?? 0);
+    // Terrain can finish loading after the camera settled (or straight after a
+    // projection/style swap re-made it), so the curve is re-applied here too.
+    applyTerrainExaggeration(viewStateRef.current?.zoom ?? 3.5);
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
     setLoading(false);
-  }, [applyDynamicPixelRatio, onInitialIdle]);
+  }, [applyDynamicPixelRatio, applyTerrainExaggeration, onInitialIdle]);
   const handleLoading = useCallback(() => {
     setLoading(true);
     clearTimeout(loadTimerRef.current);
