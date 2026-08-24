@@ -627,16 +627,27 @@ const WorldMap = ({ isGlobe = false }) => {
     }
 
     dismissFeaturePopup();
-    // Custom (editor) regions render on top of the stock regions. On a map with its
-    // OWN drawn/generated geometry, query only the custom layers — a click on empty
-    // sea must resolve to nothing, not the leftover Earth country underneath. On a
-    // re-ownership map (stock GADM geometry), keep querying regions-fill: it IS the
-    // map, and its high-zoom hit-testing has no custom-layer equivalent.
-    const queryLayers = (hasDrawnGeometry
-      ? ["custom-regions-fill", "custom-regions-fill-far"]
-      : ["custom-regions-fill", "regions-fill"]
-    ).filter((id) => map.getLayer(id));
-    const features = map.queryRenderedFeatures(event.point, { layers: queryLayers });
+    // Custom (editor) regions render on top of the stock regions, and the query
+    // returns hits in render order, so a drawn region still wins over the tile
+    // beneath it. regions-fill is queried on EVERY map, drawn geometry or not:
+    // past z7 it is the only thing that hit-tests a GADM region at all
+    // (custom-regions-fill-far stops at maxzoom 7, and custom-regions-fill only
+    // matches author-drawn shapes), which is why regions on a mixed map — drawn
+    // shapes alongside real GADM ones — became unclickable once zoomed in.
+    const queryLayers = ["custom-regions-fill", "custom-regions-fill-far", "regions-fill"]
+      .filter((id) => map.getLayer(id));
+    const hits = map.queryRenderedFeatures(event.point, { layers: queryLayers });
+    // On a map with its OWN drawn/generated geometry the stock tiles are Earth
+    // left over underneath, so a click on fantasy sea must resolve to nothing
+    // rather than to whatever real country sits at that lat/lon. Keeping only
+    // tile hits the scenario actually knows about draws that line exactly: a
+    // GADM region this world contains stays clickable at every zoom, and one it
+    // doesn't stays inert. (ownerByRegionId holds every region of the world,
+    // unclaimed ones included, so an owner-less region is still a hit.)
+    const features = hasDrawnGeometry
+      ? hits.filter((hit) => hit.layer.id !== "regions-fill"
+        || ownerLookupRef.current.has(String(hit.properties?.GID_1 ?? "")))
+      : hits;
     if (!features.length) return;
 
     const props = features[0].properties ?? {};
