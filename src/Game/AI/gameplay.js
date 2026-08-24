@@ -1111,7 +1111,9 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
       // they never filter, truncate, reorder, or mutate model-visible context.
       logContextDiagnostics({
         attempt: outputAttempt,
+        helperTemplates: prompts.helpers,
         history,
+        promptTemplate,
         stage: "structured-request",
         systemPrompt,
         taskKey,

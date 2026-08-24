@@ -1143,6 +1143,10 @@ export const buildPromptContext = async (bundle, {
     targetDateReadable: formatDateReadable(target),
     unitsSummary: buildUnitsSummaryText(bundle.world),
     worldBeforeRoundOne: normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
+    // Compatibility alias for older/frozen prompt packs that referenced the pre-game
+    // briefing by its former variable name. Keep both names pointed at the same
+    // canonical save field so legacy campaigns do not silently lose their starting lore.
+    worldBeforeRoundOneText: normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
     worldSummary,
     worldSummaryNoCity: worldSummary,
   };

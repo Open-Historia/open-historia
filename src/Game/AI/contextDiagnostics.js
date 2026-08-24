@@ -1,9 +1,11 @@
 /*
  * OpenHistoria Phase 9 context diagnostics.
  *
- * Phase 9.4A diagnostics:
+ * Phase 9.5A diagnostics:
  * - Phase 9.3A focused bounded context remains ACTIVE for diplomaticReply;
- * - Phase 9.4A longitudinal attention is ACTIVE for jumpForward/autoJumpForward;
+ * - Phase 9.4A longitudinal attention remains ACTIVE for jumpForward/autoJumpForward;
+ * - Phase 9.5A audits which candidate variables the ACTUAL loaded/frozen task prompt
+ *   and current live runtime directives can demand, without changing prompt behavior;
  * - young campaigns still receive their complete consolidated history;
  * - once old history exceeds the 24k activation ceiling, the SAME 24k transport
  *   envelope becomes ~18k broad summary coverage + up to 6k canonical-event anchors;
@@ -204,6 +206,143 @@ const measureVariables = (variables) => Object.entries(
 })).sort((left, right) => right.chars - left.chars);
 
 const approximateTokens = (chars) => Math.ceil(Math.max(0, Number(chars) || 0) / 4);
+
+
+// ---------------------------------------------------------------------------
+// 9.5A actual task-variable demand audit (observational only)
+// ---------------------------------------------------------------------------
+// Campaigns can carry frozen/custom task + helper prompts, so demand must be derived
+// from the ACTUAL loaded prompt pack, never hard-coded from today's defaults alone.
+// The small live-runtime map below covers variables consumed by gameplay.js OUTSIDE
+// the task template itself (live directives appended after renderTemplate()).
+
+const TEMPLATE_PLACEHOLDER_PATTERN = /\$\{([^}]+)\}/g;
+
+const extractTemplatePlaceholderKeys = (template) => {
+  const keys = [];
+  const source = String(template ?? "");
+  for (const match of source.matchAll(TEMPLATE_PLACEHOLDER_PATTERN)) {
+    const key = clean(match?.[1]);
+    if (key) keys.push(key);
+  }
+  return [...new Set(keys)];
+};
+
+const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
+  actions: Object.freeze(["playerPolityReputationContext"]),
+  autoJumpForward: Object.freeze([
+    "playerPolity",
+    "canonicalWarContext",
+    "worldInitiativeContext",
+    "diplomaticContinuity",
+    "dateReadable",
+    "date",
+    "targetDateReadable",
+    "targetDate",
+    "playerPolityReputationContext",
+  ]),
+  catalystCreation: Object.freeze(["playerPolityReputationContext"]),
+  catalystExecutor: Object.freeze(["playerPolityReputationContext"]),
+  countryStatSheet: Object.freeze([
+    "statsTerritorialContext",
+    "statsTerritorialReferenceContext",
+    "statsPreviousContext",
+    "statsEconomicEvidenceContext",
+    "statsTerritorialPlan",
+  ]),
+  eventConsolidator: Object.freeze(["actionsToConsolidate"]),
+  gameMaster: Object.freeze(["territorialControlContext"]),
+  idleDiplomacy: Object.freeze([
+    "canonicalDiplomaticContext",
+    "idleDiplomacyBlockedParticipantSets",
+    "eventDiplomaticReactionContext",
+  ]),
+  jumpForward: Object.freeze([
+    "playerPolity",
+    "canonicalWarContext",
+    "worldInitiativeContext",
+    "diplomaticContinuity",
+    "dateReadable",
+    "date",
+    "targetDateReadable",
+    "targetDate",
+    "playerPolityReputationContext",
+  ]),
+  nextSpeaker: Object.freeze(["canonicalDiplomaticContext"]),
+  unitDirector: Object.freeze([
+    "unitDirectorUnits",
+    "unitDirectorCandidates",
+    "unitDirectorGameDate",
+    "unitDirectorRound",
+  ]),
+});
+
+const resolveTemplateVariableDemand = ({
+  helperTemplates = {},
+  promptTemplate = "",
+  taskKey = "",
+  variables = {},
+} = {}) => {
+  const helpers = helperTemplates && typeof helperTemplates === "object"
+    ? helperTemplates
+    : {};
+  const helperKeys = new Set();
+  const templateKeys = new Set(extractTemplatePlaceholderKeys(promptTemplate));
+  const variableKeys = new Set();
+  const visiting = new Set();
+
+  const visit = (key) => {
+    const normalized = clean(key);
+    if (!normalized) return;
+    if (!Object.prototype.hasOwnProperty.call(helpers, normalized)) {
+      variableKeys.add(normalized);
+      return;
+    }
+    if (visiting.has(normalized)) return;
+    visiting.add(normalized);
+    helperKeys.add(normalized);
+    for (const nested of extractTemplatePlaceholderKeys(helpers[normalized])) {
+      visit(nested);
+    }
+    visiting.delete(normalized);
+  };
+
+  for (const key of templateKeys) visit(key);
+
+  const liveKeys = new Set(LIVE_RUNTIME_VARIABLE_KEYS[clean(taskKey)] || []);
+  const requiredKeys = new Set([...variableKeys, ...liveKeys]);
+  const constructedKeys = Object.keys(variables && typeof variables === "object" ? variables : {});
+  const constructedKeySet = new Set(constructedKeys);
+  const missingKeys = [...requiredKeys].filter((key) => !constructedKeySet.has(key)).sort();
+  const sizes = measureVariables(variables);
+  const requiredSizes = sizes.filter((entry) => requiredKeys.has(entry.key));
+  const unusedSizes = sizes.filter((entry) => !requiredKeys.has(entry.key));
+  const requiredCandidateChars = requiredSizes.reduce((sum, entry) => sum + entry.chars, 0);
+  const unusedCandidateChars = unusedSizes.reduce((sum, entry) => sum + entry.chars, 0);
+  const totalCandidateChars = requiredCandidateChars + unusedCandidateChars;
+
+  return {
+    templatePlaceholderKeys: [...templateKeys].sort(),
+    helperKeys: [...helperKeys].sort(),
+    templateVariableKeys: [...variableKeys].sort(),
+    liveRuntimeVariableKeys: [...liveKeys].sort(),
+    requiredVariableKeys: [...requiredKeys].sort(),
+    missingRequiredVariableKeys: missingKeys,
+    constructedVariableCount: constructedKeys.length,
+    requiredVariableCount: requiredKeys.size,
+    unusedConstructedVariableCount: unusedSizes.length,
+    requiredCandidateChars,
+    unusedCandidateChars,
+    totalCandidateChars,
+    unusedCandidatePercent: totalCandidateChars > 0
+      ? (unusedCandidateChars / totalCandidateChars) * 100
+      : 0,
+    largestUnusedVariables: unusedSizes.slice(0, 20),
+    note:
+      "Candidate-char totals measure materialized variable payload, not CPU time. " +
+      "Aliases can share one computed string and some builders have different computational costs.",
+  };
+};
 
 const appendDiagnosticHistory = (report) => {
   try {
@@ -576,7 +715,7 @@ export const buildShadowAttentionPreview = ({
   });
 
   return {
-    version: "9.4A-shadow",
+    version: "9.5A-shadow-demand-audit",
     profileKey: profile.key,
     exact,
     bounded,
@@ -599,7 +738,9 @@ export const buildShadowAttentionPreview = ({
 
 export const logContextDiagnostics = ({
   attempt = 1,
+  helperTemplates = {},
   history = [],
+  promptTemplate = "",
   shadowMetadata = {},
   shadowSourceVariables = null,
   shadowVariables = {},
@@ -613,6 +754,12 @@ export const logContextDiagnostics = ({
 
   const profile = resolveContextProfile(taskKey);
   const variableSizes = measureVariables(variables);
+  const demand = resolveTemplateVariableDemand({
+    helperTemplates,
+    promptTemplate,
+    taskKey,
+    variables,
+  });
   const systemPromptChars = stringifyForMeasurement(systemPrompt).length;
   const historyChars = measureHistoryChars(history);
   const userMessageChars = stringifyForMeasurement(userMessage).length;
@@ -640,6 +787,7 @@ export const logContextDiagnostics = ({
     approximateInputTokens: approximateTokens(totalInputChars),
     variableChars: variableSizes.reduce((sum, entry) => sum + entry.chars, 0),
     largestVariables: variableSizes.slice(0, 16),
+    demand,
     shadow,
   };
 
@@ -648,7 +796,7 @@ export const logContextDiagnostics = ({
   try {
     const stageLabel = report.stage.replace(/-/g, " ").toUpperCase();
     console.groupCollapsed(
-      `[context 9.4A] ${report.taskKey} [${stageLabel}] · ${report.profileLabel} · ` +
+      `[context 9.5A] ${report.taskKey} [${stageLabel}] · ${report.profileLabel} · ` +
       `${report.totalInputChars.toLocaleString()} chars (~${report.approximateInputTokens.toLocaleString()} tokens)`,
     );
     const productionWorldHistory = ["jumpForward", "autoJumpForward"].includes(report.taskKey);
@@ -668,6 +816,48 @@ export const logContextDiagnostics = ({
       userMessage: { chars: report.userMessageChars, approxTokens: approximateTokens(report.userMessageChars) },
       renderedVariables: { chars: report.variableChars, approxTokens: approximateTokens(report.variableChars) },
     });
+
+    if (promptTemplate) {
+      console.log(
+        "Phase 9.5A ACTUAL prompt-pack demand audit: derives placeholders from the loaded/frozen task + helper templates, " +
+        "then adds variables consumed by current live runtime directives. OBSERVATIONAL ONLY; no context is skipped yet.",
+      );
+      console.table({
+        constructedCandidateVariables: {
+          count: demand.constructedVariableCount,
+          chars: demand.totalCandidateChars,
+          approxTokens: approximateTokens(demand.totalCandidateChars),
+        },
+        demandedCandidateVariables: {
+          count: demand.requiredVariableCount,
+          chars: demand.requiredCandidateChars,
+          approxTokens: approximateTokens(demand.requiredCandidateChars),
+        },
+        notDemandedByThisTask: {
+          count: demand.unusedConstructedVariableCount,
+          chars: demand.unusedCandidateChars,
+          approxTokens: approximateTokens(demand.unusedCandidateChars),
+        },
+      });
+      console.log("Actual task template placeholders:", demand.templatePlaceholderKeys);
+      console.log("Actual helper keys reached:", demand.helperKeys);
+      console.log("Underlying template variable demand:", demand.templateVariableKeys);
+      console.log("Known live-runtime variable demand:", demand.liveRuntimeVariableKeys);
+      console.log("Combined required variable keys:", demand.requiredVariableKeys);
+      if (demand.missingRequiredVariableKeys.length > 0) {
+        console.warn(
+          "9.5A demand audit found required keys missing from the constructed variable object:",
+          demand.missingRequiredVariableKeys,
+        );
+      }
+      if (demand.largestUnusedVariables.length > 0) {
+        console.log(
+          `Largest candidate variables NOT demanded by this task (${demand.unusedCandidatePercent.toFixed(1)}% of candidate chars; ` +
+          "candidate chars are not a CPU-time estimate):",
+        );
+        console.table(demand.largestUnusedVariables);
+      }
+    }
 
     if (shadow.exact.length > 0 || shadow.bounded.length > 0) {
       const memoryLabel = report.taskKey === "diplomaticReply"
