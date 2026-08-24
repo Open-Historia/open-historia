@@ -8,9 +8,6 @@ import {
   getInteractionMode,
   clearInteractionMode,
   deployUnit,
-  moveUnitTo,
-  attackWith,
-  attackFeature,
 } from "./unitsController.js";
 import {
   JSON_URLS,
@@ -602,28 +599,11 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const mode = getInteractionMode();
 
-    // Active troop command modes intercept the click as a target, not a selection.
+    // Deploy is the only mode that intercepts a click as a target rather than a
+    // selection. Manual movement and attacks are gone: units depict what the
+    // events say, and the AI owns where forces go and what happens when they meet.
     if (mode.kind === "deploy") {
       deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
-      clearInteractionMode();
-      return;
-    }
-    if (mode.kind === "move") {
-      moveUnitTo(mode.unitId, event.lngLat.lng, event.lngLat.lat);
-      clearInteractionMode();
-      return;
-    }
-    if (mode.kind === "attack") {
-      // An enemy unit under the cursor is the target; otherwise a city or
-      // structure is — troops can be directed against objectives, not just
-      // other troops.
-      const target = unitsAt();
-      const feature = target.length ? null : featureAt();
-      if (target.length) {
-        attackWith(mode.unitId, target[0].properties.id);
-      } else if (feature) {
-        attackFeature(mode.unitId, feature);
-      }
       clearInteractionMode();
       return;
     }
