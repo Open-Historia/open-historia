@@ -50,14 +50,33 @@ const extractFencedJson = (text, lang) => {
     return { rest: text.replace(regex, ""), json };
 };
 
+const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
+
 const parseMessage = (rawText) => {
     const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
-    const { rest, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
+    const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
+    const { rest, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
     const messageDrafts = Array.isArray(draftsRaw)
         ? draftsRaw.filter((draft) => draft && String(draft.country ?? "").trim() && String(draft.text ?? "").trim())
         : null;
-    return { text: rest.trim(), chartConfig, actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null, messageDrafts };
+    // A deployment the advisor is recommending, ready to place with one click.
+    // Filtered hard: a button that places a unit somewhere unusable is worse
+    // than no button, so anything missing a real type or real coordinates goes.
+    const deployments = Array.isArray(deployRaw)
+        ? deployRaw.filter((entry) => entry
+            && UNIT_TYPES_ALLOWED.has(String(entry.type ?? "").toLowerCase())
+            && String(entry.name ?? "").trim()
+            && Number.isFinite(Number(entry.lng)) && Number.isFinite(Number(entry.lat))
+            && !(Number(entry.lng) === 0 && Number(entry.lat) === 0))
+        : null;
+    return {
+        text: rest.trim(),
+        chartConfig,
+        actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
+        messageDrafts,
+        deployments: deployments && deployments.length ? deployments : null,
+    };
 };
 
 // Applies the advisor's ```actions proposal to the real queue (readActionsState/
@@ -191,6 +210,42 @@ const AdvisorDraftSend = ({ draft, sent, onSend }) => {
         </button>
         {status === "error" && <div style={{ fontSize: "0.7rem", color: "rgba(248,113,113,0.85)", marginTop: "0.3rem" }}>{error}</div>}
         </div>
+    );
+};
+
+// One recommended deployment, placed with a click. Deliberately routed through
+// the SAME deployUnit the Forces panel calls, so a unit the advisor places and
+// one the player places by hand are indistinguishable to the engine: both land
+// as a translucent pending unit with a queued order for the AI to adjudicate.
+const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
+    const [status, setStatus] = useState(placed ? "placed" : "idle");
+
+    useEffect(() => { if (placed) setStatus("placed"); }, [placed]);
+
+    const handleClick = async () => {
+        if (status !== "idle") return;
+        setStatus("placing");
+        const result = await onPlace();
+        setStatus(result?.ok ? "placed" : "idle");
+    };
+
+    const busy = status !== "idle";
+    return (
+        <button type="button" onClick={handleClick} disabled={busy} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(139,92,246,0.16)",
+            border: `1px solid ${status === "placed" ? "rgba(52,211,153,0.4)" : "rgba(139,92,246,0.45)"}`,
+            borderRadius: "8px",
+            color: status === "placed" ? "rgba(167,243,208,0.95)" : "rgba(216,196,255,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+        }}>
+        {status === "placed"
+            ? `✓ ${deployment.name} placed`
+            : status === "placing"
+                ? `Placing ${deployment.name}…`
+                : `📍 Place ${deployment.name} here`}
+        </button>
     );
 };
 
@@ -354,10 +409,10 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onSendDraft }) => {
-    const { text, chartConfig, messageDrafts } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onSendDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
-        : { text: msg.text, chartConfig: null, messageDrafts: null };
+        : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -394,6 +449,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             ))}
             </div>
         )}
+        {deployments && deployments.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {deployments.map((deployment, deployIndex) => (
+                <AdvisorDeployPlace
+                key={deployIndex}
+                deployment={deployment}
+                placed={!!msg.placedDeployments?.includes(deployIndex)}
+                onPlace={() => onPlaceDeployment(msgIndex, deployIndex, deployment)}
+                />
+            ))}
+            </div>
+        )}
         </div>
         {msg.time && msg.role !== "user" && (
             <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
@@ -407,7 +474,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onSendDraft, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -416,7 +483,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     )}
 
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onSendDraft={onSendDraft} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -431,7 +498,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     </div>
 ));
 
-const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, requestedPrompt, onConsumeRequest }) => {
+const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -633,6 +700,45 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         }
     }, []);
 
+    // Places one deployment the advisor recommended, through the very same
+    // deployUnit the Forces panel uses — so it lands as a pending unit with a
+    // queued order for the AI to adjudicate, exactly like a hand-placed one, and
+    // then flies the map there so the player sees it. Marked on the ADVISOR
+    // message (not local state) so the button stays "✓ placed" across a reload.
+    // Stable reference, for the same memoization reason as handleSendDraft.
+    const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
+        try {
+            const { deployUnit } = await import("../Map/unitsController.js");
+            await deployUnit({
+                type: String(deployment.type).toLowerCase(),
+                strength: Math.max(1, Math.min(100, Number(deployment.strength) || 100)),
+                name: String(deployment.name).trim(),
+                composition: String(deployment.composition ?? "").trim(),
+                lng: Number(deployment.lng),
+                lat: Number(deployment.lat),
+            });
+            mapRef?.current?.getMap?.()?.flyTo?.({
+                center: [Number(deployment.lng), Number(deployment.lat)],
+                zoom: 4.5,
+            });
+            setMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                next[msgIndex] = {
+                    ...target,
+                    placedDeployments: [...(target.placedDeployments || []), deployIndex],
+                };
+                saveMessages(next);
+                return next;
+            });
+            return { ok: true };
+        } catch (err) {
+            console.warn("[advisor] could not place the recommended deployment:", err);
+            return { ok: false };
+        }
+    }, [mapRef]);
+
     if (!hasOpened) return null;
 
     return (
@@ -719,6 +825,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize, onOpenActions, 
         chatDir={chatDir}
         onOpenActions={onOpenActions}
         onSendDraft={handleSendDraft}
+        onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}
         onScroll={handleMessagesScroll}

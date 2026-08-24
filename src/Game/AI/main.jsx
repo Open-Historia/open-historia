@@ -1207,6 +1207,28 @@ Example:
 [{"country":"France","text":"Your Excellency, I write to propose a mutual non-aggression pact between our nations..."}]
 \`\`\``;
 
+// The advisor has always been handed the whole world's unit list, but under a
+// heading reading "Player polity, X, details: ... Military Units:" — so it read
+// them as the player's own army and never used them to answer a question about
+// anyone else. defaultPrompts.json now frames it properly for new games; this is
+// what reaches the campaigns whose advisor prompt is already frozen.
+const buildAdvisorForcesDirective = (forcePosture) => `[Forces on the Map]
+This is EVERY power's forces, not just the player's — what your services can see of the world's armies, fleets and squadrons, including where each one is, what it is doing, whose territory it is in or how far from whose border, and what it is already under orders to do. Use it whenever the player asks about anyone's military position, their own or a rival's. Answer like an intelligence chief: name the formations, say what they are doing and how close they are to what, and say plainly what you think it means. A formation marked unconfirmed has been detected without a known line of support — treat it as real, but say confidence is limited.
+${forcePosture}`;
+
+// Lets the advisor turn "put two divisions on the eastern frontier" into a real
+// button that places the unit, instead of the player reading coordinates off the
+// screen and clicking the map themselves. Appended at call time for the same
+// frozen-prompt reason as the two directives above.
+const ADVISOR_DEPLOY_DIRECTIVE = `[Placing Forces]
+The player can place their own formations on the map; they cannot move or fight them, so never offer to march or attack with anything. When you specifically recommend placing a NEW formation of theirs somewhere, and you know where, append a fenced \`\`\`deploy block after your normal prose (never instead of it) containing a JSON array with one entry per recommended deployment: {"type":"infantry|armor|air|naval|artillery|garrison","name":"<what to call it>","composition":"<what it is made of, e.g. 2 frigates>","strength":<1-100, percent of established strength>,"lng":<real longitude>,"lat":<real latitude>}.
+Use real coordinates for the place you are actually recommending — 0,0 is open ocean and is never valid. Omit the block entirely unless you are recommending a specific placement at a specific place; most replies need none, and a general discussion of strategy is not a deployment. Anything the player places is a REQUEST: the simulation confirms, repositions or rejects it, so say so rather than promising it will stand.
+
+Example:
+\`\`\`deploy
+[{"type":"armor","name":"3rd Guards Division","composition":"2 tank regiments","strength":100,"lng":30.52,"lat":50.45}]
+\`\`\``;
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1229,7 +1251,7 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}`;
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
