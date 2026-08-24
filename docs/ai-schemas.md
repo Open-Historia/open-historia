@@ -123,10 +123,10 @@ Not a single object: an `anyOf` of four shapes discriminated by `op`. Each branc
 |---|---|---|
 | `spawn` | `op`, `unit` | full `unitSchema` object + optional top-level `note` |
 | `move` | `op`, `unitId`, `toLng`, `toLat` | + optional `regionId`, `note` |
-| `strength` | `op`, `unitId`, `strength` | `strength` integer 0–1000 |
+| `strength` | `op`, `unitId`, `strength` | `strength` integer 0–100 (percent of established strength) |
 | `remove` | `op`, `unitId` | + optional `note` |
 
-`unitSchema` (`:136`) fields: `id`, `name`* (nonempty), `type`* (enum: `infantry|armor|air|naval|artillery|garrison`), `ownerCode`* (nonempty), `strength`* (integer 1–1000), `lng`* (−180..180), `lat`* (−90..90), `regionId`, `status` (enum `idle|moving|engaged|pending`), `note`. (\* = required.)
+`unitSchema` fields: `id`, `name`* (nonempty), `type`* (enum: `infantry|armor|air|naval|artillery|garrison`), `ownerCode`* (nonempty), `strength`* (integer 1–100, **percent of established strength**), `composition`* (nonempty — the order of battle, "1 aircraft carrier, 2 frigates"), `lng`* (−180..180), `lat`* (−90..90), `regionId`, `status` (enum `idle|moving|engaged|pending`), `posture` (enum `holding|massing|patrol|transit|exercise|blockade|withdrawing`), `note` (one present-tense sentence, shown to the player verbatim). (\* = required.) `covert` is **not** in the schema: it is engine-assigned, or the model would claim it whenever convenient. The `move` op also accepts `posture`.
 
 > Previously `spawn` had no top-level `note` (only `move`/`strength`/`remove` did), so a model that reached for `note` out of habit on a spawn op — three of the four branches take it — failed **every** `anyOf` branch at once: "note is not allowed" against `spawn`, "unitId is required" against the other three. Since this is `additionalProperties: false` per branch, that one stray field on one op rejected the WHOLE turn's structured output and forced a fallback simulation. Fixed by declaring the field on `spawn` too (it's redundant with `unit.note` but harmless).
 

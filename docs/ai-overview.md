@@ -116,7 +116,7 @@ UI control (e.g. "Jump forward", GM console, "Suggest actions")
   → applySimulationResult() / applyEventImpactsToWorld() → writeWorldState/… + rollback snapshot
 ```
 
-Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` (`gameplay.js:628`) — a busy lock so the idle‑diplomacy drip never writes chat state mid‑jump.
+Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` — a busy lock so the idle world pulse never writes chat or world state mid-jump. The pulse re-checks it at entry, after the model returns, and again immediately before each write.
 
 ### B. Free‑form chat (advisor / diplomacy)
 
@@ -200,7 +200,7 @@ So `maxTokens` is a **per‑response output ceiling only for providers that take
 | `catalystSummary` | `submit_catalyst_summary` | (within catalyst resolution, `:1775`) | Final event from a resolved catalyst. |
 | `gameMaster` | `submit_game_master` | `applyGameMasterCommand` (`:1949`) | GM console: apply free‑text world/map edits. |
 | `countryStatSheet` | `submit_country_stat_sheet` | `generateCountryStatSheet` / `generateCountryStats` (`:1580`, `:1551`) | National statistics sheet. |
-| `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` (`:2128`) | Optional unprompted diplomatic note. |
+| `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` / `maybeRunIdlePulse` | The between-rounds world pulse: an optional unprompted diplomatic note, up to two unit ops, and an optional intel sighting. |
 | `pregameHistory` | `submit_pregame_history` | `maybeGeneratePregameHistory` (`:2050`) | Backstory events before the start date. |
 
 ---

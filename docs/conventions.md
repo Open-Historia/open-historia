@@ -198,6 +198,18 @@ Tests use the **built-in Node test runner** (`node --test`) with `node:assert/st
 | `server/security.test.js` | Path containment, the CSRF/origin guard, HTTP range parsing, the hub host allowlist (`server/security.js`). |
 | `server/ownerMigration.test.js` | The owner-code → owner-name resolver, with fixtures transcribed from real shipped scenario data (`server/ownerMigration.js`). |
 
+`src/` also carries tests, which `npm test`'s glob does **not** pick up — run them directly:
+
+```bash
+node --test src/runtime/unitMotion.test.js src/Game/AI/forcePosture.test.js src/Game/GameUI/eventFocus.test.js
+# these three need no node_modules at all
+
+npm ci && node --test src/runtime/*.test.js src/Game/AI/*.test.js
+# the rest reach gameState.js -> assets.js -> maplibre-gl
+```
+
+Keeping the pure math in an **import-free** module (`src/runtime/unitMotion.js`, `src/Game/GameUI/eventFocus.js`, `src/Game/AI/forcePosture.js`) is what makes those first three runnable in a bare checkout. It is worth preserving when adding to them.
+
 Convention when adding tests: colocate a `*.test.js` next to the module under `server/`, keep the tested functions **pure** so they need no server, and prefer real transcribed fixtures over invented ones (`server/ownerMigration.test.js:3-7`). The `server/**/*.test.js` glob picks them up automatically. The client (`src/`) has no automated test suite; render-path changes are verified by actually booting the app.
 
 ---
