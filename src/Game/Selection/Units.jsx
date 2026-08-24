@@ -340,26 +340,6 @@ const UnitPopup = () => {
               {TYPE_LABEL[unit.type] ?? unit.type} · {ownerName}
             </div>
           </div>
-          {/* From the player's side of the map a covert insertion and a force they
-              have only just noticed look identical, and that ambiguity is the point. */}
-          {unit.covert && (
-            <span
-              title="No confirmed line of support — assessed to have been operating in the area before it was detected."
-              style={{
-                background: "rgba(196,181,253,0.18)",
-                border: "1px solid rgba(196,181,253,0.5)",
-                borderRadius: "5px",
-                color: "rgba(221,214,254,0.95)",
-                fontSize: "9px",
-                fontWeight: 700,
-                padding: "2px 5px",
-                flexShrink: 0,
-                whiteSpace: "nowrap",
-              }}
-            >
-              Unconfirmed
-            </span>
-          )}
           <button
             onClick={() => _dismiss?.()}
             style={{
@@ -380,6 +360,29 @@ const UnitPopup = () => {
         </div>
 
         <div style={{ padding: "0 12px 10px" }}>
+          {/* Its own row rather than a header chip: squeezed in beside the name it
+              broke long ones mid-word ("Unidentifie / d / submarine").
+              From the player's side of the map a covert insertion and a force they
+              have only just noticed look identical, and that ambiguity is the point. */}
+          {unit.covert && (
+            <div
+              title="No confirmed line of support — assessed to have been operating in the area before it was detected."
+              style={{
+                display: "inline-block",
+                background: "rgba(196,181,253,0.18)",
+                border: "1px solid rgba(196,181,253,0.5)",
+                borderRadius: "5px",
+                color: "rgba(221,214,254,0.95)",
+                fontSize: "9px",
+                fontWeight: 700,
+                letterSpacing: "0.02em",
+                padding: "2px 6px",
+                marginBottom: "7px",
+              }}
+            >
+              Unconfirmed contact
+            </div>
+          )}
           {/* What it is doing, then what it is made of. A counter that says only
               "Naval · 78%" tells the player nothing they can act on. */}
           {unit.note && (
