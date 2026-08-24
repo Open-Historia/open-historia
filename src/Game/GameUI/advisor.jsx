@@ -46,8 +46,34 @@ const extractFencedJson = (text, lang) => {
     const match = text.match(regex);
     if (!match) return { rest: text, json: null };
     let json = null;
-    try { json = JSON.parse(match[1].trim()); } catch { json = null; }
+    try { json = JSON.parse(match[1].trim()); }
+    catch (err) { json = null; console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message); }
     return { rest: text.replace(regex, ""), json };
+};
+
+// Pulls each contiguous "> "-quoted block out of the reply text, in the order
+// it appears. Used to recover a drafted message's text positionally from the
+// ```senddraft JSON (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx) instead
+// of trusting the model to retype it into a JSON string field a second time —
+// that used to be how this worked, and an unescaped quote or a real line
+// break in the letter was enough to make the fence invalid JSON and silently
+// drop the button with no trace. A short "> " line still needs a match group
+// that can be empty (a bare "> " paragraph break inside a longer quote).
+const extractBlockquotes = (text) => {
+    const quotes = [];
+    let current = null;
+    for (const line of text.split("\n")) {
+        const match = line.match(/^>\s?(.*)$/);
+        if (match) {
+            current = current ?? [];
+            current.push(match[1]);
+        } else if (current !== null) {
+            quotes.push(current.join("\n").trim());
+            current = null;
+        }
+    }
+    if (current !== null) quotes.push(current.join("\n").trim());
+    return quotes.filter(Boolean);
 };
 
 const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
@@ -58,7 +84,23 @@ const parseMessage = (rawText) => {
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
     const { rest, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
     const messageDrafts = Array.isArray(draftsRaw)
-        ? draftsRaw.filter((draft) => draft && String(draft.country ?? "").trim() && String(draft.text ?? "").trim())
+        ? (() => {
+            // The blockquotes live in the prose that precedes the fence — read
+            // them out of `afterActions` (text as it stood right before the
+            // senddraft fence was stripped) and pair them up by position.
+            const blockquotes = extractBlockquotes(afterActions);
+            return draftsRaw
+                .map((draft, index) => {
+                    const country = draft && String(draft.country ?? "").trim();
+                    if (!country) return null;
+                    // A "text" field is still honored if present — older saved
+                    // messages have one, and it costs nothing to prefer an
+                    // explicit value over the positional guess.
+                    const text = String(draft?.text ?? "").trim() || blockquotes[index] || "";
+                    return text ? { country, text } : null;
+                })
+                .filter(Boolean);
+        })()
         : null;
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse

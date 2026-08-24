@@ -1198,13 +1198,23 @@ ${plannedActionsWithIds}`;
 // message instead of the player copy-pasting your blockquote into the
 // Diplomacy panel themselves. Appended at call time for the same frozen-prompt
 // reason as buildAdvisorActionsDirective above.
+//
+// Deliberately does NOT ask the model to retype the letter's text into the
+// JSON field — an earlier version did, and asking a model to duplicate
+// arbitrary prose verbatim inside a JSON string is exactly the kind of thing
+// that silently breaks: one unescaped quote (very likely in diplomatic prose)
+// or one real line break (very likely in a multi-paragraph letter) makes the
+// fence invalid JSON, which advisor.jsx's extractFencedJson discards without
+// a trace — the button just never appears, with nothing to explain why. The
+// JSON now carries only the country name, and advisor.jsx pulls the actual
+// text back out of the blockquote itself, positionally.
 const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
-Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do. Immediately after it, in ADDITION to your normal prose (never instead of it), append a fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message in this reply: {"country":"<the exact recipient polity name>","text":"<the message text, identical to the blockquote, no quotation marks or markdown>"}. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
+Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do, and quote nothing else in the reply that way. Immediately after all such blockquotes, in ADDITION to your normal prose (never instead of it), append a single fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, IN THE SAME ORDER their blockquotes appear above: {"country":"<the exact recipient polity name>"}. Do not repeat the message text in this block — do not include a "text" field — the blockquote itself is the message. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
 
 Example:
 > Your Excellency, I write to propose a mutual non-aggression pact between our nations...
 \`\`\`senddraft
-[{"country":"France","text":"Your Excellency, I write to propose a mutual non-aggression pact between our nations..."}]
+[{"country":"France"}]
 \`\`\``;
 
 // The advisor has always been handed the whole world's unit list, but under a
