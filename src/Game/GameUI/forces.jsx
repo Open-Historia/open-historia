@@ -29,10 +29,15 @@ const TYPE_GLYPH = {
   garrison: "🏰",
 };
 
+// Deploy is the only interaction mode left — units depict what the events say,
+// so movement and combat belong to the AI, not to the player's mouse.
+// Strength is a percentage of the formation's established strength, so the bands
+// are readable: near full, worn down, or a shell of itself.
+export const strengthColor = (strength) =>
+  strength > 60 ? "#4ade80" : strength > 25 ? "#fbbf24" : "#f87171";
+
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
-  move: "Click a destination to move the unit",
-  attack: "Click an enemy unit, a city, or a structure to attack",
 };
 
 const surface = {
@@ -71,11 +76,11 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
         {unit.name}
       </div>
       <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.55)" }}>
-        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unit.status}
+        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unit.posture || unit.status}
       </div>
     </div>
-    <span style={{ fontSize: "12px", fontWeight: 700, color: unit.strength > 600 ? "#4ade80" : unit.strength > 250 ? "#fbbf24" : "#f87171" }}>
-      {unit.strength}
+    <span style={{ fontSize: "12px", fontWeight: 700, color: strengthColor(unit.strength) }}>
+      {unit.strength}%
     </span>
   </button>
 );
@@ -92,6 +97,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   const [allowedTypes, setAllowedTypes] = useState(getAllowedUnitTypes());
   const [deployType, setDeployType] = useState("infantry");
   const [deployStrength, setDeployStrength] = useState(100);
+  const [deployComposition, setDeployComposition] = useState("");
   const [deployName, setDeployName] = useState("");
 
   useEffect(() => {
@@ -137,7 +143,13 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
     const name = deployName.trim() || `${TYPE_LABEL[deployType]} ${myUnits.length + 1}`;
     setInteractionMode({
       kind: "deploy",
-      params: { type: deployType, strength: Math.max(1, Math.min(1000, Number(deployStrength) || 100)), name },
+      params: {
+        type: deployType,
+        // Percent of established strength, not an abstract score.
+        strength: Math.max(1, Math.min(100, Number(deployStrength) || 100)),
+        name,
+        composition: deployComposition.trim(),
+      },
     });
     setOpen(false);
   };
@@ -222,10 +234,10 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               <input
                 type="number"
                 min={1}
-                max={1000}
+                max={100}
                 value={deployStrength}
                 onChange={(e) => setDeployStrength(e.target.value)}
-                title="Strength"
+                title="Strength, as a percentage of the formation's established strength"
                 style={{ width: "4rem", background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px" }}
               />
             </div>
@@ -234,6 +246,15 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               value={deployName}
               placeholder="Unit name (optional)"
               onChange={(e) => setDeployName(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px", marginBottom: "6px" }}
+            />
+            {/* What the formation actually IS. A counter that only says "Naval, 78%"
+                tells the player nothing; "1 aircraft carrier, 2 frigates" does. */}
+            <input
+              type="text"
+              value={deployComposition}
+              placeholder="Composition, e.g. 2 frigates (optional)"
+              onChange={(e) => setDeployComposition(e.target.value)}
               style={{ width: "100%", boxSizing: "border-box", background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px", marginBottom: "6px" }}
             />
             <button

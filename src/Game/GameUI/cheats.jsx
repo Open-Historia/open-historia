@@ -293,7 +293,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
                 style={{ ...buttonStyle, alignItems: "flex-start", flexDirection: "column", gap: "0.1rem", textAlign: "left" }}
                 >
                 <span style={{ fontWeight: 700 }}>⚔️ Manual force deployment</span>
-                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontWeight: 500 }}>Open the Forces panel to spawn, move, and command units by hand.</span>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontWeight: 500 }}>Open the Forces panel to place your own units. Where forces go, and what happens when they meet, is the simulation's to decide.</span>
                 </button>
             )}
             {TOOLS.map((entry) => (
