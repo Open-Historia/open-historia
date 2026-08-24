@@ -78,30 +78,37 @@ const extractBlockquotes = (text) => {
 
 const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
 
+// Pairs each ```senddraft entry with the blockquote holding its actual text.
+// `sourceText` is the reply as it stood right before the senddraft fence was
+// stripped, so the drafted letters are the LAST blockquotes in it — the
+// directive puts the fence immediately after them. Aligning from the end
+// rather than from index 0 is what makes that safe: the advisor also quotes
+// the player (or its own earlier line) mid-reply, and pairing forwards would
+// hand a draft the wrong body — silently sending the wrong letter to a live
+// diplomacy thread, which is worse than dropping the button.
+const buildMessageDrafts = (draftsRaw, sourceText) => {
+    const allQuotes = extractBlockquotes(sourceText);
+    const blockquotes = allQuotes.length > draftsRaw.length
+        ? allQuotes.slice(-draftsRaw.length)
+        : allQuotes;
+    return draftsRaw
+        .map((draft, index) => {
+            const country = draft && String(draft.country ?? "").trim();
+            if (!country) return null;
+            // A "text" field is still honored if present — older saved messages
+            // have one, and an explicit value beats the positional guess.
+            const text = String(draft?.text ?? "").trim() || blockquotes[index] || "";
+            return text ? { country, text } : null;
+        })
+        .filter(Boolean);
+};
+
 const parseMessage = (rawText) => {
     const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
     const { rest, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
-    const messageDrafts = Array.isArray(draftsRaw)
-        ? (() => {
-            // The blockquotes live in the prose that precedes the fence — read
-            // them out of `afterActions` (text as it stood right before the
-            // senddraft fence was stripped) and pair them up by position.
-            const blockquotes = extractBlockquotes(afterActions);
-            return draftsRaw
-                .map((draft, index) => {
-                    const country = draft && String(draft.country ?? "").trim();
-                    if (!country) return null;
-                    // A "text" field is still honored if present — older saved
-                    // messages have one, and it costs nothing to prefer an
-                    // explicit value over the positional guess.
-                    const text = String(draft?.text ?? "").trim() || blockquotes[index] || "";
-                    return text ? { country, text } : null;
-                })
-                .filter(Boolean);
-        })()
-        : null;
+    const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
     // than no button, so anything missing a real type or real coordinates goes.
