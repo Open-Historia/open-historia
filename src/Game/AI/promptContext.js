@@ -148,18 +148,33 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
   return normalizedChats.slice(0, limit).map((chat) => {
     const participants = chat.countries.map((country) => country.name).join(", ");
     const lastMessage = chat.messages.at(-1);
-    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}: ${lastMessage.text}` : "no messages yet"}`;
+    const date = lastMessage?.time ? ` [${formatDateReadable(lastMessage.time)}]` : "";
+    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}${date}: ${lastMessage.text}` : "no messages yet"}`;
   }).join("\n");
 };
 
+// Every message line carries its own in-game date (when the message has one),
+// and every chat header states when that chat last saw activity. Without
+// these, the ONLY signal for "which message is most recent" was a message's
+// position in the transcript — fine for a human skimming top-to-bottom, but a
+// weak, implicit cue for the model to reason about explicitly (especially
+// with several same-named countries' chats in view, or a country the player
+// has talked to across many separate rounds). An explicit date lets the model
+// answer "the recent message from Algeria" by actually comparing dates
+// instead of guessing from list position.
 export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10 } = {}) => {
   const normalizedChats = normalizeChats(chats);
   if (normalizedChats.length === 0) return "No chats occurred in these rounds.";
 
   return normalizedChats.slice(0, limit).map((chat, index) => {
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
+    const lastActivityMs = chatLastMessageTimeMs(chat);
+    const lastActivity = lastActivityMs !== null ? ` (most recent activity: ${formatDateReadable(lastActivityMs)})` : "";
+    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${lastActivity}`;
     const body = chat.messages.length > 0
-      ? chat.messages.slice(-messageLimit).map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
+      ? chat.messages.slice(-messageLimit).map((message) => {
+        const date = message.time ? ` [${formatDateReadable(message.time)}]` : "";
+        return `${message.speaker || message.role}${date}: ${message.text}`;
+      }).join("\n")
       : "No messages yet.";
     return `${header}\n${body}`;
   }).join("\n\n");
