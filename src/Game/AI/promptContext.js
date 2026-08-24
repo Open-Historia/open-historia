@@ -16,6 +16,55 @@ import { buildRegionOwnershipText } from "./regionVocab.js";
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
+const joinWithinCharBudget = (
+  items,
+  {
+    maxChars = 0,
+    separator = "\n",
+    take = "tail",
+    omissionMarker = "",
+  } = {},
+) => {
+  const rows = normalizeArray(items)
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  if (rows.length === 0) return "";
+
+  const full = rows.join(separator);
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  if (!budget || full.length <= budget) return full;
+
+  const ordered = take === "head" ? rows : [...rows].reverse();
+  const selected = [];
+  let used = 0;
+
+  for (const row of ordered) {
+    const separatorChars = selected.length ? separator.length : 0;
+    const next = separatorChars + row.length;
+
+    // Never corrupt one canonical record merely to hit a transport target. If one
+    // record is unusually large, keep that record whole and allow this soft budget
+    // to exceed its target rather than cutting an event/chat/summary mid-thought.
+    if (selected.length === 0 && next > budget) {
+      selected.push(row);
+      used = row.length;
+      break;
+    }
+    if (used + next > budget) break;
+
+    selected.push(row);
+    used += next;
+  }
+
+  const kept = take === "head" ? selected : selected.reverse();
+  const omitted = Math.max(0, rows.length - kept.length);
+  if (omitted > 0 && omissionMarker) {
+    if (take === "head") kept.push(omissionMarker.replace("${count}", String(omitted)));
+    else kept.unshift(omissionMarker.replace("${count}", String(omitted)));
+  }
+  return kept.join(separator);
+};
+
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
     const value = variables[key];
@@ -47,13 +96,20 @@ export const getUnconsolidatedEvents = (events, world) => {
   return boundaryIndex >= 0 ? normalizedEvents.slice(boundaryIndex + 1) : normalizedEvents;
 };
 
-export const buildEventHistoryText = (events, { limit = 10, world = null } = {}) => {
+export const buildEventHistoryText = (
+  events,
+  {
+    limit = 10,
+    maxChars = 0,
+    world = null,
+  } = {},
+) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
   if (normalizedEvents.length === 0) {
     return "No unconsolidated events have been recorded yet.";
   }
 
-  return normalizedEvents
+  const rendered = normalizedEvents
     .slice(-limit)
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
@@ -81,26 +137,364 @@ export const buildEventHistoryText = (events, { limit = 10, world = null } = {})
         description ? `  ${description}` : "",
         impactNotes.length > 0 ? `  ${impactNotes.join(" | ")}` : "",
       ].filter(Boolean).join("\n");
-    })
-    .join("\n");
+    });
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n",
+    take: "tail",
+    omissionMarker: "- [${count} earlier event record(s) omitted from this task context; canonical save history is unchanged.]",
+  });
 };
 
-export const buildConsolidatedHistoryText = (world) => {
+const renderConsolidatedHistoryEntry = (entry) =>
+  `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`;
+
+const joinCoverageSelectedHistory = (rows, selectedIndexes) => {
+  const indexes = [...selectedIndexes].sort((a, b) => a - b);
+  const output = [];
+  let priorIndex = -1;
+
+  for (const index of indexes) {
+    const omitted = index - priorIndex - 1;
+    if (omitted > 0) {
+      output.push(
+        `[${omitted} consolidated-history block(s) omitted from this task context; `
+        + "their canonical source history remains in the save.]",
+      );
+    }
+    output.push(rows[index]);
+    priorIndex = index;
+  }
+
+  const trailingOmitted = rows.length - priorIndex - 1;
+  if (trailingOmitted > 0) {
+    output.push(
+      `[${trailingOmitted} newer consolidated-history block(s) omitted from this task context; `
+      + "their canonical source history remains in the save.]",
+    );
+  }
+
+  return output.join("\n\n");
+};
+
+const joinConsolidatedCoverageWithinCharBudget = (rows, { maxChars = 0 } = {}) => {
+  const normalizedRows = normalizeArray(rows)
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  if (normalizedRows.length === 0) return "";
+
+  const full = normalizedRows.join("\n\n");
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  if (!budget || full.length <= budget) return full;
+
+  // Phase 9.3B: older campaign memory should plateau without becoming a pure
+  // "latest N summaries" window. Preserve the campaign foundation, preserve the
+  // newest continuity most heavily, then use deterministic farthest-point sampling
+  // across the middle so decades of history keep broad chronological coverage.
+  // Whole summary blocks are always kept intact; this is a soft transport budget.
+  const selected = new Set();
+  let used = 0;
+  const markerReserve = Math.min(2000, Math.max(512, Math.floor(budget * 0.08)));
+  const rowBudget = Math.max(1, budget - markerReserve);
+
+  const tryAdd = (index, { force = false } = {}) => {
+    if (selected.has(index) || index < 0 || index >= normalizedRows.length) return false;
+    const row = normalizedRows[index];
+    const separatorChars = selected.size > 0 ? 2 : 0;
+    const next = row.length + separatorChars;
+    if (!force && selected.size > 0 && used + next > rowBudget) return false;
+    selected.add(index);
+    used += next;
+    return true;
+  };
+
+  const recentTarget = Math.max(1, Math.floor(rowBudget * 0.60));
+  const foundationTarget = Math.max(1, Math.floor(rowBudget * 0.15));
+
+  let recentUsed = 0;
+  for (let index = normalizedRows.length - 1; index >= 0 && recentUsed < recentTarget; index -= 1) {
+    const before = used;
+    if (tryAdd(index, { force: selected.size === 0 })) {
+      recentUsed += used - before;
+    }
+  }
+
+  let foundationUsed = 0;
+  for (let index = 0; index < normalizedRows.length && foundationUsed < foundationTarget; index += 1) {
+    const row = normalizedRows[index];
+    const separatorChars = selected.size > 0 ? 2 : 0;
+    const next = row.length + separatorChars;
+    if (foundationUsed > 0 && foundationUsed + next > foundationTarget) break;
+
+    const before = used;
+    if (tryAdd(index)) {
+      foundationUsed += used - before;
+    }
+  }
+
+  const fitCandidates = () => normalizedRows
+    .map((_row, index) => index)
+    .filter((index) => {
+      if (selected.has(index)) return false;
+      const separatorChars = selected.size > 0 ? 2 : 0;
+      return used + separatorChars + normalizedRows[index].length <= rowBudget;
+    });
+
+  // Repeatedly take the candidate furthest from anything already selected. This
+  // creates even temporal coverage without semantic guessing, language assumptions,
+  // or turning compressed summaries into a new source of truth.
+  while (true) {
+    const candidates = fitCandidates();
+    if (candidates.length === 0) break;
+
+    let bestIndex = -1;
+    let bestDistance = -1;
+    for (const index of candidates) {
+      const distance = selected.size === 0
+        ? normalizedRows.length
+        : Math.min(...[...selected].map((selectedIndex) => Math.abs(index - selectedIndex)));
+      if (distance > bestDistance || (distance === bestDistance && index > bestIndex)) {
+        bestIndex = index;
+        bestDistance = distance;
+      }
+    }
+    if (bestIndex < 0 || !tryAdd(bestIndex)) break;
+  }
+
+  // If uneven block sizes leave a little capacity, spend it on the newest remaining
+  // continuity first. That biases the final envelope toward what can still cause the
+  // next turn while retaining the broad historical anchors selected above.
+  for (let index = normalizedRows.length - 1; index >= 0; index -= 1) {
+    tryAdd(index);
+  }
+
+  return joinCoverageSelectedHistory(normalizedRows, selected);
+};
+
+export const buildConsolidatedHistoryText = (
+  world,
+  {
+    maxChars = 0,
+    selection = "tail",
+  } = {},
+) => {
   const entries = normalizeWorldState(world).consolidatedHistory;
   if (entries.length === 0) return "No earlier campaign history has been consolidated yet.";
 
-  return entries
-    .map((entry) => `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`)
-    .join("\n\n");
+  const rendered = entries.map(renderConsolidatedHistoryEntry);
+  if (selection === "coverage") {
+    return joinConsolidatedCoverageWithinCharBudget(rendered, { maxChars });
+  }
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n\n",
+    take: "tail",
+    omissionMarker:
+      "[${count} older consolidated-history block(s) omitted from this task context; "
+      + "their canonical source history remains in the save.]",
+  });
 };
 
-export const buildCampaignHistoryText = (events, world, { limit = 24 } = {}) => [
+export const buildCampaignHistoryText = (
+  events,
+  world,
+  {
+    consolidatedMaxChars = 0,
+    consolidatedSelection = "tail",
+    eventMaxChars = 0,
+    limit = 24,
+  } = {},
+) => [
   "STORY SO FAR:",
-  buildConsolidatedHistoryText(world),
+  buildConsolidatedHistoryText(world, {
+    maxChars: consolidatedMaxChars,
+    selection: consolidatedSelection,
+  }),
   "",
   "RECENT EVENTS:",
-  buildEventHistoryText(events, { limit, world }),
+  buildEventHistoryText(events, { limit, maxChars: eventMaxChars, world }),
 ].join("\n");
+
+
+const compactHistoricalAnchorText = (value, maxChars = 260) => {
+  const text = normalizeString(value).replace(/\s+/g, " ");
+  const limit = Math.max(40, Math.trunc(Number(maxChars) || 260));
+  if (text.length <= limit) return text;
+
+  const preview = text.slice(0, limit + 1);
+  const boundaries = [preview.lastIndexOf(". "), preview.lastIndexOf("; "), preview.lastIndexOf(", ")]
+    .filter((index) => index >= Math.floor(limit * 0.6));
+  const cutAt = boundaries.length > 0 ? Math.max(...boundaries) + 1 : limit;
+  return `${text.slice(0, cutAt).trim()}…`;
+};
+
+const hasDurableStructuralEventImpact = (event) => {
+  const lifecycleChange = normalizeArray(event?.impacts?.polityChanges)
+    .some((change) => ["create", "restore", "rename", "dissolve"]
+      .includes(normalizeString(change?.operation).toLowerCase()));
+  if (lifecycleChange) return true;
+
+  return normalizeArray(event?.impacts?.regionTransfers).some((transfer) => {
+    const from = normalizeString(transfer?.fromCode).toLowerCase();
+    const to = normalizeString(transfer?.toCode).toLowerCase();
+    return Boolean(to && (!from || from !== to));
+  });
+};
+
+const buildHistoricallyLinkedEventIds = (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const ids = new Set();
+  const addOrigin = (entry) => {
+    const first = normalizeArray(entry?.sourceEventIds)
+      .map(normalizeString)
+      .find(Boolean);
+    if (first) ids.add(first);
+  };
+
+  normalizeArray(world.storylines)
+    .filter((entry) => ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+  normalizeArray(world.wars)
+    .filter((entry) => ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+  normalizeArray(world.agreements)
+    .filter((entry) => ["active", "suspended"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+
+  return ids;
+};
+
+const historicalAnchorCandidateScore = (event, linkedEventIds) => {
+  const importance = normalizeString(event?.importance).toLowerCase();
+  const id = normalizeString(event?.id);
+  const linked = Boolean(id && linkedEventIds.has(id));
+  const structural = hasDurableStructuralEventImpact(event);
+
+  let score = importance === "critical" ? 1200 : importance === "major" ? 360 : 40;
+  if (linked) score += 1000;
+  if (structural) score += 520;
+  if (event?.notable) score += 220;
+  if (event?.playerRelated) score += 100;
+  return { linked, structural, score };
+};
+
+const renderHistoricalAnchorEvent = (event) => {
+  const date = normalizeString(event?.date) || "undated";
+  const title = normalizeString(event?.title) || "Untitled historical event";
+  const description = compactHistoricalAnchorText(event?.description, 260);
+  return `- ${date}: ${title}${description ? ` — ${description}` : ""}`;
+};
+
+export const buildHistoricalAnchorText = (
+  events,
+  worldLike,
+  {
+    maxAnchors = 18,
+    maxChars = 6000,
+  } = {},
+) => {
+  const world = normalizeWorldState(worldLike);
+  const history = normalizeArray(world.consolidatedHistory);
+  const throughEventId = normalizeString(history.at(-1)?.throughEventId);
+  if (!throughEventId) return "";
+
+  const normalizedEvents = normalizeEvents(events);
+  const boundaryIndex = normalizedEvents.findIndex((event) => normalizeString(event?.id) === throughEventId);
+  if (boundaryIndex < 0) return "";
+
+  const historicalEvents = normalizedEvents.slice(0, boundaryIndex + 1);
+  if (historicalEvents.length === 0) return "";
+
+  const linkedEventIds = buildHistoricallyLinkedEventIds(world);
+  const candidates = historicalEvents
+    .map((event, eventIndex) => {
+      const assessment = historicalAnchorCandidateScore(event, linkedEventIds);
+      const importance = normalizeString(event?.importance).toLowerCase();
+      const eligible = assessment.linked || assessment.structural || importance === "critical" ||
+        (importance === "major" && Boolean(event?.notable));
+      if (!eligible) return null;
+      return {
+        event,
+        eventIndex,
+        row: renderHistoricalAnchorEvent(event),
+        ...assessment,
+        critical: importance === "critical",
+      };
+    })
+    .filter(Boolean);
+  if (candidates.length === 0) return "";
+
+  const charBudget = Math.max(1, Math.trunc(Number(maxChars) || 6000));
+  const anchorLimit = Math.max(1, Math.trunc(Number(maxAnchors) || 18));
+  const selected = new Map();
+  let used = 0;
+
+  const tryAdd = (candidate, { force = false } = {}) => {
+    if (!candidate || selected.has(candidate.eventIndex) || selected.size >= anchorLimit) return false;
+    const separatorChars = selected.size > 0 ? 1 : 0;
+    const next = candidate.row.length + separatorChars;
+    if (!force && selected.size > 0 && used + next > charBudget) return false;
+    selected.set(candidate.eventIndex, candidate);
+    used += next;
+    return true;
+  };
+
+  // First protect the rare events whose absence is most likely to make a long
+  // campaign contradict itself: critical turning points and the origin events of
+  // currently active storylines/wars/agreements. This is provenance-driven, not
+  // keyword-driven, and current hard-state ledgers still outrank old event prose.
+  const forcedLimit = Math.max(1, Math.ceil(anchorLimit * 0.5));
+  const forced = candidates
+    .filter((candidate) => candidate.critical || candidate.linked)
+    .sort((a, b) =>
+      (Number(b.critical) - Number(a.critical)) ||
+      (Number(b.linked) - Number(a.linked)) ||
+      (b.score - a.score) ||
+      (b.eventIndex - a.eventIndex)
+    );
+  for (const candidate of forced) {
+    if (selected.size >= forcedLimit) break;
+    tryAdd(candidate, { force: selected.size === 0 });
+  }
+
+  // Spend the remaining slots across the entire consolidated era. Each bucket gets
+  // its strongest canonical event, so a century-long campaign does not turn into
+  // "the latest few years plus one founding paragraph". Structured lifecycle/map
+  // changes naturally outrank routine narrative churn through the candidate score.
+  const remainingSlots = Math.max(0, anchorLimit - selected.size);
+  if (remainingSlots > 0) {
+    const bucketCount = remainingSlots;
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const start = Math.floor((bucket * historicalEvents.length) / bucketCount);
+      const end = Math.max(start + 1, Math.floor(((bucket + 1) * historicalEvents.length) / bucketCount));
+      const bucketCandidates = candidates
+        .filter((candidate) =>
+          candidate.eventIndex >= start &&
+          candidate.eventIndex < end &&
+          !selected.has(candidate.eventIndex)
+        )
+        .sort((a, b) => (b.score - a.score) || (b.eventIndex - a.eventIndex));
+      if (bucketCandidates.length > 0) tryAdd(bucketCandidates[0]);
+    }
+  }
+
+  // Uneven event density / row length can leave budget behind. Use it on the
+  // strongest remaining anchors, with newer events winning only exact score ties.
+  const remaining = candidates
+    .filter((candidate) => !selected.has(candidate.eventIndex))
+    .sort((a, b) => (b.score - a.score) || (b.eventIndex - a.eventIndex));
+  for (const candidate of remaining) {
+    if (selected.size >= anchorLimit) break;
+    tryAdd(candidate);
+  }
+
+  return [...selected.values()]
+    .sort((a, b) => a.eventIndex - b.eventIndex)
+    .map((candidate) => candidate.row)
+    .join("\n");
+};
 
 const buildDiplomaticMessageLine = (message) => {
   const speaker = normalizeString(message?.speaker || message?.role || "message");
@@ -196,14 +590,30 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
   }).join("\n");
 };
 
-export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10 } = {}) => {
+export const buildDetailedChatHistoryText = (
+  chats,
+  {
+    limit = 8,
+    maxChars = 0,
+    messageLimit = 10,
+  } = {},
+) => {
   const normalizedChats = sortDiplomaticChatsByRecentActivity(chats);
   if (normalizedChats.length === 0) return "No chats occurred in these rounds.";
 
-  return normalizedChats.slice(0, limit).map((chat, index) => {
+  const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
     const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
     return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
-  }).join("\n\n");
+  });
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n\n",
+    take: "head",
+    omissionMarker:
+      "[${count} additional lower-priority diplomatic thread(s) omitted from this task context; "
+      + "their canonical chat records remain in the save.]",
+  });
 };
 
 // Compact diplomatic continuity ledger for the world simulator. Long-term meaning
@@ -590,11 +1000,19 @@ export const buildPromptContext = async (bundle, {
   catalystOpening = "",
   catalystPremise = "",
   chat = null,
+  chatHistoryLongMaxChars = 0,
   chatLimit = 8,
   chatsToConsolidate = "",
+  consolidatedHistoryMaxChars = 0,
+  consolidatedHistorySelection = "tail",
+  historicalAnchorActivationChars = 0,
+  historicalAnchorMaxChars = 0,
+  historicalAnchorMaxItems = 18,
+  eventHistoryMaxChars = 0,
   eventLimit = 10,
   eventsToConsolidate = "",
   gameMasterRequest = "",
+  longEventHistoryMaxChars = 0,
   longEventLimit = 24,
   respondingPolityName = "",
   targetDate = "",
@@ -605,8 +1023,60 @@ export const buildPromptContext = async (bundle, {
   const target = targetDate || date;
   const worldSummary = await buildWorldSummary(bundle, regionCatalog);
   const citiesSummary = await buildCityCatalogText(bundle.world);
-  const recentEvents = buildEventHistoryText(bundle.events, { limit: eventLimit, world: bundle.world });
-  const campaignHistory = buildCampaignHistoryText(bundle.events, bundle.world, { limit: longEventLimit });
+  const recentEvents = buildEventHistoryText(bundle.events, {
+    limit: eventLimit,
+    maxChars: eventHistoryMaxChars,
+    world: bundle.world,
+  });
+  const fullConsolidatedHistory = buildConsolidatedHistoryText(bundle.world);
+  const historicalAnchorThreshold = Math.max(0, Math.trunc(Number(historicalAnchorActivationChars) || 0));
+  const historicalAnchorBudget = Math.max(0, Math.trunc(Number(historicalAnchorMaxChars) || 0));
+  const historicalAnchorThresholdReached = Boolean(
+    historicalAnchorThreshold &&
+    historicalAnchorBudget &&
+    fullConsolidatedHistory.length > historicalAnchorThreshold
+  );
+  const candidateHistoricalAnchors = historicalAnchorThresholdReached
+    ? buildHistoricalAnchorText(bundle.events, bundle.world, {
+        maxAnchors: historicalAnchorMaxItems,
+        maxChars: historicalAnchorBudget,
+      })
+    : "";
+  // Do not reserve space for an anchor tier that could not be built (for example,
+  // an older imported save whose consolidation boundary id cannot be resolved). In
+  // that compatibility case, keep the full 24k summary allowance instead of silently
+  // throwing away 6k of useful history.
+  const historicalAttentionActive = Boolean(candidateHistoricalAnchors);
+  const effectiveConsolidatedHistoryMaxChars = historicalAttentionActive && consolidatedHistoryMaxChars
+    ? Math.max(1, Math.max(0, Math.trunc(Number(consolidatedHistoryMaxChars) || 0)) - historicalAnchorBudget)
+    : consolidatedHistoryMaxChars;
+  const consolidatedHistory = effectiveConsolidatedHistoryMaxChars
+    ? buildConsolidatedHistoryText(bundle.world, {
+        maxChars: effectiveConsolidatedHistoryMaxChars,
+        selection: consolidatedHistorySelection,
+      })
+    : fullConsolidatedHistory;
+  const historicalAnchors = historicalAttentionActive ? candidateHistoricalAnchors : "";
+  const campaignRecentEvents = buildEventHistoryText(bundle.events, {
+    limit: longEventLimit,
+    maxChars: longEventHistoryMaxChars,
+    world: bundle.world,
+  });
+  const campaignHistory = [
+    "STORY SO FAR:",
+    consolidatedHistory,
+    ...(historicalAnchors
+      ? [
+          "",
+          "PERMANENT HISTORICAL ANCHORS:",
+          "Selected directly from older canonical event records to preserve major divergences and origins across long campaigns. Current hard-state ledgers and newer canon override any superseded old wording.",
+          historicalAnchors,
+        ]
+      : []),
+    "",
+    "RECENT EVENTS:",
+    campaignRecentEvents,
+  ].join("\n");
   const allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
   const actionText = formatActionsForPrompt(bundle.actions);
   const consolidatedChatIds = new Set(
@@ -635,12 +1105,12 @@ export const buildPromptContext = async (bundle, {
     chatHistory: currentChat
       ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
       : "No chat history.",
-    chatHistoryLong: buildDetailedChatHistoryText(promptChats, { limit: chatLimit }),
+    chatHistoryLong: buildDetailedChatHistoryText(promptChats, { limit: chatLimit, maxChars: chatHistoryLongMaxChars }),
     chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
     chatSummary: buildChatSummaryText(promptChats),
     diplomaticContinuity: buildDiplomaticContinuityText(promptChats),
     chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 }),
-    consolidatedHistory: buildConsolidatedHistoryText(bundle.world),
+    consolidatedHistory,
     date,
     dateReadable: formatDateReadable(date),
     difficulty: bundle.game.difficulty || "standard",
@@ -648,6 +1118,12 @@ export const buildPromptContext = async (bundle, {
     difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
     eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),
     gameMasterRequest,
+    historicalAnchors,
+    historicalAttentionStatus: historicalAttentionActive
+      ? `active: ${effectiveConsolidatedHistoryMaxChars || 0} consolidated chars + up to ${historicalAnchorBudget} canonical-anchor chars`
+      : historicalAnchorThresholdReached
+        ? `fallback: long history detected (${fullConsolidatedHistory.length} chars) but no canonical anchor set was resolvable; retaining ${consolidatedHistoryMaxChars || 0}-char summary allowance`
+        : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`,
     language: bundle.world.language || bundle.game.language || "English",
     lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
     markersSummary: buildMarkersSummaryText(bundle.world),

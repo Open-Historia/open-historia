@@ -10,6 +10,9 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
+import { buildCanonicalWarContext } from "./nativeWarLedger.js";
+import { isContextDiagnosticsEnabled, logContextDiagnostics } from "./contextDiagnostics.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -1165,7 +1168,9 @@ async function ensurePromptsLoaded() {
 async function buildPromptVariables({
     actionData,
     advisorData,
+    chat = null,
     chatData,
+    contextOptions = {},
     eventData,
     gameData,
     speakingAs = "",
@@ -1179,11 +1184,54 @@ async function buildPromptVariables({
         game: gameData,
         world: worldData,
     }, {
+        chat,
         eventLimit: 16,
         longEventLimit: 24,
         respondingPolityName: speakingAs,
+        ...contextOptions,
     });
 }
+
+const diplomaticParticipantKey = (countries) => (countries ?? [])
+    .map((country) => String(typeof country === "string" ? country : country?.name ?? country?.code ?? "").trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join("|");
+
+const findDiplomaticThreadForParticipants = (chats, participantNames) => {
+    const expectedKey = diplomaticParticipantKey(participantNames);
+    if (!expectedKey) return null;
+    return (Array.isArray(chats) ? chats : []).find((chat) =>
+        diplomaticParticipantKey(chat?.countries) === expectedKey
+    ) || null;
+};
+
+const DIPLOMACY_CONTEXT_BUDGETS = Object.freeze({
+    chatHistoryLongMaxChars: 6000,
+    consolidatedHistoryMaxChars: 8000,
+    eventHistoryMaxChars: 12000,
+    longEventHistoryMaxChars: 12000,
+});
+
+const buildSyntheticDiplomaticFocusChat = (countries = []) => ({
+    countries: (countries ?? []).map((country) => {
+        if (country && typeof country === "object") return country;
+        return { name: String(country ?? "").trim() };
+    }).filter((country) => String(country?.name ?? country?.code ?? "").trim()),
+    messages: [],
+});
+
+const buildDiplomaticCanonicalGrounding = ({ diplomaticContext = "", warContext = "" } = {}) => [
+    "[Canonical Current Diplomatic State — binding]",
+    "Use this section as current hard state. If narrative history, historical expectation, or casual chat inference conflicts with these ledgers, follow the ledgers. Hostility is not automatically war; a relation is not a treaty; an agreement is not a war.",
+    "Explicit promises, proposals, warnings, and positions in THIS chat's durable memory or live transcript remain valid continuity even when they have not become a formal agreement. Do not silently promote them into treaties or wars.",
+    "",
+    "Relations and formal agreements relevant to this conversation:",
+    diplomaticContext || "No canonical bilateral relation/agreement context is currently recorded for these participants.",
+    "",
+    "Actual current wars and ceasefires:",
+    warContext || "No active or ceasefire canonical wars are currently recorded.",
+].join("\n");
 
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
@@ -1205,11 +1253,21 @@ async function buildAdvisorSystemPrompt() {
         worldData,
     });
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
+    const systemPrompt = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
 
-    return renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    // Phase 9.3A does not change advisor context; diagnostics remain observational
+    // for this path while focused production context is limited to diplomacy.
+    logContextDiagnostics({
+        stage: "prompt-build",
+        systemPrompt,
+        taskKey: "advisorChat",
+        variables,
+    });
+
+    return systemPrompt;
 }
 
-export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "") {
+async function buildDiplomaticPromptBundle(countries, playerCountry, speakingAs = "") {
     await ensurePromptsLoaded();
     const participantNames = (countries ?? [])
     .map((country) => typeof country === "string" ? country : country?.name)
@@ -1224,23 +1282,96 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
+    // Phase 9.3A: diplomacy is the first production task to receive focused context.
+    // Bind THIS_CHAT_HISTORY to the actual addressed thread before building generic
+    // variables. If a brand-new thread has not been persisted yet, use an empty
+    // synthetic focus chat rather than accidentally borrowing another country's chat.
+    const matchingThread = findDiplomaticThreadForParticipants(chatData, participantNames);
+    const focusChat = matchingThread || buildSyntheticDiplomaticFocusChat(countries);
+    const diplomaticContext = buildBoundedDiplomaticContext(worldData, {
+        playerPolity: String(gameData?.country ?? "").trim(),
+        focusActors: participantNames,
+        maxActors: 8,
+    });
+    const canonicalWarContext = buildCanonicalWarContext(worldData);
+
+    const baseVariables = await buildPromptVariables({
+        actionData,
+        advisorData,
+        chat: focusChat,
+        chatData,
+        contextOptions: DIPLOMACY_CONTEXT_BUDGETS,
+        eventData,
+        gameData,
+        speakingAs: speakingAs || participantNames.find((country) => country !== playerCountry) || "",
+        worldData,
+    });
     const variables = {
-        ...(await buildPromptVariables({
-            actionData,
-            advisorData,
-            chatData,
-            eventData,
-            gameData,
-            speakingAs: speakingAs || participantNames.find((country) => country !== playerCountry) || "",
-            worldData,
-        })),
+        ...baseVariables,
+        canonicalDiplomaticContext: diplomaticContext.text,
+        canonicalWarContext,
         chatParticipants: participantList || "",
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    // Difficulty 2.0 affects bargaining firmness and interpretation of leverage,
-    // never the counterpart's canonical interests, knowledge, or disposition.
-    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty, "diplomacy")}`;
+    // Keep the scenario-authored roleplay prompt intact, then append exact current
+    // diplomatic hard state. This improves grounding while the bounded narrative
+    // variables above stop older history/other chats from growing without limit.
+    const canonicalGrounding = buildDiplomaticCanonicalGrounding({
+        diplomaticContext: diplomaticContext.text,
+        warContext: canonicalWarContext,
+    });
+    const systemPrompt = [
+        renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
+        canonicalGrounding,
+        difficultyDirective(gameData?.difficulty, "diplomacy"),
+    ].filter(Boolean).join("\n\n");
+
+    // Diagnostics remain useful after promotion: they show whether the focused
+    // production request is now within its intended envelope and verify exact-thread
+    // alignment. No second legacy prompt is constructed just for measurement.
+    let shadowMetadata = {};
+    if (isContextDiagnosticsEnabled()) {
+        const expectedParticipants = participantNames.join(", ");
+        const focusedContextParticipants = String(baseVariables.chatParticipants ?? "").trim();
+        const expectedKey = diplomaticParticipantKey(participantNames);
+        const focusedKey = diplomaticParticipantKey(focusedContextParticipants
+            ? focusedContextParticipants.split(",").map((name) => name.trim())
+            : []);
+        shadowMetadata = {
+            expectedDiplomaticParticipants: expectedParticipants,
+            focusedContextParticipants,
+            diplomaticThreadAligned: Boolean(expectedKey && focusedKey && expectedKey === focusedKey),
+            matchingThreadFound: Boolean(matchingThread),
+            matchingThreadId: String(matchingThread?.id ?? ""),
+            matchingThreadMessages: Array.isArray(matchingThread?.messages) ? matchingThread.messages.length : 0,
+            productionFocusedContext: true,
+        };
+    }
+
+    return {
+        systemPrompt,
+        variables,
+        shadowVariables: {},
+        shadowMetadata,
+    };
+}
+
+const logDiplomaticPromptBuild = (bundle) => {
+    logContextDiagnostics({
+        shadowMetadata: bundle.shadowMetadata,
+        shadowVariables: bundle.shadowVariables,
+        stage: "prompt-build",
+        systemPrompt: bundle.systemPrompt,
+        taskKey: "diplomaticReply",
+        variables: bundle.variables,
+    });
+};
+
+export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "") {
+    const bundle = await buildDiplomaticPromptBundle(countries, playerCountry, speakingAs);
+    logDiplomaticPromptBuild(bundle);
+    return bundle.systemPrompt;
 }
 
 let advisorHistory = [];
@@ -1270,6 +1401,13 @@ export async function sendMessage(userMessage, opts) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
+        logContextDiagnostics({
+            history: advisorHistory,
+            stage: "live-request",
+            systemPrompt,
+            taskKey: "advisorChat",
+            userMessage,
+        });
         const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat" });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         return reply;
@@ -1438,7 +1576,9 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         playerSpeaker = "",
         ...aiOpts
     } = opts || {};
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs);
+    const promptBundle = await buildDiplomaticPromptBundle(countries, null, speakingAs);
+    logDiplomaticPromptBuild(promptBundle);
+    const freshPrompt = promptBundle.systemPrompt;
 
     // Backwards-compatible default: direct callers still append the player's line.
     // The group-chat UI appends it once up-front, then several delegations may respond
@@ -1478,6 +1618,16 @@ REACTION:<emoji>
     ];
 
     try {
+        logContextDiagnostics({
+            history: historyWithInstruction,
+            shadowMetadata: promptBundle.shadowMetadata,
+            shadowSourceVariables: promptBundle.variables,
+            shadowVariables: promptBundle.shadowVariables,
+            stage: "live-request",
+            systemPrompt: freshPrompt,
+            taskKey: "diplomaticReply",
+            userMessage: playerMessage,
+        });
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...aiOpts, languageMode: "chat" });
         const {
             reply,

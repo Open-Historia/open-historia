@@ -27,6 +27,7 @@ import {
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
 import { callAI } from "./main.jsx";
+import { logContextDiagnostics } from "./contextDiagnostics.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import {
   decodeGameMasterTransportPayload,
@@ -978,7 +979,7 @@ ${canonicalDiplomacy}`;
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
- 
+
 // ---- timeline curator calibration ------------------------------------------
 // the analyst has a bad habit of calling routine paperwork "worthwhile" and
 // claiming recurrence matters because, apparently, another fucking timetable
@@ -1105,6 +1106,18 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      // Phase 9.2A: diagnostics are observational only. When explicitly enabled in
+      // DevTools they measure the exact prompt/history already about to be sent;
+      // they never filter, truncate, reorder, or mutate model-visible context.
+      logContextDiagnostics({
+        attempt: outputAttempt,
+        history,
+        stage: "structured-request",
+        systemPrompt,
+        taskKey,
+        userMessage,
+        variables,
+      });
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
@@ -1249,6 +1262,17 @@ const CONSOLIDATION_INTERVAL_ROUNDS = 5;
 const CONSOLIDATION_RETAIN_EVENTS = 24;
 const CONSOLIDATION_SIZE_THRESHOLD = 48;
 const CONSOLIDATION_BATCH_SIZE = 60;
+
+// Phase 9.4A: the canonical save still keeps every consolidated-history block.
+// World Simulation gets a 24k-char OLD-HISTORY transport envelope. Young campaigns
+// stay unchanged. Once the raw consolidated story exceeds 24k, promptContext reserves
+// up to 6k of that SAME envelope for direct canonical-event anchors and uses the
+// remaining ~18k for broad chronological consolidated-summary coverage. This keeps
+// long-campaign cost bounded without trading away critical divergences for recency.
+const WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS = 24000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS = 24000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS = 6000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS = 18;
 
 const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
   const variables = await buildTemplateVariables(bundle, {
@@ -4902,6 +4926,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       const passesLeft = windows.length - passIndex;
 
       const variables = await buildTemplateVariables(workingBundle, {
+        consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
+        consolidatedHistorySelection: "coverage",
+        historicalAnchorActivationChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS,
+        historicalAnchorMaxChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS,
+        historicalAnchorMaxItems: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS,
         targetDate: passTargetDate,
       });
       const worldInitiative = buildWorldInitiativeContext(workingBundle, {
