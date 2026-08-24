@@ -21,7 +21,9 @@ import {
   writeJson,
 } from "../../runtime/assets.js";
 import {
+  advanceStandingOrders,
   applyEventImpactsToWorld,
+  enforceUnitVolume,
   normalizeActionEntry,
   normalizeActions,
   normalizeChatEntry,
@@ -1677,9 +1679,14 @@ const applySimulationResult = async ({
   // foldGeneratedChatsIntoStorage) rather than putting the stale snapshot back.
   const generatedChats = [];
 
-  const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
+  const { colors: nextColors, world: impactedWorld } = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
+    // Give every unit op a travel budget of the days between the previous event
+    // and its own, so a move op advances a formation as far as it could actually
+    // have got rather than teleporting it. An over-long move becomes a partial
+    // advance plus a standing order the engine keeps working on later turns.
+    motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
@@ -1710,6 +1717,17 @@ const applySimulationResult = async ({
       ].slice(0, 12),
     },
   });
+  // Residual travel from the last event's date out to the stop date, plus this
+  // turn's patrol drift — the reason a fleet on station is visibly somewhere new
+  // every turn without any of it having to come back from the model.
+  const worldWithImpacts = enforceUnitVolume(
+    advanceStandingOrders(impactedWorld, {
+      fromDate: freshEvents.at(-1)?.date || baseGame.gameDate,
+      toDate: nextGame.gameDate,
+      round: nextGame.round,
+    }),
+    { playerCode: baseGame.country },
+  );
   let nextWorld = worldWithImpacts;
 
   for (const event of freshEvents) {
