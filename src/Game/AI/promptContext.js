@@ -13,6 +13,8 @@ import {
   normalizeWorldState,
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText } from "./regionVocab.js";
+import { buildForcePostureText } from "./forcePosture.js";
+import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -278,29 +280,39 @@ export const buildUnitsSummaryText = (world) => {
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
       ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
       : "unknown location";
-    return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    const detail = [
+      `${unit.type}`,
+      `owner ${unit.ownerCode}`,
+      `${unit.strength}% of established strength`,
+      unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
+    ].join(", ");
+    return `- ${unit.name} [id ${unit.id}] (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
+      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
   }).join("\n");
 };
 
-// Units still mid-journey on a multi-turn move or attack-approach order (world.
-// pendingUnitOrders) — orders beyond a single move/engagement's era-and-type
-// leash, issued by the player or a previous AI turn, NOT YET complete. Kept
-// separate from world.pendingUnitOrders' storage shape/clearActions entirely
-// (see gameState.js's pruneSatisfiedUnitOrders): these stay outstanding and
-// re-surface here every jump until the referenced unit actually arrives.
+// Standing orders the ENGINE is advancing (world.pendingUnitOrders): a move still
+// under way, or a patrol working its station. Kept separate from the actions
+// queue and its clearActions flag entirely (see gameState.js), so they re-surface
+// every jump until the unit arrives or the order lapses. The model is shown these
+// as CONTEXT — advanceStandingOrders already moves them, so a move op for one of
+// these units would advance it twice (see the [Standing Unit Orders] directive).
 export const buildPendingUnitOrdersText = (world) => {
   const orders = normalizeArray(world?.pendingUnitOrders);
   if (orders.length === 0) {
-    return "No units currently have a standing multi-turn order — nothing here needs continued advancing.";
+    return "No units currently have a standing order.";
   }
   const unitById = new Map(normalizeArray(world?.units).map((unit) => [unit.id, unit]));
   return orders.map((order) => {
     const unit = unitById.get(order.unitId);
     if (!unit) return null;
     const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
-    const verb = order.kind === "attack" ? "advancing to engage" : "en route to";
+    if (order.kind === "patrol") {
+      return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is working a ` +
+        `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;
+    }
     const destination = order.targetLabel || `lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}`;
-    return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is ${verb} ${destination} — ` +
+    return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is en route to ${destination} — ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}, about ${remaining} km still to go.`;
   }).filter(Boolean).join("\n");
 };
@@ -539,6 +551,32 @@ export const buildPromptContext = async (bundle, {
   const date = bundle.game.gameDate || "";
   const target = targetDate || date;
   const worldSummary = await buildWorldSummary(bundle, regionCatalog);
+  // Every power fielding forces, plus the player and whoever they are talking to
+  // — the set the "are X's units near Y's border?" question could be about.
+  // Bounded deliberately: indexing all ~200 countries' geometry would decode a
+  // lot of coastline nobody is going to ask about.
+  const forcePosture = await (async () => {
+    const world = normalizeWorldState(bundle.world);
+    const owners = [
+      normalizeString(bundle.game?.country),
+      ...normalizeArray(world.units).map((unit) => normalizeString(unit.ownerCode)),
+      ...normalizeChats(bundle.chats).flatMap((chat) =>
+        normalizeArray(chat.countries).map((country) => normalizeString(country?.name))),
+    ].filter(Boolean);
+    let territories = null;
+    try {
+      territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
+    } catch (error) {
+      // Border proximity is colour on top; never let it break a prompt build.
+      console.warn("[ai] force posture fell back to positions only:", error);
+    }
+    return buildForcePostureText(
+      world.units,
+      world.pendingUnitOrders,
+      territories,
+      normalizeString(bundle.game?.country),
+    );
+  })();
   const citiesSummary = await buildCityCatalogText(bundle.world);
   const recentEvents = buildEventHistoryText(bundle.events, { limit: eventLimit, world: bundle.world });
   const campaignHistory = buildCampaignHistoryText(bundle.events, bundle.world, { limit: longEventLimit });
@@ -576,6 +614,7 @@ export const buildPromptContext = async (bundle, {
     date,
     dateReadable: formatDateReadable(date),
     difficulty: bundle.game.difficulty || "standard",
+    forcePosture,
     difficultyGuidanceChats: buildDifficultyGuidance(bundle.game.difficulty, "chats"),
     difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
     eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),

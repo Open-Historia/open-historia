@@ -297,6 +297,7 @@ const Main = ({
         {shouldLoadAdvisor && (
           <LazyAdvisorPanel
             isAdvisorOpen={isAdvisorOpen}
+            mapRef={mapRef}
             onClose={() => setIsAdvisorOpen(false)}
             width={advisorWidth}
             onResize={handleAdvisorResize}

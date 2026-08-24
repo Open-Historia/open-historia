@@ -43,7 +43,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "CHATS_NON_CONSOLIDATED_ROUNDS",
       "ALL_ADVISOR_MESSAGES",
       "PLAYER_POLITY_REGIONS",
-      "PLAYER_POLITY_BATTALION_SUMMARIES",
+      "ALL_FORCES_POSTURE",
     ],
     key: "advisor",
     label: "Advisor Chat",
