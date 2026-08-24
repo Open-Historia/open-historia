@@ -208,6 +208,21 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description:
+      "The between-turns world pulse: an optional unprompted diplomatic note, plus small, "
+      + "motivated unit movement so the map stays alive when the player is not simulating.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "CURRENT_UNITS",
+      "PREVIOUS_ROUND_EVENTS",
+      "GRAND_MAP_DESCRIPTION_NO_CITY",
+    ],
+    key: "idleDiplomacy",
+    label: "Idle World Pulse",
+    type: "task",
+  },
+  {
     description: "Direct game-master map and state interventions.",
     helpers: [
       "PLAYER_POLITY",

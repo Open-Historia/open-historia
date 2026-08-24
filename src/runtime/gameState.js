@@ -1115,19 +1115,26 @@ export const applyUnitOps = (units, ops, context = {}) =>
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
 // order repositions deterministically around its station.
-export const advanceStandingOrders = (world, { fromDate, toDate, round = 0, tick = 0 } = {}) => {
+export const advanceStandingOrders = (
+  world,
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [] } = {},
+) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
   if (orders.length === 0) return world;
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
+  // Units the caller already moved this turn (an event's own unit ops). Advancing
+  // them again here would move them twice for the same elapsed time — their step
+  // was taken per-event, against that event's own budget.
+  const skip = new Set(normalizeArray(skipUnitIds));
   const expired = new Set();
   const stamp = new Date().toISOString();
 
   const nextUnits = units.map((unit) => {
     const order = ordersByUnit.get(unit.id);
-    if (!order) return unit;
+    if (!order || skip.has(unit.id)) return unit;
 
     if (order.untilRound && round > order.untilRound) {
       expired.add(order.id);
