@@ -1087,10 +1087,25 @@ const normalizeProjectOp = (entry) => {
 
   if (op === "complete" || op === "finish" || op === "completed") {
     if (!projectId && !name) return null;
-    return { op: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
+    return { op: "close", status: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
   }
 
-  if (op === "remove" || op === "cancel" || op === "abandon" || op === "delete") {
+  // Ending badly is still an outcome worth keeping on the board. These used to
+  // alias to remove, which DELETED the entry — so the most natural way for a
+  // model to say "we gave up on this" quietly erased it, and the Closed view it
+  // should have appeared in stayed empty.
+  if (op === "cancel" || op === "cancelled" || op === "abandon" || op === "shelve") {
+    if (!projectId && !name) return null;
+    return { op: "close", status: "cancelled", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  if (op === "fail" || op === "failed") {
+    if (!projectId && !name) return null;
+    return { op: "close", status: "failed", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  // The real erasure, for an entry that should never have been opened.
+  if (op === "remove" || op === "delete" || op === "drop") {
     if (!projectId && !name) return null;
     return { op: "remove", projectId, name, note: normalizeOptionalString(entry.note) };
   }
@@ -1229,17 +1244,22 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       continue;
     }
 
-    if (op.op === "complete") {
+    if (op.op === "close") {
+      const succeeded = op.status === "complete";
       next = next.map((project, i) => (i === index
         ? touch({
           ...project,
-          status: "complete",
-          progress: 100,
-          // Nothing is still outstanding on a finished project. Leaving a pending
-          // milestone behind would keep it showing a "next" that will never come
-          // and, once its date passes, an OVERDUE badge on a done programme.
+          status: op.status,
+          // Only success implies the work is all done. A cancelled programme at
+          // 40% stays at 40% — that is the informative number.
+          progress: succeeded ? 100 : project.progress,
+          // Nothing is still outstanding once a project has ended, whichever way
+          // it ended. A leftover pending milestone would keep showing a "next"
+          // that will never come and, once its date passed, an OVERDUE badge on
+          // something already finished. Success marks them done; anything else
+          // marks them missed, which is what actually happened.
           milestones: project.milestones.map((entry) =>
-            (entry.status === "pending" ? { ...entry, status: "done" } : entry)),
+            (entry.status === "pending" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
         })

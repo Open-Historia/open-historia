@@ -580,18 +580,19 @@ const projectOpSchema = {
     },
     {
       type: "object",
+      description: "End a project. complete = it succeeded; cancel = it was called off; fail = it was defeated. All three keep it on the board under Closed.",
       properties: {
-        op: { type: "string", enum: ["complete"] },
+        op: { type: "string", enum: ["complete", "cancel", "fail"] },
         projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
         name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
-        note: textSchema("One sentence on how it finished."),
+        note: textSchema("One sentence on how it ended."),
       },
       required: ["op", "name"],
       additionalProperties: false,
     },
     {
       type: "object",
-      description: "Drop a project from the board entirely - it was cancelled or abandoned. To record a defeat instead, use update with status failed so it stays visible.",
+      description: "Erase a project from the board entirely, for an entry that should never have been opened. This is NOT how a project ends: use op cancel or op fail for that, so it stays on the board as a record of what happened.",
       properties: {
         op: { type: "string", enum: ["remove"] },
         projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),

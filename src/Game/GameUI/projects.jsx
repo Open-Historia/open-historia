@@ -20,6 +20,7 @@ import { PROJECT_BOARD_LIMIT, readEventsState, readWorldState } from "../../runt
 import {
   PROJECT_SORTS,
   collectProjectTags,
+  isProjectClosed,
   deriveProjectFlags,
   describeTimeline,
   filterProjects,
@@ -459,18 +460,19 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
     });
   }, [availableTags]);
 
+  // Closed is an EXCLUSIVE view, not an "also include" switch: off shows only
+  // work still running, on shows only work that has finished, failed or been
+  // cancelled. It used to widen the list to everything, which — because the sort
+  // always ranks open work above closed — buried the two closed entries under a
+  // screen of active ones and made the button look broken.
   const visible = useMemo(() => {
     const filtered = filterProjects(projects, { owner, playerCountry, query, tags: activeTags });
-    const scoped = showClosed
-      ? filtered
-      : filtered.filter((project) => !["complete", "failed", "cancelled"].includes(project.status));
+    const scoped = filtered.filter((project) => (showClosed ? isProjectClosed(project) : !isProjectClosed(project)));
     return sortProjects(scoped, sortKey);
   }, [projects, owner, playerCountry, query, activeTags, showClosed, sortKey]);
 
-  const closedCount = useMemo(
-    () => projects.filter((project) => ["complete", "failed", "cancelled"].includes(project.status)).length,
-    [projects],
-  );
+  const closedCount = useMemo(() => projects.filter(isProjectClosed).length, [projects]);
+  const openCount = projects.length - closedCount;
 
   const toggleTag = useCallback((tag) => {
     setActiveTags((current) => (current.includes(tag)
@@ -630,9 +632,11 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
               <Chip
                 active={showClosed}
                 onClick={() => setShowClosed((value) => !value)}
-                title="Include completed, failed and cancelled entries"
+                title={showClosed
+                  ? `Showing closed entries only — switch back to the ${openCount} still running`
+                  : `Show the ${closedCount} completed, failed or cancelled entries instead`}
               >
-                Closed ({closedCount})
+                {showClosed ? `← Running (${openCount})` : `Closed (${closedCount})`}
               </Chip>
             )}
           </div>
@@ -723,7 +727,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             textAlign: "center",
           }}
           >
-            Nothing matches those filters.
+            {showClosed ? "No closed entries match those filters." : "Nothing matches those filters."}
           </div>
         )}
 
