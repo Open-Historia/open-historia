@@ -99,10 +99,13 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
 
   return {
     open,
+    ongoing: Boolean(project?.ongoing),
     nextMilestone,
     daysToTarget,
     daysToMilestone,
-    overdue: open && daysToTarget !== null && daysToTarget < 0,
+    // An ongoing effort can never be overdue — there is no date it was meant to
+    // finish by. It can still miss a milestone, which is the useful signal.
+    overdue: open && !project?.ongoing && daysToTarget !== null && daysToTarget < 0,
     dueSoon: open && daysToMilestone !== null && daysToMilestone >= 0 && daysToMilestone <= DUE_SOON_DAYS,
     milestoneMissed: open && milestoneMissed,
     stale: open && (asText(project?.status) === "stalled" || roundsSinceUpdate >= STALE_ROUNDS),
@@ -244,6 +247,9 @@ export const collectProjectTags = (projects) => {
 export const describeTimeline = (project, gameDate) => {
   const started = asText(project?.startedAt);
   const target = asText(project?.targetDate);
+  // A standing effort is not "missing" its end date; say so, rather than showing
+  // a bare start date that reads like an entry nobody finished filling in.
+  if (project?.ongoing) return started ? `Began ${started} · ongoing` : "Ongoing";
   if (!started && !target) return "";
   if (started && !target) return `Began ${started}`;
   if (!started) return `Target ${target}`;

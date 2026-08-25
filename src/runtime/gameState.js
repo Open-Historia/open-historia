@@ -969,6 +969,13 @@ export const normalizeProjectEntry = (entry, index = 0) => {
   const secrecy = normalizeOptionalString(entry.secrecy || entry.classification).toLowerCase();
   const progress = Number(entry.progress);
   const milestones = normalizeProjectMilestones(entry.milestones);
+  // A standing effort with no planned end: a permanent patrol, a continuous
+  // intelligence programme, an alliance kept in good repair. Distinct from
+  // merely having no targetDate yet, which is what an entry the model has not
+  // dated looks like — the flag says the absence is DELIBERATE, so the board can
+  // show it as ongoing rather than as an oversight, and the model knows it is
+  // allowed to leave the date off instead of inventing one.
+  const ongoing = entry.ongoing === true || entry.ongoing === "true";
   const updatedRound = Number(entry.updatedRound);
 
   return {
@@ -986,7 +993,10 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     tags: normalizeTagList(entry.tags),
     secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
     startedAt: canonicalizeDateString(entry.startedAt || entry.startDate || entry.began),
-    targetDate: canonicalizeDateString(entry.targetDate || entry.dueDate || entry.completionDate),
+    ongoing,
+    // An ongoing effort has no end date by definition; drop any the model sent
+    // alongside the flag rather than showing a deadline it has already disowned.
+    targetDate: ongoing ? "" : canonicalizeDateString(entry.targetDate || entry.dueDate || entry.completionDate),
     milestones,
     nextMilestone: deriveNextMilestoneFrom(milestones, entry.nextMilestone),
     lastUpdate: normalizeTextLike(entry.lastUpdate),
@@ -1097,7 +1107,7 @@ const normalizeProjectOp = (entry) => {
 // lowercase. Renaming goes through an explicit `newName`, the same way a marker
 // rename does.
 const PROJECT_PATCHABLE_FIELDS = [
-  "kind", "ownerCode", "summary", "status", "progress", "secrecy",
+  "kind", "ownerCode", "summary", "status", "progress", "secrecy", "ongoing",
   "startedAt", "targetDate", "lastUpdate", "note", "focus",
   "linkedUnitIds", "linkedMarkerIds",
 ];
