@@ -3,7 +3,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { extractFencedJson, looksLikeProjectOps, repairTruncatedJsonArray } from "./advisorBlocks.js";
+import {
+  extractFencedJson,
+  looksLikeProjectOps,
+  recoverOpsElementwise,
+  repairJsonStringValues,
+  repairTruncatedJsonArray,
+} from "./advisorBlocks.js";
 
 const fence = (lang, body) => "```" + lang + "\n" + body + "\n```";
 
@@ -171,4 +177,64 @@ test("a valid block reports no reason and is not touched", () => {
 
 test("looksLikeProjectOps survives smart quotes too", () => {
   assert.equal(looksLikeProjectOps('[{\u201Cop\u201D:\u201Ccreate\u201D,\u201Cname\u201D:\u201CA\u201D}]'), true);
+});
+
+// ---- unescaped inner quotes, and partial recovery ---------------------------
+// Field report: "invalid JSON (Expected ',' or '}' after property value in JSON
+// at position 4271 (line 10 column 1))" after ten entries had already imported.
+// The model wrote  "summary":"A 1 GW reactor (the "Titan-class" megalith)."  —
+// the inner quote closes the string early. Before this, one such entry cost the
+// entire batch.
+
+const goodEntry = (i) => `  {"op":"create","name":"Project ${i}","summary":"${"padding text ".repeat(20)}"},`;
+const badEntry = '  {"op":"create","name":"Project Vanguard","summary":"A 1 GW reactor (the "Titan-class" megalith)."},';
+
+test("an unescaped inner quote no longer costs the whole batch", () => {
+  const body = ["[", ...Array.from({ length: 8 }, (_, i) => goodEntry(i)), badEntry,
+    '  {"op":"create","name":"Project Nine","summary":"another"}', "]"].join("\n");
+
+  // Confirm the input really is the failure we are fixing.
+  assert.throws(() => JSON.parse(body), /Expected ',' or '}' after property value/);
+
+  const ops = repairTruncatedJsonArray(body);
+  assert.ok(ops, "nothing recovered at all");
+  assert.ok(ops.length >= 9, `expected the 9 clean entries, got ${ops.length}`);
+  assert.ok(ops.some((op) => op.name === "Project Nine"), "entries AFTER the bad one must survive too");
+  assert.ok(ops.every((op) => typeof op.name === "string" && op.name));
+});
+
+test("the bad entry itself is repaired when it can be", () => {
+  const repaired = repairJsonStringValues(badEntry.trim().replace(/,$/, ""));
+  const parsed = JSON.parse(repaired);
+  assert.equal(parsed.name, "Project Vanguard");
+  assert.match(parsed.summary, /Titan-class/);
+});
+
+test("already-escaped quotes are not double-escaped", () => {
+  const source = '{"op":"create","name":"A","summary":"He said \\"hello\\" once."}';
+  const parsed = JSON.parse(repairJsonStringValues(source));
+  assert.equal(parsed.summary, 'He said "hello" once.');
+});
+
+test("a literal newline inside a string value is escaped", () => {
+  const source = '{"op":"create","name":"A","summary":"first line\nsecond line"}';
+  assert.throws(() => JSON.parse(source));
+  assert.equal(JSON.parse(repairJsonStringValues(source)).summary, "first line\nsecond line");
+});
+
+test("recoverOpsElementwise reports what it had to drop", () => {
+  const body = [goodEntry(1), goodEntry(2), '  {"op":"create","name":"broken", "summary": }', goodEntry(3)].join("\n");
+  const { ops, dropped } = recoverOpsElementwise(body);
+  assert.equal(ops.length, 3);
+  assert.equal(dropped, 1);
+});
+
+test("non-string values are left alone by the repair", () => {
+  const source = '{"op":"update","name":"A","progress":58,"tags":["x","y"],"focus":{"lng":1.5,"lat":2.5}}';
+  assert.deepEqual(JSON.parse(repairJsonStringValues(source)), JSON.parse(source));
+});
+
+test("a fully valid batch is untouched by any of this", () => {
+  const source = '[{"op":"create","name":"A","summary":"s","milestones":[{"title":"m","date":"2030-01-01"}]}]';
+  assert.deepEqual(repairTruncatedJsonArray(source), JSON.parse(source));
 });
