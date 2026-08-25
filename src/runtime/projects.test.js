@@ -13,6 +13,8 @@ import {
   deriveProjectFlags,
   describeTimeline,
   filterProjects,
+  isProjectClosed,
+  isProjectOpen,
   isPlayerProject,
   signedDaysBetween,
   sortProjects,
@@ -229,4 +231,72 @@ test("every helper tolerates junk without throwing", () => {
   assert.deepEqual(collectProjectTags(null), []);
   assert.equal(describeTimeline(null, ""), "");
   assert.deepEqual(filterProjects([null, undefined], {}), []);
+});
+
+// ---- open vs closed, the Closed view's definition ---------------------------
+// The panel's Closed toggle, its count, and the sort all have to agree on what
+// "closed" means. They used to each carry their own inline list of statuses.
+
+test("isProjectClosed is exactly the complement of isProjectOpen", () => {
+  for (const status of ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"]) {
+    const entry = project({ status });
+    assert.equal(isProjectClosed(entry), !isProjectOpen(entry), `disagreed on "${status}"`);
+  }
+});
+
+test("closed means finished, failed or cancelled — nothing else", () => {
+  assert.deepEqual(
+    ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"]
+      .filter((status) => isProjectClosed(project({ status }))),
+    ["complete", "failed", "cancelled"],
+  );
+});
+
+test("an entry with no status at all counts as running", () => {
+  // normalizeProjectEntry defaults to "active", but the panel must not blow up
+  // on a hand-edited save either.
+  assert.equal(isProjectClosed({ name: "X" }), false);
+  assert.equal(isProjectClosed(null), false);
+});
+
+// ---- overdue, audited ------------------------------------------------------
+
+test("overdue fires the day AFTER the target, not on it", () => {
+  const p = project({ targetDate: "2035-06-01" });
+  assert.equal(deriveProjectFlags(p, "2035-05-31").overdue, false);
+  assert.equal(deriveProjectFlags(p, "2035-06-01").overdue, false, "still has the day it is due");
+  assert.equal(deriveProjectFlags(p, "2035-06-02").overdue, true);
+});
+
+test("overdue never fires for a closed project", () => {
+  for (const status of ["complete", "failed", "cancelled"]) {
+    assert.equal(deriveProjectFlags(project({ targetDate: "2020-01-01", status }), "2040-01-01").overdue, false, status);
+  }
+});
+
+test("overdue does fire for every running status, paused included", () => {
+  for (const status of ["proposed", "active", "stalled", "paused"]) {
+    assert.equal(deriveProjectFlags(project({ targetDate: "2020-01-01", status }), "2040-01-01").overdue, true, status);
+  }
+});
+
+test("an ongoing effort is never overdue, however old", () => {
+  const p = project({ targetDate: "", ongoing: true, startedAt: "1900-01-01" });
+  const flags = deriveProjectFlags(p, "2040-01-01");
+  assert.equal(flags.overdue, false);
+  assert.equal(flags.ongoing, true);
+});
+
+test("ongoing does not suppress a missed milestone", () => {
+  const flags = deriveProjectFlags(project({
+    ongoing: true, targetDate: "",
+    milestones: [{ id: "m", title: "Quarterly review", date: "2030-01-01", status: "pending", note: "" }],
+  }), "2040-01-01");
+  assert.equal(flags.overdue, false, "no end date to be late against");
+  assert.equal(flags.milestoneMissed, true, "but a slipped checkpoint still matters");
+});
+
+test("describeTimeline says ongoing rather than showing a bare start date", () => {
+  assert.equal(describeTimeline(project({ ongoing: true, targetDate: "" }), "2033-01-01"), "Began 1962-03-01 · ongoing");
+  assert.equal(describeTimeline(project({ ongoing: true, targetDate: "", startedAt: "" }), "2033-01-01"), "Ongoing");
 });

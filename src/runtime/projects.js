@@ -56,6 +56,11 @@ const OPEN_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
 
 export const isProjectOpen = (project) => OPEN_STATUSES.has(asText(project?.status) || "active");
 
+// The complement, exported so the panel's Closed filter and its count cannot
+// drift apart from each other or from the sort — this used to be an inline
+// ["complete","failed","cancelled"] literal written out in two separate places.
+export const isProjectClosed = (project) => !isProjectOpen(project);
+
 // The soonest outstanding milestone. Reads the stored `nextMilestone` first
 // (normalizeProjectEntry already derived it from the milestone list on the way
 // in, so it is the authoritative answer) and only falls back to scanning when a
