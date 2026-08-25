@@ -279,6 +279,7 @@ const Main = ({
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
+        mapRef={mapRef}
       />
       <Other rightShift={rightShift} />
       <Search mapRef={mapRef} />
@@ -302,6 +303,7 @@ const Main = ({
             width={advisorWidth}
             onResize={handleAdvisorResize}
             onOpenActions={() => setActiveBottomPanel("actions")}
+            onOpenProjects={() => setActiveBottomPanel("projects")}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
           />

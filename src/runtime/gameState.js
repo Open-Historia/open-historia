@@ -74,6 +74,14 @@ export const WORLD_DEFAULTS = {
   // pruneSatisfiedUnitOrders below.
   pendingUnitOrders: [],
   polityOverrides: {},
+  // Long-running efforts the player is pursuing or has learned of: research
+  // programmes, construction projects, military and political operations. Only
+  // the AI writes these -- events via impacts.projectOps, the advisor via its
+  // ```projects block -- because a hand-editable board would drift out of step
+  // with the narrative that is supposed to be driving it. Listed in the
+  // normalizeWorldState return too: this spread is overwritten by the incoming
+  // world, so a field declared only here never survives a round trip.
+  projects: [],
   // Region id -> claimant polity names: the world-data way to mark a region
   // DISPUTED (striped in the administrator's + claimants' colors). Same effect
   // as a claimants list on the region's geojson feature, but declarable by a
@@ -811,6 +819,380 @@ export const applyMarkerOps = (markers, ops) => {
   return next;
 };
 
+// Projects & Operations: the long-running efforts board (world.projects[]).
+//
+// A project is anything that spans rounds and has a state worth tracking — a
+// research programme, a shipbuilding project, a covert operation, a diplomatic
+// campaign. It is deliberately NOT the actions queue: an action is one thing the
+// player does this round and a jump resolves it, while a project persists across
+// many rounds and accumulates milestones.
+//
+// Enums are closed where the UI switches on the value and open where the
+// vocabulary is a judgement call the model makes every turn. `status` is closed
+// because the panel colour-codes it; `tags` is wide open (normalizeTagList, the
+// same rule country tags use) because "which categories exist" is exactly the
+// thing the AI should be free to invent per campaign.
+export const PROJECT_STATUSES = [
+  "proposed",
+  "active",
+  "stalled",
+  "paused",
+  "complete",
+  "failed",
+  "cancelled",
+];
+const PROJECT_STATUS_SET = new Set(PROJECT_STATUSES);
+// Statuses that are still running: they can go overdue and belong on the default
+// board view. Exported because the panel and the derived-flag helpers both need
+// the same answer, and two copies of this list would drift apart.
+export const PROJECT_OPEN_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
+const PROJECT_KIND_SET = new Set(["project", "operation"]);
+const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
+const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
+
+// world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
+// unitsController), so everything riding inside it is on a bandwidth budget.
+// These caps are what stop a campaign two hundred rounds deep from turning the
+// poll into a payload — an old project falling off the board is a far smaller
+// loss than every poll dragging.
+const MAX_PROJECTS = 40;
+const MAX_PROJECT_MILESTONES = 12;
+const MAX_PROJECT_EVENT_IDS = 12;
+
+const normalizeProjectMilestone = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") {
+    // A bare string is a title. Models reach for that shorthand constantly, and
+    // an undated milestone still tells the player what comes next.
+    if (typeof entry !== "string") return null;
+    const title = normalizeString(entry);
+    return title
+      ? { id: generateId(`milestone-${index}`), title, date: "", status: "pending", note: "" }
+      : null;
+  }
+
+  const title = normalizeOptionalString(entry.title || entry.name || entry.label);
+  if (!title) return null;
+
+  const status = normalizeOptionalString(entry.status).toLowerCase();
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`milestone-${index}`),
+    title,
+    date: canonicalizeDateString(entry.date || entry.due || entry.targetDate),
+    status: PROJECT_MILESTONE_STATUS_SET.has(status) ? status : "pending",
+    note: normalizeOptionalString(entry.note || entry.description),
+  };
+};
+
+const normalizeProjectMilestones = (list) =>
+  normalizeArray(list)
+    .map((entry, index) => normalizeProjectMilestone(entry, index))
+    .filter(Boolean)
+    .slice(0, MAX_PROJECT_MILESTONES);
+
+// The soonest milestone still outstanding. Derived rather than trusted: the model
+// is given both a milestone list and a nextMilestone field, and the two drift the
+// moment it marks one done without restating the other. The list wins where there
+// is one; the stored value is a fallback for a project that carries no list.
+const deriveNextMilestoneFrom = (milestones, stored) => {
+  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending");
+  if (pending.length > 0) {
+    // Dated milestones first, earliest wins. An undated one is a "next, whenever"
+    // and only surfaces when nothing dated is outstanding.
+    const dated = pending.filter((entry) => entry.date).sort((a, b) => a.date.localeCompare(b.date));
+    const next = dated[0] || pending[0];
+    return { title: next.title, date: next.date, note: next.note };
+  }
+
+  if (!stored || typeof stored !== "object") return null;
+  const title = normalizeOptionalString(stored.title || stored.name);
+  if (!title) return null;
+  return {
+    title,
+    date: canonicalizeDateString(stored.date || stored.due),
+    note: normalizeOptionalString(stored.note || stored.description),
+  };
+};
+
+const normalizeProjectCoords = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const lng = finiteOrNull(value.lng ?? value.lon ?? value.longitude);
+  const lat = finiteOrNull(value.lat ?? value.latitude);
+  // 0,0 is open ocean off Africa — the coordinate a model emits when it does not
+  // actually know where something is. Same guard normalizeMarkerEntry uses.
+  if (lng === null || lat === null || (lng === 0 && lat === 0)) return null;
+  return { lng, lat };
+};
+
+const normalizeIdList = (value, limit) =>
+  normalizeArray(value)
+    .map((entry) => normalizeOptionalString(entry))
+    .filter(Boolean)
+    .filter((entry, index, list) => list.indexOf(entry) === index)
+    .slice(0, limit);
+
+export const normalizeProjectEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  // The name IS the identity here, exactly as it is for markers and polities: it
+  // is what the player reads, what the advisor says out loud, and what an op
+  // targets when it does not know the id. A nameless project is unaddressable.
+  const name = normalizeOptionalString(entry.name || entry.title || entry.project);
+  if (!name) return null;
+
+  const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
+  const status = normalizeOptionalString(entry.status).toLowerCase();
+  const secrecy = normalizeOptionalString(entry.secrecy || entry.classification).toLowerCase();
+  const progress = Number(entry.progress);
+  const milestones = normalizeProjectMilestones(entry.milestones);
+  const updatedRound = Number(entry.updatedRound);
+
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`project-${index}`),
+    name,
+    kind: PROJECT_KIND_SET.has(kind) ? kind : "project",
+    // Same owner namespace as units, markers and every other polity-keyed field:
+    // a country NAME, verbatim. Blank means the player — an operation the model
+    // reports without naming an owner is one of theirs, and making it restate the
+    // player's own name on every entry is how that field ends up wrong.
+    ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
+    summary: normalizeTextLike(entry.summary || entry.description),
+    status: PROJECT_STATUS_SET.has(status) ? status : "active",
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
+    tags: normalizeTagList(entry.tags),
+    secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
+    startedAt: canonicalizeDateString(entry.startedAt || entry.startDate || entry.began),
+    targetDate: canonicalizeDateString(entry.targetDate || entry.dueDate || entry.completionDate),
+    milestones,
+    nextMilestone: deriveNextMilestoneFrom(milestones, entry.nextMilestone),
+    lastUpdate: normalizeTextLike(entry.lastUpdate),
+    // Newest first: the activity feed reads top-down, so the cap must drop the
+    // oldest entry rather than the most recent one.
+    eventIds: normalizeIdList(entry.eventIds, MAX_PROJECT_EVENT_IDS),
+    linkedUnitIds: normalizeIdList(entry.linkedUnitIds, 12),
+    linkedMarkerIds: normalizeIdList(entry.linkedMarkerIds, 12),
+    focus: normalizeProjectCoords(entry.focus),
+    note: normalizeTextLike(entry.note),
+    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeOptionalString(entry.updatedAt) || new Date().toISOString(),
+    updatedRound: Number.isFinite(updatedRound) && updatedRound > 0 ? Math.trunc(updatedRound) : 0,
+  };
+};
+
+export const normalizeProjects = (projects) =>
+  normalizeArray(projects)
+    .map((entry, index) => normalizeProjectEntry(entry, index))
+    .filter(Boolean)
+    // Deduplicate by name, keeping the FIRST occurrence. Two entries for the same
+    // programme are a model restating itself, and applyProjectOps has already
+    // folded ops together in order, so the first is the merged one.
+    .filter((entry, index, list) =>
+      list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index)
+    .slice(0, MAX_PROJECTS);
+
+// One AI-authored mutation to the projects board.
+//
+// The aliases are generous on purpose. markerOps learned this the hard way: a
+// model asked for "build" writes "found" about a third of the time and the op is
+// then dropped in silence. The vocabulary accepted here (start/launch,
+// cancel/abandon) is what a model actually reaches for when narrating a
+// programme, so take it rather than losing the update.
+const normalizeProjectOp = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  const op = normalizeOptionalString(entry.op || entry.action).toLowerCase();
+  const projectId = normalizeOptionalString(entry.projectId || entry.id);
+  const name = normalizeOptionalString(entry.name || entry.project || entry.title);
+
+  if (op === "create" || op === "start" || op === "launch" || op === "open" || op === "add") {
+    // The payload may be nested under `project` or inlined on the op itself —
+    // both shapes turn up, and markerOps accepts both for the same reason.
+    const project = normalizeProjectEntry(entry.project ?? entry, 0);
+    if (!project) return null;
+    return { op: "create", project };
+  }
+
+  if (op === "update" || op === "progress" || op === "edit") {
+    if (!projectId && !name) return null;
+    return { op: "update", projectId, name, patch: entry.patch ?? entry.project ?? entry };
+  }
+
+  if (op === "milestone") {
+    if (!projectId && !name) return null;
+    const milestone = normalizeProjectMilestone(entry.milestone ?? entry, 0);
+    if (!milestone) return null;
+    return { op: "milestone", projectId, name, milestone };
+  }
+
+  if (op === "complete" || op === "finish" || op === "completed") {
+    if (!projectId && !name) return null;
+    return { op: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  if (op === "remove" || op === "cancel" || op === "abandon" || op === "delete") {
+    if (!projectId && !name) return null;
+    return { op: "remove", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  return null;
+};
+
+// Fields an `update` op may change. A whitelist rather than a spread, because the
+// patch object is frequently the whole op (see normalizeProjectOp), so a blind
+// merge would write `op`, `projectId` and friends straight into the project.
+// Note the absence of `name`: an inlined update op carries the name it was
+// matched BY, and matching is case-insensitive, so patching it would let
+// {"op":"update","name":"project leviathan"} quietly rename Project Leviathan to
+// lowercase. Renaming goes through an explicit `newName`, the same way a marker
+// rename does.
+const PROJECT_PATCHABLE_FIELDS = [
+  "kind", "ownerCode", "summary", "status", "progress", "secrecy",
+  "startedAt", "targetDate", "lastUpdate", "note", "focus",
+  "linkedUnitIds", "linkedMarkerIds",
+];
+
+// Apply a batch of project ops (pure).
+//
+// Matching is by id first, then case-insensitive name — the same order
+// applyMarkerOps uses, and for the same reason: the model reliably knows what it
+// called something and only sometimes knows the id it was given.
+//
+// `ctx` carries the event that caused the change ({date, eventId, round}), which
+// is what builds the activity feed without the model having to maintain it.
+export const applyProjectOps = (projects, ops, ctx = {}) => {
+  const { date = "", eventId = "", round = 0 } = ctx;
+  const stamp = new Date().toISOString();
+  let next = normalizeProjects(projects);
+
+  const indexOf = (op) => {
+    if (op.projectId) {
+      const byId = next.findIndex((project) => project.id === op.projectId);
+      if (byId !== -1) return byId;
+    }
+    if (!op.name) return -1;
+    const wanted = op.name.toLowerCase();
+    return next.findIndex((project) => project.name.toLowerCase() === wanted);
+  };
+
+  // Every mutation routes through here so the "when did this last move" fields
+  // and the activity feed cannot be updated in one branch and forgotten in
+  // another — which is exactly how a board like this goes quietly stale.
+  const touch = (project) => ({
+    ...project,
+    updatedAt: stamp,
+    updatedRound: round > 0 ? round : project.updatedRound,
+    eventIds: eventId
+      ? [eventId, ...project.eventIds.filter((id) => id !== eventId)].slice(0, MAX_PROJECT_EVENT_IDS)
+      : project.eventIds,
+  });
+
+  // Normalize defensively. Ops arriving from applyEventImpactsToWorld have been
+  // through normalizeEventImpacts already, but the advisor feeds this function a
+  // freshly parsed ```projects block that has not -- and normalizeProjectOp is
+  // idempotent, so running it twice costs nothing and skipping it drops the whole
+  // advisor path on the floor.
+  for (const raw of normalizeArray(ops)) {
+    const op = normalizeProjectOp(raw);
+    if (!op) continue;
+    if (op.op === "create") {
+      const existingIndex = indexOf({ projectId: op.project.id, name: op.project.name });
+      if (existingIndex !== -1) {
+        // Re-announcing a running project is a restatement, not a second one, so
+        // treat it as an update — otherwise a chatty turn fills the board with
+        // duplicate copies of Project Leviathan. Same rule applyMarkerOps applies
+        // to rebuilding under an existing name.
+        const existing = next[existingIndex];
+        next = next.map((project, index) => (index === existingIndex
+          ? touch({
+            ...op.project,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            // A restatement rarely repeats the history, so keep what we had.
+            eventIds: existing.eventIds,
+            milestones: op.project.milestones.length ? op.project.milestones : existing.milestones,
+          })
+          : project));
+        continue;
+      }
+      next = [...next, touch({
+        ...op.project,
+        startedAt: op.project.startedAt || date,
+        createdAt: stamp,
+      })];
+      continue;
+    }
+
+    // An op against a project that does not exist is dropped rather than
+    // creating one: it usually means the model invented an id, and a phantom
+    // project spawned from a typo is worse than a missed update.
+    const index = indexOf(op);
+    if (index === -1) continue;
+    const current = next[index];
+
+    if (op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const merged = { ...current };
+      for (const field of PROJECT_PATCHABLE_FIELDS) {
+        if (patch[field] !== undefined) merged[field] = patch[field];
+      }
+      // tags follows the countryTags rule exactly: an ARRAY replaces the list
+      // wholesale (so [] really does mean "this has no tags any more"), while an
+      // absent value means unchanged. Truthiness would conflate the two.
+      const renamed = normalizeOptionalString(patch.newName || patch.rename);
+      if (renamed) merged.name = renamed;
+      if (Array.isArray(patch.tags)) merged.tags = patch.tags;
+      if (Array.isArray(patch.milestones)) merged.milestones = patch.milestones;
+      const normalized = normalizeProjectEntry(
+        { ...merged, id: current.id, createdAt: current.createdAt },
+        index,
+      );
+      if (!normalized) continue;
+      next = next.map((project, i) => (i === index ? touch(normalized) : project));
+      continue;
+    }
+
+    if (op.op === "milestone") {
+      const wanted = op.milestone.title.toLowerCase();
+      const existing = current.milestones.find((entry) =>
+        (op.milestone.id && entry.id === op.milestone.id) || entry.title.toLowerCase() === wanted);
+      const milestones = existing
+        ? current.milestones.map((entry) =>
+          (entry === existing ? { ...entry, ...op.milestone, id: entry.id } : entry))
+        : [...current.milestones, op.milestone];
+      // nextMilestone is nulled so normalizeProjectEntry re-derives it from the
+      // list it was just handed, rather than keeping a value the new milestone
+      // may have superseded.
+      const normalized = normalizeProjectEntry({ ...current, milestones, nextMilestone: null }, index);
+      if (!normalized) continue;
+      next = next.map((project, i) => (i === index ? touch(normalized) : project));
+      continue;
+    }
+
+    if (op.op === "complete") {
+      next = next.map((project, i) => (i === index
+        ? touch({
+          ...project,
+          status: "complete",
+          progress: 100,
+          // Nothing is still outstanding on a finished project. Leaving a pending
+          // milestone behind would keep it showing a "next" that will never come
+          // and, once its date passes, an OVERDUE badge on a done programme.
+          milestones: project.milestones.map((entry) =>
+            (entry.status === "pending" ? { ...entry, status: "done" } : entry)),
+          nextMilestone: null,
+          lastUpdate: op.note || project.lastUpdate,
+        })
+        : project));
+      continue;
+    }
+
+    if (op.op === "remove") {
+      next = next.filter((_, i) => i !== index);
+    }
+  }
+
+  return next;
+};
+
 // One AI-authored mutation to the unit list: spawn | move | strength | remove.
 // Why normalizeUnitOp refused an entry, in words a player can paste into a bug
 // report. Mirrors the checks below — keep the two in step.
@@ -1244,6 +1626,7 @@ const normalizeEventImpacts = (value) => {
       createdChats: [],
       markerOps: [],
       polityChanges: [],
+      projectOps: [],
       regionTransfers: [],
       unitOps: [],
     };
@@ -1254,6 +1637,7 @@ const normalizeEventImpacts = (value) => {
     createdChats: normalizeChats(value.createdChats),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
+    projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
     // event that narrates a deployment and troops that actually appear on the map,
@@ -1514,8 +1898,9 @@ export const normalizeWorldState = (world) => {
       })
       .filter(Boolean),
     markers: normalizeMarkers(nextWorld.markers),
-    // Explicit (not via the ...WORLD_DEFAULTS spread) so this new field survives every
+    // Explicit (not via the ...WORLD_DEFAULTS spread) so these new fields survive every
     // write path — the documented new-world-field trap.
+    projects: normalizeProjects(nextWorld.projects),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -1696,7 +2081,11 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // op on day 3 of a 90-day jump only moves three days' worth. Passing motion: null
 // (the default) leaves moves unclamped, i.e. exactly the old behaviour — which is
 // also the right fallback for a scenario whose dates are not Gregorian.
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, motion = null }) => {
+// `round` stamps world.projects[].updatedRound so the board can say how long a
+// programme has sat still. It defaults to 0 (meaning "leave the stamp alone")
+// rather than being required, because the staged event reveal in time.jsx replays
+// impacts purely for display and must not age the projects it is only redrawing.
+export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, motion = null, round = 0 }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
   let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
@@ -1853,6 +2242,21 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, moti
           nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [op.name.toLowerCase()]: op.newName };
         }
       }
+    }
+
+    // Projects & Operations last, so the ops see the world this event has already
+    // reshaped. The event's own id and date ride along: that is what stamps the
+    // activity feed and dates a project the event has just started, without the
+    // model having to restate either.
+    if (event.impacts.projectOps?.length) {
+      nextWorld.projects = applyProjectOps(nextWorld.projects, event.impacts.projectOps.map((op) =>
+        (op.op === "create" && op.project?.ownerCode
+          ? { ...op, project: { ...op.project, ownerCode: resolveOwner(op.project.ownerCode) } }
+          : op)), {
+        date: event.date,
+        eventId: event.id,
+        round,
+      });
     }
   }
 

@@ -93,6 +93,24 @@ Stored in world so they share every read/write/poll/normalize path with no serve
 
 `Unit` enums (`:60`–`:64`): `type ∈ {infantry,armor,air,naval,artillery,garrison}` (default `infantry`); `status ∈ {idle,moving,engaged,defeated,pending}` (default `idle`; `pending` = a player deploy awaiting AI resolution, rendered translucent); `source ∈ {player,ai,scenario}` (default `scenario`); `posture ∈ {holding,massing,patrol,transit,exercise,blockade,withdrawing}` (default `""` — intent, as distinct from lifecycle `status`; deliberately not `garrison`, which would collide with the unit *type*). `strength` is a **percentage of established strength**, clamped to `[0,100]` by `clampUnitStrength`, which coerces the old 1–1000 scale by dividing anything over 100 by ten. `composition` is free text for the order of battle ("1 aircraft carrier, 2 frigates"); `covert` is engine-assigned and means "no confirmed line of support" (a covert insertion **or** a presence only just detected), shown to the player as *Unconfirmed*; `eventId` links the event that created or last moved the unit. `marker.kind` is free-form (lowercased for stable styling), default `landmark`. `PendingUnitOrder.kind ∈ {move,patrol}` (default `move`; a legacy `attack` is coerced to `move`, keeping its destination and `targetLabel`).
 
+### 2e-bis. Projects & operations (ride inside world state)
+
+| Field | Type | Default | Element shape (normalizer) |
+|---|---|---|---|
+| `projects` | `Project[]` | `[]` | `normalizeProjectEntry`: `{id,name,kind,ownerCode,summary,status,progress,tags,secrecy,startedAt,targetDate,milestones,nextMilestone,lastUpdate,eventIds,linkedUnitIds,linkedMarkerIds,focus,note,createdAt,updatedAt,updatedRound}`. |
+
+The **Projects & Operations board**: long-running efforts that span rounds — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns. Deliberately distinct from the actions queue, which holds one round's orders and is resolved by the next jump.
+
+`kind ∈ {project, operation}` (default `project`); `status ∈ {proposed,active,stalled,paused,complete,failed,cancelled}` (default `active`; the still-running subset is exported as `PROJECT_OPEN_STATUSES`); `secrecy ∈ {public,restricted,covert}`. `tags` reuses `normalizeTagList` (`countryTags.js`) so the 8×32 caps and case-insensitive dedupe are shared with country tags. `ownerCode` is a country **NAME**, verbatim — same namespace as units and markers — and **blank means the player**, so the model is never made to restate the player's own country on every entry (a field it has to repeat is a field it eventually gets wrong). `nextMilestone` is **re-derived** from `milestones` on every normalize (earliest dated `pending` wins) rather than trusted: the model is given both and drifts them apart the moment it marks one done without restating the other.
+
+Capped at 40 projects, 12 milestones each and 12 `eventIds` each. `world.json` is force-re-read every 5 s by two pollers, so everything riding inside it is on a bandwidth budget.
+
+**The player cannot create or edit a project.** Only two authors write to the board: events, via `impacts.projectOps` (§5), and the advisor, via its ```` ```projects ```` block. `eventIds` is stamped by `applyProjectOps` from the causing event, which is what builds the per-project activity feed without the model having to maintain it.
+
+Everything date-derived — overdue, due-soon, a slipped milestone, a programme untouched for several rounds — is **not stored**. It is computed from the game clock by `src/runtime/projects.js` (import-free, unit-tested in a bare checkout), so it cannot go stale between AI turns. That split is the point of the feature: the model owns what only it can know, the calendar owns the rest.
+
+Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately — `buildFreshWorldSeedFromScenario` carries *authored settings* across, and projects are play state, exactly like `units` and `markers`.
+
 ### 2f. Turn machinery & narrative history
 
 | Field | Type | Default | Meaning (normalizer) |
@@ -139,6 +157,7 @@ Every event may carry an `impacts` object (`normalizeEventImpacts`, `src/runtime
 | `polityChanges` | `normalizePolityChange` (`:442`) → `{code,name,color,aliases[],note,reputation,tags}` | inline loop (`:1052`) | Upserts `polityOverrides[code]`; also writes `colors[code]` (§7), `internationalReputation[code]`, `countryTags[code]`. |
 | `unitOps` | `normalizeUnitOp` (`:592`) → `spawn\|move\|strength\|remove` | `applyUnitOps` (`:638`) | Rewrites `world.units`. |
 | `markerOps` | `normalizeMarkerOp` (`:549`) → `build\|remove` | `applyMarkerOps` (`:575`) | Rewrites `world.markers`. |
+| `projectOps` | `normalizeProjectOp` → `create\|update\|milestone\|complete\|remove` | `applyProjectOps` | Rewrites `world.projects`. Matches by id, then case-insensitive name; an op against a project that does not exist is **dropped**, never auto-created. A `create` naming a project already on the board is folded in as an update, so a chatty turn cannot fill the board with duplicates. `tags` follows the `countryTags` rule — an array replaces wholesale, absent means unchanged. |
 | `createdChats` | `normalizeChats` (`:415`) | turn writer (`gameplay.js:1364`) | New diplomacy threads pushed into `chat.json` (not `world`). |
 | `actionIds` | string list (`:683`) | turn writer | Which queued actions this event resolves. |
 

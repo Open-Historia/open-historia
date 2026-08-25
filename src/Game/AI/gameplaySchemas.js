@@ -418,6 +418,183 @@ const markerOpSchema = {
   ],
 };
 
+const projectMilestoneSchema = {
+  type: "object",
+  description: "One dated checkpoint on the way to a project's completion.",
+  properties: {
+    id: textSchema("Stable milestone identifier, when updating an existing one."),
+    title: nonEmptyTextSchema("Short description of the checkpoint, e.g. \"Sea trials begin\"."),
+    date: textSchema("In-game date the checkpoint is expected or was reached (YYYY-MM-DD)."),
+    status: {
+      type: "string",
+      description: "pending until reached; done once achieved; missed if its date passed unmet.",
+      enum: ["pending", "done", "missed"],
+    },
+    note: textSchema("Brief detail about the checkpoint."),
+  },
+  required: ["title"],
+  additionalProperties: false,
+};
+
+const projectSchema = {
+  type: "object",
+  description:
+    "A long-running effort that spans multiple rounds: a research or industrial "
+    + "programme, a construction project, a military operation, a covert operation, "
+    + "or a sustained political or diplomatic campaign. Distinct from a queued "
+    + "action, which is one thing done this round and resolved by the next jump.",
+  properties: {
+    id: textSchema("Stable project identifier. Copy it EXACTLY from the running-projects list when updating one; omit it when starting something new."),
+    name: nonEmptyTextSchema("The name the project is known by, e.g. \"Project Leviathan\" or \"Operation Kingfisher\"."),
+    kind: {
+      type: "string",
+      description: "operation for a military, intelligence or covert undertaking; project for a programme, build or civil effort.",
+      enum: ["project", "operation"],
+    },
+    ownerCode: textSchema("Running polity's FULL country name (\"Spain\"), never a country code. Leave empty for the player's own."),
+    summary: nonEmptyTextSchema("One or two sentences on what this is and what it is meant to achieve."),
+    status: {
+      type: "string",
+      description:
+        "proposed (agreed but not begun), active (under way), stalled (blocked or "
+        + "starved of resources), paused (deliberately suspended), complete, failed, "
+        + "or cancelled.",
+      enum: ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"],
+    },
+    progress: {
+      type: "integer",
+      description: "How far along it is, 0-100. Move this whenever the narrative advances or sets it back.",
+      minimum: 0,
+      maximum: 100,
+    },
+    tags: stringArraySchema(
+      "Short lowercase categories the player can filter by - military, political, "
+      + "naval, economic, research, intelligence, infrastructure, nuclear, space. "
+      + "Invent what fits this campaign; reuse the same spelling across projects.",
+    ),
+    secrecy: {
+      type: "string",
+      description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
+      enum: ["public", "restricted", "covert"],
+    },
+    startedAt: textSchema("In-game date work began (YYYY-MM-DD)."),
+    targetDate: textSchema("In-game date it is expected to complete (YYYY-MM-DD). This is what the board measures overdue against."),
+    milestones: {
+      type: "array",
+      description: "Checkpoints along the way, earliest first. The soonest pending one is shown as the project's next milestone.",
+      items: projectMilestoneSchema,
+    },
+    lastUpdate: textSchema("One present-tense sentence on what most recently changed. Shown to the player verbatim."),
+    linkedUnitIds: stringArraySchema("Ids of units carrying this out, copied exactly from the unit list."),
+    linkedMarkerIds: stringArraySchema("Ids of structures this is built around, copied exactly from the structure list."),
+    focus: {
+      type: "object",
+      description: "Where on the map this is happening, so the player can jump the camera to it.",
+      properties: {
+        lng: { type: "number", description: "Longitude.", minimum: -180, maximum: 180 },
+        lat: { type: "number", description: "Latitude.", minimum: -90, maximum: 90 },
+      },
+      required: ["lng", "lat"],
+      additionalProperties: false,
+    },
+    note: textSchema("Anything else worth keeping: estimated cost, blockers, who is running it."),
+  },
+  required: ["name", "summary"],
+  additionalProperties: false,
+};
+
+const projectOpSchema = {
+  description:
+    "A change to the player's Projects & Operations board. Use op create, update, "
+    + "milestone, complete, or remove, and fill the fields that op needs.",
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create"] },
+        project: projectSchema,
+      },
+      required: ["op", "project"],
+      additionalProperties: false,
+    },
+    // The same create, written flat. markerOpSchema learned this the hard way:
+    // models routinely put the payload's fields beside `op` instead of nesting
+    // them, the engine has always read that shape (normalizeProjectOp falls back
+    // to the entry itself), and only the schema refused it — throwing away the
+    // WHOLE turn over one flattened op. Accept what we already understand.
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create"] },
+        ...projectSchema.properties,
+      },
+      required: ["op", "name", "summary"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      description: "Change an existing project. Send only the fields that actually change.",
+      properties: {
+        op: { type: "string", enum: ["update"] },
+        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
+        name: nonEmptyTextSchema("The project's current name, used to find it when no id is given."),
+        newName: textSchema("A new name, only when the project is being renamed."),
+        kind: projectSchema.properties.kind,
+        ownerCode: projectSchema.properties.ownerCode,
+        summary: textSchema("Replacement summary, only when it changes."),
+        status: projectSchema.properties.status,
+        progress: projectSchema.properties.progress,
+        tags: projectSchema.properties.tags,
+        secrecy: projectSchema.properties.secrecy,
+        startedAt: projectSchema.properties.startedAt,
+        targetDate: projectSchema.properties.targetDate,
+        lastUpdate: projectSchema.properties.lastUpdate,
+        linkedUnitIds: projectSchema.properties.linkedUnitIds,
+        linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
+        focus: projectSchema.properties.focus,
+        note: projectSchema.properties.note,
+      },
+      required: ["op", "name"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      description: "Add a checkpoint to a project, or mark an existing one reached or missed.",
+      properties: {
+        op: { type: "string", enum: ["milestone"] },
+        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
+        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
+        milestone: projectMilestoneSchema,
+      },
+      required: ["op", "name", "milestone"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["complete"] },
+        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
+        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
+        note: textSchema("One sentence on how it finished."),
+      },
+      required: ["op", "name"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      description: "Drop a project from the board entirely - it was cancelled or abandoned. To record a defeat instead, use update with status failed so it stays visible.",
+      properties: {
+        op: { type: "string", enum: ["remove"] },
+        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
+        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
+        note: textSchema("Brief explanation."),
+      },
+      required: ["op", "name"],
+      additionalProperties: false,
+    },
+  ],
+};
+
 const impactsSchema = {
   type: "object",
   description: "Optional structured world-state effects. Include only effect arrays that are relevant.",
@@ -453,6 +630,16 @@ const impactsSchema = {
         + "constructs, or destroys a named place - a city, military base, bunker, "
         + "missile silo, embassy, port - so the map shows it.",
       items: markerOpSchema,
+    },
+    projectOps: {
+      type: "array",
+      description:
+        "Changes to the Projects & Operations board. Use whenever the event starts, "
+        + "advances, sets back, completes or ends a multi-round effort - a research "
+        + "or industrial programme, a construction project, a military or covert "
+        + "operation, a sustained political campaign - so the board matches the "
+        + "story. Prefer updating a running project over starting a duplicate.",
+      items: projectOpSchema,
     },
   },
   additionalProperties: false,

@@ -14,6 +14,7 @@ import {
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText } from "./regionVocab.js";
 import { buildForcePostureText } from "./forcePosture.js";
+import { describeTimeline, deriveProjectFlags } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -348,6 +349,69 @@ export const buildMarkersSummaryText = (world) => {
   }).join("\n");
 };
 
+// The Projects & Operations board (world.projects), written out for the model.
+//
+// Ids are printed with every entry, and the directives insist they be copied
+// verbatim, because the alternative is the model inventing one and its update
+// landing on nothing (applyProjectOps drops an op whose target does not exist —
+// far better than spawning a phantom project from a typo).
+//
+// Also prints what the ENGINE derived rather than what the model last said:
+// overdue, and rounds since the last update. That is the nudge that gets a
+// neglected programme moved along, and it cannot be argued with — it is a
+// function of the calendar, not of anyone's memory.
+export const buildProjectsSummaryText = (world, game) => {
+  const projects = normalizeArray(world?.projects);
+  if (projects.length === 0) {
+    return "No projects or operations are being tracked yet.";
+  }
+
+  const gameDate = normalizeString(game?.gameDate);
+  const round = Number(game?.round) || 0;
+  const player = normalizeString(game?.country);
+
+  return projects.map((project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    const owner = normalizeString(project.ownerCode);
+    // Do not label it twice: half of these are already called "Operation X" or
+    // "Project Y", and "Operation \"Operation Kingfisher\"" reads like a mistake.
+    const label = project.kind === "operation" ? "Operation" : "Project";
+    const titled = project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
+      ? `"${project.name}"`
+      : `${label} "${project.name}"`;
+    const head = [
+      `${titled} [id ${project.id}]`,
+      owner && owner !== player ? `run by ${owner}` : "ours",
+      project.status,
+      `${project.progress}% complete`,
+    ].filter(Boolean).join(", ");
+
+    const timeline = describeTimeline(project, gameDate);
+    const next = flags.nextMilestone
+      ? `Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
+      : "";
+    // Only the flags that are actually raised, so the common case stays short.
+    const warnings = [
+      flags.overdue ? "OVERDUE" : "",
+      flags.milestoneMissed ? "a milestone has slipped" : "",
+      flags.stale ? "no progress reported recently" : "",
+      project.secrecy !== "public" ? project.secrecy : "",
+    ].filter(Boolean);
+    const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
+
+    return [
+      `- ${head}.`,
+      project.summary,
+      project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
+      timeline ? `${timeline}.` : "",
+      next,
+      project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
+      roundsSince > 0 ? `Last updated ${roundsSince} round${roundsSince === 1 ? "" : "s"} ago.` : "",
+      warnings.length ? `[${warnings.join("; ")}]` : "",
+    ].filter(Boolean).join(" ");
+  }).join("\n");
+};
+
 // City coordinates for the model, so troop deployments and events land on the
 // actual city instead of a guess. Two sources, mirroring the map's own layer:
 // custom-city scenarios use their era set; everything else uses the significant
@@ -644,6 +708,7 @@ export const buildPromptContext = async (bundle, {
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),
+    projectsSummary: buildProjectsSummaryText(bundle.world, bundle.game),
     recentEvents,
     recentEventsLong: campaignHistory,
     recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
