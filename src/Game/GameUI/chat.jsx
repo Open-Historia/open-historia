@@ -178,6 +178,14 @@ const TrashIcon = () => (
     </svg>
 );
 
+const RetryIcon = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+    </svg>
+);
+
 // Filled = currently unread (click to mark read, envelope "sealed"); outline =
 // currently read (click to mark unread, envelope "opened").
 const EnvelopeIcon = ({ filled }) => (
@@ -194,7 +202,7 @@ const EnvelopeIcon = ({ filled }) => (
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 
-const MessageBubble = ({ msg }) => {
+const MessageBubble = ({ msg, onRetry }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
     const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
@@ -249,6 +257,18 @@ const MessageBubble = ({ msg }) => {
         }}>
         {isPlayer ? msg.text : <div className="chat-markdown"><ReactMarkdown>{msg.text}</ReactMarkdown></div>}
         </div>
+
+        {/* A failed request is the transport dropping, not the leader refusing
+            to answer — so the player re-sends the same message rather than
+            retyping it. Only offered on the newest error (see the caller). */}
+        {isError && onRetry && (
+            <button onClick={onRetry}
+            style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.4rem", padding: "0.3rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: "0.75rem", fontWeight: 600, fontFamily: "sans-serif", cursor: "pointer", transition: "all 0.12s ease" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.22)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.6)"; e.currentTarget.style.color = "#fecaca"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(239,68,68,0.12)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; e.currentTarget.style.color = "#fca5a5"; }}>
+            <RetryIcon /> Retry
+            </button>
+        )}
 
         {!isPlayer && msg.time && (
             <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem", display: "block" }}>
@@ -487,6 +507,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
+            // Captured before the request, not in the catch: by the time an
+            // error lands, offerNextCountry may already have rotated the index
+            // on, and a retry has to replay this turn from where it started.
+            const speakerIdxAtStart = nextSpeakerIdx.current;
             if (isPlayerCountry(country)) {
                 setPendingCountry(null);
                 setRemainingQueue([]);
@@ -514,7 +538,17 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     pushMessages([...messagesRef.current, { role: "leader", speaker: country.name, code: country.code, text: reply, time: gameDate }]);
                 }
             } catch (err) {
-                pushMessages([...messagesRef.current, { role: "error", speaker: country.name, code: country.code, text: err.message, time: gameDate }]);
+                pushMessages([...messagesRef.current, {
+                    role: "error", speaker: country.name, code: country.code, text: err.message, time: gameDate,
+                    // Everything handleRetry needs to re-issue this exact turn.
+                    // Plain data so it survives a save/reload of the chat.
+                    retry: {
+                        country: { name: country.name, code: country.code ?? "" },
+                        playerMessage,
+                        queue: queueAfter.map(({ name, code }) => ({ name, code: code ?? "" })),
+                        speakerIdx: speakerIdxAtStart,
+                    },
+                }]);
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
@@ -595,6 +629,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             }
         };
 
+        // Re-sends the message that failed. The error bubble is dropped first so
+        // a successful retry leaves the thread reading as if nothing went wrong;
+        // a second failure just pushes a fresh one. sendDiplomaticMessage already
+        // rolls its own history back on error, so the model sees no duplicate.
+        const handleRetry = async (index) => {
+            if (isLoading) return;
+            const retry = messagesRef.current[index]?.retry;
+            if (!retry) return;
+            pushMessages(messagesRef.current.filter((_, i) => i !== index));
+            setPendingCountry(null);
+            setRemainingQueue([]);
+            setPhase("player");
+            nextSpeakerIdx.current = retry.speakerIdx ?? nextSpeakerIdx.current;
+            lastPlayerMessage.current = retry.playerMessage;
+            await fetchLeaderResponse(retry.country, retry.playerMessage, retry.queue ?? []);
+        };
+
         const handleSpeakInstead = () => {
             setPendingCountry(null);
             setRemainingQueue([]);
@@ -651,7 +702,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 Begin the diplomatic conversation.
                 </p>
             )}
-            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} chatCountries={countries} />)}
+            {/* Retry is offered on the last message only: an older error has
+                already been answered past, and re-running it would splice a
+                reply into the middle of the thread. */}
+            {messages.map((msg, i) => (
+                <MessageBubble key={i} msg={msg} chatCountries={countries}
+                onRetry={msg.retry && !isLoading && i === messages.length - 1 ? () => handleRetry(i) : undefined} />
+            ))}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             <div ref={messagesEndRef} />
             </div>
