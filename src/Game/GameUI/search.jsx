@@ -277,8 +277,10 @@ const Search = memo(({ mapRef }) => {
         // Phones: the expanded box wouldn't fit there, so it opens as a
         // full-width bar just above the toolbar instead.
         bottom: expanded && isMobile ? "5rem" : "1rem",
-        // Clear of the bottom toolbar (0.5rem + 8.75rem wide).
-        left: expanded && isMobile ? "0.5rem" : "9.75rem",
+        // Clear of the bottom toolbar (0.5rem left + 12.8rem wide + 0.5rem gap).
+        // Keep this in step with the pill's width in chat.jsx — it grew when the
+        // Projects launcher became its third button.
+        left: expanded && isMobile ? "0.5rem" : "13.8rem",
         height: "3rem",
         width: expanded ? (isMobile ? "calc(100vw - 1rem)" : "17rem") : "3rem",
         overflow: "visible",

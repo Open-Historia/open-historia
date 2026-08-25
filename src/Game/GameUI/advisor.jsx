@@ -6,7 +6,7 @@ import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
-import { normalizeActionEntry, readActionsState, writeActionsState } from "../../runtime/gameState.js";
+import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -107,7 +107,8 @@ const parseMessage = (rawText) => {
     const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
-    const { rest, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
+    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
+    const { rest, json: projectsRaw } = extractFencedJson(afterDeploy, "projects");
     const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
@@ -125,6 +126,7 @@ const parseMessage = (rawText) => {
         actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
         messageDrafts,
         deployments: deployments && deployments.length ? deployments : null,
+        projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
     };
 };
 
@@ -186,6 +188,83 @@ const applyAdvisorActions = async (proposal) => {
     if (items.length === 0) return null;
     await writeActionsState(next);
     return items;
+};
+
+// Applies the advisor's ```projects proposal to the real board (world.projects,
+// the same field events write through impacts.projectOps) and reports what
+// actually happened, so the confirmation card shows real outcomes rather than
+// echoing the model's request back. Runs ONCE, right when a reply arrives (see
+// handleSend) — never at render time, since parseMessage runs on every re-render
+// and must stay a pure read.
+//
+// The read-modify-write spreads the WHOLE world back. A shallow patch here would
+// drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
+// — the same trap saveGame documents in libraryBar.jsx.
+const applyAdvisorProjects = async (proposal, gameDate) => {
+    if (!Array.isArray(proposal) || proposal.length === 0) return null;
+
+    const world = await readWorldState({ force: true });
+    const before = new Map(world.projects.map((project) => [project.id, project]));
+
+    // applyProjectOps normalizes defensively, so the raw parsed ops are fine
+    // here; it also drops anything aimed at a project that does not exist.
+    const next = applyProjectOps(world.projects, proposal, { date: String(gameDate || "") });
+
+    const items = [];
+    for (const project of next) {
+        const previous = before.get(project.id);
+        if (!previous) {
+            items.push({ change: "opened", title: project.name });
+        } else if (previous.updatedAt !== project.updatedAt) {
+            items.push({
+                change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
+                title: project.name,
+            });
+        }
+    }
+    for (const project of world.projects) {
+        if (!next.some((entry) => entry.id === project.id)) {
+            items.push({ change: "closed", title: project.name });
+        }
+    }
+    if (items.length === 0) return null;
+    await writeWorldState({ ...world, projects: next });
+    return items;
+};
+
+// Inline confirmation for what the advisor just did to the projects board. Same
+// "advisor creates, I review" contract as the actions card below it: nothing the
+// advisor changes happens silently.
+const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
+    const counts = items.reduce((acc, item) => {
+        acc[item.change] = (acc[item.change] ?? 0) + 1;
+        return acc;
+    }, {});
+    const summary = ["opened", "updated", "completed", "closed"]
+        .filter((change) => counts[change])
+        .map((change) => `${counts[change]} ${change}`)
+        .join(", ");
+    const verb = { opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: " };
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(191,219,254,0.95)" }}>🎯 Projects {summary}</span>
+        {onOpenProjects && (
+            <button type="button" onClick={onOpenProjects} style={{ background: "none", border: "1px solid rgba(59,130,246,0.5)", borderRadius: "6px", color: "rgba(191,219,254,0.9)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Open Projects
+            </button>
+        )}
+        </div>
+        <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item, index) => (
+            <li key={index} data-no-translate style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
+            {verb[item.change] || "Changed: "}{item.title}
+            </li>
+        ))}
+        </ul>
+        </div>
+    );
 };
 
 // Inline confirmation for what the advisor just did to the Actions queue —
@@ -458,7 +537,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onSendDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onSendDraft, onPlaceDeployment }) => {
     const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
         : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
@@ -486,6 +565,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -523,7 +603,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -532,7 +612,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     )}
 
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -547,7 +627,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     </div>
 ));
 
-const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, requestedPrompt, onConsumeRequest }) => {
+const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -695,10 +775,16 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
                 console.error("Failed to apply advisor-proposed actions:", error);
                 return null;
             });
+            // Same one-shot treatment for the projects board.
+            const { json: projectsProposal } = extractFencedJson(reply, "projects");
+            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate).catch((error) => {
+                console.error("Failed to apply advisor-proposed projects:", error);
+                return null;
+            });
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}) };
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -873,6 +959,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         chatDiffers={chatDiffers}
         chatDir={chatDir}
         onOpenActions={onOpenActions}
+        onOpenProjects={onOpenProjects}
         onSendDraft={handleSendDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}

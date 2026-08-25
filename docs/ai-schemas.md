@@ -88,6 +88,7 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 | `regionTransfers` | `regionTransferSchema[]` | **Map ownership changes.** Required by prompt whenever narration says territory changed hands — one entry per region | no |
 | `unitOps` | `unitOpSchema[]` | Military unit mutations | no |
 | `markerOps` | `markerOpSchema[]` | Structures built/destroyed on the map | no |
+| `projectOps` | `projectOpSchema[]` | Changes to the Projects & Operations board | no |
 
 ### 4.2 `regionTransferSchema` (`:90`)
 
@@ -140,6 +141,23 @@ Not a single object: an `anyOf` of four shapes discriminated by `op`. Each branc
 `markerSchema` (`:227`) fields: `id`, `name`* (nonempty), `kind`* (nonempty free-form lowercase noun — city/base/silo/embassy…), `ownerCode`, `lng`* (−180..180), `lat`* (−90..90), `note`, `foundedAt`.
 
 > **Note:** `validateGeneratedWorldChanges` (Layer 2) also accepts `op: "found"` as an alias of `build` and `op: "destroy"` as an alias of `remove` (`gameplay.js:1095`, `:1105`), and for a build reads coordinates from `operation.marker ?? operation`. The **schema itself only declares `build`/`remove`** — the aliases pass Layer 1 only because `unitOp`/`markerOp` schemas validate loosely (see the caveat in §6).
+
+### 4.5-bis `projectOpSchema` — `anyOf` on `op`
+
+| `op` | Required | Payload |
+|---|---|---|
+| `create` | `op`, `project` | full `projectSchema` object |
+| `create` (flat) | `op`, `name`, `summary` | the same fields written beside `op` instead of nested |
+| `update` | `op`, `name` | `projectId` + any changed field; `newName` renames |
+| `milestone` | `op`, `name`, `milestone` | `projectMilestoneSchema` |
+| `complete` | `op`, `name` | + optional `note` |
+| `remove` | `op`, `name` | + optional `note` |
+
+`projectSchema` fields: `id`, `name`* (nonempty), `summary`* (nonempty), `kind` (enum `project|operation`), `ownerCode`, `status` (enum `proposed|active|stalled|paused|complete|failed|cancelled`), `progress` (integer 0–100), `tags` (open vocabulary), `secrecy` (enum `public|restricted|covert`), `startedAt`, `targetDate`, `milestones`, `lastUpdate`, `linkedUnitIds`, `linkedMarkerIds`, `focus` (`{lng,lat}`), `note`. (\* = required.) `projectMilestoneSchema`: `id`, `title`*, `date`, `status` (enum `pending|done|missed`), `note`.
+
+> The **flat `create` branch exists for the same reason `markerOpSchema` has one** (§4.5): models routinely put a payload's fields beside `op` rather than nesting them, the engine has always read that shape (`normalizeProjectOp` falls back to the entry itself), and because each branch is `additionalProperties: false` a flattened op fails **every** branch at once — throwing away the whole turn over one op. Declaring the shape we already understand is far cheaper than losing the output.
+
+Layer 2 (`validateGeneratedWorldChanges`) supplies the world-aware half. An `update`/`milestone`/`complete`/`remove` naming a project that is not on the board — and was not opened by a `create` earlier in the same payload — fails the **strict** attempt with `buildProjectFeedback`, which lists the real project names the way `buildTransferFeedback` lists real regions, and is dropped on the **final** attempt. Without that check the failure is invisible: `applyProjectOps` silently ignores an op aimed at nothing (correctly — a phantom project conjured from a typo is worse), so the event narrates a programme advancing and the board simply never moves.
 
 ### 4.6 `createdChatSchema` (`:57`)
 

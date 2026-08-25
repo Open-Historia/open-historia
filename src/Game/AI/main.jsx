@@ -1239,6 +1239,43 @@ Example:
 [{"type":"armor","name":"3rd Guards Division","composition":"2 tank regiments","strength":100,"lng":30.52,"lat":50.45}]
 \`\`\``;
 
+// Lets the advisor open and maintain the player's Projects & Operations board
+// from an ordinary chat reply, the same way the ```actions block manages the
+// action queue. Appended at call time for the same frozen-prompt reason as the
+// directives above: every save carries its own copy of the prompt pack, so a
+// defaultPrompts.json edit would only ever reach NEW games — and the single most
+// important thing this feature has to do is populate the board of a campaign
+// that is already fifty rounds deep.
+//
+// The player cannot create a project by hand anywhere in the UI. That is
+// deliberate (the board reflects the narrative, not a wishlist), but it does mean
+// that if the advisor never opens one, nothing will — hence the instruction to
+// open one whenever a sustained effort is actually settled on, rather than
+// waiting to be asked.
+const buildAdvisorProjectsDirective = (projectsSummary) => `[Projects & Operations]
+The player has a Projects & Operations board: the running list of their long-term efforts — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns — each with a description, tags, progress, timeline and next milestone. They can read, sort and filter it, but they CANNOT create or edit an entry themselves. You and the world's events are the only things that write to it.
+
+You can create, update and close entries directly from this conversation, with no separate confirmation step. Because of that, only open a project once the two of you have actually settled on a sustained effort — never speculatively from an open-ended question, and never re-open one the player has abandoned. Do open one unprompted when it is clearly warranted: if they commit to something that will run for rounds, it belongs on the board, and nothing else will put it there.
+
+To act, end your reply with a fenced \`\`\`projects block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you opened or changed; the array itself is stripped from what the player sees). Each entry:
+- Open one: {"op":"create","name":"Project Leviathan","summary":"...","kind":"project","tags":["military","naval"],"status":"active","progress":0,"targetDate":"YYYY-MM-DD","milestones":[{"title":"...","date":"YYYY-MM-DD"}]} — kind is "operation" for a military, intelligence or covert undertaking and "project" for a programme or build. Add "secrecy":"covert" for something deniable, and "ownerCode":"<full country name>" for a FOREIGN power's programme you have learned of (omit it entirely for the player's own).
+- Change one: {"op":"update","id":"<exact id from the list below>","name":"<its exact name>","progress":58,"status":"stalled","lastUpdate":"One sentence on what just changed."} — send only the fields that actually change.
+- Record a checkpoint: {"op":"milestone","id":"<exact id>","name":"<its exact name>","milestone":{"title":"Sea trials","date":"YYYY-MM-DD","status":"pending"}} — status is pending, done, or missed.
+- Finish one: {"op":"complete","id":"<exact id>","name":"<its exact name>","note":"How it ended."} — this is for success. For a defeat use "op":"update" with "status":"failed" so it stays on the board; only use "op":"remove" when it was cancelled outright and should vanish.
+Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations] below — never invented or guessed, or the change lands on nothing and is silently dropped. Omit the \`\`\`projects block entirely when nothing should change; most replies need none.
+
+Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
+
+Keep it honest. Progress and dates are what the board shows the player, and the engine flags a project overdue on its own once its target date passes — so do not quietly push a target date back to hide a slip. Say the programme is late and mark it stalled.
+
+Example:
+\`\`\`projects
+[{"op":"update","id":"project-abc123","name":"Project Leviathan","progress":58,"lastUpdate":"Hull section three is complete; the yard says sea trials hold for November."}]
+\`\`\`
+
+[Current Projects & Operations]
+${projectsSummary}`;
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1261,7 +1298,7 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}`;
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {

@@ -100,6 +100,7 @@ Design intent captured in comments: the advisor drawer (10040) sits above every 
 |---|---|---|---|
 | 💬 Chat | `Chat` (`chat.jsx:886`) | `ChatPanel` (bottom-left, z 9998) | Unread badge: polls stored chats every 15 s, counts open chats that gained messages since last opened |
 | ✦ Actions | `Actions` (`actions.jsx:700`) | `ActionsPanel` | See [§7](#7-actions-panel--srcgamegameuiactionsjsx) |
+| 🎯 Projects | `Projects` (`projects.jsx`) | `ProjectsPanel` | The Projects & Operations board. See [§7-bis](#7-bis-projects--operations-panel--srcgamegameuiprojectsjsx) |
 
 Both launchers use `hasOpened` latches so the panel body isn't mounted until first opened.
 
@@ -296,6 +297,23 @@ Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game`
 
 ---
 
+## 7-bis. Projects & Operations panel — `src/Game/GameUI/projects.jsx`
+
+`ProjectsPanel` — bottom-left slide-up (z 9998), the third `activeBottomPanel` slot after Chat and Actions. Its launcher `Projects` (🎯) sits in the same `Toolbar` (`chat.jsx`), which widened from `8.75rem` to `12.05rem` to hold three buttons. The board is **read-only to the player**: entries are created and edited only by the AI, by design — see [World state](world-state.md) §2e-bis.
+
+| Element | Behavior | Connects to |
+|---|---|---|
+| Data | Its own 5 s `setInterval` while open: `readWorldState({force:true})` + `JSON_URLS.game`, signature-gated so a poll that changed nothing does not re-render the list under the cursor | `src/runtime/gameState.js` |
+| Cards | Kind glyph, name, status pill, owner, summary, tag chips, progress bar (`Bar`, copied from `stats.jsx:88`), timeline row, next milestone, last update | — |
+| Derived badges | ⚠ Overdue / ⏳ Due in Nd / Milestone slipped / No recent progress — all from `deriveProjectFlags` against the game clock, never from what the model wrote, so they cannot go stale | `src/runtime/projects.js` |
+| Sort & filter | `PROJECT_SORTS` dropdown, Mine/Foreign/All, a Closed toggle, and tag chips built from the live vocabulary (`collectProjectTags`). Open work always sorts above closed work whatever the chosen sort | `src/runtime/projects.js` |
+| **🧭 Ask advisor** | `onOpenAdvisor(seed)` — opens the drawer with a per-project brief request **pre-filled, never sent**; the same path the Actions panel's "Help brainstorm actions" button uses | `Main.openAdvisor` |
+| **📍 Show on map** | Resolves `project.focus` → first linked marker → first linked unit, then `map.flyTo`. Hidden entirely when nothing resolves, rather than offered and inert | `mapRef`, threaded through `Toolbar` |
+| Activity feed | Expanding a card resolves `project.eventIds` against `readEventsState()`, fetched **once and only after a first expand** — `events.json` is the largest runtime document and most opens never expand anything | `src/runtime/gameState.js` |
+| Empty state | The **backfill path**, not a dead end: a button seeding the advisor with "put my ongoing efforts on the board". An existing campaign's history is already in the advisor's prompt, so it can reconstruct one | — |
+
+Two authors write the board, never the player: events through `impacts.projectOps`, and the advisor through a ```` ```projects ```` block — `applyAdvisorProjects` in `advisor.jsx`, with an `AdvisorProjectsCard` receipt, the same "advisor creates, I review" contract as ```` ```actions ````. The advisor's write does a read-modify-write that spreads the **whole** world back; a shallow patch there would drop `polityOverrides`/`regionOwnershipOverrides` and blank the map.
+
 ## 8. Forces panel — `src/Game/GameUI/forces.jsx`
 
 `ForcesPanel` (`forces.jsx:85`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now primarily from the Cheats panel's "Manual force deployment"). Manual troop control is treated as a cheat.
@@ -380,6 +398,8 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | 11 | Chat panel / conversation | `chat.jsx` | panel | `isOpen` | chats, country names, game | `sendDiplomaticMessage`, `writeChatsState`, `chooseNextDiplomaticSpeaker` |
 | 12 | ✦ Actions button | `actions.jsx` | button | `activeBottomPanel==="actions"` | — | opens `ActionsPanel` |
 | 13 | Actions panel | `actions.jsx` | panel | `isOpen` | `JSON_URLS.game`, actions | `writeActionsState`, `generateActionSuggestions`, `refinePlayerAction`, `revertUnitOrder` |
+| 13a | 🎯 Projects button | `projects.jsx` | button | `activeBottomPanel==="projects"` | — | opens `ProjectsPanel` |
+| 13b | Projects & Operations panel | `projects.jsx` | panel | `isOpen` | `readWorldState`, `JSON_URLS.game`, events (lazily) | read-only; `onOpenAdvisor(seed)`, `map.flyTo` |
 | 14 | Forces panel + mode banner | `forces.jsx` | panel | `Main.isForcesOpen` | units, allowed types, player code | `setInteractionMode`/`clearInteractionMode`, `map.flyTo` |
 | 15 | Cheats panel + tools | `cheats.jsx` | panel | `Main.isCheatsOpen` (+ `shouldLoadCheats`) | world/game/events/catalogs | many `writeWorldState`/`writeGameData`/`writeJson`, `applyGameMasterCommand`, `setRegionClickInterceptor` |
 | 16 | Search box | `search.jsx` | widget | local `expanded` | Nominatim | `map.flyTo` |

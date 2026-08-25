@@ -551,6 +551,19 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n[World Pulse]\nOnly minutes of real time have passed and the game date has NOT advanced, so any movement is a step, never a redeployment. Return at most two unitOps, and an empty list is the normal answer. Move only what already has a reason to move: a war under way, a crisis already named in recent events, a border already tense, a fleet already at sea. Never invent a new conflict here.\nPrefer moving or re-posturing an EXISTING unit over spawning one. Prefer movement ${playerName} can actually see - near their borders, waters, allies and rivals; a division shuffling across the far side of the world is invisible and not worth an operation. Never move a garrison, and never touch a unit owned by ${playerName}.\nWrite composition and a one-sentence note on anything you spawn, and set posture on anything you touch. Return a sighting ONLY when the movement is inside or near ${playerName}'s sphere and their services would plausibly have seen it; otherwise sighting is null and the movement is silent.\n${normalizeString(variables.idleChatAllowed) === "no" ? "This pulse is MOVEMENT ONLY: return chat as null." : ""}`;
   }
 
+  // The Projects & Operations board. It exists precisely so long-running work
+  // does not vanish between rounds, which only holds if the jump that narrates a
+  // programme also MOVES it -- otherwise the board freezes at whatever the
+  // advisor last said and the player stops trusting it. Injected at call time for
+  // the same frozen-prompt reason as the directives above.
+  if (["jumpForward", "autoJumpForward", "gameMaster", "catalystExecutor", "catalystSummary"].includes(taskKey)) {
+    const projects = normalizeString(variables.projectsSummary);
+    const board = projects && !projects.startsWith("No projects")
+      ? `\n\nThe board as it stands:\n${projects}`
+      : "";
+    systemPrompt = `${systemPrompt}\n\n[Projects & Operations]\nThe player keeps a board of long-running efforts - research and industrial programmes, construction projects, military and covert operations, sustained political campaigns - each with a status, progress, timeline and next milestone. Keep it in step with what you narrate, using impacts.projectOps.\nWhen an event advances, delays, funds, starves, exposes or ends one of the efforts below, that SAME event must carry a projectOps entry moving it: op update for progress or a change of status, op milestone when a checkpoint is reached or missed, op complete when it finishes. Copy the id and name EXACTLY as they appear below - an op that names something not on the board is dropped. When an event STARTS a new multi-round effort (a power lays down a programme, opens a construction project, mounts an operation), open it with op create, including a foreign power's programme the player's services have learned of - set ownerCode to that country's full name.\nBe proportionate. A programme does not move every jump, and inventing progress is worse than reporting none: if nothing happened to it this period, leave it alone. A long jump should move the things that plausibly advanced over that span; a six-hour jump almost never moves any of them.${board}`;
+  }
+
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
@@ -1305,11 +1318,37 @@ const CAPTURE_LANGUAGE = /\b(captur\w*|seiz\w*|annex\w*|conquer\w*|occup(?:y|ies
 // ops are DROPPED in place instead ("$.events[4].impacts.unitOps[0].unitId
 // does not identify an existing unit" used to trash whole good turns to the
 // canned fallback over one stale id).
+// What to tell the model when a projectOp names something that is not on the
+// board. Same shape as buildTransferFeedback: state the problem, then list the
+// real vocabulary, so the single retry has what it needs instead of guessing
+// again. Capped because a long board would crowd out the rest of the retry.
+const buildProjectFeedback = (operationPath, operation, knownProjects) => {
+  const named = normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project);
+  const names = [...new Set(knownProjects.values())].slice(0, 24);
+  if (names.length === 0) {
+    return `${operationPath} changes "${named}", but no project by that name exists and the board is empty. `
+      + `Open it first with {"op":"create","name":"...","summary":"..."}, or drop the op.`;
+  }
+  return `${operationPath} changes "${named}", which is not on the board. `
+    + `Use one of these exact names: ${names.map((name) => `"${name}"`).join(", ")}. `
+    + `If this is genuinely a new effort, open it with {"op":"create","name":"...","summary":"..."} instead.`;
+};
+
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{ impacts: candidate?.impacts, path: "$.impacts" }];
+  // Every project an op could legitimately address: what is already on the
+  // board, plus anything a create earlier in this same payload opens.
+  const knownProjects = new Map();
+  for (const project of normalizeArray(world?.projects)) {
+    const name = normalizeString(project?.name);
+    if (!name) continue;
+    knownProjects.set(name.toLowerCase(), name);
+    if (normalizeString(project?.id)) knownProjects.set(normalizeString(project.id), name);
+  }
+
   const unresolvedTransfers = await resolveRegionTransfers(containers, world);
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
@@ -1417,6 +1456,46 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       keptMarkerOps.push(operation);
     }
     if (impacts && Array.isArray(impacts.markerOps)) impacts.markerOps = keptMarkerOps;
+
+    // Project ops aimed at nothing. applyProjectOps drops these silently (which
+    // is the right runtime behaviour - a phantom project conjured from a typo is
+    // worse than a missed update), but silence is exactly what makes the failure
+    // invisible: the event narrates a programme advancing and the board never
+    // moves. On the strict attempt, hand the model the real board so the retry
+    // can use the right name; on the final attempt, drop the op and keep the turn.
+    const keptProjectOps = [];
+    for (let index = 0; index < normalizeArray(impacts?.projectOps).length; index += 1) {
+      const operation = impacts.projectOps[index];
+      const operationPath = `${path}.projectOps[${index}]`;
+      const op = normalizeString(operation?.op).toLowerCase();
+
+      if (["create", "start", "launch", "open", "add"].includes(op)) {
+        const project = operation.project ?? operation;
+        if (!normalizeString(project?.name)) {
+          if (strict) return `${operationPath} must name the project it is opening.`;
+          continue;
+        }
+        // A create is also how a project first appears, so remember it: a later
+        // op in the SAME turn may legitimately reference something opened above.
+        knownProjects.set(normalizeString(project.name).toLowerCase(), normalizeString(project.name));
+        if (normalizeString(project.id)) knownProjects.set(normalizeString(project.id), normalizeString(project.name));
+        keptProjectOps.push(operation);
+        continue;
+      }
+
+      const target = normalizeString(operation?.projectId || operation?.id).toLowerCase()
+        || normalizeString(operation?.name || operation?.project).toLowerCase();
+      if (!target) {
+        if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
+        continue;
+      }
+      if (!knownProjects.has(target)) {
+        if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
+        continue;
+      }
+      keptProjectOps.push(operation);
+    }
+    if (impacts && Array.isArray(impacts.projectOps)) impacts.projectOps = keptProjectOps;
   }
 
   // Unprompted outreach chats (top-level, not tied to an event) need real
@@ -1741,6 +1820,10 @@ const applySimulationResult = async ({
     // have got rather than teleporting it. An over-long move becomes a partial
     // advance plus a standing order the engine keeps working on later turns.
     motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
+    // Stamps world.projects[].updatedRound, which is what lets the board say a
+    // programme has sat untouched for three rounds. The staged reveal in time.jsx
+    // deliberately omits it: replaying impacts for display must not age anything.
+    round: nextGame.round,
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
