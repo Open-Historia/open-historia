@@ -850,13 +850,39 @@ const PROJECT_KIND_SET = new Set(["project", "operation"]);
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
 
+// Synonyms a model actually writes for these, mapped onto the closed vocabulary.
+// Observed in the field: a real backfill came back with "status":"completed" on
+// a finished operation, which fell through to the "active" default and put a
+// concluded op back on the running board. The op-name aliases above exist for
+// the same reason; the values need them just as much as the verbs do.
+const PROJECT_STATUS_ALIASES = {
+  completed: "complete", finished: "complete", done: "complete", delivered: "complete",
+  canceled: "cancelled", abandoned: "cancelled", dropped: "cancelled", shelved: "cancelled",
+  ongoing: "active", "in progress": "active", inprogress: "active", running: "active", underway: "active",
+  planned: "proposed", proposal: "proposed", pending: "proposed",
+  suspended: "paused", halted: "paused", onhold: "paused", "on hold": "paused",
+  blocked: "stalled", delayed: "stalled", stalling: "stalled",
+};
+
+const resolveProjectStatus = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (PROJECT_STATUS_SET.has(raw)) return raw;
+  return PROJECT_STATUS_ALIASES[raw] || "active";
+};
+
 // world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
 // unitsController), so everything riding inside it is on a bandwidth budget.
-// These caps are what stop a campaign two hundred rounds deep from turning the
-// poll into a payload — an old project falling off the board is a far smaller
-// loss than every poll dragging.
-const MAX_PROJECTS = 40;
-const MAX_PROJECT_MILESTONES = 12;
+//
+// Sized against a real campaign rather than guessed: a forty-round game came back
+// with 44 live projects, and one project measures ~1 KB (milestones are 39% of
+// that, hence their own tighter cap). 120 leaves that campaign roughly 2.5x of
+// headroom for ~120 KB worst case, against a world.json whose startingTimelineText
+// and consolidatedHistory are already ~105 KB each. If a board ever genuinely
+// needs more than this, the answer is not a bigger number — it is moving projects
+// out to their own runtime asset, which is a real piece of work because rollback
+// snapshots and the staged event reveal both get world.projects for free today.
+const MAX_PROJECTS = 120;
+const MAX_PROJECT_MILESTONES = 8;
 const MAX_PROJECT_EVENT_IDS = 12;
 
 const normalizeProjectMilestone = (entry, index = 0) => {
@@ -940,7 +966,6 @@ export const normalizeProjectEntry = (entry, index = 0) => {
   if (!name) return null;
 
   const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
-  const status = normalizeOptionalString(entry.status).toLowerCase();
   const secrecy = normalizeOptionalString(entry.secrecy || entry.classification).toLowerCase();
   const progress = Number(entry.progress);
   const milestones = normalizeProjectMilestones(entry.milestones);
@@ -956,7 +981,7 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // player's own name on every entry is how that field ends up wrong.
     ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
     summary: normalizeTextLike(entry.summary || entry.description),
-    status: PROJECT_STATUS_SET.has(status) ? status : "active",
+    status: resolveProjectStatus(entry.status),
     progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
     tags: normalizeTagList(entry.tags),
     secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
@@ -978,16 +1003,43 @@ export const normalizeProjectEntry = (entry, index = 0) => {
   };
 };
 
+// What to drop when the board is over its cap.
+//
+// This used to be .slice(0, MAX), i.e. "keep the first N" — so a board that went
+// over lost whatever happened to be last, which is live work as often as not, and
+// said nothing about it. Finished work goes first instead, oldest by last-touched,
+// and only if that is not enough does anything still running get evicted.
+// Survivors keep their original order: the list order is the board's order, and
+// re-sorting it here would reshuffle the panel for reasons nobody can see.
+const capProjectList = (list) => {
+  if (list.length <= MAX_PROJECTS) return list;
+
+  const evictionRank = (project) => (PROJECT_OPEN_STATUSES.has(project.status) ? 1 : 0);
+  const doomed = new Set(
+    [...list]
+      .sort((a, b) => evictionRank(a) - evictionRank(b)
+        || normalizeOptionalString(a.updatedAt).localeCompare(normalizeOptionalString(b.updatedAt)))
+      .slice(0, list.length - MAX_PROJECTS)
+      .map((project) => project.id),
+  );
+  return list.filter((project) => !doomed.has(project.id));
+};
+
 export const normalizeProjects = (projects) =>
-  normalizeArray(projects)
-    .map((entry, index) => normalizeProjectEntry(entry, index))
-    .filter(Boolean)
-    // Deduplicate by name, keeping the FIRST occurrence. Two entries for the same
-    // programme are a model restating itself, and applyProjectOps has already
-    // folded ops together in order, so the first is the merged one.
-    .filter((entry, index, list) =>
-      list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index)
-    .slice(0, MAX_PROJECTS);
+  capProjectList(
+    normalizeArray(projects)
+      .map((entry, index) => normalizeProjectEntry(entry, index))
+      .filter(Boolean)
+      // Deduplicate by name, keeping the FIRST occurrence. Two entries for the same
+      // programme are a model restating itself, and applyProjectOps has already
+      // folded ops together in order, so the first is the merged one.
+      .filter((entry, index, list) =>
+        list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index),
+  );
+
+// The board's size limit, exported so the panel can warn the player as they
+// approach it instead of work quietly vanishing.
+export const PROJECT_BOARD_LIMIT = MAX_PROJECTS;
 
 // One AI-authored mutation to the projects board.
 //

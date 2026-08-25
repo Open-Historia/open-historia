@@ -351,6 +351,22 @@ export const buildMarkersSummaryText = (world) => {
 
 // The Projects & Operations board (world.projects), written out for the model.
 //
+// Tiered, because this text rides EVERY advisor message and EVERY jump prompt.
+// Written flat, one full paragraph per project, a real 44-project board cost
+// ~5,300 tokens a call — which is not just expensive, it crowds the campaign
+// history out of the same context window. Three tiers instead:
+//
+//   1. Open projects, in full, most recently touched first, capped at
+//      FULL_DETAIL_PROJECTS. This is what the model reasons WITH.
+//   2. Every remaining open project, one compact line.
+//   3. Closed projects, one compact line, so the model knows they exist and does
+//      not re-open them.
+//
+// Crucially every project appears in some tier WITH ITS ID, because the directive
+// tells the model to copy ids verbatim and an op naming something absent from
+// this list is dropped. Truncating the list outright would quietly make the
+// omitted projects uneditable.
+//
 // Ids are printed with every entry, and the directives insist they be copied
 // verbatim, because the alternative is the model inventing one and its update
 // landing on nothing (applyProjectOps drops an op whose target does not exist —
@@ -360,6 +376,8 @@ export const buildMarkersSummaryText = (world) => {
 // overdue, and rounds since the last update. That is the nudge that gets a
 // neglected programme moved along, and it cannot be argued with — it is a
 // function of the calendar, not of anyone's memory.
+const FULL_DETAIL_PROJECTS = 20;
+
 export const buildProjectsSummaryText = (world, game) => {
   const projects = normalizeArray(world?.projects);
   if (projects.length === 0) {
@@ -369,38 +387,39 @@ export const buildProjectsSummaryText = (world, game) => {
   const gameDate = normalizeString(game?.gameDate);
   const round = Number(game?.round) || 0;
   const player = normalizeString(game?.country);
+  const OPEN = new Set(["proposed", "active", "stalled", "paused"]);
 
-  return projects.map((project) => {
-    const flags = deriveProjectFlags(project, gameDate, round);
-    const owner = normalizeString(project.ownerCode);
-    // Do not label it twice: half of these are already called "Operation X" or
-    // "Project Y", and "Operation \"Operation Kingfisher\"" reads like a mistake.
+  // Do not label it twice: half of these are already called "Operation X" or
+  // "Project Y", and 'Operation "Operation Kingfisher"' reads like a mistake.
+  const titleOf = (project) => {
     const label = project.kind === "operation" ? "Operation" : "Project";
-    const titled = project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
+    return project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
       ? `"${project.name}"`
       : `${label} "${project.name}"`;
-    const head = [
-      `${titled} [id ${project.id}]`,
-      owner && owner !== player ? `run by ${owner}` : "ours",
-      project.status,
-      `${project.progress}% complete`,
-    ].filter(Boolean).join(", ");
+  };
 
+  const ownerOf = (project) => {
+    const owner = normalizeString(project.ownerCode);
+    return owner && owner !== player ? `run by ${owner}` : "ours";
+  };
+
+  const warningsOf = (project, flags) => [
+    flags.overdue ? "OVERDUE" : "",
+    flags.milestoneMissed ? "a milestone has slipped" : "",
+    flags.stale ? "no progress reported recently" : "",
+    project.secrecy !== "public" ? project.secrecy : "",
+  ].filter(Boolean);
+
+  const full = (project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
     const timeline = describeTimeline(project, gameDate);
     const next = flags.nextMilestone
       ? `Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
       : "";
-    // Only the flags that are actually raised, so the common case stays short.
-    const warnings = [
-      flags.overdue ? "OVERDUE" : "",
-      flags.milestoneMissed ? "a milestone has slipped" : "",
-      flags.stale ? "no progress reported recently" : "",
-      project.secrecy !== "public" ? project.secrecy : "",
-    ].filter(Boolean);
     const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
-
+    const warnings = warningsOf(project, flags);
     return [
-      `- ${head}.`,
+      `- ${titleOf(project)} [id ${project.id}], ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
       project.summary,
       project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
       timeline ? `${timeline}.` : "",
@@ -409,7 +428,36 @@ export const buildProjectsSummaryText = (world, game) => {
       roundsSince > 0 ? `Last updated ${roundsSince} round${roundsSince === 1 ? "" : "s"} ago.` : "",
       warnings.length ? `[${warnings.join("; ")}]` : "",
     ].filter(Boolean).join(" ");
-  }).join("\n");
+  };
+
+  // Everything the model needs to ADDRESS a project and judge whether it needs
+  // touching, minus the prose it only needs to reason about one in depth.
+  const compact = (project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    const warnings = warningsOf(project, flags);
+    const next = flags.nextMilestone
+      ? ` Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
+      : "";
+    return `- ${titleOf(project)} [id ${project.id}], ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
+      + `${next}${warnings.length ? ` [${warnings.join("; ")}]` : ""}`;
+  };
+
+  const open = projects.filter((project) => OPEN.has(project.status));
+  const closed = projects.filter((project) => !OPEN.has(project.status));
+  // Most recently touched first, so the detail budget goes to live work.
+  const ranked = [...open].sort((a, b) =>
+    normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+  const detailed = ranked.slice(0, FULL_DETAIL_PROJECTS);
+  const brief = ranked.slice(FULL_DETAIL_PROJECTS);
+
+  const sections = [detailed.map(full).join("\n")];
+  if (brief.length > 0) {
+    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compact).join("\n")}`);
+  }
+  if (closed.length > 0) {
+    sections.push(`Finished or abandoned — do not re-open these:\n${closed.map(compact).join("\n")}`);
+  }
+  return sections.join("\n\n");
 };
 
 // City coordinates for the model, so troop deployments and events land on the
