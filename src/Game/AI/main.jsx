@@ -412,11 +412,31 @@ export async function readOpenAIStreamedResponse(response) {
 // for non-tool calls that pass an onChunk callback; tool/JSON tasks keep the
 // buffered path so the whole structured object is still parsed at once. The
 // onChunk call is wrapped so a throwing UI callback can never break the stream.
+// Returns the streamed answer, or the model's reasoning when it produced no
+// answer at all.
+//
+// That fallback is the same #540 fix already applied to extractOpenAIMessageText
+// (buffered chat) and readOpenAIStreamedResponse (structured tool calls) — this
+// third path, the one the advisor's streaming chat actually uses, was missed.
+// A thinking model that spends its whole reply budget reasoning streams nothing
+// but reasoning deltas, so `full` stays empty and the caller throws "response
+// did not contain text" with a perfectly good chain of thought in hand.
+// What to tell the player when a provider returns nothing at all. The bare
+// "did not contain text" was accurate and useless: by far the most common cause
+// is a thinking model that spent its entire reply budget reasoning, and the app
+// ships with Model reasoning ON, so the fix is a toggle they can actually reach.
+function emptyReplyMessage(providerLabel) {
+    return `${providerLabel} returned an empty reply. This usually means a thinking model used its whole `
+        + `response budget reasoning without writing an answer. Try turning off **Model reasoning** in settings, `
+        + `or switch to a model that is not a reasoning model.`;
+}
+
 async function streamTextSSE(response, extractDelta, onChunk) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let reasoning = "";
     try {
         for (;;) {
             const { done, value } = await reader.read();
@@ -430,12 +450,33 @@ async function streamTextSSE(response, extractDelta, onChunk) {
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
+                // An extractor may return a plain string (content only) or
+                // { content, reasoning } — the providers that separate the two.
                 const delta = extractDelta(json);
-                if (delta) { full += delta; try { onChunk(delta, full); } catch { /* UI callback must not break the stream */ } }
+                const contentDelta = typeof delta === "string" ? delta : (delta?.content ?? "");
+                const reasoningDelta = typeof delta === "string" ? "" : (delta?.reasoning ?? "");
+                if (reasoningDelta) reasoning += reasoningDelta;
+                if (contentDelta) { full += contentDelta; try { onChunk(contentDelta, full); } catch { /* UI callback must not break the stream */ } }
             }
         }
     } finally {
         try { reader.releaseLock(); } catch { /* already closed */ }
+    }
+
+    // Inline <think> blocks arrive as ordinary content, so the streamed preview
+    // shows them; strip them from what is RETURNED, which is what gets persisted
+    // and re-read on reload. An unclosed block means the stream was cut
+    // mid-thought and there is no answer in there at all.
+    const answer = stripThinking(full);
+    if (answer) return answer;
+
+    // No answer, but it did think: hand back the reasoning rather than throwing
+    // away a whole (expensive) generation. Better a rambling reply than an error.
+    const salvaged = stripThinking(reasoning);
+    if (salvaged) {
+        console.warn("[ai] the model returned reasoning but no answer; using the reasoning as the reply");
+        try { onChunk(salvaged, salvaged); } catch { /* UI callback must not break the stream */ }
+        return salvaged;
     }
     return full;
 }
@@ -445,12 +486,27 @@ async function streamTextSSE(response, extractDelta, onChunk) {
 // together — so join the streamed parts WITHOUT trimming.
 const geminiStreamDelta = (json) =>
     (json?.candidates?.[0]?.content?.parts ?? []).map((part) => part?.text ?? "").join("");
+// Thinking models (Qwen3, DeepSeek-R1, and the gateways in front of them) stream
+// their chain of thought in a field beside content: `reasoning_content` is the
+// DeepSeek/vLLM spelling, `reasoning` the OpenRouter one. Reading only `content`
+// is what made an all-reasoning reply look like an empty one (#540).
 const openaiStreamDelta = (json) => {
     const delta = json?.choices?.[0]?.delta;
-    return typeof delta?.content === "string" ? delta.content : "";
+    return {
+        content: typeof delta?.content === "string" ? delta.content : "",
+        reasoning: typeof delta?.reasoning_content === "string"
+            ? delta.reasoning_content
+            : (typeof delta?.reasoning === "string" ? delta.reasoning : ""),
+    };
 };
-const anthropicStreamDelta = (json) =>
-    json?.type === "content_block_delta" && json?.delta?.type === "text_delta" ? (json.delta.text || "") : "";
+const anthropicStreamDelta = (json) => {
+    if (json?.type !== "content_block_delta") return "";
+    if (json?.delta?.type === "text_delta") return { content: json.delta.text || "", reasoning: "" };
+    // Extended thinking arrives as its own delta type; keep it for the same
+    // all-reasoning-no-answer fallback the OpenAI-compatible path gets.
+    if (json?.delta?.type === "thinking_delta") return { content: "", reasoning: json.delta.thinking || "" };
+    return "";
+};
 
 function toOpenAIMessages(systemPrompt, history) {
     const messages = [{ role: "system", content: systemPrompt }];
@@ -779,7 +835,7 @@ async function callOpenAIStyleChatCompletions({
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const streamed = await streamTextSSE(response, openaiStreamDelta, onChunk);
-            if (!streamed) throw new Error(`${providerLabel} response did not contain text.`);
+            if (!streamed) throw new Error(emptyReplyMessage(providerLabel));
             return streamed;
         }
 
@@ -801,7 +857,7 @@ async function callOpenAIStyleChatCompletions({
         }
 
         if (!text) {
-            throw new Error(`${providerLabel} response did not contain text.`);
+            throw new Error(emptyReplyMessage(providerLabel));
         }
 
         return text;
