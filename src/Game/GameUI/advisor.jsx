@@ -7,6 +7,7 @@ import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -37,19 +38,8 @@ const ThinkingDots = () => {
     return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
 };
 
-// Extracts one fenced ```<lang> block (JSON payload) from a reply and strips
-// it from the remaining text — shared by the chart block and the actions
-// block below, which both ride the same "prose + one machine-readable fence"
-// convention.
-const extractFencedJson = (text, lang) => {
-    const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```");
-    const match = text.match(regex);
-    if (!match) return { rest: text, json: null };
-    let json = null;
-    try { json = JSON.parse(match[1].trim()); }
-    catch (err) { json = null; console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message); }
-    return { rest: text.replace(regex, ""), json };
-};
+// extractFencedJson now lives in advisorBlocks.js so it can be unit-tested (this
+// file cannot be — JSX, and it reaches maplibre-gl through assets.js).
 
 // Pulls each contiguous "> "-quoted block out of the reply text, in the order
 // it appears. Used to recover a drafted message's text positionally from the
@@ -108,7 +98,7 @@ const parseMessage = (rawText) => {
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
     const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
-    const { rest, json: projectsRaw } = extractFencedJson(afterDeploy, "projects");
+    const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
     const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
@@ -127,6 +117,7 @@ const parseMessage = (rawText) => {
         messageDrafts,
         deployments: deployments && deployments.length ? deployments : null,
         projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
+        projectsTruncated,
     };
 };
 
@@ -263,6 +254,31 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
             </li>
         ))}
         </ul>
+        </div>
+    );
+};
+
+// The other half of the receipt: what to show when the advisor plainly tried to
+// change the board and the change did not land. Silence here is the worst
+// outcome — the player sees a wall of JSON in the chat, the board stays empty,
+// and nothing anywhere explains why. The overwhelmingly common cause is the
+// reply hitting its token cap partway through a long array.
+const AdvisorProjectsProblem = ({ kind, onRetry }) => {
+    const message = kind === "truncated"
+        ? "That reply was cut off partway through, so only the entries that arrived complete were added. Ask for the rest to continue the board."
+        : kind === "truncated-empty"
+            ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
+            : "The advisor tried to change the board but the instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(253,230,138,0.95)" }}>⚠ Board not fully updated</div>
+        <p style={{ margin: "0.3rem 0 0", fontSize: "0.75rem", lineHeight: 1.5, color: "rgba(255,255,255,0.75)" }}>{message}</p>
+        {onRetry && (
+            <button type="button" onClick={onRetry} style={{ marginTop: "0.5rem", background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Ask for the next batch
+            </button>
+        )}
         </div>
     );
 };
@@ -537,7 +553,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onSendDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment }) => {
     const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
         : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
@@ -566,6 +582,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
+        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} onRetry={onRetryProjects} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -603,7 +620,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -612,7 +629,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     )}
 
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -775,16 +792,25 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
                 console.error("Failed to apply advisor-proposed actions:", error);
                 return null;
             });
-            // Same one-shot treatment for the projects board.
-            const { json: projectsProposal } = extractFencedJson(reply, "projects");
+            // Same one-shot treatment for the projects board, with truncation
+            // salvage: a full backfill of a long campaign is the one block big
+            // enough to be cut off mid-array by the reply token cap.
+            const { json: projectsProposal, truncated: projectsTruncated } =
+                extractFencedJson(reply, "projects", { salvageTruncated: true });
             const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate).catch((error) => {
                 console.error("Failed to apply advisor-proposed projects:", error);
                 return null;
             });
+            // Every way this can fail used to look identical to the player: a wall
+            // of JSON in the chat and a board that never moved. If the model
+            // plainly tried and nothing landed, say so and offer the retry.
+            const projectsProblem = projectsSummary
+                ? (projectsTruncated ? "truncated" : "")
+                : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}) };
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -818,6 +844,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     // "✓ Sent" across a reload instead of reappearing clickable. A stable
     // reference (no deps) so it never breaks AdvisorMessageList's memoization —
     // see the comment on that component for why that matters.
+    // Puts the follow-up in the composer rather than sending it: the player may
+    // want to narrow what they are asking for, and this file has never auto-sent
+    // anything on the player's behalf (see the requestedPrompt effect above).
+    const handleRetryProjects = React.useCallback(() => {
+        setInput("Continue putting my projects and operations on the board — the last reply was cut off. "
+            + "Pick up from where you stopped and skip anything already on the board. Send no more than ten, "
+            + "one sentence each. Only include efforts that genuinely appear in our history — if everything real "
+            + "is already on the board, just tell me that and add nothing.");
+        inputRef.current?.focus();
+    }, []);
+
     const handleSendDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
         try {
             const { chat } = await sendAdvisorDraftedMessage({ countryName: draft.country, text: draft.text });
@@ -960,6 +997,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         chatDir={chatDir}
         onOpenActions={onOpenActions}
         onOpenProjects={onOpenProjects}
+        onRetryProjects={handleRetryProjects}
         onSendDraft={handleSendDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}

@@ -16,7 +16,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
-import { readEventsState, readWorldState } from "../../runtime/gameState.js";
+import { PROJECT_BOARD_LIMIT, readEventsState, readWorldState } from "../../runtime/gameState.js";
 import {
   PROJECT_SORTS,
   collectProjectTags,
@@ -30,12 +30,22 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
 // the rule the advisor's requestedPrompt path has always followed.
+// Deliberately asks for a BATCH, not for everything.
+//
+// The first version of this asked for every effort at once. On a campaign forty
+// rounds deep that is dozens of entries with full milestone histories, which runs
+// past the 8192-token reply cap and arrives as a half-written JSON array — the
+// board stays empty and the player gets a wall of text. Ten at a time, one
+// sentence each, and only the milestones still ahead keeps a reply inside its
+// budget; the retry button asks for the next batch.
 export const PROJECTS_BACKFILL_PROMPT =
-  "Go through everything I have running right now — every project, programme, "
-  + "operation and sustained campaign, mine and any belonging to other powers that "
-  + "we know about — and open a Projects & Operations entry for each one. Give each "
-  + "a short description, tags, a timeline, and the next milestone if it has one. "
-  + "Work from our actual history, and tell me plainly if you are unsure about any of them.";
+  "Put my current projects and operations on the board — the sustained efforts, "
+  + "mine and any belonging to other powers that we know about. Start with the TEN "
+  + "most significant and stop there; I will ask for the next batch after. Keep each "
+  + "summary to one sentence, and give each only the milestones still ahead of it "
+  + "plus the single most recent one already achieved. Only include efforts that genuinely "
+  + "appear in our history — never invent one to round out the list — and say plainly if "
+  + "you are unsure about any of them.";
 
 const buildBriefPrompt = (project) => {
   const label = project.kind === "operation" ? "operation" : "project";
@@ -496,6 +506,8 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   }, [mapRef]);
 
   const isEmptyBoard = hasLoaded && projects.length === 0;
+  // Warn with a little road left, not at the moment work starts disappearing.
+  const nearLimit = projects.length >= PROJECT_BOARD_LIMIT - 10;
 
   return (
     <div
@@ -533,7 +545,14 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         padding: "1rem 1.25rem 0.75rem",
       }}
       >
-        <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>Projects &amp; Operations</span>
+        <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>
+          Projects &amp; Operations
+          {projects.length > 0 && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.72rem", fontWeight: 500, marginLeft: "0.4rem" }}>
+              {visible.length === projects.length ? projects.length : `${visible.length} / ${projects.length}`}
+            </span>
+          )}
+        </span>
         <button
           type="button"
           onClick={onClose}
@@ -620,6 +639,22 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {nearLimit && (
+        <div style={{
+          backgroundColor: "rgba(245,158,11,0.12)",
+          borderBottom: "1px solid rgba(245,158,11,0.3)",
+          color: "rgba(253,230,138,0.95)",
+          fontSize: "0.7rem",
+          lineHeight: 1.45,
+          padding: "0.5rem 1rem",
+        }}
+        >
+          {projects.length >= PROJECT_BOARD_LIMIT
+            ? `The board is full (${PROJECT_BOARD_LIMIT}). Completed and cancelled entries are dropped first to make room — ask your advisor to close anything finished.`
+            : `${PROJECT_BOARD_LIMIT - projects.length} slots left before the board starts dropping its oldest closed entries.`}
         </div>
       )}
 
@@ -711,7 +746,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(139,92,246,0.2)"; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
           >
-            🧭 Ask the advisor to review the board
+            🧭 Ask the advisor to review or extend the board
           </button>
         )}
       </div>
