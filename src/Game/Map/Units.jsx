@@ -27,6 +27,25 @@ const SNAP_DISTANCE_DEG = 40;
 const STATION_RING_POINTS = 48;
 const EARTH_RADIUS_KM = 6371;
 
+// The unit layers, bottom to top, in the order they are declared below. Nothing
+// on this map sets a beforeId: <Nations>, <Cities>, <MarkersLayer> and this
+// component all call addLayer() with no anchor, so the final stacking order is
+// decided purely by which of them reached MapLibre first. That order is not
+// stable — a source whose data resolves late renders null until it does (so its
+// layers are added on a later pass), and a style reload re-adds everything from
+// scratch — which is how the region fills end up ABOVE the counters. When that
+// happens a unit reads as though it were painted under the map: the glyph and
+// the strength label carry dark halos and stay legible through a 0.72-opacity
+// fill, but the disc is its owner's colour sitting under that same owner's
+// colour, so it washes out to a translucent smudge. See raiseUnitLayers.
+const UNIT_LAYER_ORDER = [
+  "units-heading",
+  "units-station",
+  "units-fill",
+  "units-icons",
+  "units-strength",
+];
+
 // On-map glyph per unit type (rendered via the same font stack as the city
 // symbols, so they appear wherever those do).
 const TYPE_GLYPH = {
@@ -100,6 +119,32 @@ const Units = () => {
       })
       .catch((error) => console.error("Failed to load colors for units:", error));
   }, []);
+
+  // Units are the one thing on the map that must never be painted over, so
+  // re-assert the whole stack on top after every style change rather than
+  // trusting insertion order (see UNIT_LAYER_ORDER). Deliberately idempotent:
+  // once the counters are already the topmost layers this compares two short
+  // arrays and returns, so the styledata that moveLayer itself fires settles
+  // immediately instead of looping. getLayersOrder() hands back a copy of the
+  // id list, so this costs nothing like getStyle() would — that one serializes
+  // every layer, and the region fills carry match expressions with a stop per
+  // region.
+  useEffect(() => {
+    const mapInstance = map?.getMap?.() ?? map;
+    if (!mapInstance?.getLayersOrder) return undefined;
+
+    const raiseUnitLayers = () => {
+      const present = UNIT_LAYER_ORDER.filter((id) => mapInstance.getLayer(id));
+      if (!present.length) return;
+      const order = mapInstance.getLayersOrder();
+      if (order.slice(-present.length).join() === present.join()) return;
+      for (const id of present) mapInstance.moveLayer(id);
+    };
+
+    raiseUnitLayers();
+    mapInstance.on("styledata", raiseUnitLayers);
+    return () => mapInstance.off("styledata", raiseUnitLayers);
+  }, [map]);
 
   useEffect(() => {
     const source = () => map?.getMap?.()?.getSource?.("units-source") ?? map?.getSource?.("units-source");
