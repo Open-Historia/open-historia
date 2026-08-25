@@ -66,6 +66,88 @@ const unwrapOpsArray = (value) => {
   return null;
 };
 
+// Escapes what a model leaves unescaped INSIDE a JSON string value.
+//
+// The failure this exists for, straight from a field report: "Expected ',' or
+// '}' after property value ... line 10". The model wrote
+//   "summary":"A 1 GW reactor (the "Titan-class" megalith)."
+// and that inner quote closes the string early, so the parser hits bare text
+// where it wanted a comma. Same class of problem: a real line break inside a
+// summary.
+//
+// Each property value is located by its BOUNDARY rather than by its closing
+// quote — everything between :" and the quote that precedes either the next
+// "key": or the object's end. That is what lets the inner quotes be found at all;
+// scanning for the first closing quote is exactly the mistake the parser makes.
+const escapeInnerStringChars = (value) => value
+  // Normalise first so an already-escaped quote is not double-escaped: this
+  // matches a literal backslash-quote, NOT a bare quote.
+  .replace(/\\"/g, '"')
+  .replace(/"/g, '\\"')
+  .replace(/\r/g, "")
+  .replace(/\n/g, "\\n")
+  .replace(/\t/g, "\\t");
+
+export const repairJsonStringValues = (text) => String(text ?? "").replace(
+  /("(?:\\.|[^"\\])*"\s*:\s*)"([\s\S]*?)"(\s*(?:,\s*"(?:\\.|[^"\\])*"\s*:|,?\s*[}\]]))/g,
+  (whole, key, value, tail) => `${key}"${escapeInnerStringChars(value)}"${tail}`,
+);
+
+// Parse one object's worth of text, trying progressively harder.
+const parseObjectCandidate = (text) => {
+  const trimmed = String(text ?? "").trim().replace(/,\s*$/, "");
+  if (!trimmed.startsWith("{")) return null;
+  const direct = lenientJsonParse(trimmed);
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+  const repaired = lenientJsonParse(repairJsonStringValues(trimmed));
+  return repaired && typeof repaired === "object" && !Array.isArray(repaired) ? repaired : null;
+};
+
+// Splits an array body into one text per top-level object, WITHOUT relying on
+// cumulative brace/string state.
+//
+// State-tracking is the obvious way to do this and the wrong one here: a single
+// unescaped quote inverts the in-string flag and every brace after it is counted
+// wrongly, so one bad entry corrupts the parse of every entry that follows. This
+// re-anchors at each line that opens an object, so a bad entry costs exactly
+// itself. Models emit these arrays one object per line almost without exception;
+// a genuinely multi-line object still accumulates correctly, because its
+// continuation lines start with a key or a brace-close, not with "{".
+const splitObjectTexts = (body) => {
+  const texts = [];
+  let current = [];
+  for (const line of String(body ?? "").split("\n")) {
+    if (/^\s*\{/.test(line) && current.length > 0) {
+      texts.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) texts.push(current.join("\n"));
+  return texts;
+};
+
+// Recover as many entries as possible from a block, dropping only what is
+// genuinely unreadable. Returns { ops, dropped } so the caller can tell the
+// player that eight of ten landed rather than implying all of it did.
+export const recoverOpsElementwise = (body) => {
+  const texts = splitObjectTexts(String(body ?? "").replace(/^\s*\[/, "").replace(/\]\s*$/, ""));
+  const ops = [];
+  let dropped = 0;
+
+  for (let index = 0; index < texts.length; index += 1) {
+    const parsed = parseObjectCandidate(texts[index]);
+    if (parsed) { ops.push(parsed); continue; }
+    // A false split (a nested object that happened to start its own line) shows
+    // up as two fragments that only parse once rejoined.
+    const joined = index + 1 < texts.length ? parseObjectCandidate(`${texts[index]}\n${texts[index + 1]}`) : null;
+    if (joined) { ops.push(joined); index += 1; continue; }
+    if (texts[index].trim()) dropped += 1;
+  }
+
+  return { ops, dropped };
+};
+
 // Recovers a usable ops array from a block, whether it is merely malformed or
 // genuinely cut off partway through.
 //
@@ -120,10 +202,29 @@ export const repairTruncatedJsonArray = (text) => {
     }
   }
 
-  if (lastCompleteEnd === -1) return null;
+  if (lastCompleteEnd !== -1) {
+    const rebuilt = lenientJsonParse(`${body.slice(0, lastCompleteEnd)}]`);
+    if (Array.isArray(rebuilt) && rebuilt.length > 0) return rebuilt;
+  }
 
-  const rebuilt = lenientJsonParse(`${body.slice(0, lastCompleteEnd)}]`);
-  return Array.isArray(rebuilt) && rebuilt.length > 0 ? rebuilt : null;
+  // Last resort: recover entry by entry. This is what survives a single bad
+  // entry in the MIDDLE of an otherwise good batch — the walk above gives up at
+  // the corruption, this one keeps everything on both sides of it.
+  const { ops } = recoverOpsElementwise(body);
+  return ops.length > 0 ? ops : null;
+};
+
+// The text around the character a JSON parse failed at, for showing the player.
+// V8's message carries "at position N"; without that, fall back to the head of
+// the block, which is still better than nothing.
+export const excerptAroundError = (body, message, radius = 140) => {
+  const source = String(body ?? "");
+  const match = /at position (\d+)/.exec(String(message ?? ""));
+  if (!match) return source.slice(0, radius * 2).trim();
+  const at = Number(match[1]);
+  const from = Math.max(0, at - radius);
+  const to = Math.min(source.length, at + radius);
+  return `${from > 0 ? "…" : ""}${source.slice(from, to).trim()}${to < source.length ? "…" : ""}`;
 };
 
 // Extracts one fenced ```<lang> block (JSON payload) from a reply and strips it
@@ -146,26 +247,32 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false } = {})
     const body = match[1];
     let json = null;
     let reason = "";
+    let dropped = 0;
+    let excerpt = "";
     try {
       json = JSON.parse(body.trim());
     } catch (err) {
       json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
+      excerpt = excerptAroundError(body, err.message);
       if (json === null) {
         reason = `invalid JSON (${err.message})`;
         console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
         console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
       } else {
+        // Something was recovered, but say how much was not: silently importing
+        // eight of ten and implying ten is worse than importing eight and saying so.
+        dropped = Math.max(0, recoverOpsElementwise(body).dropped);
         console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
       }
     }
-    return { rest: text.replace(regex, ""), json, truncated: false, reason };
+    return { rest: text.replace(regex, ""), json, truncated: false, reason, dropped, excerpt };
   }
 
-  if (!salvageTruncated) return { rest: text, json: null, truncated: false, reason: "" };
+  if (!salvageTruncated) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   const openRegex = new RegExp("```" + lang + "\\s*");
   const open = text.match(openRegex);
-  if (!open) return { rest: text, json: null, truncated: false, reason: "" };
+  if (!open) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   // Everything after the opening fence is the (incomplete) payload. Report
   // `truncated` even when the repair works, so the caller can tell the player the
@@ -181,6 +288,8 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false } = {})
     json,
     truncated: true,
     reason: json === null ? "cut off before any entry finished" : "",
+    dropped: 0,
+    excerpt: json === null ? String(body ?? "").slice(0, 280).trim() : "",
   };
 };
 

@@ -263,12 +263,15 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
 // outcome — the player sees a wall of JSON in the chat, the board stays empty,
 // and nothing anywhere explains why. The overwhelmingly common cause is the
 // reply hitting its token cap partway through a long array.
-const AdvisorProjectsProblem = ({ kind, detail, onRetry }) => {
+const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
+    const [showExcerpt, setShowExcerpt] = useState(false);
     const message = kind === "truncated"
         ? "That reply was cut off partway through, so only the entries that arrived complete were added. Ask for the rest to continue the board."
         : kind === "truncated-empty"
             ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
-            : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+            : kind === "partial"
+                ? "Most of that batch went on the board. A few entries were written in a way that could not be read and were skipped — ask for those again."
+                : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -279,10 +282,22 @@ const AdvisorProjectsProblem = ({ kind, detail, onRetry }) => {
             {detail}
             </p>
         )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
         {onRetry && (
-            <button type="button" onClick={onRetry} style={{ marginTop: "0.5rem", background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            <button type="button" onClick={onRetry} style={{ background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
             Ask for the next batch
             </button>
+        )}
+        {excerpt && (
+            <button type="button" onClick={() => setShowExcerpt((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            {showExcerpt ? "Hide" : "Show"} what broke
+            </button>
+        )}
+        </div>
+        {excerpt && showExcerpt && (
+            <pre data-no-translate style={{ margin: "0.5rem 0 0", padding: "0.5rem", background: "rgba(0,0,0,0.35)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", fontSize: "0.64rem", lineHeight: 1.45, maxHeight: "9rem", overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {excerpt}
+            </pre>
         )}
         </div>
     );
@@ -587,7 +602,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
-        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} onRetry={onRetryProjects} />}
+        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -800,7 +815,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
-            const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason } =
+            const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
+                dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
             const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate).catch((error) => {
                 console.error("Failed to apply advisor-proposed projects:", error);
@@ -809,20 +825,29 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             // Every way this can fail used to look identical to the player: a wall
             // of JSON in the chat and a board that never moved. If the model
             // plainly tried and nothing landed, say so and offer the retry.
+            // "Some of it landed" is its own outcome, and the most common one now
+            // that a single malformed entry no longer costs the batch.
             const projectsProblem = projectsSummary
-                ? (projectsTruncated ? "truncated" : "")
+                ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
                 : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
             // "None of the ops applied" is a distinct failure from "we could not
             // read them": the block parsed fine and every op named a project that
             // does not exist. Telling them apart is the difference between "ask
             // again" and "it is trying to update something that was never opened".
-            const projectsDetail = projectsProblem === "unusable"
-                ? (projectsReason || "every entry referred to a project that is not on the board")
+            const projectsDetail = projectsProblem === "partial"
+                ? `${projectsDropped} entr${projectsDropped === 1 ? "y was" : "ies were"} malformed and skipped.`
+                : projectsProblem === "unusable"
+                    ? (projectsReason || "every entry referred to a project that is not on the board")
+                    : "";
+            // The desktop build has no developer tools bound, so the text that
+            // actually broke has to reach the screen or it is unreportable.
+            const projectsExcerptText = (projectsProblem === "unusable" || projectsProblem === "partial")
+                ? projectsExcerpt
                 : "";
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}) };
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {

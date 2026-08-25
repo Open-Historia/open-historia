@@ -1266,6 +1266,8 @@ Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations]
 
 Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
 
+The block must be STRICT JSON, and the one thing that reliably breaks it is a double quote inside a value: write (the Titan-class megalith), not (the "Titan-class" megalith). Use no quotation marks inside any summary, name or note — and no line breaks inside a value either. Straight double quotes around keys and values only; never curly quotes.
+
 Keep the block SMALL. Your reply has a length limit, and a block that runs past it is cut off mid-array and lost — the board does not update at all. So: one sentence per summary, and only the milestones that still matter (those still ahead, plus at most one already achieved; the board keeps its own history of the events behind each project, so you do not need to restate it). If there is a lot to open at once, do TEN AT MOST in one reply, say which ones you have covered and that more remain, and let the player ask for the next batch. Ten entries that land beat forty that do not.
 
 Keep it honest. Progress and dates are what the board shows the player, and the engine flags a project overdue on its own once its target date passes — so do not quietly push a target date back to hide a slip. Say the programme is late and mark it stalled.
