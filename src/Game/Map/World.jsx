@@ -1,6 +1,7 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import Map from "react-map-gl/maplibre";
+import LayerOrder from "./LayerOrder.jsx";
 import Nations from "./Nations";
 import { useCustomBackground } from "./useCustomBackground.js";
 import GlobeEffects from "./GlobeEffects.jsx";
@@ -369,6 +370,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         <Cities />
         <MarkersLayer />
         <Units />
+        {/* Renders nothing; the sole owner of layer stacking order. Last so it
+            mounts after every component that adds layers. */}
+        <LayerOrder />
         <GlobeEffects active={isGlobe} />
         <RegionPopup />
         <CountryInfoPanel />
