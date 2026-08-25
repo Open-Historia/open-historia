@@ -975,16 +975,25 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
     const [displayOrder, setDisplayOrder] = useState([]);
     const snapshotTakenRef = useRef(false);
 
+    // `chats` is only refreshed while the panel is OPEN, so between opens it goes
+    // stale — and the toolbar badge polls storage directly, with force. Opening
+    // used to snapshot (and write the seen baseline from) that stale list, so a
+    // message that had already landed was invisible AND left the baseline behind
+    // it: the badge kept saying 1, the list kept showing nothing, and only an
+    // open that outlived the 5s poll below caught up. Nothing is decided until
+    // the poll's first forced read has landed for this open.
+    const [freshSinceOpen, setFreshSinceOpen] = useState(false);
+
     useEffect(() => {
-        if (!isOpen) { snapshotTakenRef.current = false; return; }
-        if (snapshotTakenRef.current || !hasLoadedInitialData) return;
+        if (!isOpen) { snapshotTakenRef.current = false; setFreshSinceOpen(false); return; }
+        if (snapshotTakenRef.current || !hasLoadedInitialData || !freshSinceOpen) return;
         snapshotTakenRef.current = true;
         setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, readSeen())).map((chat) => String(chat.id))));
         setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
         // Everything on screen now counts as seen: the toolbar badge clears, and the
         // next open only flags what arrived in between.
         writeSeen(seenTotals(openChats));
-    }, [isOpen, hasLoadedInitialData, openChats]);
+    }, [isOpen, hasLoadedInitialData, freshSinceOpen, openChats]);
 
     // Follows the frozen displayOrder — each id's LIVE chat object, so unread
     // status and preview text still update in place — with anything that
@@ -1061,7 +1070,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         if (!isOpen || hasLoadedInitialData) return;
 
         let cancelled = false;
-        Promise.all([loadCountryNames(), loadAllChats()])
+        Promise.all([loadCountryNames(), loadAllChats({ force: true })])
         .then(([countryList, savedChats]) => {
             if (cancelled) return;
             setCountries(countryList);
@@ -1110,7 +1119,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         let cancelled = false;
         const sync = () => loadAllChats({ force: true })
         .then((saved) => {
-            if (cancelled || !Array.isArray(saved)) return;
+            if (cancelled) return;
+            if (!Array.isArray(saved)) { setFreshSinceOpen(true); return; }
             setChats((prev) => {
                 const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
                 if (signature(saved) === signature(prev)) return prev;
@@ -1123,9 +1133,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
                 });
                 return saved;
             });
+            // Batched with the setChats above, so the snapshot effect first runs
+            // against the list this read produced, never the one it replaced.
+            setFreshSinceOpen(true);
         })
-        .catch(() => {});
+        // A failed read must not wedge the panel on "waiting for fresh data" —
+        // fall back to whatever is in hand and let the next tick try again.
+        .catch(() => { if (!cancelled) setFreshSinceOpen(true); });
 
+        // Run now, not in 5s: opening the panel is exactly the moment the list
+        // has to be current, and a player who opens and closes inside the
+        // interval would otherwise never see a read at all.
+        sync();
         const iv = setInterval(sync, 5000);
         return () => {
             cancelled = true;
