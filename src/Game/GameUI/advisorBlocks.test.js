@@ -98,3 +98,77 @@ test("looksLikeProjectOps spots an attempt the parser could not use", () => {
   assert.equal(looksLikeProjectOps("Ordinary advice with no JSON at all."), false);
   assert.equal(looksLikeProjectOps('[{"title":"An action","text":"do it"}]'), false);
 });
+
+// ---- the failure this file's second revision exists for ---------------------
+// A well-fenced, COMPLETE block that will not parse. The board reported "the
+// instructions could not be read" while the chat showed only the advisor's
+// preamble — the fence matched and was stripped, then JSON.parse threw and the
+// repair gave up. Smart quotes are the first suspect every time: a model whose
+// prose is full of typographic punctuation writes its JSON the same way.
+
+test("smart quotes in a complete block are repaired, not thrown away", () => {
+  const body = '[{\u201Cop\u201D:\u201Ccreate\u201D,\u201Cname\u201D:\u201CProject Leviathan\u201D,\u201Csummary\u201D:\u201CAutonomous ships.\u201D}]';
+  const { json } = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.equal(json?.length, 1);
+  assert.equal(json[0].name, "Project Leviathan");
+  assert.equal(json[0].op, "create");
+});
+
+test("a trailing comma no longer costs the whole board", () => {
+  // The old walker hit depth 0, tried one strict parse, and returned null —
+  // discarding every complete entry ahead of the stray comma.
+  const body = '[{"op":"create","name":"A","summary":"s"},{"op":"create","name":"B","summary":"t"},]';
+  const { json } = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.equal(json?.length, 2);
+  assert.deepEqual(json.map((op) => op.name), ["A", "B"]);
+});
+
+test("smart quotes AND a trailing comma together", () => {
+  const body = '[{\u201Cop\u201D:\u201Ccreate\u201D,\u201Cname\u201D:\u201CA\u201D,\u201Csummary\u201D:\u201Cs\u201D},]';
+  assert.equal(repairTruncatedJsonArray(body)?.[0]?.name, "A");
+});
+
+test("comments a chatty model adds are stripped", () => {
+  const body = '[\n  // the fusion programme\n  {"op":"create","name":"A","summary":"s"}\n]';
+  assert.equal(repairTruncatedJsonArray(body)?.[0]?.name, "A");
+});
+
+test("a wrapper object around the array is unwrapped", () => {
+  for (const key of ["projects", "ops", "projectOps", "operations"]) {
+    const body = `{"${key}":[{"op":"create","name":"A","summary":"s"}]}`;
+    assert.equal(repairTruncatedJsonArray(body)?.[0]?.name, "A", `wrapper key "${key}" not unwrapped`);
+  }
+});
+
+test("a single op sent bare rather than in an array", () => {
+  assert.deepEqual(
+    repairTruncatedJsonArray('{"op":"update","name":"A","progress":50}'),
+    [{ op: "update", name: "A", progress: 50 }],
+  );
+});
+
+test("a truncated array inside a wrapper object still salvages", () => {
+  const body = '{"projects":[{"op":"create","name":"A","summary":"s"},{"op":"create","name":"B","summ';
+  const json = repairTruncatedJsonArray(body);
+  assert.equal(json?.length, 1);
+  assert.equal(json[0].name, "A");
+});
+
+test("extractFencedJson reports why a block was unusable", () => {
+  const { json, reason } = extractFencedJson(fence("projects", "{definitely not json"), "projects", { salvageTruncated: true });
+  assert.equal(json, null);
+  assert.match(reason, /invalid JSON/);
+});
+
+test("a valid block reports no reason and is not touched", () => {
+  const { json, reason, truncated } = extractFencedJson(
+    fence("projects", '[{"op":"create","name":"A","summary":"s"}]'), "projects", { salvageTruncated: true },
+  );
+  assert.equal(reason, "");
+  assert.equal(truncated, false);
+  assert.deepEqual(json, [{ op: "create", name: "A", summary: "s" }]);
+});
+
+test("looksLikeProjectOps survives smart quotes too", () => {
+  assert.equal(looksLikeProjectOps('[{\u201Cop\u201D:\u201Ccreate\u201D,\u201Cname\u201D:\u201CA\u201D}]'), true);
+});
