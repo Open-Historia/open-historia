@@ -403,6 +403,11 @@ export const buildProjectsSummaryText = (world, game) => {
     return owner && owner !== player ? `run by ${owner}` : "ours";
   };
 
+  const timelineOf = (project) => {
+    const timeline = describeTimeline(project, gameDate);
+    return timeline ? `${timeline}.` : "";
+  };
+
   const warningsOf = (project, flags) => [
     flags.overdue ? "OVERDUE" : "",
     flags.milestoneMissed ? "a milestone has slipped" : "",
@@ -412,7 +417,7 @@ export const buildProjectsSummaryText = (world, game) => {
 
   const full = (project) => {
     const flags = deriveProjectFlags(project, gameDate, round);
-    const timeline = describeTimeline(project, gameDate);
+    const timeline = timelineOf(project);
     const next = flags.nextMilestone
       ? `Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
       : "";
@@ -422,7 +427,7 @@ export const buildProjectsSummaryText = (world, game) => {
       `- ${titleOf(project)} [id ${project.id}], ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
       project.summary,
       project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
-      timeline ? `${timeline}.` : "",
+      timeline,
       next,
       project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
       roundsSince > 0 ? `Last updated ${roundsSince} round${roundsSince === 1 ? "" : "s"} ago.` : "",

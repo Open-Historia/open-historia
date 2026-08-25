@@ -412,23 +412,25 @@ export async function readOpenAIStreamedResponse(response) {
 // for non-tool calls that pass an onChunk callback; tool/JSON tasks keep the
 // buffered path so the whole structured object is still parsed at once. The
 // onChunk call is wrapped so a throwing UI callback can never break the stream.
-// Returns the streamed answer, or the model's reasoning when it produced no
-// answer at all.
+// Returns { text, reasoning }: the streamed ANSWER, and separately whatever the
+// model streamed as chain of thought.
 //
-// That fallback is the same #540 fix already applied to extractOpenAIMessageText
-// (buffered chat) and readOpenAIStreamedResponse (structured tool calls) — this
-// third path, the one the advisor's streaming chat actually uses, was missed.
-// A thinking model that spends its whole reply budget reasoning streams nothing
-// but reasoning deltas, so `full` stays empty and the caller throws "response
-// did not contain text" with a perfectly good chain of thought in hand.
-// What to tell the player when a provider returns nothing at all. The bare
-// "did not contain text" was accurate and useless: by far the most common cause
-// is a thinking model that spent its entire reply budget reasoning, and the app
-// ships with Model reasoning ON, so the fix is a toggle they can actually reach.
+// Reasoning is fully supported and completely excluded from the reply — the same
+// contract the Anthropic path has always had ("thinking blocks are filtered out
+// by extractAnthropicText, which only reads text blocks"). It is returned only so
+// the caller can tell "the model thought but never answered" from "the model
+// returned nothing at all", which are different problems with different fixes.
+// What to tell the player when a provider returns nothing at all.
+//
+// By this point the all-reasoning case has already been retried once with the
+// token cap lifted, so reaching here means the model produced no answer even
+// with room to think — a model or endpoint problem, not a setting to toggle.
+// Deliberately does NOT suggest turning reasoning off: reasoning is supported,
+// and the answer is to give it room, which the retry already did.
 function emptyReplyMessage(providerLabel) {
-    return `${providerLabel} returned an empty reply. This usually means a thinking model used its whole `
-        + `response budget reasoning without writing an answer. Try turning off **Model reasoning** in settings, `
-        + `or switch to a model that is not a reasoning model.`;
+    return `${providerLabel} returned no answer, even after being given more room to think. `
+        + `The model may be out of context, or the endpoint may have dropped the response. `
+        + `Try sending a shorter message, or check the model is loaded and healthy.`;
 }
 
 async function streamTextSSE(response, extractDelta, onChunk) {
@@ -467,18 +469,7 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
-    const answer = stripThinking(full);
-    if (answer) return answer;
-
-    // No answer, but it did think: hand back the reasoning rather than throwing
-    // away a whole (expensive) generation. Better a rambling reply than an error.
-    const salvaged = stripThinking(reasoning);
-    if (salvaged) {
-        console.warn("[ai] the model returned reasoning but no answer; using the reasoning as the reply");
-        try { onChunk(salvaged, salvaged); } catch { /* UI callback must not break the stream */ }
-        return salvaged;
-    }
-    return full;
+    return { text: stripThinking(full), reasoning: reasoning.trim() };
 }
 
 // One incremental text chunk per provider's stream event. NOTE: joinGeminiParts
@@ -626,7 +617,7 @@ async function callGemini(systemPrompt, history, {
             const payload = await readErrorPayload(response);
             throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
         }
-        const streamed = await streamTextSSE(response, geminiStreamDelta, onChunk);
+        const { text: streamed } = await streamTextSSE(response, geminiStreamDelta, onChunk);
         if (!streamed) throw new Error("Gemini response did not contain text.");
         return streamed;
     }
@@ -695,6 +686,12 @@ async function callGemini(systemPrompt, history, {
     }
 }
 
+// Extra output tokens allowed when reasoning is on, because on an OpenAI-style
+// endpoint the chain of thought is spent from the same budget as the answer.
+// Sized to a full second answer's worth: a model that thinks for 8k still has 8k
+// left to write with.
+const REASONING_HEADROOM_TOKENS = 8192;
+
 async function callOpenAIStyleChatCompletions({
     endpoint,
     headers,
@@ -715,6 +712,12 @@ async function callOpenAIStyleChatCompletions({
 }) {
     let structuredMode = tool ? "tool" : "text";
     let disableToolReasoning = false;
+    // Set once the model has proved it needs more room than the caller asked for
+    // (see the all-reasoning retry below). Lifting the cap entirely hands the
+    // model its own maximum, which is what the no-cap branch below already does.
+    // It can only flip once, so the retry it drives can only ever add one pass.
+    let liftedCapForReasoning = false;
+    const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
     while (attempt <= retries) {
@@ -755,7 +758,15 @@ async function callOpenAIStyleChatCompletions({
                 ...(streamLocalEndpoint && getReasoningEnabled() && !disableToolReasoning ? { enable_thinking: true } : {}),
                 // No cap unless a caller asked for a specific budget: omit the field so
                 // the provider uses the model's own maximum (long turns aren't truncated).
-                ...(Number(maxTokens) > 0 ? { [tokenLimitField]: Number(maxTokens) } : {}),
+                //
+                // Reasoning eats the SAME budget as the answer here — unlike Anthropic,
+                // there is no separate thinking allowance to raise — so a thinking model
+                // asked for 8192 can spend all 8192 thinking and emit no answer at all.
+                // Add headroom for the thinking, and drop the cap entirely once a reply
+                // has already come back as reasoning-only.
+                ...(Number(maxTokens) > 0 && !liftedCapForReasoning
+                    ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
+                    : {}),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -834,9 +845,20 @@ async function callOpenAIStyleChatCompletions({
         // on the actual content-type so a gateway that ignored stream:true (plain
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamed = await streamTextSSE(response, openaiStreamDelta, onChunk);
-            if (!streamed) throw new Error(emptyReplyMessage(providerLabel));
-            return streamed;
+            const { text: streamed, reasoning: streamedReasoning } =
+                await streamTextSSE(response, openaiStreamDelta, onChunk);
+            if (streamed) return streamed;
+            // The model thought and never answered: it spent the whole budget
+            // reasoning. Give it room and ask once more, rather than erroring or
+            // (worse) passing its chain of thought off as advice. Anthropic has
+            // always raised max_tokens to fit its thinking budget; this is the
+            // same idea for a provider that gives no budget knob to raise.
+            if (streamedReasoning && !liftedCapForReasoning) {
+                liftedCapForReasoning = true;
+                console.warn(`[ai] ${providerLabel} returned only reasoning; retrying with the token cap lifted`);
+                continue;
+            }
+            throw new Error(emptyReplyMessage(providerLabel));
         }
 
         // Local servers that honor stream:true answer as an event stream; ones
@@ -1029,7 +1051,7 @@ async function callAnthropic(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamed = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
             if (!streamed) throw new Error("Anthropic response did not contain text.");
             return streamed;
         }
@@ -1133,7 +1155,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamed = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
             if (!streamed) throw new Error("Anthropic-compatible response did not contain text.");
             return streamed;
         }
@@ -1321,6 +1343,8 @@ To act, end your reply with a fenced \`\`\`projects block containing a JSON arra
 Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations] below — never invented or guessed, or the change lands on nothing and is silently dropped. Omit the \`\`\`projects block entirely when nothing should change; most replies need none.
 
 Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
+
+Not everything ends. For a standing effort with no planned completion — a permanent patrol, a continuous intelligence or security programme, an alliance kept in good repair — set "ongoing":true and leave targetDate out entirely. Never invent an end date for something that is simply meant to continue: the board flags a project overdue once its target date passes, so a made-up deadline turns a healthy standing operation into a false alarm. An ongoing effort still takes milestones, and can still be completed or cancelled later if it genuinely ends.
 
 The block must be STRICT JSON, and the one thing that reliably breaks it is a double quote inside a value: write (the Titan-class megalith), not (the "Titan-class" megalith). Use no quotation marks inside any summary, name or note — and no line breaks inside a value either. Straight double quotes around keys and values only; never curly quotes.
 

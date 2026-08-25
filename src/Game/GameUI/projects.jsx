@@ -218,7 +218,14 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, onT
           </span>
           {secrecy && <span title={project.secrecy}>{secrecy}</span>}
         </div>
-        <Pill color={tone.color} bg={tone.bg}>{tone.label}</Pill>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.25rem" }}>
+          {flags.ongoing && (
+            <Pill color="rgba(255,255,255,0.55)" bg="rgba(255,255,255,0.08)" title="A standing effort with no planned end">
+              Ongoing
+            </Pill>
+          )}
+          <Pill color={tone.color} bg={tone.bg}>{tone.label}</Pill>
+        </div>
       </div>
 
       {owner && (

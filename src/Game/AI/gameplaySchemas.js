@@ -478,7 +478,15 @@ const projectSchema = {
       enum: ["public", "restricted", "covert"],
     },
     startedAt: textSchema("In-game date work began (YYYY-MM-DD)."),
-    targetDate: textSchema("In-game date it is expected to complete (YYYY-MM-DD). This is what the board measures overdue against."),
+    ongoing: {
+      type: "boolean",
+      description:
+        "True for a standing effort with no planned end - a permanent patrol, a "
+        + "continuous intelligence or security programme, an alliance kept in good "
+        + "repair. Leave targetDate empty when this is true, and never invent an end "
+        + "date for something that is simply meant to continue.",
+    },
+    targetDate: textSchema("In-game date it is expected to complete (YYYY-MM-DD). Omit entirely for an ongoing effort. This is what the board measures overdue against."),
     milestones: {
       type: "array",
       description: "Checkpoints along the way, earliest first. The soonest pending one is shown as the project's next milestone.",
@@ -547,6 +555,7 @@ const projectOpSchema = {
         tags: projectSchema.properties.tags,
         secrecy: projectSchema.properties.secrecy,
         startedAt: projectSchema.properties.startedAt,
+        ongoing: projectSchema.properties.ongoing,
         targetDate: projectSchema.properties.targetDate,
         lastUpdate: projectSchema.properties.lastUpdate,
         linkedUnitIds: projectSchema.properties.linkedUnitIds,
