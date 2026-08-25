@@ -27,27 +27,6 @@ const SNAP_DISTANCE_DEG = 40;
 const STATION_RING_POINTS = 48;
 const EARTH_RADIUS_KM = 6371;
 
-// MapLibre can "drape" only these layer types onto 3D terrain — it renders a
-// contiguous run of them into a per-tile texture and paints that onto the
-// terrain mesh. Anything else (symbols, circles) is drawn live, in 3D, on top.
-const DRAPED_LAYER_TYPES = new Set([
-  "background",
-  "fill",
-  "line",
-  "raster",
-  "hillshade",
-  "color-relief",
-]);
-
-// The heading lines and station rings are `line` layers, so terrain drapes them.
-// They must sit at the END of the map's draped run, NOT after the label layers —
-// see arrangeUnitLayers for why that single detail decides the frame rate.
-const UNIT_DRAPED_LAYERS = ["units-heading", "units-station"];
-
-// The counters themselves: a circle and two symbol layers, none of them drapeable,
-// all of them drawn live above the terrain. Bottom to top.
-const UNIT_COUNTER_LAYERS = ["units-fill", "units-icons", "units-strength"];
-
 // On-map glyph per unit type (rendered via the same font stack as the city
 // symbols, so they appear wherever those do).
 const TYPE_GLYPH = {
@@ -121,66 +100,6 @@ const Units = () => {
       })
       .catch((error) => console.error("Failed to load colors for units:", error));
   }, []);
-
-  // Puts the unit layers where they belong, and keeps them there. Nothing else on
-  // this map sets a beforeId — <Nations>, <Cities>, <MarkersLayer> and this
-  // component all call addLayer() with no anchor — so the stacking order is
-  // decided purely by which of them reached MapLibre first, which is not stable:
-  // a source whose data resolves late renders null until it does, and a style
-  // reload re-adds everything from scratch. Two things have to be true, and
-  // neither one holds by accident:
-  //
-  // 1. The counters must be on top. When the region fills land above them a unit
-  //    reads as though it were painted UNDER the map — the glyph and the strength
-  //    label carry dark halos and stay legible through a 0.72-opacity fill, but
-  //    the disc is its owner's colour sitting under that same owner's colour, so
-  //    it washes out to a translucent smudge.
-  //
-  // 2. The heading/station lines must close the draped run rather than following
-  //    the labels. MapLibre batches consecutive drapeable layers into one
-  //    render-to-texture stack and flushes it on the first layer it cannot drape.
-  //    Two line layers sitting after the label symbols open a SECOND stack, and
-  //    the cost of that is not the extra terrain redraw — it is the cache. The
-  //    RenderPool calls freeAllObjects() at the end of every flush, so stack two
-  //    takes stack one's textures and re-stamps them; next frame the stamps no
-  //    longer match and the whole region-fill drape is rebuilt from scratch. That
-  //    is every fill and hairline on the map, match-expression fill-colour and
-  //    all, re-rendered per tile per frame. Folding the lines into the first run
-  //    leaves one stack, and the drape cache survives between frames.
-  //
-  // Deliberately idempotent: it compares the arrangement it wants against the one
-  // in place and returns without touching anything when they agree, so the
-  // styledata that moveLayer itself fires settles instead of looping.
-  // getLayersOrder() hands back a copy of the id list, which is what makes this
-  // cheap enough to run on every style change — getStyle() would serialize every
-  // layer, and the region fills carry a match stop per region.
-  useEffect(() => {
-    const mapInstance = map?.getMap?.() ?? map;
-    if (!mapInstance?.getLayersOrder) return undefined;
-
-    const arrangeUnitLayers = () => {
-      const present = (ids) => ids.filter((id) => mapInstance.getLayer(id));
-      const draped = present(UNIT_DRAPED_LAYERS);
-      const counters = present(UNIT_COUNTER_LAYERS);
-      if (!draped.length && !counters.length) return;
-
-      const order = mapInstance.getLayersOrder();
-      const others = order.filter((id) => !draped.includes(id) && !counters.includes(id));
-      // The first layer terrain cannot drape — where the draped run ends, and so
-      // where the heading lines have to go to stay inside it.
-      const firstLive = others.find((id) => !DRAPED_LAYER_TYPES.has(mapInstance.getLayer(id)?.type));
-      const cut = firstLive ? others.indexOf(firstLive) : others.length;
-      const desired = [...others.slice(0, cut), ...draped, ...others.slice(cut), ...counters];
-      if (desired.join() === order.join()) return;
-
-      for (const id of draped) mapInstance.moveLayer(id, firstLive);
-      for (const id of counters) mapInstance.moveLayer(id);
-    };
-
-    arrangeUnitLayers();
-    mapInstance.on("styledata", arrangeUnitLayers);
-    return () => mapInstance.off("styledata", arrangeUnitLayers);
-  }, [map]);
 
   useEffect(() => {
     const source = () => map?.getMap?.()?.getSource?.("units-source") ?? map?.getSource?.("units-source");
@@ -328,10 +247,10 @@ const Units = () => {
   return (
     <>
       {/* Declared first so a heading line never draws over its own unit. Where
-          these two actually END UP is settled by arrangeUnitLayers above, which
-          tucks them in at the end of the terrain-draped run — below the label
-          symbols, not after them, because a second drape stack costs the whole
-          render-to-texture cache. */}
+          these two actually END UP is settled by MAP_LAYER_ORDER (mapLayerOrder.js),
+          which tucks them in at the end of the terrain-draped run — below the
+          label symbols, not after them, because a second drape stack costs the
+          whole render-to-texture cache. */}
       <Source id="units-orders-source" type="geojson" data={orderData}>
         <Layer
           id="units-heading"
