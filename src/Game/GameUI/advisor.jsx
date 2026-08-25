@@ -263,17 +263,22 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
 // outcome — the player sees a wall of JSON in the chat, the board stays empty,
 // and nothing anywhere explains why. The overwhelmingly common cause is the
 // reply hitting its token cap partway through a long array.
-const AdvisorProjectsProblem = ({ kind, onRetry }) => {
+const AdvisorProjectsProblem = ({ kind, detail, onRetry }) => {
     const message = kind === "truncated"
         ? "That reply was cut off partway through, so only the entries that arrived complete were added. Ask for the rest to continue the board."
         : kind === "truncated-empty"
             ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
-            : "The advisor tried to change the board but the instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+            : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
         <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(253,230,138,0.95)" }}>⚠ Board not fully updated</div>
         <p style={{ margin: "0.3rem 0 0", fontSize: "0.75rem", lineHeight: 1.5, color: "rgba(255,255,255,0.75)" }}>{message}</p>
+        {detail && (
+            <p data-no-translate style={{ margin: "0.3rem 0 0", fontSize: "0.68rem", lineHeight: 1.45, color: "rgba(255,255,255,0.4)" }}>
+            {detail}
+            </p>
+        )}
         {onRetry && (
             <button type="button" onClick={onRetry} style={{ marginTop: "0.5rem", background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
             Ask for the next batch
@@ -582,7 +587,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
-        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} onRetry={onRetryProjects} />}
+        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} onRetry={onRetryProjects} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -795,7 +800,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
-            const { json: projectsProposal, truncated: projectsTruncated } =
+            const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
             const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate).catch((error) => {
                 console.error("Failed to apply advisor-proposed projects:", error);
@@ -807,10 +812,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             const projectsProblem = projectsSummary
                 ? (projectsTruncated ? "truncated" : "")
                 : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
+            // "None of the ops applied" is a distinct failure from "we could not
+            // read them": the block parsed fine and every op named a project that
+            // does not exist. Telling them apart is the difference between "ask
+            // again" and "it is trying to update something that was never opened".
+            const projectsDetail = projectsProblem === "unusable"
+                ? (projectsReason || "every entry referred to a project that is not on the board")
+                : "";
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}) };
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
