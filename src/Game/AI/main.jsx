@@ -10,6 +10,7 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { busyProviderMessage, errorPayloadText, isBusyErrorPayload, providerErrorReplyMessage } from "./providerErrors.js";
 import {
     buildPromptContext,
     renderTemplate,
@@ -449,6 +450,41 @@ function emptyReplyMessage(providerLabel) {
         + `Try sending a shorter message, or check the model is loaded and healthy.`;
 }
 
+// errorPayloadText / isBusyErrorPayload / busyProviderMessage /
+// providerErrorReplyMessage live in providerErrors.js (imported at the top of
+// this file) so they can be unit-tested: nothing in main.jsx can be, and
+// deciding whether a provider is merely busy is exactly the kind of string
+// handling that needs to be. See that file for why it exists at all.
+
+// The error every streaming path throws when the stream ended with no answer.
+// If the provider said why, say what it said; otherwise fall back to the
+// caller's own wording. Written once because all four streaming call sites had
+// the same blind spot — Anthropic's overloaded_error and Gemini's UNAVAILABLE
+// arrive exactly like the OpenAI-compatible one above, inside the stream.
+function streamFailureError(providerLabel, streamResult, { retried = false, fallbackMessage } = {}) {
+    const detail = errorPayloadText(streamResult.streamError);
+    const busy = isBusyErrorPayload(streamResult.streamError);
+    return aiFailureError(
+        streamResult.streamError
+            ? (busy ? busyProviderMessage(providerLabel, detail, retried) : providerErrorReplyMessage(providerLabel, detail))
+            : fallbackMessage,
+        {
+            provider: providerLabel,
+            mode: "streaming chat",
+            ...(streamResult.streamError ? { providerError: detail || "(no message)", retriedAfterOverload: retried } : {}),
+            finishReason: streamResult.finishReason || "(none reported)",
+            streamFrames: streamResult.frames,
+            sampleFrames: streamResult.sample,
+        },
+    );
+}
+
+// One retry, five seconds later. Long enough for a load spike to pass, short
+// enough that the player is not left watching the dots — and capped at one, so a
+// provider that is genuinely down fails with a real message and a Retry button
+// rather than stalling the turn.
+const OVERLOADED_RETRY_DELAY = 5000;
+
 async function streamTextSSE(response, extractDelta, onChunk) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -462,6 +498,7 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     // names a new backend invents.
     let finishReason = "";
     let frames = 0;
+    let streamError = null;
     const sample = [];
     try {
         for (;;) {
@@ -477,6 +514,10 @@ async function streamTextSSE(response, extractDelta, onChunk) {
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
                 frames += 1;
+                // An error object in place of a delta: the provider gave up
+                // mid-stream. Keep the FIRST one — it is the cause; anything
+                // after it is fallout.
+                if (!streamError && json?.error) streamError = json.error;
                 if (json?.choices?.[0]?.finish_reason) finishReason = json.choices[0].finish_reason;
                 // Keep the first few frames and nothing more: enough to show the
                 // shape a gateway is using, small enough to paste into a report.
@@ -503,6 +544,7 @@ async function streamTextSSE(response, extractDelta, onChunk) {
         reasoning: reasoning.trim(),
         finishReason,
         frames,
+        streamError,
         sample,
     };
 }
@@ -634,27 +676,40 @@ async function callGemini(systemPrompt, history, {
     // deliberately sends NO cap so long simulations are never truncated.
     if (onChunk && !tool) {
         const streamUrl = getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
-        const response = await fetch(streamUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: history,
-                generationConfig: {
-                    maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
-                    ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
-                },
-                ...customParams,
-            }),
-            signal,
-        });
-        if (!response.ok) {
-            const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+        // Two passes at most: the second only ever happens when the first came
+        // back with an overloaded/unavailable error INSIDE the stream, which
+        // arrives as an HTTP 200 and so never reaches the status-code retry.
+        for (let pass = 1; ; pass += 1) {
+            const response = await fetch(streamUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    system_instruction: { parts: [{ text: systemPrompt }] },
+                    contents: history,
+                    generationConfig: {
+                        maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
+                        ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+                    },
+                    ...customParams,
+                }),
+                signal,
+            });
+            if (!response.ok) {
+                const payload = await readErrorPayload(response);
+                throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+            }
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            if (pass === 1 && isBusyErrorPayload(streamResult.streamError) && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                console.warn(`[ai] Gemini reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Gemini", streamResult, {
+                retried: pass > 1,
+                fallbackMessage: "Gemini response did not contain text.",
+            });
         }
-        const { text: streamed } = await streamTextSSE(response, geminiStreamDelta, onChunk);
-        if (!streamed) throw new Error("Gemini response did not contain text.");
-        return streamed;
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -752,6 +807,9 @@ async function callOpenAIStyleChatCompletions({
     // model its own maximum, which is what the no-cap branch below already does.
     // It can only flip once, so the retry it drives can only ever add one pass.
     let liftedCapForReasoning = false;
+    // Same one-shot discipline as liftedCapForReasoning: it drives a retry that
+    // does not consume an attempt, so it must only ever be able to flip once.
+    let retriedAfterOverload = false;
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -881,8 +939,22 @@ async function callOpenAIStyleChatCompletions({
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk);
-            const { text: streamed, reasoning: streamedReasoning } = streamResult;
+            const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             if (streamed) return streamed;
+            // The provider said what went wrong inside the stream. Say THAT
+            // rather than the generic empty-reply guess below — and if it was
+            // simply busy, wait and ask again before troubling the player.
+            if (streamError) {
+                const detail = errorPayloadText(streamError);
+                const busy = isBusyErrorPayload(streamError);
+                if (busy && !retriedAfterOverload && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                    retriedAfterOverload = true;
+                    console.warn(`[ai] ${providerLabel} reported "${detail}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                    await sleep(OVERLOADED_RETRY_DELAY, signal);
+                    continue;
+                }
+                throw streamFailureError(providerLabel, streamResult, { retried: retriedAfterOverload });
+            }
             // The model thought and never answered: it spent the whole budget
             // reasoning. Give it room and ask once more, rather than erroring or
             // (worse) passing its chain of thought off as advice. Anthropic has
@@ -927,10 +999,26 @@ async function callOpenAIStyleChatCompletions({
         }
 
         if (!text) {
-            throw aiFailureError(emptyReplyMessage(providerLabel), {
+            // A gateway that ignored stream:true puts the same overload error in
+            // a 200 body instead of a frame — same cause, same handling.
+            const bufferedError = data?.error;
+            const bufferedDetail = errorPayloadText(bufferedError);
+            const bufferedBusy = isBusyErrorPayload(bufferedError);
+            if (bufferedBusy && !retriedAfterOverload && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] ${providerLabel} reported "${bufferedDetail}"; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            const bufferedMessage = bufferedError
+                ? (bufferedBusy ? busyProviderMessage(providerLabel, bufferedDetail, retriedAfterOverload)
+                    : providerErrorReplyMessage(providerLabel, bufferedDetail))
+                : emptyReplyMessage(providerLabel);
+            throw aiFailureError(bufferedMessage, {
                 provider: providerLabel,
                 model,
                 mode: "buffered chat",
+                ...(bufferedError ? { providerError: bufferedDetail || "(no message)", retriedAfterOverload } : {}),
                 reasoningEnabled: wantsReasoning,
                 requestedMaxTokens: Number(maxTokens) || 0,
                 finishReason: data?.choices?.[0]?.finish_reason || "(none reported)",
@@ -1030,6 +1118,7 @@ async function callAnthropic(systemPrompt, history, {
     signal,
     tool,
 } = {}) {
+    let retriedAfterOverload = false;
     const settings = getProviderSettings("anthropic");
     const apiKey = settings.apiKey.trim();
 
@@ -1110,9 +1199,21 @@ async function callAnthropic(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
-            if (!streamed) throw new Error("Anthropic response did not contain text.");
-            return streamed;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            // overloaded_error arrives as an error EVENT on a 200 stream, so the
+            // status-code retry above never sees it. Wait and ask once more.
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Anthropic", streamResult, {
+                retried: retriedAfterOverload,
+                fallbackMessage: "Anthropic response did not contain text.",
+            });
         }
 
         const data = await response.json();
@@ -1140,6 +1241,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     signal,
     tool,
 } = {}) {
+    let retriedAfterOverload = false;
     const settings = getProviderSettings("anthropic-compatible");
     const endpoint = normalizeEndpoint(settings.endpoint);
 
@@ -1214,9 +1316,21 @@ async function callAnthropicCompatible(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
-            if (!streamed) throw new Error("Anthropic-compatible response did not contain text.");
-            return streamed;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            // overloaded_error arrives as an error EVENT on a 200 stream, so the
+            // status-code retry above never sees it. Wait and ask once more.
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic-compatible reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Anthropic-compatible", streamResult, {
+                retried: retriedAfterOverload,
+                fallbackMessage: "Anthropic-compatible response did not contain text.",
+            });
         }
 
         const data = await response.json();
