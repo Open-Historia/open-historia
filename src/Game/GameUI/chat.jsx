@@ -967,11 +967,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
     const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
 
-    // Which chats to flag as unread, snapshotted when the panel OPENS and held
-    // until it closes — rows must not reshuffle under the cursor while the player
-    // is reading them. Reopening the panel is what re-sorts. displayOrder freezes
-    // the same way and for the same reason: a background message landing for some
-    // OTHER chat must not visibly jump it up the list mid-read.
+    // Which chats to flag as unread: seeded from the persisted baseline when the
+    // panel OPENS, then only ever added to (arrivals) or cleared per-chat (an
+    // actual read) — never wholesale, so a row stays bold until its message is
+    // opened. displayOrder freezes at open for a different reason: a background
+    // message landing for some OTHER chat must not visibly jump it up the list
+    // mid-read. Reopening the panel is what re-sorts.
     const [unreadIds, setUnreadIds] = useState(() => new Set());
     const [displayOrder, setDisplayOrder] = useState([]);
     const snapshotTakenRef = useRef(false);
@@ -989,12 +990,39 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         if (!isOpen) { snapshotTakenRef.current = false; setFreshSinceOpen(false); return; }
         if (snapshotTakenRef.current || !hasLoadedInitialData || !freshSinceOpen) return;
         snapshotTakenRef.current = true;
-        setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, readSeen())).map((chat) => String(chat.id))));
+        const seen = readSeen();
+        if (seen === null) {
+            // First look ever: seed the baseline rather than declare every chat
+            // that already existed unread. The same seed the toolbar badge does —
+            // whichever gets there first wins, and it only ever happens once.
+            writeSeen(seenTotals(openChats));
+            setUnreadIds(new Set());
+        } else {
+            setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
+        }
         setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
-        // Everything on screen now counts as seen: the toolbar badge clears, and the
-        // next open only flags what arrived in between.
-        writeSeen(seenTotals(openChats));
+        // Deliberately NOT writing the baseline here. Opening the panel is not
+        // reading your mail: seeing a row in a list is not seeing the message.
+        // The baseline only advances when a chat is actually opened
+        // (setChatReadState, below) or "Mark all read" is clicked, so the badge
+        // survives a look at the list and clears only for what was really read.
     }, [isOpen, hasLoadedInitialData, freshSinceOpen, openChats]);
+
+    // A chat that arrives (or gains a message) while the panel sits open still
+    // has to show as new — storage is the authority now that the baseline is no
+    // longer wiped on open. Union-only, so it never un-flags a row mid-read, and
+    // it skips the chat currently on screen, which the effect below marks read.
+    useEffect(() => {
+        if (!isOpen || !snapshotTakenRef.current) return;
+        const seen = readSeen();
+        if (!seen) return;
+        const activeId = activeChat ? String(activeChat.id) : null;
+        const arrived = openChats
+            .filter((chat) => String(chat.id) !== activeId && isChatUnread(chat, seen))
+            .map((chat) => String(chat.id));
+        if (arrived.length === 0) return;
+        setUnreadIds((prev) => (arrived.every((id) => prev.has(id)) ? prev : new Set([...prev, ...arrived])));
+    }, [isOpen, openChats, activeChat]);
 
     // Follows the frozen displayOrder — each id's LIVE chat object, so unread
     // status and preview text still update in place — with anything that
@@ -1312,9 +1340,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         .then((saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             const open = saved.filter((c) => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length > 0);
-            // The badge only READS the baseline. The panel writes it when it opens,
-            // and it must be the only writer: if this poll also wrote on isOpen it
-            // could clear the baseline first and the list would find nothing unread.
+            // The badge only READS the baseline (bar the one-time seed below) —
+            // it is advanced solely by opening a chat or "Mark all read". While
+            // the panel is open the badge is behind it and says nothing; closing
+            // re-runs this effect, so whatever is still genuinely unread comes
+            // straight back rather than being silently cleared by the visit.
             if (isOpen) { setUnseenCount(0); return; }
             const seen = readSeen();
             if (seen === null) {
