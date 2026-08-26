@@ -1069,6 +1069,39 @@ export const normalizeProjects = (projects) =>
 // approach it instead of work quietly vanishing.
 export const PROJECT_BOARD_LIMIT = MAX_PROJECTS;
 
+// Which raw keys map onto each project field, so a partially-specified op can be
+// told apart from a fully-specified one. Mirrors the aliases normalizeProjectEntry
+// accepts — keep the two in step or a field the normalizer understands will look
+// "not provided" and be silently preserved instead of applied.
+const PROJECT_FIELD_ALIASES = {
+  name: ["name", "title", "project"],
+  kind: ["kind", "type"],
+  ownerCode: ["ownerCode", "owner", "code"],
+  summary: ["summary", "description"],
+  status: ["status"],
+  progress: ["progress"],
+  tags: ["tags"],
+  secrecy: ["secrecy", "classification"],
+  startedAt: ["startedAt", "startDate", "began"],
+  ongoing: ["ongoing"],
+  targetDate: ["targetDate", "dueDate", "completionDate"],
+  milestones: ["milestones"],
+  lastUpdate: ["lastUpdate"],
+  linkedUnitIds: ["linkedUnitIds"],
+  linkedMarkerIds: ["linkedMarkerIds"],
+  focus: ["focus"],
+  note: ["note"],
+};
+
+// A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
+// replayed by the staged reveal, so this has to survive a JSON round trip.
+const listProvidedFields = (source) => {
+  if (!source || typeof source !== "object") return [];
+  return Object.entries(PROJECT_FIELD_ALIASES)
+    .filter(([, aliases]) => aliases.some((alias) => source[alias] !== undefined))
+    .map(([field]) => field);
+};
+
 // One AI-authored mutation to the projects board.
 //
 // The aliases are generous on purpose. markerOps learned this the hard way: a
@@ -1086,9 +1119,13 @@ const normalizeProjectOp = (entry) => {
   if (op === "create" || op === "start" || op === "launch" || op === "open" || op === "add") {
     // The payload may be nested under `project` or inlined on the op itself —
     // both shapes turn up, and markerOps accepts both for the same reason.
-    const project = normalizeProjectEntry(entry.project ?? entry, 0);
+    const source = entry.project ?? entry;
+    const project = normalizeProjectEntry(source, 0);
     if (!project) return null;
-    return { op: "create", project };
+    // Re-normalizing an op that has already been through here (events.json is
+    // replayed by the staged reveal) must not widen the field list to everything.
+    const provided = Array.isArray(entry.provided) ? entry.provided : listProvidedFields(source);
+    return { op: "create", project, provided };
   }
 
   if (op === "update" || op === "progress" || op === "edit") {
@@ -1192,18 +1229,30 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       const existingIndex = indexOf({ projectId: op.project.id, name: op.project.name });
       if (existingIndex !== -1) {
         // Re-announcing a running project is a restatement, not a second one, so
-        // treat it as an update — otherwise a chatty turn fills the board with
+        // treat it as an UPDATE — otherwise a chatty turn fills the board with
         // duplicate copies of Project Leviathan. Same rule applyMarkerOps applies
         // to rebuilding under an existing name.
+        //
+        // Crucially a merge, not a replace. This used to spread the whole
+        // normalized op over the existing entry, so a jump that mentioned an
+        // operation in passing — {"op":"create","name":"Standing Watch",
+        // "summary":"The patrol continues."} — silently reset everything the
+        // model had not bothered to restate: ongoing back to false, progress to
+        // 0, status to active, secrecy to public, tags emptied, an operation
+        // demoted to a project. Only apply what the op actually carried.
         const existing = next[existingIndex];
+        const merged = { ...existing };
+        for (const field of op.provided ?? []) {
+          if (field === "name") continue; // matched BY the name; never rewrite it here
+          merged[field] = op.project[field];
+        }
         next = next.map((project, index) => (index === existingIndex
           ? touch({
-            ...op.project,
+            ...merged,
             id: existing.id,
             createdAt: existing.createdAt,
             // A restatement rarely repeats the history, so keep what we had.
             eventIds: existing.eventIds,
-            milestones: op.project.milestones.length ? op.project.milestones : existing.milestones,
           })
           : project));
         continue;
