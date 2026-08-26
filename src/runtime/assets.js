@@ -865,6 +865,19 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
     if (buffer == null) {
       const { response } = await fetchWithPersistence(url, { signal });
       buffer = await response.arrayBuffer();
+      // Bytes from a node were hash-checked above; bytes from the origin were
+      // not, which made the fallback the weakest link in a chain built to be
+      // strong. Hold it to the same signed manifest. A mismatch throws rather
+      // than degrading quietly: the caller already handles a failed archive by
+      // painting the procedural fallback, and a map that fails loudly beats a
+      // map someone else chose.
+      if (import.meta.env.VITE_OH_WEB) {
+        const { verifyOriginBuffer } = await import("./web/contentTrust.js");
+        const { checked, ok } = await verifyOriginBuffer(url, buffer);
+        if (checked && !ok) {
+          throw new Error(`${url} does not match the signed content manifest — refusing to use it.`);
+        }
+      }
     }
     primePmtilesArchive(url, buffer);
     return buffer;

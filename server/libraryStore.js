@@ -719,11 +719,11 @@ const copyGameOptionalAssets = (targetGameId, sourceGameId) => {
 };
 
 const normalizeBaseSaveSeedAsset = (assetKey, value) => {
-  if (assetKey in STORAGE_JSON_ASSET_FILES) {
+  if (Object.hasOwn(STORAGE_JSON_ASSET_FILES, assetKey)) {
     return Array.isArray(value) ? value : cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
   }
 
-  if (assetKey in CORE_JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES) {
+  if (Object.hasOwn(CORE_JSON_ASSET_FILES, assetKey) || Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
     return value && typeof value === "object" && !Array.isArray(value)
     ? value
     : cloneJson(JSON_ASSET_DEFAULTS[assetKey]);
@@ -1692,7 +1692,7 @@ const updateScenario = (
 
   if (storage && typeof storage === "object") {
     for (const [assetKey, value] of Object.entries(storage)) {
-      if (assetKey in STORAGE_JSON_ASSET_FILES) {
+      if (Object.hasOwn(STORAGE_JSON_ASSET_FILES, assetKey)) {
         writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), value);
       }
     }
@@ -1774,7 +1774,7 @@ const updateGame = (
 
   if (storage && typeof storage === "object") {
     for (const [assetKey, value] of Object.entries(storage)) {
-      if (assetKey in STORAGE_JSON_ASSET_FILES) {
+      if (Object.hasOwn(STORAGE_JSON_ASSET_FILES, assetKey)) {
         writeJsonFile(getGameJsonPath(gameId, assetKey), value);
       }
     }
@@ -1910,7 +1910,7 @@ const deleteGame = (gameId) => {
 const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "") => {
   ensureScenarioStore();
 
-  if (!(assetKey in UPLOADABLE_SCENARIO_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_SCENARIO_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -1933,7 +1933,7 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
 const removeScenarioAsset = (scenarioId, assetKey) => {
   ensureScenarioStore();
 
-  if (!(assetKey in UPLOADABLE_SCENARIO_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_SCENARIO_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -1952,7 +1952,7 @@ const removeScenarioAsset = (scenarioId, assetKey) => {
 const uploadGameAsset = (gameId, assetKey, dataBuffer, contentType = "") => {
   ensureGameStore();
 
-  if (!(assetKey in UPLOADABLE_GAME_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_GAME_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -1975,7 +1975,7 @@ const uploadGameAsset = (gameId, assetKey, dataBuffer, contentType = "") => {
 const removeGameAsset = (gameId, assetKey) => {
   ensureGameStore();
 
-  if (!(assetKey in UPLOADABLE_GAME_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_GAME_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -1994,7 +1994,7 @@ const removeGameAsset = (gameId, assetKey) => {
 const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
   ensureScenarioStore();
 
-  if (!(assetKey in UPLOADABLE_SCENARIO_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_SCENARIO_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -2012,7 +2012,7 @@ const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
   const contentType =
     assetKey === COVER_IMAGE_ASSET_KEY
       ? readScenarioMeta(scenarioId).coverImageContentType || "application/octet-stream"
-      : assetKey in OPTIONAL_JSON_ASSET_FILES || assetKey in SCENARIO_GEOJSON_ASSET_FILES
+      : Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey) || Object.hasOwn(SCENARIO_GEOJSON_ASSET_FILES, assetKey)
         ? "application/json; charset=utf-8"
         : "application/octet-stream";
   return { contentType, sourcePath };
@@ -2021,7 +2021,7 @@ const resolveScenarioUploadAsset = (scenarioId, assetKey) => {
 const resolveGameUploadAsset = (gameId, assetKey) => {
   ensureGameStore();
 
-  if (!(assetKey in UPLOADABLE_GAME_ASSET_FILES)) {
+  if (!(Object.hasOwn(UPLOADABLE_GAME_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported asset key: ${assetKey}`);
   }
 
@@ -2225,7 +2225,7 @@ const readRuntimeJsonAsset = (assetKey) => {
 
   // Custom region/city geometry is scenario-scoped (static map data). Resolve it
   // from the active game's scenario, mirroring how pmtiles overrides resolve.
-  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
+  if (Object.hasOwn(SCENARIO_GEOJSON_ASSET_FILES, assetKey)) {
     const scenario = getActiveRuntimeScenarioSummary();
     ensureScenarioOwnerSchema(scenario.id);
     let sourcePath = getScenarioUploadPath(scenario.id, assetKey);
@@ -2257,7 +2257,7 @@ const readRuntimeJsonAsset = (assetKey) => {
   // resolved at the top of this function, above the geojson branch, so the
   // migration hook can see it.)
   const gamePath =
-  activeGame && (assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)
+  activeGame && (Object.hasOwn(JSON_ASSET_FILES, assetKey) || Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey) || Object.hasOwn(RUNTIME_ONLY_JSON_ASSET_FILES, assetKey))
   ? getGameJsonPath(activeGame.id, assetKey)
   : null;
 
@@ -2271,7 +2271,7 @@ const readRuntimeJsonAsset = (assetKey) => {
 
   const scenario = getActiveRuntimeScenarioSummary();
   const scenarioPath =
-  assetKey in JSON_ASSET_FILES || assetKey in OPTIONAL_JSON_ASSET_FILES
+  Object.hasOwn(JSON_ASSET_FILES, assetKey) || Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)
   ? getScenarioJsonPath(scenario.id, assetKey)
   : null;
 
@@ -2283,7 +2283,7 @@ const readRuntimeJsonAsset = (assetKey) => {
     };
   }
 
-  if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+  if (Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
     // Only colors has a built-in fallback (the app palette every stock country is
     // painted from). This branch predates there being a second optional asset and
     // used to call resolveColorsAssetFile() for whatever key arrived — so adding
@@ -2326,7 +2326,7 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
   // the catalog invalidation writeJsonFile does) changes the asset URL the
   // client polls. That is what makes a newly placed city appear without a
   // reload, rather than sitting in the data invisibly until restart.
-  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
+  if (Object.hasOwn(SCENARIO_GEOJSON_ASSET_FILES, assetKey)) {
     // Same shape guard as the storage assets below, for the same reason: an
     // unparseable body reaches us as {} (express.json hands a route that), and
     // writing it here would replace a scenario's entire map geometry with an
@@ -2359,7 +2359,7 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     };
   }
 
-  if (!(assetKey in JSON_ASSET_FILES) && !(assetKey in OPTIONAL_JSON_ASSET_FILES) && !(assetKey in RUNTIME_ONLY_JSON_ASSET_FILES)) {
+  if (!(Object.hasOwn(JSON_ASSET_FILES, assetKey)) && !(Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) && !(Object.hasOwn(RUNTIME_ONLY_JSON_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
 
@@ -2372,7 +2372,7 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
   // forever, which looks exactly like "my game saved nothing". Refusing is safe —
   // writeJson throws on a non-ok response, so the caller sees a real failure
   // instead of silently corrupting a save.
-  const expectsArray = assetKey in STORAGE_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES;
+  const expectsArray = Object.hasOwn(STORAGE_JSON_ASSET_FILES, assetKey) || Object.hasOwn(RUNTIME_ONLY_JSON_ASSET_FILES, assetKey);
   const shapeOk = expectsArray
     ? Array.isArray(value)
     : Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -2434,7 +2434,7 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
 const resolveRuntimeBinaryAsset = (assetKey) => {
   ensureGameStore();
 
-  if (!(assetKey in PMTILES_ASSET_FILES)) {
+  if (!(Object.hasOwn(PMTILES_ASSET_FILES, assetKey))) {
     throw new Error(`Unsupported PMTiles asset key: ${assetKey}`);
   }
 
@@ -2480,7 +2480,7 @@ const buildScenarioBundleAsset = (scenarioId, assetKey, mode) => {
     };
   }
 
-  if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+  if (Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
     const scenarioPath = getScenarioJsonPath(scenarioId, assetKey);
     if (fs.existsSync(scenarioPath)) {
       return {
@@ -2498,7 +2498,7 @@ const buildScenarioBundleAsset = (scenarioId, assetKey, mode) => {
 
   // Custom region geometry IS the map, so always embed it (even in "light"
   // mode) — a shared custom map is broken without its geometry.
-  if (assetKey in SCENARIO_GEOJSON_ASSET_FILES) {
+  if (Object.hasOwn(SCENARIO_GEOJSON_ASSET_FILES, assetKey)) {
     const geojsonPath = getScenarioUploadPath(scenarioId, assetKey);
     if (!fs.existsSync(geojsonPath)) {
       return { fileName: SCENARIO_GEOJSON_ASSET_FILES[assetKey], mode: "default" };
@@ -2633,7 +2633,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   });
 
   for (const [assetKey, assetValue] of Object.entries(assets)) {
-    if (!(assetKey in UPLOADABLE_SCENARIO_ASSET_FILES)) {
+    if (!(Object.hasOwn(UPLOADABLE_SCENARIO_ASSET_FILES, assetKey))) {
       continue;
     }
     applyScenarioBundleAsset(scenarioId, assetKey, assetValue);
@@ -2668,7 +2668,7 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
   }
 
   if (assetValue?.mode === "embedded") {
-    if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+    if (Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
       writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), assetValue.data ?? {});
     } else {
       const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
@@ -2677,7 +2677,7 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
     return;
   }
 
-  if (assetKey in OPTIONAL_JSON_ASSET_FILES) {
+  if (Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
     removeFileIfPresent(getScenarioJsonPath(scenarioId, assetKey));
   }
   removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));

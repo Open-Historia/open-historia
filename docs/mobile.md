@@ -269,10 +269,71 @@ The APK is a **debug** build attached to the rolling `android` release; players 
 | `server.androidScheme` | `http` | WebView origin scheme (matches the `http://127.0.0.1` embedded server) |
 | `server.hostname` | `app.paxhistoria` | Base WebView origin before navigating into the server |
 | `server.cleartext` | `true` | Allow cleartext (loopback HTTP) |
-| `server.allowNavigation` | `["*"]` | Permit navigating to any host (embedded loopback, or a LAN/remote server) |
+| `server.allowNavigation` | `["*"]` | Permit navigating to any host (embedded loopback, or a LAN/remote server) — **see below before changing this** |
 | `android.allowMixedContent` | `true` | Allow mixed content in the WebView |
 
 `mobile/package.json` currently declares only `@capacitor/core` + `@capacitor/android` (deps) and `@capacitor/cli` + `@capacitor/assets` (dev). Scripts: `sync` (`cap sync android`), `open`, `apk`.
+
+### `allowNavigation` is two settings wearing one coat
+
+`["*"]` looks like an obvious thing to tighten: the WebView will navigate to any
+origin, and it does so over cleartext to a host the player typed. It is not
+obvious, because Capacitor feeds this one array to **two consumers with
+incompatible syntaxes**, and getting it wrong fails in the unhelpful direction.
+
+**Consumer 1 — the navigation allowlist.** `Bridge.shouldOverrideLoad` allows a
+navigation when the target host equals the app's own host, *or* when
+`HostMask` matches it. `HostMask` (`com/getcapacitor/util/HostMask.java`)
+splits mask and host on `.`, requires an equal number of parts once the mask has
+more than one, and matches each part exactly or against a literal `*`. So
+`192.168.*.*` matches `192.168.1.20`, and a single-label mask like `localhost`
+is a suffix match on the final label. A navigation that is *not* allowed is not
+blocked — it is handed to `Intent.ACTION_VIEW`, i.e. it opens in the system
+browser. That is a reasonable failure mode, not a dead end.
+
+**Consumer 2 — the bridge's origin scope.** `Bridge.setAllowedOriginRules`
+prefixes every entry that does not start with `http` with `https://` and adds it
+to the set passed to `WebViewCompat.addWebMessageListener`, which decides **which
+origins get the `androidBridge` object injected**. AndroidX documents that grammar
+as `SCHEME "://" [ HOSTNAME_PATTERN [ ":" PORT ] ]`, where `HOSTNAME_PATTERN` is
+a plain hostname, an IP literal, or a sub-domain pattern with a **leading `*.`** —
+and a bare `*` is a standalone rule meaning "any origin". A wildcard in the middle
+of a host is not in that grammar.
+
+**The trap.** When `addWebMessageListener` throws, `MessageHandler` catches it and
+falls back to `webView.addJavascriptInterface(this, "androidBridge")` — which
+injects the bridge into **every page the WebView loads**, with no origin check at
+all. So an entry that reads as a tightening (`192.168.*.*`) is a valid *navigation*
+mask and an invalid *origin rule*, and buying the narrower navigation may cost the
+origin scoping entirely. The failure is silent: no crash, no log the app surfaces.
+
+**Entries that are valid to both consumers:** exact hostnames (`localhost`), IP
+literals (`127.0.0.1`), and leading-label patterns (`*.local`). Anything with an
+interior `*` is navigation-only.
+
+### The decision, per app variant
+
+- **Embedded server (this document's app).** The WebView navigates to exactly
+  `http://127.0.0.1:3000` — a known host. `allowNavigation` should be
+  `["127.0.0.1", "localhost"]`: valid in both consumers, and it means a link
+  inside the game to an outside origin opens in the real browser instead of
+  loading inside the app with the bridge attached. **This is the recommended
+  change and it is safe to make.**
+
+- **Thin client (`mobile/www/index.html` on `main`).** The player types the
+  server's address, so the set of hosts is not known at build time and the only
+  masks that would cover a LAN IP have interior wildcards — the trap above.
+  `["*"]` stays until either the app stops navigating away from its own origin,
+  or Capacitor grows a way to set the navigation allowlist at runtime.
+
+Whether today's `["*"]` is already in the fallback path is worth ten minutes on a
+device: it produces the rule `https://*`, whose validity under the grammar above
+is genuinely ambiguous. Load a page, and check whether `androidBridge` exists on a
+**non-app** origin. If it does, the bridge is already global and the thin client's
+`["*"]` costs nothing extra to keep; if it does not, `https://*` is being honoured
+and any interior-wildcard entry would be a regression. Either way, treat the
+WebView as reachable by whatever server it connects to: it speaks cleartext HTTP
+to a host on the local network.
 
 ---
 

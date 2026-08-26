@@ -22,20 +22,34 @@ const STAMP = path.join(ROOT, "fmg", ".version");
 
 const FMG_REPO = "Azgaar/Fantasy-Map-Generator";
 const FMG_TAG = "v1.109";
-const ZIP_URL = `https://codeload.github.com/${FMG_REPO}/zip/refs/tags/${FMG_TAG}`;
+// Pinned by COMMIT, not by tag. What lands here is served same-origin at /fmg/
+// and executed by the editor (an iframe plus eval), on the same origin that
+// holds the player's AI keys in localStorage — so this download is as
+// trust-sensitive as our own code. A git tag is a movable pointer: whoever can
+// push to the upstream repo can repoint v1.109 at anything, and every install
+// would fetch it on the next update. A commit id addresses the exact tree, and
+// GitHub will not serve different bytes for it.
+//
+// To move the pin: pick the new release, resolve it
+//   git ls-remote https://github.com/Azgaar/Fantasy-Map-Generator refs/tags/<tag>
+// update BOTH constants, and re-test the editor's Generate console.
+const FMG_COMMIT = "50f51bd8380a7fddc27977f96fa9c1db4b7cdd1e";
+const ZIP_URL = `https://codeload.github.com/${FMG_REPO}/zip/${FMG_COMMIT}`;
+// The stamp records the commit, so an install pinned to the old tag re-fetches.
+const PIN = `${FMG_TAG}@${FMG_COMMIT.slice(0, 12)}`;
 
 const log = (m) => console.log(`[fmg] ${m}`);
 
 async function main() {
   // Already at the pinned version? nothing to do (keeps updates fast).
   if (fs.existsSync(path.join(DIST_DIR, "index.html")) && fs.existsSync(STAMP)) {
-    if (fs.readFileSync(STAMP, "utf8").trim() === FMG_TAG) {
-      log(`already at ${FMG_TAG}.`);
+    if (fs.readFileSync(STAMP, "utf8").trim() === PIN) {
+      log(`already at ${PIN}.`);
       return;
     }
   }
 
-  log(`downloading Fantasy Map Generator ${FMG_TAG}…`);
+  log(`downloading Fantasy Map Generator ${PIN}…`);
   const res = await fetch(ZIP_URL);
   if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
   const buf = Buffer.from(await res.arrayBuffer());
@@ -54,7 +68,13 @@ async function main() {
     if (entry.dir) continue;
     const rel = entry.name.startsWith(rootPrefix) ? entry.name.slice(rootPrefix.length) : entry.name;
     if (!rel) continue;
-    const out = path.join(tmp, rel);
+    // Zip-slip guard: an archive entry names its own path, so "../../x" would
+    // have written wherever it liked. Resolve first, then insist the result is
+    // still inside the staging directory.
+    const out = path.resolve(tmp, rel);
+    if (!out.startsWith(tmp + path.sep)) {
+      throw new Error(`archive entry escapes the staging directory: ${entry.name}`);
+    }
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, Buffer.from(await entry.async("nodebuffer")));
   }
@@ -63,8 +83,8 @@ async function main() {
   fs.rmSync(DIST_DIR, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(DIST_DIR), { recursive: true });
   fs.renameSync(tmp, DIST_DIR);
-  fs.writeFileSync(STAMP, FMG_TAG);
-  log(`Fantasy Map Generator ${FMG_TAG} vendored → /fmg/ ✓`);
+  fs.writeFileSync(STAMP, PIN);
+  log(`Fantasy Map Generator ${PIN} vendored → /fmg/ ✓`);
 }
 
 main().catch((e) => {

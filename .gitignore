@@ -49,6 +49,10 @@ CLAUDE.md
 # Content-node runtime store (hash-named blobs, populated by scripts/populate-node.mjs)
 /node-content/
 
+# Records which map binaries have been checksum-verified, so `fetch-map-assets
+# --ensure` can stay fast without trusting file size alone. Per-install state.
+/.map-assets-verified.json
+
 # Offline root signing PRIVATE key — never commit
 /trust/*.key.pem
 # generated per release build by the desktop workflow
