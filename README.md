@@ -121,7 +121,7 @@ release APK — run it after changing `mobile/`.
 
 ### Manual
 
-Prerequisites: [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/en) 22 LTS or newer (minimum 20.19 / 22.12 — the client build runs on Vite 7, which requires it).
+Prerequisites: [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/en) 22 LTS or newer (minimum 20.19 / 22.12 — the client build runs on Vite 7, which requires it). Building the **desktop app** needs 22.12+, which is what Electron 44 requires; the server and the web client still run on 20.19.
 
 ```bash
 git clone https://github.com/Open-Historia/open-historia.git
