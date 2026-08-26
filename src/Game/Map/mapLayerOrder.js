@@ -83,7 +83,7 @@ export const MAP_LAYER_ORDER = [
   // The counters, always last.
   "units-fill",
   "units-icons",
-  "units-strength",
+  "units-name",
 ];
 
 // Put the stack back into MAP_LAYER_ORDER. Safe to call on every style change:
