@@ -1,7 +1,6 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
-import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker, isChatGenerationLikely } from "../AI/gameplay.js";
 import { Actions } from "./actions";
@@ -14,6 +13,7 @@ import {
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -102,30 +102,6 @@ const useNationColor = (code) => {
             return () => { cancelled = true; };
     }, [code]);
     return color;
-};
-
-// ── Markdown styles ───────────────────────────────────────────────────────────
-
-const markdownStyles = `
-.chat-markdown p { margin: 0 0 0.5rem 0; }
-.chat-markdown p:last-child { margin-bottom: 0; }
-.chat-markdown ul, .chat-markdown ol { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; }
-.chat-markdown li { margin-bottom: 0.2rem; }
-.chat-markdown strong { color: rgba(255,255,255,0.95); }
-.chat-markdown em { color: rgba(255,255,255,0.75); }
-.chat-markdown blockquote { border-left: 2px solid rgba(139,92,246,0.6); margin: 0.5rem 0; padding-left: 0.75rem; color: rgba(255,255,255,0.6); }
-`;
-
-const MarkdownStyleInjector = () => {
-    useEffect(() => {
-        if (!document.getElementById("chat-md-styles")) {
-            const style = document.createElement("style");
-            style.id = "chat-md-styles";
-            style.textContent = markdownStyles;
-            document.head.appendChild(style);
-        }
-    }, []);
-    return null;
 };
 
 // ── ThinkingDots ──────────────────────────────────────────────────────────────
@@ -256,7 +232,7 @@ const MessageBubble = ({ msg, onRetry }) => {
             : undefined,
             boxSizing: "border-box",
         }}>
-        {isPlayer ? msg.text : <div className="chat-markdown"><ReactMarkdown>{msg.text}</ReactMarkdown></div>}
+        {isPlayer ? msg.text : <Markdown className="chat-markdown">{msg.text}</Markdown>}
         </div>
 
         {/* A failed request is the transport dropping, not the leader refusing
