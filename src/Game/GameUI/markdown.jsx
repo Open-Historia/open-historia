@@ -49,7 +49,14 @@ const markdownStyles = `
     /* The bubbles set pre-wrap for the player's own typed text; inside rendered
        markdown it would double every line break and wreck table layout. */
     white-space: normal;
-    overflow-wrap: anywhere;
+    /* break-word, NOT anywhere. Both break a word too long for its line, but
+       "anywhere" also lets those breaks count toward min-content width — which
+       tells a table's auto layout that any column may legally be ONE CHARACTER
+       wide. That is what crushed a short "ongoing"/"false" column into "ong /
+       oin / g" while the prose column beside it took the room. "break-word"
+       keeps the longest word as the column's floor and still stops a long URL
+       or model id from overflowing the bubble. */
+    overflow-wrap: break-word;
 }
 .advisor-markdown { --oh-md-accent: #60a5fa; }
 .chat-markdown { --oh-md-accent: #a78bfa; }
@@ -144,13 +151,27 @@ const markdownStyles = `
     padding: 0.3rem 0.5rem;
     text-align: left;
     vertical-align: top;
+    /* A floor no column can be squeezed below, whatever its neighbour wants.
+       If the floors together exceed the panel the wrapper scrolls, which is
+       always better than a column too narrow to read. */
+    min-width: 3.25rem;
 }
+/* A header chip is the column's name: never break it. A chip in a BODY cell may
+   break, because the alternative is one long token dictating its column's
+   minimum and pushing the whole table onto a horizontal scrollbar. "anywhere"
+   is scoped to exactly these — it is the one thing that lowers a token's
+   min-content contribution, which is why it must not be set panel-wide. */
+.oh-md-table-wrap th code { white-space: nowrap; }
+.oh-md-table-wrap td code { overflow-wrap: anywhere; }
+/* The first column is the one being looked UP (the name, the item), so it
+   gets a wider floor than the rest: a label broken one word per line is
+   still hard to read even when nothing is truncated. */
+.oh-md-table-wrap th:first-child, .oh-md-table-wrap td:first-child { min-width: 5.5rem; }
 .oh-md-table-wrap thead th {
     background: color-mix(in srgb, var(--oh-md-accent) 16%, rgba(255,255,255,0.05));
     color: rgba(255,255,255,0.95);
     font-weight: 700;
     letter-spacing: 0.02em;
-    white-space: nowrap;
 }
 .oh-md-table-wrap tbody tr:nth-child(even) { background: rgba(255,255,255,0.035); }
 .oh-md-table-wrap td:first-child { color: rgba(255,255,255,0.9); font-weight: 600; }
