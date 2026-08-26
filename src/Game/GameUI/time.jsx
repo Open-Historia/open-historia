@@ -1121,6 +1121,7 @@ const TimelineHistoryPanel = ({
     onRevealAll,
     lookups,
     onClose,
+    onUndo,
     record,
     topOffset,
     visibleEventCount,
@@ -1132,6 +1133,7 @@ const TimelineHistoryPanel = ({
     ? record.events.slice(0, Math.min(visibleEventCount, totalEvents))
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
+    const hasSimulationError = record?.events?.some((event) => event.title === "Error with simulating");
     const lastVisibleEventRef = React.useRef(null);
 
     useEffect(() => {
@@ -1216,6 +1218,11 @@ const TimelineHistoryPanel = ({
                 <span>Skip to end ({totalEvents - visibleEvents.length} more)</span>
                 </button>
                 </>
+            )}
+            {hasSimulationError && onUndo && (
+                <button type="button" onClick={onUndo} style={{ ...ghostButtonStyle, width: "100%" }}>
+                Undo
+                </button>
             )}
             </div>
         )}
@@ -1654,6 +1661,7 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={lookups}
         onClose={() => setPanel(null)}
+        onUndo={undoCount > 0 ? runUndo : null}
         record={latestTurnRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}

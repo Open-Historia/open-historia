@@ -1328,7 +1328,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         description:
           action.kind === "chat"
             ? `${bundle.game.country} opens a deliberate diplomatic channel tied to ${action.title.toLowerCase()}, forcing counterparts to weigh terms instead of guessing intent.`
-            : `${bundle.game.country} begins implementing ${action.title.toLowerCase()}, producing immediate administrative and political consequences that other powers start to notice.`,
+            : "",
         impacts: {
           createdChats:
             action.kind === "chat" && action.invitees.length > 0 && action.chatStarter
@@ -1351,7 +1351,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         title:
           action.kind === "chat"
             ? `${bundle.game.country} opens a diplomatic channel`
-            : `${bundle.game.country} acts on ${action.title.toLowerCase()}`,
+            : "Error with simulating",
       });
     });
   } else {
