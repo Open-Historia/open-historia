@@ -71,14 +71,28 @@ const fetchVerifiedManifest = async (name) => {
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
+// Stage the artifacts a verified manifest points at. The manifest is signed, so
+// everything here is defence in depth — but this is the one path that installs
+// CODE onto a node, and "the signature was valid" should not be the only thing
+// standing between a typo in a manifest and a file written outside the staging
+// directory.
 const downloadArtifacts = async (manifest, stageDir) => {
   mkdirSync(stageDir, { recursive: true });
+  const stageRoot = path.resolve(stageDir);
   for (const artifact of manifest.artifacts ?? []) {
+    // A hash is mandatory, not "checked if present": an artifact without one is
+    // fetched over the network and executed, verified by nothing at all.
+    if (typeof artifact?.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(artifact.sha256)) {
+      throw new Error(`artifact ${artifact?.path ?? "(unnamed)"} has no sha256 — refusing to stage it`);
+    }
+    const dest = path.resolve(stageRoot, String(artifact.path ?? ""));
+    if (!dest.startsWith(stageRoot + path.sep)) {
+      throw new Error(`artifact path escapes the staging directory: ${artifact.path}`);
+    }
     const bytes = await fetchBytes(artifact.url);
-    if (artifact.sha256 && sha256(bytes) !== artifact.sha256) {
+    if (sha256(bytes) !== artifact.sha256) {
       throw new Error(`artifact ${artifact.path} failed hash check`);
     }
-    const dest = path.join(stageDir, artifact.path);
     mkdirSync(path.dirname(dest), { recursive: true });
     writeFileSync(dest, bytes);
   }

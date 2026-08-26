@@ -33,7 +33,17 @@ const listFlags = async () => {
 
 const createFlag = async (body = {}) => {
   const dataUrl = String(body.dataUrl || "");
-  if (!dataUrl.startsWith("data:image/")) throw new Error("A flag must be an image data URL.");
+  // Same shape check as the server store (server/flagStore.js): a known image
+  // type, real base64, and a ceiling — so the two halves of the same feature
+  // accept the same things and a flag that saves locally also saves on a server.
+  const match = /^data:image\/([a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(dataUrl);
+  if (!match) throw new Error("A flag must be a base64 image data URL.");
+  if (!["png", "jpeg", "jpg", "webp", "gif", "svg+xml"].includes(match[1].toLowerCase())) {
+    throw new Error(`Unsupported flag image type: ${match[1]}`);
+  }
+  if (Math.floor((match[2].length * 3) / 4) > 2 * 1024 * 1024) {
+    throw new Error("That flag is too large (the limit is 2048 KB).");
+  }
   const flags = await listFlags();
   const contentHash = await sha256Hex(dataUrl);
   const existing = flags.find((f) => f.contentHash === contentHash);

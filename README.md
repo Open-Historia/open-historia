@@ -96,6 +96,9 @@ one of the two:
 
 - **A desktop on the same network** running the launcher — type its address
   (e.g. `http://192.168.1.20:3000`) into the app once; it's remembered.
+  Start that server with `OH_HOST=0.0.0.0` (see
+  [Reaching the server from another device](#reaching-the-server-from-another-device)),
+  or it only answers the machine it runs on.
 - **[Termux](https://termux.dev/) on the phone itself** running the server — the app
   finds it on first launch by itself, no address needed.
 
@@ -130,6 +133,29 @@ node server/server.js              # Start the server
 ```
 
 Then open **http://localhost:3000** in your browser.
+
+### Reaching the server from another device
+
+The server listens on **`127.0.0.1` only** — the machine it runs on. That covers
+the desktop app, Termux on the same phone, and a browser on the same computer.
+
+To play from your phone or another computer, tell it to listen on the network:
+
+```bash
+OH_HOST=0.0.0.0 node server/server.js      # every interface
+OH_HOST=192.168.1.20 node server/server.js # one interface
+```
+
+Worth knowing before you do: **the game's API has no password.** Anyone who can
+reach that address can read, change and delete your games and scenarios — the
+server can't tell them apart from you. That's fine on a home network you control
+and a bad idea on café, hotel, dorm or office Wi-Fi. Two related switches:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `OH_HOST` | `127.0.0.1` | Which interface to listen on. Anything but loopback puts the API on your network. |
+| `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. |
+| `OH_RATE_LIMIT` | `1200` | Requests per minute per network client (loopback is exempt). |
 
 > [!TIP]
 > **Running the server only — Termux/Android, a headless box, a NAS?** Skip the

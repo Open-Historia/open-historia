@@ -77,6 +77,24 @@ const BUNDLE_LINK_PATTERN =
 const COVER_IMAGE_PATTERN =
   /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 
+// Anyone can open a hub issue, so the cover URL is a stranger's string that ends
+// up as an <img src> in every player's Community tab. Bundle downloads already
+// go through the server's GitHub allowlist for this reason; covers were loaded
+// straight from whatever the post said, which hands the post's author the IP and
+// user agent of everyone who so much as scrolls past the card. Same rule, same
+// hosts: GitHub-served images only, anything else shows as a text-only card.
+const COVER_IMAGE_HOSTS = /^(?:[a-z0-9-]+\.)*(?:githubusercontent\.com|github\.com)$/i;
+
+const safeCoverImageUrl = (candidate) => {
+  if (!candidate) return null;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" && COVER_IMAGE_HOSTS.test(url.hostname) ? url.href : null;
+  } catch {
+    return null;
+  }
+};
+
 let hubCache = { at: 0, posts: null };
 
 
@@ -121,7 +139,9 @@ const parsePost = (issue, importsById) => {
     .replace(/\s+/g, " ")
     .trim();
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
-  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
+  const coverImageUrl = safeCoverImageUrl(
+    coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null,
+  );
   // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
   // It is deduped per person (an account, or an IP hash) and covers every scenario —
   // release assets and attachment posts alike. We deliberately do NOT fall back to

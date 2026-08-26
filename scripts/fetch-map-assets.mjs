@@ -25,7 +25,20 @@ const ROOT = process.cwd();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST = path.join(here, "map-assets.json");
 
+// Records which bytes were actually checked, so --ensure can be fast WITHOUT
+// trusting file size alone. See the note on ENSURE_ONLY below.
+const VERIFIED_STATE = path.join(ROOT, ".map-assets-verified.json");
+
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+
+const readVerified = async () => {
+  try {
+    const parsed = JSON.parse(await readFile(VERIFIED_STATE, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 
 let manifest;
 try {
@@ -44,23 +57,67 @@ if (!owner || !repo || !release || !assets.length) {
   console.error("fetch-map-assets: manifest is missing owner/repo/release/assets; skipping.");
   process.exit(0);
 }
+// Fixed https URL built from the manifest that ships inside the app — there is no
+// env override on purpose. The bytes are pinned by the sha256 below, so the
+// download source only decides whether a fetch SUCCEEDS, never what lands on disk.
 const base = `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release)}`;
+
+const verified = await readVerified();
+const nextVerified = {};
 
 let present = 0;
 let downloaded = 0;
 let failed = 0;
 
 for (const asset of assets) {
-  const dst = path.join(ROOT, asset.path);
+  // A manifest entry with no checksum has nothing to verify the download
+  // against, so refuse it outright rather than writing unverified bytes. (The
+  // old code technically failed closed here too — `sha256(buf) !== undefined` is
+  // always true — but by accident, reported as "checksum mismatch", and one
+  // refactor away from silently becoming a hole.)
+  if (typeof asset?.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(asset.sha256)) {
+    console.error(`  [warn] ${asset?.asset ?? "(unnamed asset)"} has no usable sha256 in the manifest; refusing to download it.`);
+    failed += 1;
+    continue;
+  }
 
-  // Already have the right bytes? --ensure trusts the size; a full run also
-  // verifies the SHA-256 so a changed map (uploaded to the same release) is
-  // picked up and a truncated/corrupt file is repaired.
+  // The manifest ships inside the app, so this is defence in depth rather than a
+  // live threat — but a path is a path, and one that escapes the install root
+  // should never be written just because a JSON file asked for it.
+  const dst = path.resolve(ROOT, asset.path);
+  if (dst !== path.join(ROOT, asset.path) || !dst.startsWith(ROOT + path.sep)) {
+    console.error(`  [warn] ${asset.asset} wants to write outside the install directory (${asset.path}); skipped.`);
+    failed += 1;
+    continue;
+  }
+
+  // Already have the right bytes?
+  //
+  // --ensure used to trust the SIZE alone, and the desktop shell's own
+  // missing-asset check still does — which meant a file of the right length was
+  // never looked at again, however its contents got there. Now the hash a file
+  // passed is remembered along with its size and mtime: --ensure re-hashes only
+  // when one of those changed (so a second launch is still just a stat), and a
+  // file that was never verified gets hashed once. A full run always re-hashes.
+  const stamp = verified[asset.path];
   try {
     const info = await stat(dst);
     if (info.size === asset.bytes) {
-      if (ENSURE_ONLY) { present += 1; continue; }
-      if (sha256(await readFile(dst)) === asset.sha256) { present += 1; continue; }
+      const stampMatches = stamp
+        && stamp.sha256 === asset.sha256
+        && stamp.size === info.size
+        && stamp.mtimeMs === info.mtimeMs;
+      if (ENSURE_ONLY && stampMatches) {
+        present += 1;
+        nextVerified[asset.path] = stamp;
+        continue;
+      }
+      if (sha256(await readFile(dst)) === asset.sha256) {
+        present += 1;
+        nextVerified[asset.path] = { sha256: asset.sha256, size: info.size, mtimeMs: info.mtimeMs };
+        continue;
+      }
+      console.error(`  [warn] ${asset.asset} is the right size but the wrong bytes — re-downloading.`);
     }
   } catch {
     /* missing — fall through and download */
@@ -79,12 +136,24 @@ for (const asset of assets) {
     await writeFile(tmp, buf);
     await rename(tmp, dst);
     downloaded += 1;
+    // Remember what we just proved, so --ensure doesn't have to re-hash 100 MB
+    // on every launch to know this file is still the file we verified.
+    try {
+      const info = await stat(dst);
+      nextVerified[asset.path] = { sha256: asset.sha256, size: info.size, mtimeMs: info.mtimeMs };
+    } catch { /* the stamp is an optimisation; losing it only costs a re-hash */ }
   } catch (error) {
     console.error(`  [warn] could not download ${asset.asset} (${error.message}); the map may not display.`);
     await unlink(tmp).catch(() => {});
     failed += 1;
   }
 }
+
+// Best-effort: a missing or unwritable stamp file just means the next --ensure
+// re-hashes, which is correct, only slower.
+try {
+  await writeFile(VERIFIED_STATE, `${JSON.stringify(nextVerified, null, 2)}\n`);
+} catch { /* not worth a warning */ }
 
 if (downloaded || failed) {
   console.log(`fetch-map-assets: ${downloaded} downloaded, ${present} already current, ${failed} failed.`);
