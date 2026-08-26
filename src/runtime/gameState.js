@@ -2,6 +2,7 @@
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
+import { advanceRecurringDate, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
 import {
@@ -900,12 +901,20 @@ const normalizeProjectMilestone = (entry, index = 0) => {
   if (!title) return null;
 
   const status = normalizeOptionalString(entry.status).toLowerCase();
+  const completedCount = Number(entry.completedCount);
   return {
     id: normalizeOptionalString(entry.id) || generateId(`milestone-${index}`),
     title,
     date: canonicalizeDateString(entry.date || entry.due || entry.targetDate),
     status: PROJECT_MILESTONE_STATUS_SET.has(status) ? status : "pending",
     note: normalizeOptionalString(entry.note || entry.description),
+    // A standing commitment that comes round again — an annual drill, a
+    // quarterly review. Marking one done rolls it to its next occurrence rather
+    // than retiring it (see applyProjectOps), so the board keeps showing when
+    // the next one falls due instead of going blank.
+    repeat: normalizeMilestoneRepeat(entry.repeat || entry.recurrence || entry.cadence),
+    completedCount: Number.isFinite(completedCount) && completedCount > 0 ? Math.trunc(completedCount) : 0,
+    lastCompletedAt: canonicalizeDateString(entry.lastCompletedAt),
   };
 };
 
@@ -926,7 +935,16 @@ const deriveNextMilestoneFrom = (milestones, stored) => {
     // and only surfaces when nothing dated is outstanding.
     const dated = pending.filter((entry) => entry.date).sort((a, b) => a.date.localeCompare(b.date));
     const next = dated[0] || pending[0];
-    return { title: next.title, date: next.date, note: next.note };
+    // Carries the recurrence through, so the card can mark it ↻ and show the
+    // tally. projects.js has the same derivation for the live view; if you add a
+    // field to one, add it to the other — the panel reads whichever is present.
+    return {
+      title: next.title,
+      date: next.date,
+      note: next.note,
+      repeat: next.repeat || "",
+      completedCount: Number(next.completedCount) || 0,
+    };
   }
 
   if (!stored || typeof stored !== "object") return null;
@@ -1231,9 +1249,44 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       const wanted = op.milestone.title.toLowerCase();
       const existing = current.milestones.find((entry) =>
         (op.milestone.id && entry.id === op.milestone.id) || entry.title.toLowerCase() === wanted);
+
+      // Merge field by field rather than spreading the normalized op over the
+      // entry. normalizeProjectMilestone fills every field, so a spread wrote
+      // date:"" and note:"" whenever the model marked something done the natural
+      // way — {"title":"Annual drill","status":"done"} — silently erasing when it
+      // had been due and what it was. Only take what the op actually carried.
+      const mergeInto = (entry) => {
+        const merged = {
+          ...entry,
+          title: op.milestone.title || entry.title,
+          date: op.milestone.date || entry.date,
+          status: op.milestone.status,
+          note: op.milestone.note || entry.note,
+          repeat: op.milestone.repeat || entry.repeat,
+          id: entry.id,
+        };
+
+        // A recurring commitment is never finished, only performed again. Roll it
+        // to the next occurrence after whichever is later — the date it was due or
+        // the date it was actually marked off — and set it pending, so the board
+        // shows the next one instead of an empty "next milestone".
+        if (merged.status === "done" && merged.repeat) {
+          const rolled = advanceRecurringDate(merged.date, merged.repeat, date || merged.date);
+          if (rolled) {
+            return {
+              ...merged,
+              date: rolled,
+              status: "pending",
+              completedCount: (Number(entry.completedCount) || 0) + 1,
+              lastCompletedAt: date || merged.date,
+            };
+          }
+        }
+        return merged;
+      };
+
       const milestones = existing
-        ? current.milestones.map((entry) =>
-          (entry === existing ? { ...entry, ...op.milestone, id: entry.id } : entry))
+        ? current.milestones.map((entry) => (entry === existing ? mergeInto(entry) : entry))
         : [...current.milestones, op.milestone];
       // nextMilestone is nulled so normalizeProjectEntry re-derives it from the
       // list it was just handed, rather than keeping a value the new milestone
