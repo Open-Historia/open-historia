@@ -39,9 +39,31 @@ const slug = (raw, fallback = "flag") =>
 
 export const listFlags = () => readAll();
 
+// A flag is a 256px PNG — tens of kilobytes. The only check used to be that the
+// string starts with "data:image/", which let anything up to the 64 MB body
+// limit into a file that is read and rewritten IN FULL on every flag operation,
+// so a few oversized entries slow down every request that touches the library.
+// Pin the shape instead: a known image type, real base64, and a sane ceiling.
+const FLAG_IMAGE_TYPES = new Set(["png", "jpeg", "jpg", "webp", "gif", "svg+xml"]);
+const MAX_FLAG_BYTES = 2 * 1024 * 1024;
+const DATA_URL_PATTERN = /^data:image\/([a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i;
+
+const validateFlagDataUrl = (dataUrl) => {
+  const match = DATA_URL_PATTERN.exec(dataUrl);
+  if (!match) throw new Error("A flag must be a base64 image data URL.");
+  if (!FLAG_IMAGE_TYPES.has(match[1].toLowerCase())) {
+    throw new Error(`Unsupported flag image type: ${match[1]}`);
+  }
+  // base64 is 4 chars per 3 bytes; compare decoded size against the cap.
+  const bytes = Math.floor((match[2].length * 3) / 4);
+  if (bytes > MAX_FLAG_BYTES) {
+    throw new Error(`That flag is too large (${Math.round(bytes / 1024)} KB; the limit is ${MAX_FLAG_BYTES / 1024} KB).`);
+  }
+};
+
 export const createFlag = (body = {}) => {
   const dataUrl = String(body.dataUrl || "");
-  if (!dataUrl.startsWith("data:image/")) throw new Error("A flag must be an image data URL.");
+  validateFlagDataUrl(dataUrl);
   const flags = readAll();
   const contentHash = hashOf(dataUrl);
   // Same flag already saved: hand back the existing one rather than a duplicate.

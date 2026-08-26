@@ -116,6 +116,31 @@ const orderedContentNodes = (nodes, assetId) => {
   return ordered;
 };
 
+// Verify bytes that came from the CANONICAL ORIGIN against the same signed
+// manifest the node swarm is held to.
+//
+// The swarm was verified from day one because it is untrusted by design. The
+// fallback was not — so the path that actually serves most players (the Worker's
+// CORS+range proxy in front of the GitHub Release) was the one path where
+// arbitrary bytes could become the map. The hash is right there in a manifest we
+// already fetched and checked the signature on; there is no reason not to hold
+// both sources to it.
+//
+// Returns { checked, ok }: checked=false means the manifest has nothing to say
+// about this asset (an unsigned/absent manifest, or a URL that isn't a pmtiles
+// archive), in which case there is nothing to enforce and the caller proceeds.
+export const verifyOriginBuffer = async (url, buffer) => {
+  const assetId = assetIdFromUrl(url);
+  if (!assetId) return { checked: false, ok: true };
+
+  const manifest = await loadManifest();
+  const expected = manifest?.assets?.[assetId];
+  if (!expected?.sha256) return { checked: false, ok: true };
+
+  if (expected.bytes && buffer.byteLength !== expected.bytes) return { checked: true, ok: false };
+  return { checked: true, ok: (await sha256Hex(buffer)) === expected.sha256 };
+};
+
 // Try to fetch `url`'s asset from the node swarm, verifying the SHA-256. Returns a
 // verified ArrayBuffer, or null so the caller falls back to the canonical origin
 // (no nodes listed, unknown asset, or every node failed/served tampered bytes).
