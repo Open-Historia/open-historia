@@ -55,6 +55,13 @@ let setupWindow = null;
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
 // second launch goes straight into the game.
+//
+// Size is NOT an integrity check — it only answers "is the download finished".
+// A file of the right length whose contents are not the map we published passes
+// this and would then be used forever, because nothing downstream looked again.
+// verifyMapData() below closes that: it runs the fetcher's --ensure pass after
+// the window is up, which checks the SHA-256 of anything it has not already
+// verified and quietly re-downloads what doesn't match.
 const missingAssets = () => {
   let manifest;
   try {
@@ -100,6 +107,22 @@ const downloadMapData = (onProgress) =>
     child.on("close", () => resolve());
     child.on("error", () => resolve());
   });
+
+// Verify the map data against the manifest's checksums in the background, after
+// the game is already on screen. The fetcher remembers what it has verified, so
+// this is a handful of stats on a normal launch and a re-hash only when a file
+// changed underneath us. Deliberately silent and non-blocking: the player never
+// waits on it, and a repair looks like the same best-effort download the setup
+// screen does.
+const verifyMapData = () => {
+  const child = spawn(process.execPath, [FETCH_SCRIPT, "--ensure"], {
+    cwd: USER_ROOT,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  child.on("error", () => {});
+};
 
 // --- windows ----------------------------------------------------------------
 
@@ -181,9 +204,38 @@ const createMainWindow = () => {
   });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
+  //
+  // Only http(s) and mailto get out. shell.openExternal hands whatever it is
+  // given to the OS, which will happily act on schemes that are not "a link":
+  // file: opens a local file in its registered application, smb:/\\host leaks a
+  // Windows credential hash to a remote server, and any app-registered handler
+  // is fair game. The page renders AI output and community text, so what reaches
+  // here is not always something the player wrote.
+  const openableExternally = (target) => {
+    try {
+      return ["https:", "http:", "mailto:"].includes(new URL(target).protocol);
+    } catch {
+      return false;
+    }
+  };
+
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (openableExternally(url)) shell.openExternal(url);
+    else console.warn(`[shell] refused to open ${url} externally`);
     return { action: "deny" };
+  });
+
+  // Keep the game IN the game window. This window has no address bar, no back
+  // button and an auto-hidden menu, so a link that navigates it away strands the
+  // player on a page they cannot leave — and hands anything that can render a
+  // link a full-window canvas to imitate the app on. Same-origin navigation (the
+  // local server the app itself serves) is the app working normally; anything
+  // else is a link, and links open in the real browser.
+  win.webContents.on("will-navigate", (event, targetUrl) => {
+    const appOrigin = `http://localhost:${process.env.PORT || 3000}`;
+    if (targetUrl.startsWith(`${appOrigin}/`) || targetUrl === appOrigin) return;
+    event.preventDefault();
+    if (openableExternally(targetUrl)) shell.openExternal(targetUrl);
   });
   attachEditingContextMenu(win);
   win.once("ready-to-show", () => win.show());
@@ -212,9 +264,11 @@ const findFreePort = (start, attempts = 20) =>
     probe.unref();
     probe.once("error", () => resolve(findFreePort(start + 1, attempts - 1)));
     probe.once("listening", () => probe.close(() => resolve(start)));
-    // Bind the wildcard, not 127.0.0.1: server.js listens on every interface, so
-    // a loopback-only probe would call a port free that a 0.0.0.0 publisher
-    // (Docker's default) already owns — exactly the case this exists for.
+    // Bind the wildcard, not 127.0.0.1. server.js now binds loopback by default
+    // (OH_HOST), but a player can point it at every interface, and a loopback-only
+    // probe would call a port free that a 0.0.0.0 publisher (Docker's default)
+    // already owns — exactly the case this exists for. Probing wider than we bind
+    // can only skip a port that would have worked, which costs nothing.
     probe.listen(start);
   });
 
@@ -263,6 +317,8 @@ const boot = async () => {
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
+  // The game is up; now confirm the map on disk is still the map we shipped.
+  verifyMapData();
 };
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and

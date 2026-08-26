@@ -1,9 +1,21 @@
 /*! Open Historia — web-mode accounts + client crypto © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Client half of the accounts + sync feature (web build only). Handles the
 // magic-link session, the per-account data key (DEK), and AES-256-GCM
-// encrypt/decrypt of records before they leave the browser. The registry Worker
-// only ever stores CIPHERTEXT and the DEK wrapped under the offline admin master
-// key (recovery) + a Worker secret (cross-device delivery) — see registry/worker.js.
+// encrypt/decrypt of records before they leave the browser.
+//
+// BE PRECISE ABOUT WHAT THIS IS. Records are encrypted on the device, so the
+// blob store holds only ciphertext — that is real protection against a stolen
+// database or a leaked backup. It is NOT end-to-end encryption: the DEK itself
+// is generated here and then UPLOADED (see ensureDek below), because that is how
+// a second device gets it. The registry Worker therefore holds, or can unwrap,
+// the key to everything — wrapped under the offline admin master key for
+// recovery plus a Worker secret for cross-device delivery (registry/worker.js),
+// but held all the same.
+//
+// Making it genuinely end-to-end means wrapping the DEK with something the
+// server never sees — a passphrase-derived key, or a passkey PRF — and accepting
+// that a player who loses it loses their saves. Until then, describe it as
+// encrypted-at-rest, not as "only you can read this".
 
 import { kvGet, kvPut, idbDelete, STORES } from "./idb.js";
 import { bytesToBase64, base64ToBytes, sha256Hex } from "./util.js";
@@ -11,7 +23,9 @@ import { bytesToBase64, base64ToBytes, sha256Hex } from "./util.js";
 const ACCOUNT_URL = (import.meta.env.VITE_OH_ACCOUNT_URL || "").replace(/\/$/, "");
 
 // Session lives in IndexedDB kv so it survives reloads. The DEK is cached here
-// too (this device is already trusted once signed in); it is never uploaded.
+// too, so an offline reload can still decrypt local blobs. (It is also held
+// server-side — see ensureDek — so this cache is a convenience, not the only
+// copy.)
 const SESSION_KEY = "account:session";
 const EMAIL_KEY = "account:email";
 const DEK_KEY = "account:dek"; // base64 of the raw 32-byte AES key
@@ -91,6 +105,10 @@ export const signInWithGoogle = async (credential) => {
 
 // Ensure the account's DEK is available on this device: pull it (existing
 // account) or generate + register it (first sign-in ever).
+//
+// This upload is the reason the header above says "not end-to-end": the raw key
+// crosses the wire, so the server is in a position to decrypt every blob it
+// stores. It buys cross-device sync with no passphrase to lose.
 const ensureDek = async (session, hasKey) => {
   if (hasKey) {
     const { status, data } = await api("/account/key", { session });

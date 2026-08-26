@@ -50,9 +50,13 @@ import {
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
+  allowedCorsOrigin,
   crossOriginWriteAllowed,
   isAllowedHubUrl,
+  isLoopbackAddress,
   parseByteRange,
+  relayTargetAllowed,
+  sanitizeRelayHeaders,
 } from "./security.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -61,17 +65,55 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const distDir = path.join(__dirname, "../dist");
 
+// WHERE THIS LISTENS is the real access control. Every /api route is
+// unauthenticated by design — it is a personal game server, and the app has no
+// login — so anyone who can open a socket to it can read, overwrite and delete
+// every game and scenario. The cross-origin guard below cannot change that: it
+// keeps a *browser* on another site out, but a non-browser client just sends a
+// matching Origin header (see server/security.js).
+//
+// So this used to be `app.listen(PORT)`, which binds every interface: on a café
+// or dorm network, every device on it had full control of the player's saves.
+// Now it binds loopback unless the player asks for LAN play, which is the case
+// the Android client and "play from another room" need:
+//
+//   OH_HOST=0.0.0.0 node server/server.js     # phone / other devices can reach it
+//   OH_HOST=192.168.1.9 node server/server.js # one interface only
+//
+// The desktop app, Termux on the same phone, and a browser on the same machine
+// all arrive over loopback, so the default costs them nothing.
+const HOST = process.env.OH_HOST || "127.0.0.1";
+const LAN_ENABLED = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
+const LISTEN_ARGS = [PORT, HOST];
+
+// Body limits. These used to be 2048mb, which let a single request exhaust the
+// process's memory before any handler ran. The real ceiling is a scenario bundle
+// with an embedded basemap; the hub caps those at 200 MB (HUB_MAX_BUNDLE_BYTES),
+// so 512 MB leaves room for a hand-built import several times that size while
+// still refusing a body that exists only to OOM the server.
 const jsonParser = express.json({ limit: "64mb" });
-const largeJsonParser = express.json({ limit: "2048mb" });
-const uploadParser = express.raw({ type: () => true, limit: "2048mb" });
+const largeJsonParser = express.json({ limit: "512mb" });
+const uploadParser = express.raw({ type: () => true, limit: "512mb" });
 
 // The Android app's connect screen lives on the WebView's own origin, so its
 // probe of this server is a cross-origin request — without these headers the
-// phone blocks it (CORS) and the app can never connect. This is a personal
-// game server whose whole API is open to whoever can reach it, so a blanket
-// allow changes nothing security-wise.
+// phone blocks it (CORS) and the app can never connect.
+//
+// This was `Access-Control-Allow-Origin: *`, on the reasoning that the API is
+// open to whoever can reach it anyway so a blanket allow changes nothing. That
+// holds for someone already on the network; it does NOT hold for a random
+// website. Reads are "safe methods", so the write guard below never sees them —
+// with `*`, any page in any tab could fetch /api/games off the player's own
+// machine and read the response. An allowlist keeps the phone working and puts
+// the same-origin policy back in front of everyone else.
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const corsOrigin = allowedCorsOrigin(req.headers.origin, req.headers.host, {
+    allowAll: process.env.OH_ALLOW_CROSS_ORIGIN === "1",
+  });
+  // Vary regardless of the outcome: the answer depends on the request's Origin,
+  // so a cache must not reuse one origin's response for another.
+  res.setHeader("Vary", "Origin");
+  if (corsOrigin) res.setHeader("Access-Control-Allow-Origin", corsOrigin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   // PMTiles range reads are cross-origin from the phone shell. Range is
@@ -80,10 +122,34 @@ app.use((req, res, next) => {
   // absent, which it reports as a hard error.
   res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
   // Chrome's Private Network Access preflights loopback/LAN targets and
-  // requires this opt-in on top of regular CORS.
-  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  // requires this opt-in on top of regular CORS. Only worth sending to an origin
+  // we are already answering — offering it to everyone advertises a localhost
+  // service to any page that cares to look.
+  if (corsOrigin) res.setHeader("Access-Control-Allow-Private-Network", "true");
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
+  }
+  next();
+});
+
+// Per-IP fixed-window rate limit for requests that arrive over the network, the
+// same shape the content node already uses. Loopback is exempt: the game itself
+// polls runtime state briskly and it is not the traffic this is here for. Only
+// meaningful when OH_HOST opens the server up at all, which is exactly when an
+// unauthenticated API benefits from a ceiling on how fast it can be hammered.
+const RATE_LIMIT_PER_MIN = Number(process.env.OH_RATE_LIMIT) || 1200;
+const rateHits = new Map();
+const rateTimer = setInterval(() => rateHits.clear(), 60000);
+if (typeof rateTimer.unref === "function") rateTimer.unref();
+
+app.use((req, res, next) => {
+  const address = req.socket?.remoteAddress;
+  if (isLoopbackAddress(address)) return next();
+  const count = (rateHits.get(address) || 0) + 1;
+  rateHits.set(address, count);
+  if (count > RATE_LIMIT_PER_MIN) {
+    res.setHeader("Retry-After", "60");
+    return sendError(res, 429, new Error("Too many requests — slow down."));
   }
   next();
 });
@@ -99,15 +165,17 @@ const sendError = (res, statusCode, error) => {
 };
 
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
-// The blanket CORS above is needed so the Android connect screen (on the
-// WebView's own origin) can *probe* this server — a GET. But it also let any
-// web page the user happens to be visiting POST/PUT/DELETE to localhost:
-// delete saved maps and games, drive the AI relay at internal hosts, or hit
-// /api/server/shutdown. The app serves its own SPA, so real gameplay writes
-// are same-origin (Origin host === Host). No-Origin writes are trusted only
-// from loopback — a native client on the same machine — so a curl from another
-// host on the LAN can't slip past with no Origin header. Set
-// OH_ALLOW_CROSS_ORIGIN=1 to restore the old fully-open behavior.
+// The CORS allowlist above lets the Android connect screen (on the WebView's own
+// origin) *probe* this server — a GET. Without this guard, any web page the
+// player happens to be visiting could also POST/PUT/DELETE to localhost: delete
+// saved maps and games, drive the AI relay, or hit /api/server/shutdown. The app
+// serves its own SPA, so real gameplay writes are same-origin (Origin host ===
+// Host); no-Origin writes are trusted only from loopback.
+//
+// This stops browsers, which is what CSRF is. It does NOT stop a non-browser
+// client on the network, which sets Origin and Host itself — that is what the
+// loopback default in OH_HOST is for, not this. Set OH_ALLOW_CROSS_ORIGIN=1 to
+// restore the old fully-open behavior (this guard off, CORS back to `*`).
 const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
 app.use((req, res, next) => {
   const decision = crossOriginWriteAllowed({
@@ -602,6 +670,25 @@ const setHubFileGuards = (res) => {
 // plain server-to-server for the endpoint. The target is whatever the player
 // configured in Settings — them talking to their own AI through their own
 // game server.
+//
+// Which also makes it, structurally, a request forwarder: caller-chosen URL,
+// caller-chosen headers, response body handed back. It cannot refuse private
+// addresses — a model on localhost or the LAN box is the entire point — so it is
+// fenced in three other ways instead:
+//   1. LOOPBACK ONLY by default. A relay reachable from the network is an open
+//      proxy for everyone on it. The desktop app, Termux-on-the-same-phone and a
+//      browser on the host all come from loopback and are unaffected; a phone
+//      talking to a desktop needs OH_ALLOW_REMOTE_RELAY=1, which is a deliberate
+//      "yes, proxy for my LAN" and is stated as such.
+//   2. Cloud metadata endpoints refused (relayTargetAllowed) — never an AI
+//      endpoint, always credentials.
+//   3. Caller headers filtered, redirects not followed, response size and time
+//      bounded, so it cannot be aimed at an internal service and used to walk a
+//      redirect chain or stream something unbounded back.
+const ALLOW_REMOTE_RELAY = process.env.OH_ALLOW_REMOTE_RELAY === "1";
+const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
+
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
   let completed = false;
@@ -610,20 +697,53 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
+  const timeout = setTimeout(abortUpstream, RELAY_TIMEOUT_MS);
 
   try {
-    const { url: targetUrl, method = "POST", headers = {}, payload } = req.body ?? {};
-    const target = new URL(String(targetUrl ?? ""));
-    if (target.protocol !== "http:" && target.protocol !== "https:") {
-      return sendError(res, 400, new Error("Only http(s) AI endpoints can be relayed."));
+    if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
+      return sendError(
+        res,
+        403,
+        new Error(
+          "The AI relay only answers this machine. Set OH_ALLOW_REMOTE_RELAY=1 to let other "
+            + "devices on your network relay AI calls through this server.",
+        ),
+      );
     }
+
+    const { url: targetUrl, method = "POST", headers = {}, payload } = req.body ?? {};
+    let target;
+    try {
+      target = new URL(String(targetUrl ?? ""));
+    } catch {
+      return sendError(res, 400, new Error("That AI endpoint is not a valid URL."));
+    }
+    const verdict = relayTargetAllowed(target);
+    if (!verdict.allowed) {
+      return sendError(res, 400, new Error(verdict.reason));
+    }
+
     const upstream = await fetch(target, {
       method: method === "GET" ? "GET" : "POST",
-      headers: { "Content-Type": "application/json", ...headers },
+      headers: { "Content-Type": "application/json", ...sanitizeRelayHeaders(headers) },
       body: method === "GET" ? undefined : JSON.stringify(payload ?? {}),
       signal: controller.signal,
+      // A 302 from the configured endpoint to somewhere else is not something an
+      // AI backend does; following one would re-open the target check we just
+      // passed. The status comes back as-is and the client can act on it.
+      redirect: "manual",
     });
+
+    // Read with a ceiling rather than buffering whatever the endpoint sends.
+    const declared = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > RELAY_MAX_RESPONSE_BYTES) {
+      return sendError(res, 502, new Error("The AI endpoint's response is too large to relay."));
+    }
     const text = await upstream.text();
+    if (Buffer.byteLength(text) > RELAY_MAX_RESPONSE_BYTES) {
+      return sendError(res, 502, new Error("The AI endpoint's response is too large to relay."));
+    }
+
     completed = true;
     res.status(upstream.status);
     res.type(upstream.headers.get("content-type") || "application/json");
@@ -632,13 +752,24 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     if (!controller.signal.aborted && !res.headersSent) {
       sendError(res, 502, error);
     }
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
 // Shut the server down from the UI (the ⏻ button in the top bar) — handy on
 // phones/Termux and headless installs where no terminal is in sight. Responds
 // first so the client can show its "server stopped" screen, then exits.
-app.post("/api/server/shutdown", (_req, res) => {
+//
+// A remote kill switch on an API with no password is worth one extra condition:
+// answer this machine always, and the network only when the player has already
+// said LAN play is what they want (OH_HOST). Termux on the same phone and the
+// desktop app both come from loopback, so the button keeps working where it was
+// most needed.
+app.post("/api/server/shutdown", (req, res) => {
+  if (!LAN_ENABLED && !isLoopbackAddress(req.socket?.remoteAddress)) {
+    return sendError(res, 403, new Error("Only this machine can shut the server down."));
+  }
   res.json({ ok: true });
   console.log("Shutdown requested from the UI — exiting.");
   setTimeout(() => process.exit(0), 300);
@@ -903,8 +1034,16 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-const httpServer = app.listen(PORT, () => {
+const httpServer = app.listen(...LISTEN_ARGS, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  if (LAN_ENABLED) {
+    console.log(`Reachable from your network on ${HOST}:${PORT}. This API has no password:`);
+    console.log("anyone who can reach that address can read, change and delete your games.");
+    console.log("Only do this on a network you trust; unset OH_HOST to go back to this machine only.");
+  } else {
+    console.log("Listening on 127.0.0.1 only (this machine).");
+    console.log("To play from your phone or another device, restart with OH_HOST=0.0.0.0 set.");
+  }
 });
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers

@@ -1,9 +1,13 @@
 /*! Open Historia — web-mode encrypted sync engine © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 // Reconciles the browser's games + scenarios (and their catalog manifests) with
 // the registry Worker's encrypted blob store. Everything is AES-256-GCM encrypted
-// client-side (account.js) before it leaves the device; the server sees only
-// ciphertext. Uses a full-scan model (compare local SHA-256 vs the last synced
-// version) so no write can be missed — no fragile idb write hooks. Web build only.
+// client-side (account.js) before it leaves the device, so the blob store holds
+// ciphertext — but the key ring does not stay on the device (account.js uploads
+// the DEK so other devices can sync), so this is encryption at rest, not
+// end-to-end. See the header of account.js.
+//
+// Uses a full-scan model (compare local SHA-256 vs the last synced version) so no
+// write can be missed — no fragile idb write hooks. Web build only.
 
 import { idbGet, idbGetAll, idbGetAllKeys, idbPut, idbDelete, kvGet, kvPut, STORES } from "./idb.js";
 import {
