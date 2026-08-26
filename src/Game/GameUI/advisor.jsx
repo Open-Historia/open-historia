@@ -181,6 +181,109 @@ const applyAdvisorActions = async (proposal) => {
     return items;
 };
 
+// Copy-to-clipboard, with the execCommand fallback still in place.
+//
+// The desktop build has no developer tools bound (no F12, no menu entry), so a
+// player who hits a provider error has no way to get at what actually happened.
+// navigator.clipboard needs a secure context, which the packaged app has but a
+// plain-http LAN host does not — hence the textarea fallback rather than a
+// silent failure.
+const copyToClipboard = async (text) => {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch { /* fall through to the legacy path */ }
+    try {
+        const scratch = document.createElement("textarea");
+        scratch.value = text;
+        scratch.setAttribute("readonly", "");
+        scratch.style.position = "fixed";
+        scratch.style.opacity = "0";
+        document.body.appendChild(scratch);
+        scratch.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(scratch);
+        return ok;
+    } catch {
+        return false;
+    }
+};
+
+const CopyButton = ({ text, label = "Copy for a bug report", tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
+    const [state, setState] = useState("idle");
+    return (
+        <button
+        type="button"
+        onClick={async () => {
+            setState(await copyToClipboard(text) ? "copied" : "failed");
+            setTimeout(() => setState("idle"), 2000);
+        }}
+        style={{ background: "none", border: `1px solid ${tone}`, borderRadius: "6px", color, cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}
+        >
+        {state === "copied" ? "✓ Copied" : state === "failed" ? "Copy failed — select the text below" : label}
+        </button>
+    );
+};
+
+// The pasteable report.
+//
+// Contains no API key and no endpoint host. It DOES contain model output — the
+// tail of the reasoning and a few raw stream frames — because that is the part
+// that actually explains a failure, and it can quote the campaign. The UI says
+// so next to the button rather than letting someone paste it somewhere public
+// on the assumption that it is inert.
+const formatErrorReport = (message, diagnostics) => {
+    const lines = ["Open Historia — advisor error", "", `Message: ${message}`];
+    if (diagnostics && typeof diagnostics === "object") {
+        lines.push("");
+        for (const [key, value] of Object.entries(diagnostics)) {
+            if (value === "" || value === null || value === undefined) continue;
+            if (Array.isArray(value)) {
+                if (value.length === 0) continue;
+                lines.push(`${key}:`);
+                for (const entry of value) lines.push(`  ${String(entry)}`);
+                continue;
+            }
+            const text = String(value);
+            lines.push(text.includes("\n") ? `${key}:\n${text}` : `${key}: ${text}`);
+        }
+    }
+    return lines.join("\n");
+};
+
+// Shown under an advisor error. The message says what went wrong in plain
+// English; this is the part that says WHY, in enough detail to act on.
+const AdvisorErrorDetails = ({ message, diagnostics }) => {
+    const [open, setOpen] = useState(false);
+    const report = formatErrorReport(message, diagnostics);
+    const hasDetail = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
+
+    return (
+        <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+        <CopyButton text={report} tone="rgba(239,68,68,0.45)" color="rgba(254,202,202,0.95)" />
+        {hasDetail && (
+            <button type="button" onClick={() => setOpen((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            {open ? "Hide details" : "Show details"}
+            </button>
+        )}
+        </div>
+        {open && (
+            <>
+            <p style={{ margin: "0.4rem 0 0", fontSize: "0.64rem", lineHeight: 1.4, color: "rgba(255,255,255,0.35)" }}>
+            No API key or endpoint is included. The model&apos;s own output is, so this may quote your campaign.
+            </p>
+            <pre data-no-translate style={{ margin: "0.35rem 0 0", padding: "0.5rem", background: "rgba(0,0,0,0.35)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", fontSize: "0.64rem", lineHeight: 1.45, maxHeight: "12rem", overflow: "auto", userSelect: "text", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {report}
+            </pre>
+            </>
+        )}
+        </div>
+    );
+};
+
 // Applies the advisor's ```projects proposal to the real board (world.projects,
 // the same field events write through impacts.projectOps) and reports what
 // actually happened, so the confirmation card shows real outcomes rather than
@@ -292,6 +395,13 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
             <button type="button" onClick={() => setShowExcerpt((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
             {showExcerpt ? "Hide" : "Show"} what broke
             </button>
+        )}
+        {excerpt && (
+            <CopyButton
+            text={formatErrorReport("projects block could not be applied", { detail, excerpt })}
+            tone="rgba(245,158,11,0.5)"
+            color="rgba(253,230,138,0.95)"
+            />
         )}
         </div>
         {excerpt && showExcerpt && (
@@ -603,6 +713,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
+        {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -862,7 +973,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
-                const updated = [...base, { role: "error", text: err.message, time: gameDate }];
+                // Keep whatever the transport managed to learn about the failure,
+                // so the Copy button still works after a reload.
+                const updated = [...base, {
+                    role: "error",
+                    text: err.message,
+                    time: gameDate,
+                    ...(err?.diagnostics ? { diagnostics: err.diagnostics } : {}),
+                }];
                 saveMessages(updated);
                 return updated;
             });

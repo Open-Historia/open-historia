@@ -427,6 +427,22 @@ export async function readOpenAIStreamedResponse(response) {
 // with room to think — a model or endpoint problem, not a setting to toggle.
 // Deliberately does NOT suggest turning reasoning off: reasoning is supported,
 // and the answer is to give it room, which the retry already did.
+// Builds the error the advisor shows AND the debug report behind its Copy
+// button. The message alone was never enough to act on: the interesting part is
+// what the provider actually sent, which is otherwise discarded the moment the
+// stream ends.
+//
+// The API key and the endpoint host are never included — those come from
+// headers and settings, and nothing here reads them. What IS included is model
+// output: the tail of the chain of thought and a few raw stream frames, because
+// without them an unfamiliar gateway's shape cannot be diagnosed at all. That
+// output can quote the campaign, so the UI warns before it is shared.
+function aiFailureError(message, diagnostics) {
+    const error = new Error(message);
+    error.diagnostics = diagnostics;
+    return error;
+}
+
 function emptyReplyMessage(providerLabel) {
     return `${providerLabel} returned no answer, even after being given more room to think. `
         + `The model may be out of context, or the endpoint may have dropped the response. `
@@ -439,6 +455,14 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     let buffer = "";
     let full = "";
     let reasoning = "";
+    // Diagnostics for the failure case only. finish_reason is the single most
+    // useful field when a reply comes back empty ("length" means it hit the
+    // token cap mid-thought), and a sample of the raw frames is what makes an
+    // unfamiliar gateway's shape debuggable at all — we cannot guess the field
+    // names a new backend invents.
+    let finishReason = "";
+    let frames = 0;
+    const sample = [];
     try {
         for (;;) {
             const { done, value } = await reader.read();
@@ -452,6 +476,11 @@ async function streamTextSSE(response, extractDelta, onChunk) {
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
+                frames += 1;
+                if (json?.choices?.[0]?.finish_reason) finishReason = json.choices[0].finish_reason;
+                // Keep the first few frames and nothing more: enough to show the
+                // shape a gateway is using, small enough to paste into a report.
+                if (sample.length < 3) sample.push(payload.slice(0, 400));
                 // An extractor may return a plain string (content only) or
                 // { content, reasoning } — the providers that separate the two.
                 const delta = extractDelta(json);
@@ -469,7 +498,13 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
-    return { text: stripThinking(full), reasoning: reasoning.trim() };
+    return {
+        text: stripThinking(full),
+        reasoning: reasoning.trim(),
+        finishReason,
+        frames,
+        sample,
+    };
 }
 
 // One incremental text chunk per provider's stream event. NOTE: joinGeminiParts
@@ -845,8 +880,8 @@ async function callOpenAIStyleChatCompletions({
         // on the actual content-type so a gateway that ignored stream:true (plain
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed, reasoning: streamedReasoning } =
-                await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const { text: streamed, reasoning: streamedReasoning } = streamResult;
             if (streamed) return streamed;
             // The model thought and never answered: it spent the whole budget
             // reasoning. Give it room and ask once more, rather than erroring or
@@ -858,7 +893,20 @@ async function callOpenAIStyleChatCompletions({
                 console.warn(`[ai] ${providerLabel} returned only reasoning; retrying with the token cap lifted`);
                 continue;
             }
-            throw new Error(emptyReplyMessage(providerLabel));
+            throw aiFailureError(emptyReplyMessage(providerLabel), {
+                provider: providerLabel,
+                model,
+                mode: "streaming chat",
+                reasoningEnabled: wantsReasoning,
+                tokenCapLifted: liftedCapForReasoning,
+                requestedMaxTokens: Number(maxTokens) || 0,
+                finishReason: streamResult.finishReason || "(none reported)",
+                streamFrames: streamResult.frames,
+                answerChars: streamed.length,
+                reasoningChars: streamedReasoning.length,
+                reasoningTail: streamedReasoning.slice(-600),
+                sampleFrames: streamResult.sample,
+            });
         }
 
         // Local servers that honor stream:true answer as an event stream; ones
@@ -879,7 +927,18 @@ async function callOpenAIStyleChatCompletions({
         }
 
         if (!text) {
-            throw new Error(emptyReplyMessage(providerLabel));
+            throw aiFailureError(emptyReplyMessage(providerLabel), {
+                provider: providerLabel,
+                model,
+                mode: "buffered chat",
+                reasoningEnabled: wantsReasoning,
+                requestedMaxTokens: Number(maxTokens) || 0,
+                finishReason: data?.choices?.[0]?.finish_reason || "(none reported)",
+                // The whole envelope, minus anything that could carry a key.
+                responseShape: Object.keys(data ?? {}),
+                messageKeys: Object.keys(data?.choices?.[0]?.message ?? {}),
+                rawResponse: JSON.stringify(data ?? {}).slice(0, 1500),
+            });
         }
 
         return text;
