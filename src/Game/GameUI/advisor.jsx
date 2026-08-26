@@ -227,6 +227,14 @@ const CopyButton = ({ text, label = "Copy for a bug report", tone = "rgba(255,25
     );
 };
 
+const RetryIcon = () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+    </svg>
+);
+
 // The pasteable report.
 //
 // Contains no API key and no endpoint host. It DOES contain model output — the
@@ -255,7 +263,13 @@ const formatErrorReport = (message, diagnostics) => {
 
 // Shown under an advisor error. The message says what went wrong in plain
 // English; this is the part that says WHY, in enough detail to act on.
-const AdvisorErrorDetails = ({ message, diagnostics }) => {
+//
+// The Retry button is offered on the NEWEST error only (see the caller). Most
+// advisor failures are the transport or an overloaded provider rather than
+// anything about the question, and the transport already waits and retries once
+// on its own before it gets here — so by this point the useful thing is a way to
+// ask again without retyping, not more advice.
+const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
     const [open, setOpen] = useState(false);
     const report = formatErrorReport(message, diagnostics);
     const hasDetail = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
@@ -263,6 +277,12 @@ const AdvisorErrorDetails = ({ message, diagnostics }) => {
     return (
         <div style={{ marginTop: "0.5rem" }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+        {onRetry && (
+            <button type="button" onClick={onRetry} disabled={retrying}
+            style={{ alignItems: "center", background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "6px", color: "rgba(254,202,202,0.95)", cursor: retrying ? "default" : "pointer", display: "flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", opacity: retrying ? 0.6 : 1, padding: "0.2rem 0.55rem" }}>
+            <RetryIcon /> {retrying ? "Retrying…" : "Retry"}
+            </button>
+        )}
         <CopyButton text={report} tone="rgba(239,68,68,0.45)" color="rgba(254,202,202,0.95)" />
         {hasDetail && (
             <button type="button" onClick={() => setOpen((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
@@ -683,7 +703,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment }) => {
     const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
         : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
@@ -713,7 +733,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
-        {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} />}
+        {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -751,7 +771,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -759,8 +779,12 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
         </p>
     )}
 
+    {/* The retry is offered on the LAST message only, and only when it is the
+        error: retrying anything older would re-ask a question the conversation
+        has already moved past. */}
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment}
+        onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -789,6 +813,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     // "while I'm reading this one", not permanent.
     const messagesContainerRef      = useRef(null);
     const shouldAutoScrollRef       = useRef(true);
+    // The transcript and the current runTurn, readable from a stable callback
+    // (handleRetryTurn) without making that callback depend on either.
+    const messagesRef               = useRef(messages);
+    const runTurnRef                = useRef(null);
     const handleMessagesScroll = React.useCallback(() => {
         const el = messagesContainerRef.current;
         if (!el) return;
@@ -879,8 +907,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         resizeTextarea();
     }, [input, resizeTextarea]);
 
-    const handleSend = async () => {
-        const text = input.trim();
+    // One turn with the advisor, from either entry point: the composer
+    // (handleSend) or the Retry button on a failed turn (handleRetryTurn).
+    //
+    // `replaceTrailingError` is what makes a retry a retry rather than a second
+    // question: the failed attempt's error bubble is dropped and the player's
+    // original question stays where it is, so the transcript reads as one
+    // exchange. sendMessage pops its own history entry when a call throws (see
+    // main.jsx), so the model never sees the question twice either.
+    const runTurn = async (text, { replaceTrailingError = false } = {}) => {
         if (!text || isLoading) return;
 
         const { gameDate } = await readJson(JSON_URLS.game, {
@@ -888,13 +923,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             force: true,
         }).catch(() => ({ gameDate: null }));
 
-        const userMessage = { role: "user", text, time: gameDate };
-        setInput("");
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
         // reply they scrolled away from, not the whole session.
         shouldAutoScrollRef.current = true;
-        setMessages(prev => [...prev, userMessage]);
+        setMessages(prev => (replaceTrailingError
+            ? (prev[prev.length - 1]?.role === "error" ? prev.slice(0, -1) : prev.slice())
+            : [...prev, { role: "user", text, time: gameDate }]));
         setIsLoading(true);
 
         // Streaming: the ThinkingDots show until the first token, then a live
@@ -988,6 +1023,27 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             setIsLoading(false);
         }
     };
+
+    const handleSend = () => {
+        const text = input.trim();
+        if (!text || isLoading) return;
+        setInput("");
+        return runTurn(text);
+    };
+
+    // Asks the last question again. Reads the transcript through a ref and calls
+    // runTurn through one, so this stays a stable reference across renders —
+    // AdvisorMessageList is memoized on its props, and a callback that changed
+    // identity every message would re-render the whole history each time (see
+    // AdvisorMessageRow's comment).
+    const handleRetryTurn = React.useCallback(() => {
+        const lastQuestion = [...messagesRef.current].reverse().find((msg) => msg.role === "user")?.text;
+        if (!lastQuestion) return;
+        runTurnRef.current?.(lastQuestion, { replaceTrailingError: true });
+    }, []);
+
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+    useEffect(() => { runTurnRef.current = runTurn; });
 
     const handleKeyDown = (e) => {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -1153,6 +1209,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         onOpenActions={onOpenActions}
         onOpenProjects={onOpenProjects}
         onRetryProjects={handleRetryProjects}
+        onRetry={handleRetryTurn}
+        retrying={isLoading}
         onSendDraft={handleSendDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
