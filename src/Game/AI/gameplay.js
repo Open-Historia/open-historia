@@ -2562,15 +2562,19 @@ const IDLE_PULSE_CHANCE = 1 / 4;
 // unit may be re-postured or re-ordered, but nothing marches.
 const IDLE_PULSE_ELAPSED_DAYS = 0;
 let idleDiplomacyInFlight = false;
+// Narrower than idleDiplomacyInFlight above: true only for the half of a pulse
+// that actually asks whether a polity would send a note (allowChat). A
+// movement-only pulse sets the in-flight guard but not this.
+let idleChatPollInFlight = false;
 
-// Whether a country reaching out unprompted (idle diplomacy) or a broader
-// simulation (jump/auto-jump, a game-master command) that could itself emit
-// createdChats/diplomaticOutreach is currently in flight. Not a promise a chat
-// IS coming — most jumps don't create one — just "the AI is doing something
-// that could produce a new one right now". Polled by the chat UI (chat.jsx) to
-// show a "generating" state instead of leaving the badge looking idle while a
-// note is actually being drafted.
-export const isChatGenerationLikely = () => idleDiplomacyInFlight || isSimulationBusy();
+// Whether the model is right now being asked whether a country would reach out
+// unprompted. Deliberately NOT true for a jump/auto-jump, a game-master command,
+// or an advisor exchange: those take the same busy lock and MIGHT end up emitting
+// createdChats/diplomaticOutreach, but the indicator used to fire on every one of
+// them, so simulating a turn or talking to the advisor lit up the chat button for
+// the whole run. "Might produce a chat eventually" is not worth an indicator —
+// only a poll whose entire purpose is that question gets one.
+export const isChatGenerationLikely = () => idleChatPollInFlight;
 
 // Apply a pulse's unit ops to the LIVE world. Routed through
 // applyEventImpactsToWorld with a synthetic event rather than a hand-rolled
@@ -2638,6 +2642,7 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
   // while the movement half runs on every pulse.
   const allowChat = roll < Math.min(chance, IDLE_DIPLOMACY_CHANCE);
   idleDiplomacyInFlight = true;
+  idleChatPollInFlight = allowChat;
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
@@ -2706,6 +2711,7 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
     return null; // silence is always the safe outcome
   } finally {
     idleDiplomacyInFlight = false;
+    idleChatPollInFlight = false;
   }
 };
 

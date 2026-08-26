@@ -860,10 +860,13 @@ const ChatGroupHeader = ({ label }) => (
     </div>
 );
 
-// Sits above the chat list while isChatGenerationLikely() is true (an idle-
-// diplomacy roll or a jump/game-master command in flight) — the visible half
-// of "before the chat is generated": a note that's about to exist doesn't
-// read as a stuck panel while the player is looking right at an empty list.
+// Sits above the chat list while isChatGenerationLikely() is true — i.e. while
+// the idle poll is actually asking whether a polity would send a note, and only
+// then. It is the visible half of "before the chat is generated": a note that's
+// about to exist doesn't read as a stuck panel while the player is looking right
+// at an empty list. A turn simulation or an advisor exchange no longer trips it;
+// those merely COULD produce a chat, and saying so for the length of every jump
+// made the indicator meaningless.
 const GeneratingBanner = () => (
     <div style={{ alignItems: "center", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
     <span style={{ flexShrink: 0, fontSize: "1rem" }}>🖊</span>
@@ -1293,8 +1296,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const setChatOpen = () => { onToggle(); };
 
     // "Someone might be typing": isChatGenerationLikely() is a plain synchronous
-    // getter (idle-diplomacy roll or a jump/game-master command in flight), not
-    // an event — polled at a fast, animation-friendly cadence so the badge and
+    // getter (an idle poll rolling for a diplomatic note), not an event —
+    // polled at a fast, animation-friendly cadence so the badge and
     // the panel's banner (below) feel live rather than laggy. Runs regardless of
     // isOpen (unlike the unread poll) since the panel's own banner needs it too.
     useEffect(() => {
