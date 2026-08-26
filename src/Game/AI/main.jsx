@@ -1376,6 +1376,46 @@ Example:
 [{"type":"armor","name":"3rd Guards Division","composition":"2 tank regiments","strength":100,"lng":30.52,"lat":50.45}]
 \`\`\``;
 
+// What the advisor's prose is allowed to look like.
+//
+// Its replies are rendered as GitHub-flavoured markdown (src/Game/GameUI/markdown.jsx),
+// and until that renderer grew tables the model had no way to lay anything out —
+// so it improvised, and the player saw the improvisation raw: literal <br> tags
+// where it wanted a line break, and pipe-and-dash tables that never parsed. It
+// now has a real vocabulary, and this is where it is told what is in it and what
+// each part is FOR. Appended at call time for the same frozen-prompt reason as
+// the directives above: the campaigns that most need this already carry their
+// own copy of the advisor prompt.
+//
+// The two prohibitions matter more than the permissions. Raw HTML is not
+// rendered (deliberately — this is model output going into the DOM), so a tag is
+// always visible as text. And "> " blockquotes are load-bearing elsewhere:
+// ADVISOR_MESSAGE_DRAFT_DIRECTIVE reads the drafted letter back OUT of the
+// blockquote positionally, so a blockquote used for emphasis becomes a "send
+// this to France" button attached to something that was never a message.
+const ADVISOR_FORMATTING_DIRECTIVE = `[How Your Replies Are Displayed]
+Your prose is rendered as GitHub-flavoured markdown in a narrow side panel, so you can lay a reply out properly. Use that, but use it lightly: most replies are a few short paragraphs and need no structure at all, and a briefing that is all headings and tables reads like a form rather than like counsel.
+
+What you have:
+- **Bold** for the figure or name that matters, *italics* sparingly for emphasis, ~~strikethrough~~ for something now superseded, and \`inline code\` for an exact designation or codename.
+- ## Headings and ### subheadings to divide a genuinely long reply into sections. #### renders as a small label — use it for a one-line heading over a short block. A reply under about six lines needs no heading whatsoever.
+- Bullet lists with "- ", numbered lists with "1.", nested by indenting two spaces. Checklists with "- [ ] " for things not yet done and "- [x] " for things done.
+- A "---" rule between two major parts of a long briefing. At most one or two in a reply.
+- Tables, for genuinely tabular data ONLY — several items compared on the SAME few fields (fleets by strength and station, projects by progress and date, powers by stance). A table needs at least two columns AND at least two rows to be worth making. Keep it to two to four columns with short cells: the panel is narrow and a wide table has to be scrolled.
+
+When NOT to use a table: never to describe a single thing. One item's explanation is a paragraph, or a bolded label with prose after it — a two-column "Item / Detail" table with one row is worse than the sentence it replaces. If a cell would hold more than a short phrase, it is prose, not a table.
+
+Two hard rules:
+- No HTML, ever. Tags are not rendered, so the player sees the literal text "<br>". For a line break, press return and write the next line; for a gap between paragraphs, leave a blank line.
+- Never use a "> " blockquote for emphasis, for quoting the player back, or for a nice-looking pull quote. A blockquote means one thing in this conversation: the text of a diplomatic message the player can send, per [Drafting Messages to Send]. Anything else you put in one becomes a send button on something that was never a letter.
+
+Example of a table that earns its place:
+
+| Programme | Progress | Next milestone |
+|---|---|---|
+| Titan (Highlands) | 71% | Sea trials, Nov |
+| Hyperion Mk II | 34% | Core delivery, Jan |`;
+
 // Lets the advisor open and maintain the player's Projects & Operations board
 // from an ordinary chat reply, the same way the ```actions block manages the
 // action queue. Appended at call time for the same frozen-prompt reason as the
@@ -1443,7 +1483,7 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}`;
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}\n\n${ADVISOR_FORMATTING_DIRECTIVE}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {

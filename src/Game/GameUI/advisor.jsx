@@ -1,6 +1,5 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
@@ -8,6 +7,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -707,7 +707,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             boxSizing: "border-box",
         }}>
         {msg.role === "user" ? text : (
-            <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
+            <Markdown className="advisor-markdown">{text}</Markdown>
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
@@ -1186,31 +1186,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         </div>
         </>
     );
-};
-
-const markdownStyles = `
-.advisor-markdown p { margin: 0 0 0.5rem 0; }
-.advisor-markdown p:last-child { margin-bottom: 0; }
-.advisor-markdown ul, .advisor-markdown ol { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; }
-.advisor-markdown li { margin-bottom: 0.2rem; }
-.advisor-markdown strong { color: rgba(255,255,255,0.95); }
-.advisor-markdown em { color: rgba(255,255,255,0.75); }
-.advisor-markdown code { background: rgba(0,0,0,0.3); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; }
-.advisor-markdown pre { background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
-.advisor-markdown h1, .advisor-markdown h2, .advisor-markdown h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; color: rgba(255,255,255,0.9); }
-.advisor-markdown blockquote { border-left: 2px solid rgba(59,130,246,0.6); margin: 0.5rem 0; padding-left: 0.75rem; color: rgba(255,255,255,0.6); }
-`;
-
-const MarkdownStyleInjector = () => {
-    useEffect(() => {
-        if (!document.getElementById("advisor-md-styles")) {
-            const style = document.createElement("style");
-            style.id = "advisor-md-styles";
-            style.textContent = markdownStyles;
-            document.head.appendChild(style);
-        }
-    }, []);
-    return null;
 };
 
 export { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel };
