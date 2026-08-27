@@ -30,7 +30,7 @@ import {
 import { setWorldStateOverride } from "../Map/useWorldState.js";
 import { setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, isBetaUnits, useMapSetting } from "../../runtime/mapSettings.js";
 
 dayjs.extend(advancedFormat);
 
@@ -1674,11 +1674,17 @@ const DateWidget = ({
             // never had. The residual advance past the last event is not replayed
             // here — the reveal is a partial state by definition, and the map's
             // position tween absorbs the difference when the override clears.
-            motion: {
-                originDate: record.fromDate || "",
-                round: record.round || 0,
-                tick: 0,
-            },
+            //
+            // "Same as the persisted turn" is the whole point, so this has to
+            // track the unit system exactly as applySimulationResult does.
+            motion: isBetaUnits()
+                ? {
+                    originDate: record.fromDate || "",
+                    round: record.round || 0,
+                    tick: 0,
+                }
+                : null,
+            betaEngine: isBetaUnits(),
             world: stagedBase.world,
         });
         setWorldStateOverride(stagedWorld);

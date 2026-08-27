@@ -1520,15 +1520,54 @@ const isUnsupportedSpawn = (point, anchors, type, gameDate) => {
 // short enough that it does not circle the same water forever.
 const PATROL_ORDER_ROUNDS = 12;
 
+const UNIT_SYSTEM_SET = new Set(["beta", "classic"]);
+
+// Bring standing orders back into the present after time has passed under the
+// classic system, which has no engine to advance or expire them.
+//
+// A patrol carries an ABSOLUTE expiry round, so ten rounds of classic play would
+// leave every dormant patrol already past its untilRound — and the next beta jump
+// would clear the lot at once, looking exactly like the orders had been lost when
+// in fact they were preserved on disk the whole time. Rebasing gives each one the
+// rest of its life from here instead. Move orders need nothing: they have no
+// expiry and resume simply by being advanced again.
+//
+// `previousSystem` is the stamp the save carried BEFORE this turn, which the
+// caller has to supply: by the time a world comes back from
+// applyEventImpactsToWorld it has already been re-stamped "beta", so reading it
+// off the world here would never fire.
+//
+// Idempotent, and a no-op unless the classic system is what last wrote the save.
+export const resumeStandingOrders = (world, { round = 0, previousSystem = "" } = {}) => {
+  if (previousSystem !== "classic" || !round) return world;
+  const next = normalizeWorldState(world);
+  const orders = next.pendingUnitOrders;
+  if (orders.length === 0) return world;
+  return {
+    ...next,
+    pendingUnitOrders: orders.map((order) =>
+      (order.kind === "patrol" && order.untilRound && order.untilRound <= round
+        ? { ...order, untilRound: round + PATROL_ORDER_ROUNDS }
+        : order)),
+  };
+};
+
 // Apply a batch of unit ops to a unit list AND the standing-order list (pure).
 // Ops referencing unknown ids are silently ignored; units reduced to <=0 strength
 // are dropped.
 //
-// context: { markers, gameDate, elapsedDays, round, extraAnchors, eventId }
+// context: { markers, gameDate, elapsedDays, round, extraAnchors, eventId, betaEngine }
 //   elapsedDays === null | undefined  ->  no travel clamp (the old behaviour, and
 //   what a non-Gregorian scenario date must fall back to).
+//   betaEngine === false  ->  the classic unit system is running: no standing
+//   orders are minted and a spawn is taken at face value. Defaults to true so
+//   this stays directly callable — it is the caller (gameplay.js, time.jsx) that
+//   knows which system the session is in, never this module. See
+//   runtime/mapSettings.js isBetaUnits.
 export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
-  const { gameDate = "", elapsedDays = null, round = 0, extraAnchors = [], eventId = "" } = context;
+  const {
+    gameDate = "", elapsedDays = null, round = 0, extraAnchors = [], eventId = "", betaEngine = true,
+  } = context;
   let next = normalizeUnits(units);
   let nextOrders = normalizePendingUnitOrders(orders);
   const markers = normalizeArray(context.markers);
@@ -1555,7 +1594,9 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
 
       const unit = { ...op.unit };
       const anchors = buildOwnerFootprint({ units: next, markers }, unit.ownerCode, extraAnchors);
-      if (isUnsupportedSpawn(unit, anchors, unit.type, gameDate)) {
+      // Reach/supply feasibility is a beta-engine rule; the classic system takes a
+      // spawn where the model put it, exactly as it always has.
+      if (betaEngine && isUnsupportedSpawn(unit, anchors, unit.type, gameDate)) {
         // A fixed installation is the one thing that cannot simply be detected
         // into existence — it has to be built. Downgrade it to the troops it
         // would take rather than dropping the op, because a silently dropped op
@@ -1568,7 +1609,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       if (eventId && !unit.eventId) unit.eventId = eventId;
       next.push(unit);
 
-      if (unit.posture === "patrol") {
+      if (betaEngine && unit.posture === "patrol") {
         upsertOrder(
           normalizePendingUnitOrderEntry({
             unitId: unit.id,
@@ -1600,7 +1641,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
 
         if (step.arrived) {
           dropOrder(unit.id);
-          if (posture === "patrol") {
+          if (betaEngine && posture === "patrol") {
             upsertOrder(
               normalizePendingUnitOrderEntry({
                 unitId: unit.id,
@@ -1618,17 +1659,24 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
           // actually get and keep a standing order to the FULL destination, so
           // the journey continues by itself next turn. This is what makes
           // over-long move ops safe for the model to write.
-          upsertOrder(
-            normalizePendingUnitOrderEntry({
-              unitId: unit.id,
-              kind: "move",
-              toLng: op.toLng,
-              toLat: op.toLat,
-              note: op.note,
-              issuedAt: gameDate,
-              issuedRound: round,
-            }),
-          );
+          //
+          // Unreachable in the classic system, which never clamps travel
+          // (elapsedDays is null, so the budget is Infinity and every step
+          // arrives). Guarded anyway so the rule is stated once, here, rather
+          // than resting on that coincidence holding forever.
+          if (betaEngine) {
+            upsertOrder(
+              normalizePendingUnitOrderEntry({
+                unitId: unit.id,
+                kind: "move",
+                toLng: op.toLng,
+                toLat: op.toLat,
+                note: op.note,
+                issuedAt: gameDate,
+                issuedRound: round,
+              }),
+            );
+          }
         }
 
         return {
@@ -2097,6 +2145,17 @@ export const normalizeWorldState = (world) => {
     // an order clears itself the moment its unit actually arrives — see
     // pruneSatisfiedUnitOrders.
     pendingUnitOrders: pruneSatisfiedUnitOrders(units, normalizePendingUnitOrders(nextWorld.pendingUnitOrders)),
+    // Which unit system last took a turn on this save: "beta", "classic", or ""
+    // for a save written before the two were distinguishable. Stamped by
+    // applyEventImpactsToWorld, never by a normalizer — this module has no idea
+    // which system is running and must not acquire one.
+    //
+    // It exists so resumeStandingOrders can tell that game time passed while the
+    // beta engine was not running, and so a save can say what wrote it. Neither
+    // system reads it to decide behaviour.
+    unitSystem: UNIT_SYSTEM_SET.has(normalizeOptionalString(nextWorld.unitSystem))
+      ? normalizeOptionalString(nextWorld.unitSystem)
+      : "",
   };
 };
 
@@ -2269,7 +2328,11 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // programme has sat still. It defaults to 0 (meaning "leave the stamp alone")
 // rather than being required, because the staged event reveal in time.jsx replays
 // impacts purely for display and must not age the projects it is only redrawing.
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, motion = null, round = 0 }) => {
+// `betaEngine` reaches applyUnitOpBatch unchanged — see its context docs. Pass
+// false alongside motion: null to run a jump entirely under the classic rules.
+export const applyEventImpactsToWorld = ({
+  colors = {}, events = [], world, motion = null, round = 0, betaEngine = true,
+}) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
   let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
@@ -2399,6 +2462,7 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, moti
           elapsedDays: motion ? daysBetweenDates(cursorDate, event.date) : null,
           round: motion?.round ?? 0,
           eventId: event.id,
+          betaEngine,
         },
       );
       nextWorld.units = applied.units;
@@ -2446,6 +2510,8 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world, moti
 
   return {
     colors: nextColors,
-    world: nextWorld,
+    // Record which system took this turn, so a later resume can tell that game
+    // time passed while the beta engine was not running (resumeStandingOrders).
+    world: { ...nextWorld, unitSystem: betaEngine ? "beta" : "classic" },
   };
 };

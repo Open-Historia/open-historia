@@ -18,6 +18,7 @@ import {
 import {
     MAP_SETTING_KEYS,
     getMapSetting,
+    isBetaUnits,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
 
@@ -906,6 +907,7 @@ const SettingsMenu = ({
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+        betaUnits: getMapSetting(MAP_SETTING_KEYS.betaUnits),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -1018,6 +1020,26 @@ const SettingsMenu = ({
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On: time skips give the model 5 minutes, then fall back to canned events. Off (default): generation waits as long as the model needs. Cancel works either way.
         </div>
+        </div>
+
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Experimental</div>
+        <Toggle
+        label="Beta unit system"
+        enabled={mapSettings.betaUnits}
+        onToggle={() => updateMapSetting("betaUnits", MAP_SETTING_KEYS.betaUnits, !mapSettings.betaUnits)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing.
+        </div>
+        {/* The running session is pinned to whatever the flag said at startup (see
+            isBetaUnits), so a flip only means something after a restart. Say so, but
+            only while the two actually disagree — a permanent notice would be noise. */}
+        {mapSettings.betaUnits !== isBetaUnits() && (
+            <div style={{ fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
+            Restart the game to apply this change.
+            </div>
+        )}
         </div>
 
         <NetworkSharing />
