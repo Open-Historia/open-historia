@@ -17,9 +17,12 @@
     "preview:web": "vite preview --outDir dist-web",
     "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\"",
     "electron": "electron .",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux"
+    "dist:win": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --win",
+    "dist:mac": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --mac",
+    "dist:linux": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --linux",
+    "dist:win:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --win --config electron-builder.beta.yml",
+    "dist:mac:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --mac --config electron-builder.beta.yml",
+    "dist:linux:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --linux --config electron-builder.beta.yml"
   },
   "dependencies": {
     "@noble/ed25519": "^2.3.0",

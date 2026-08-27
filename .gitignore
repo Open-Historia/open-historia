@@ -57,3 +57,6 @@ CLAUDE.md
 /trust/*.key.pem
 # generated per release build by the desktop workflow
 electron/build-id.json
+
+# generated per build by scripts/stamp-channel.mjs (see dist:*:beta)
+electron/channel.json

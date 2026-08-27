@@ -9,18 +9,146 @@
 // would be ESM, and Electron's main process is most predictable as CJS. The
 // server is ESM and is pulled in with a dynamic import().
 
-const { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 
+// Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
+// the fork's beta build (`npm run dist:win:beta` and the desktop-beta workflow);
+// the stable build ships no such file, reads "stable", and every branch below is
+// the behaviour it has always had. OH_CHANNEL overrides it for `npm run electron`,
+// which is the only way to exercise the beta paths unpackaged.
+const CHANNEL = (() => {
+  if (process.env.OH_CHANNEL) return String(process.env.OH_CHANNEL);
+  try {
+    const stamp = fs.readFileSync(path.join(__dirname, "channel.json"), "utf8");
+    return String(JSON.parse(stamp).channel || "stable");
+  } catch {
+    return "stable"; // no stamp: the stable build, or a dev run
+  }
+})();
+const IS_BETA = CHANNEL === "beta";
+
+// Electron derives userData — the Chromium profile, and with it the
+// single-instance lock — from the app name, which for both builds is package.json's
+// "name" (%APPDATA%/open-historia). Two builds sharing that profile cannot run
+// independently: whichever starts second sees the first's lock and quits without a
+// window, which reads as "the beta is broken". Renaming the beta's profile is the
+// fix, and it has to happen here, before anything reads a path: the installer's
+// productName does NOT reach Electron (it only names the exe and the shortcut).
+//
+// This moves ONLY Chromium's own state. Saves, scenarios, settings and the map
+// live under USER_ROOT below, which is deliberately the stable app's folder.
+if (IS_BETA) app.setName("Open Historia Beta");
+
+// Where a beta build looks for ITS updates and sends ITS feedback. Pointing these
+// at the fork is the whole reason they are not left at the defaults in
+// server.js: a beta that polled the upstream release would offer to "update" a
+// tester onto a different app.
+const BETA_UPDATE_MANIFEST =
+  "https://github.com/SeventhDread/open-historia/releases/download/desktop-beta/latest.json";
+const BETA_FEEDBACK_URL = "https://github.com/SeventhDread/open-historia/issues";
+
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
 // full stop, so nothing may be written next to the code (see server/dataDir.js).
-const USER_ROOT = app.getPath("userData");
+//
+// The directory is named after the STABLE app rather than after whichever build
+// is running. For the stable app that is what getPath("userData") already
+// returns, so nothing moves; for the beta (renamed just above, so its own
+// userData) it means both builds open ONE library — one set of saves, one copy
+// of the ~200MB map, one set of AI keys — and a player can go back to the stable
+// app mid-campaign. Chromium's own per-build state stays in getPath("userData")
+// and is deliberately not shared. Unpackaged runs keep using userData, so a dev
+// build cannot scribble on a real install's library.
+//
+// The literal name is "open-historia", NOT the "Open Historia" the installer
+// shows: that folder is Electron's default from package.json's `name`, and it is
+// where the saves on every existing install already live. Getting this string
+// wrong fails silently — it opens an empty library rather than erroring — so it
+// is checked against a real install, never assumed.
+const SHARED_LIBRARY_NAME = "open-historia";
+const USER_ROOT = app.isPackaged
+  ? path.join(app.getPath("appData"), SHARED_LIBRARY_NAME)
+  : app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
 const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
+
+// Sharing one library means two builds must never write it at once: both run an
+// embedded server over the same JSON files, and the loser of a race silently
+// loses a turn. Electron's requestSingleInstanceLock is per-build (it is keyed on
+// the app's own userData) and so cannot see the other install at all.
+const LOCK_FILE = path.join(USER_ROOT, "library-lock.json");
+const LOCK_LABEL = IS_BETA ? "Open Historia Beta" : "Open Historia";
+
+const lockHolder = () => {
+  let held;
+  try {
+    held = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
+  } catch {
+    return null; // no lock, or an unreadable one: not evidence of anything
+  }
+  const pid = Number(held && held.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    // Signal 0 tests for the process without touching it. EPERM means it exists
+    // and belongs to someone else, which still counts as running.
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error.code !== "EPERM") return null; // ESRCH: it died without cleaning up
+  }
+  if (pid === process.pid) return null;
+  return String(held.label || "Another copy of Open Historia");
+};
+
+// Returns false if the player chose to quit rather than share the library.
+const claimSharedLibrary = () => {
+  const holder = lockHolder();
+  if (holder) {
+    const choice = dialog.showMessageBoxSync({
+      type: "warning",
+      title: `${LOCK_LABEL} — saves in use`,
+      message: `${holder} is already running.`,
+      detail:
+        `${LOCK_LABEL} shares its saves, scenarios and settings with it, and two ` +
+        "copies writing at once can lose a turn or corrupt a save. Close the " +
+        "other one first.",
+      buttons: ["Quit", "Start anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (choice === 0) return false;
+  }
+  try {
+    fs.mkdirSync(USER_ROOT, { recursive: true });
+    const held = { pid: process.pid, label: LOCK_LABEL, at: Date.now() };
+    fs.writeFileSync(LOCK_FILE, JSON.stringify(held));
+  } catch {
+    /* an unwritable lock is not a reason to keep a player out of the game */
+  }
+  return true;
+};
+
+const releaseSharedLibrary = () => {
+  try {
+    // Only if it is still ours: "start anyway" leaves the other build's lock in
+    // place, and stealing its release would leave a third launch unwarned.
+    if (JSON.parse(fs.readFileSync(LOCK_FILE, "utf8")).pid === process.pid) fs.rmSync(LOCK_FILE);
+  } catch {
+    /* already gone, or never written */
+  }
+};
+
+// Read by server.js. A stable build sets neither, and server.js keeps its own
+// upstream defaults; only the beta redirects its update check at the fork.
+process.env.OH_CHANNEL = CHANNEL;
+if (IS_BETA) {
+  process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
+  process.env.OH_FORK_FEEDBACK_URL = BETA_FEEDBACK_URL;
+}
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
 // "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
@@ -197,7 +325,9 @@ const createMainWindow = () => {
     autoHideMenuBar: true,
     backgroundColor: "#0d1122",
     show: false,
-    title: "Open Historia",
+    // The beta says so in the one place a player always sees, even after they
+    // have both builds pinned to the taskbar and forgotten which is which.
+    title: IS_BETA ? "Open Historia Beta — fork build" : "Open Historia",
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },
@@ -238,6 +368,10 @@ const createMainWindow = () => {
     if (openableExternally(targetUrl)) shell.openExternal(targetUrl);
   });
   attachEditingContextMenu(win);
+  // The page carries its own <title>, and Chromium hands that to the window the
+  // moment it loads — which would quietly undo the Beta title above. Refusing the
+  // update keeps the taskbar entry honest for the whole session.
+  if (IS_BETA) win.on("page-title-updated", (event) => event.preventDefault());
   win.once("ready-to-show", () => win.show());
   return win;
 };
@@ -326,13 +460,23 @@ const boot = async () => {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  app.on("will-quit", releaseSharedLibrary);
   app.on("second-instance", () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
-  app.whenReady().then(boot);
+  app.whenReady().then(() => {
+    // The other build may already own the shared library. Asking needs a window
+    // toolkit, so it happens here rather than at module scope, and it happens
+    // BEFORE boot: answering "Quit" ends the launch with nothing started.
+    if (!claimSharedLibrary()) {
+      app.quit();
+      return undefined;
+    }
+    return boot();
+  });
   app.on("window-all-closed", () => app.quit());
   ipcMain.handle("setup:cancel", () => app.quit());
 }
