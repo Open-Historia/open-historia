@@ -200,6 +200,22 @@ const polityChangeSchema = {
   additionalProperties: false,
 };
 
+// `composition` and `posture` below belong to the beta unit system, and are
+// DELIBERATELY left in the schema when the classic system is running.
+//
+// Stripping them looks tidier and is a trap. Every op object here is
+// additionalProperties: false, so a provider that does not enforce the tool
+// schema server-side (not all of the supported ones do) would have a stray
+// `posture` rejected by validateGameplayPayload — and that fails the WHOLE turn's
+// structured output into a fallback simulation, which is exactly the failure the
+// note field on the spawn op was added to prevent (see its comment below).
+// Trading a guaranteed-safe default mode for a few dozen tokens of schema is a
+// bad deal.
+//
+// Nothing acts on them in classic: applyUnitOpBatch's betaEngine gate ignores
+// posture, and promptContext stops describing either field, so the model is not
+// invited to use them. If one arrives anyway it is stored verbatim and simply
+// waits — which is what makes switching to beta later lossless.
 const unitSchema = {
   type: "object",
   description: "A military unit to create on the map.",

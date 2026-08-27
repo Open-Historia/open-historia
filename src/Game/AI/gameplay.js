@@ -38,6 +38,7 @@ import {
   readGameData,
   readGameStateBundle,
   readWorldState,
+  resumeStandingOrders,
   writeActionsState,
   writeChatsState,
   writeEventsState,
@@ -46,7 +47,7 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -1683,6 +1684,9 @@ const applySimulationResult = async ({
   // foldGeneratedChatsIntoStorage) rather than putting the stale snapshot back.
   const generatedChats = [];
 
+  // Which unit system this session is running, pinned at startup.
+  const betaUnits = isBetaUnits();
+
   const { colors: nextColors, world: impactedWorld } = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
@@ -1690,7 +1694,12 @@ const applySimulationResult = async ({
     // and its own, so a move op advances a formation as far as it could actually
     // have got rather than teleporting it. An over-long move becomes a partial
     // advance plus a standing order the engine keeps working on later turns.
-    motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
+    //
+    // Both of these are the beta unit system. In the classic system a unit op
+    // lands where the model put it and no standing order is minted, which is
+    // what motion: null plus betaEngine: false mean.
+    motion: betaUnits ? { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 } : null,
+    betaEngine: betaUnits,
     // Stamps world.projects[].updatedRound, which is what lets the board say a
     // programme has sat untouched for three rounds. The staged reveal in time.jsx
     // deliberately omits it: replaying impacts for display must not age anything.
@@ -1731,17 +1740,32 @@ const applySimulationResult = async ({
   // having to come back from the model. Units the model DID move are skipped:
   // they already stepped once per event against that event's own budget, and
   // advancing them again here would move them twice for the same elapsed time.
+  //
+  // Both this and the unit-volume cap are beta-only: the classic system has no
+  // standing orders to advance and no cap on how many formations the world may
+  // hold, so it leaves the impacted world exactly as the events left it.
   const movedThisTurn = freshEvents.flatMap((event) =>
     normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
-  const worldWithImpacts = enforceUnitVolume(
-    advanceStandingOrders(impactedWorld, {
-      fromDate: baseGame.gameDate,
-      toDate: nextGame.gameDate,
-      round: nextGame.round,
-      skipUnitIds: movedThisTurn,
-    }),
-    { playerCode: baseGame.country },
-  );
+  const worldWithImpacts = betaUnits
+    ? enforceUnitVolume(
+      advanceStandingOrders(
+        // Rounds may have passed under the classic system since these orders were
+        // issued, which would leave every dormant patrol already expired. Give
+        // them the rest of their life from here before advancing anything.
+        resumeStandingOrders(impactedWorld, {
+          round: nextGame.round,
+          previousSystem: normalizeWorldState(baseWorld).unitSystem,
+        }),
+        {
+          fromDate: baseGame.gameDate,
+          toDate: nextGame.gameDate,
+          round: nextGame.round,
+          skipUnitIds: movedThisTurn,
+        },
+      ),
+      { playerCode: baseGame.country },
+    )
+    : impactedWorld;
   let nextWorld = worldWithImpacts;
 
   for (const event of freshEvents) {
@@ -2587,13 +2611,18 @@ const applyIdlePulseUnitOps = async (bundle, unitOps) => {
   const tick = (Number(freshWorld.idlePulseTick) || 0) + 1;
   const gameDate = normalizeString(bundle.game?.gameDate);
   const round = Number(bundle.game?.round) || 0;
+  const betaUnits = isBetaUnits();
 
   const { world: impacted } = applyEventImpactsToWorld({
     colors: {},
     events: [{ date: gameDate, title: "", description: "", impacts: { unitOps } }],
     world: freshWorld,
-    motion: { originDate: gameDate, round, tick },
+    motion: betaUnits ? { originDate: gameDate, round, tick } : null,
+    betaEngine: betaUnits,
   });
+  // The classic system has nothing to drift and no cap to enforce — the pulse's
+  // ops are the whole of its effect.
+  if (!betaUnits) return { ...impacted, idlePulseTick: tick };
   // fromDate === toDate, so no unit travels: the pulse only re-posts standing
   // orders and drifts patrols, which is right when no game time has passed.
   const drifted = advanceStandingOrders(impacted, {

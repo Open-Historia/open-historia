@@ -13,6 +13,7 @@ import {
   normalizeWorldState,
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText } from "./regionVocab.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { buildForcePostureText } from "./forcePosture.js";
 import { describeTimeline, deriveProjectFlags } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
@@ -287,9 +288,29 @@ export const buildRecentRoundsWithDates = (bundle) => {
     .join("; ");
 };
 
-export const buildUnitsSummaryText = (world) => {
+// Posture, composition and covert status are beta-system concepts. In the classic
+// system they are absent from play, so describing them would spend tokens on
+// mechanics the model cannot act on and invite ops the engine would discard.
+export const buildUnitsSummaryText = (world, { betaUnits = isBetaUnits() } = {}) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
+  if (!betaUnits) {
+    return units.slice(0, 60).map((unit) => {
+      const lat = Number(unit.lat);
+      const lng = Number(unit.lng);
+      const coords = Number.isFinite(lat) && Number.isFinite(lng)
+        ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+        : "unknown location";
+      const detail = [
+        `${unit.type}`,
+        `owner ${unit.ownerCode}`,
+        `${unit.strength}% of established strength`,
+        `status ${unit.status}`,
+      ].join(", ");
+      return `- ${unit.name} [id ${unit.id}] (${detail}) at ${coords}` +
+        `${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    }).join("\n");
+  }
   return units.slice(0, 60).map((unit) => {
     const lat = Number(unit.lat);
     const lng = Number(unit.lng);
@@ -313,9 +334,13 @@ export const buildUnitsSummaryText = (world) => {
 // every jump until the unit arrives or the order lapses. The model is shown these
 // as CONTEXT — advanceStandingOrders already moves them, so a move op for one of
 // these units would advance it twice (see the [Standing Unit Orders] directive).
-export const buildPendingUnitOrdersText = (world) => {
+export const buildPendingUnitOrdersText = (world, { betaUnits = isBetaUnits() } = {}) => {
   const orders = normalizeArray(world?.pendingUnitOrders);
-  if (orders.length === 0) {
+  // The classic system has no engine advancing orders, so there is nothing true
+  // to say here. A save may still CARRY dormant orders from beta play — they are
+  // preserved on disk deliberately, and describing them would invite the model to
+  // act on orders nothing is going to advance.
+  if (!betaUnits || orders.length === 0) {
     return "No units currently have a standing order.";
   }
   const unitById = new Map(normalizeArray(world?.units).map((unit) => [unit.id, unit]));
@@ -687,7 +712,12 @@ export const buildPromptContext = async (bundle, {
   // — the set the "are X's units near Y's border?" question could be about.
   // Bounded deliberately: indexing all ~200 countries' geometry would decode a
   // lot of coastline nobody is going to ask about.
-  const forcePosture = await (async () => {
+  //
+  // Beta-only, and skipped wholesale in the classic system rather than merely
+  // unused: buildTerritoryIndex decodes region geometry for every power fielding
+  // forces, which is the single most expensive thing in a prompt build. Nothing
+  // in classic reads the result.
+  const forcePosture = !isBetaUnits() ? "" : await (async () => {
     const world = normalizeWorldState(bundle.world);
     const owners = [
       normalizeString(bundle.game?.country),

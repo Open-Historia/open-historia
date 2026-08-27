@@ -17,8 +17,10 @@ import {
   getPlayerCode,
   removeUnit,
   requestUnitOrders,
+  setInteractionMode,
 } from "../Map/unitsController.js";
 import { readEventsState } from "../../runtime/gameState.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { haversineKm } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 
@@ -289,9 +291,23 @@ const UnitPopup = () => {
   const strengthPct = Math.max(2, Math.min(100, unit.strength));
   const orderText = describeOrder(unit, order);
   const postureText = POSTURE_LABEL[unit.posture] || "";
+  // Pinned for the session, so the popup can never show one system's controls
+  // while the controller is running the other's.
+  const betaUnits = isBetaUnits();
 
   const disband = () => {
     removeUnit(unit.id);
+    _dismiss?.();
+  };
+
+  // Classic only. Arms a map-click mode; the click dispatcher in Nations.jsx
+  // turns the next click into moveUnitTo / attackWith / attackFeature.
+  const beginMove = () => {
+    setInteractionMode({ kind: "move", unitId: unit.id });
+    _dismiss?.();
+  };
+  const beginAttack = () => {
+    setInteractionMode({ kind: "attack", unitId: unit.id });
     _dismiss?.();
   };
 
@@ -410,9 +426,11 @@ const UnitPopup = () => {
             />
           </div>
 
-          {postureText && <InfoRow label="Posture">{postureText}</InfoRow>}
-          {orderText && <InfoRow label="Orders">{orderText}</InfoRow>}
-          {!postureText && <InfoRow label="Status">{unit.status}</InfoRow>}
+          {/* Posture and standing orders exist only in the beta system; classic
+              shows the plain lifecycle status it has always shown. */}
+          {betaUnits && postureText && <InfoRow label="Posture">{postureText}</InfoRow>}
+          {betaUnits && orderText && <InfoRow label="Orders">{orderText}</InfoRow>}
+          {(!betaUnits || !postureText) && <InfoRow label="Status">{unit.status}</InfoRow>}
           <InfoRow label="Location">
             {unit.lat.toFixed(1)}, {unit.lng.toFixed(1)}
           </InfoRow>
@@ -423,7 +441,17 @@ const UnitPopup = () => {
             </InfoRow>
           )}
 
-          {isOwn && (
+          {/* Classic: the player moves and fights their own units. Both buttons
+              arm a map-click mode the dispatcher in Nations.jsx consumes. */}
+          {isOwn && !betaUnits && (
+            <div style={{ display: "flex", gap: "5px", marginTop: "10px" }}>
+              <ActionButton label="Move" tone="primary" onClick={beginMove} />
+              <ActionButton label="Attack" tone="danger" onClick={beginAttack} />
+              <ActionButton label="Disband" onClick={disband} />
+            </div>
+          )}
+
+          {isOwn && betaUnits && (
             <>
               {/* Intent, not control: this queues an action for the AI to weigh on
                   the next jump. Nothing on the map moves now. */}

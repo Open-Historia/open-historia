@@ -18,6 +18,7 @@ import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { getNationColors, getNationFlags } from "../../runtime/assets.js";
 import { subscribeUnits, getUnits, getPendingUnitOrders, startUnitsSync } from "./unitsController.js";
 import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -155,6 +156,9 @@ const Units = () => {
   const [colorMap, setColorMap] = useState({});
   const [orders, setOrders] = useState([]);
   const { current: map } = useMap();
+  // Pinned for the session (see runtime/mapSettings.js). Counters, flags and
+  // names are the same in both systems — only the standing-order overlay differs.
+  const betaUnits = isBetaUnits();
   // Scenario polities carry their own flags, and a custom-era country usually
   // resolves to no ISO flag at all — so this is the only flag it will ever have.
   const { polityOverrides } = useWorldState();
@@ -375,7 +379,14 @@ const Units = () => {
 
   // Heading lines and station rings. Rebuilt only when the standing orders
   // change — they are static between turns, unlike the counters themselves.
+  //
+  // Beta only: they draw standing orders, and the classic system has no engine
+  // advancing any. A save carried over from beta play still HOLDS its orders (they
+  // are preserved on disk so switching back is lossless), so this has to gate on
+  // the system rather than on the list being empty — otherwise classic would paint
+  // heading lines toward destinations nothing is moving to.
   const orderData = useMemo(() => {
+    if (!betaUnits) return EMPTY_FEATURE_COLLECTION;
     const units = new Map(unitsRef.current.map((unit) => [unit.id, unit]));
     const features = [];
     for (const order of orders) {
@@ -401,7 +412,7 @@ const Units = () => {
       });
     }
     return features.length ? { type: "FeatureCollection", features } : EMPTY_FEATURE_COLLECTION;
-  }, [orders, colorMap]);
+  }, [orders, colorMap, betaUnits]);
 
   return (
     <>

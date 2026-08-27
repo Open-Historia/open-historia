@@ -8,6 +8,9 @@ import {
   getInteractionMode,
   clearInteractionMode,
   deployUnit,
+  moveUnitTo,
+  attackWith,
+  attackFeature,
 } from "./unitsController.js";
 import {
   JSON_URLS,
@@ -599,11 +602,31 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const mode = getInteractionMode();
 
-    // Deploy is the only mode that intercepts a click as a target rather than a
-    // selection. Manual movement and attacks are gone: units depict what the
-    // events say, and the AI owns where forces go and what happens when they meet.
+    // Modes that intercept a click as a TARGET rather than a selection. Deploy
+    // exists in both unit systems; move and attack are classic-only, and in beta
+    // mode nothing can set them (units depict what the events say, and the AI owns
+    // where forces go and what happens when they meet) — so the branches below are
+    // simply unreachable there rather than needing a flag check of their own.
     if (mode.kind === "deploy") {
       deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
+      clearInteractionMode();
+      return;
+    }
+    if (mode.kind === "move") {
+      moveUnitTo(mode.unitId, event.lngLat.lng, event.lngLat.lat);
+      clearInteractionMode();
+      return;
+    }
+    if (mode.kind === "attack") {
+      // A unit under the cursor is the target; otherwise a city or built
+      // structure is, so anything clickable is also attackable.
+      const target = unitsAt();
+      if (target.length) {
+        attackWith(mode.unitId, target[0].properties.id);
+      } else {
+        const feature = featureAt();
+        if (feature) attackFeature(mode.unitId, feature);
+      }
       clearInteractionMode();
       return;
     }

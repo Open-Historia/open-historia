@@ -9,6 +9,7 @@ import {
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { busyProviderMessage, errorPayloadText, isBusyErrorPayload, providerErrorReplyMessage } from "./providerErrors.js";
 import {
@@ -1481,8 +1482,14 @@ ${forcePosture}`;
 // button that places the unit, instead of the player reading coordinates off the
 // screen and clicking the map themselves. Appended at call time for the same
 // frozen-prompt reason as the two directives above.
-const ADVISOR_DEPLOY_DIRECTIVE = `[Placing Forces]
-The player can place their own formations on the map; they cannot move or fight them, so never offer to march or attack with anything. When you specifically recommend placing a NEW formation of theirs somewhere, and you know where, append a fenced \`\`\`deploy block after your normal prose (never instead of it) containing a JSON array with one entry per recommended deployment: {"type":"infantry|armor|air|naval|artillery|garrison","name":"<what to call it>","composition":"<what it is made of, e.g. 2 frigates>","strength":<1-100, percent of established strength>,"lng":<real longitude>,"lat":<real latitude>}.
+// What the player can actually do with a formation differs between the two unit
+// systems, and the advisor must not offer what the UI cannot deliver: in beta
+// there is no manual movement or combat at all, while classic is the wargame
+// where the player marches and fights their own units.
+const buildAdvisorDeployDirective = (betaUnits) => `[Placing Forces]
+The player can place their own formations on the map${betaUnits
+    ? "; they cannot move or fight them, so never offer to march or attack with anything"
+    : ", and can move and attack with them directly"}. When you specifically recommend placing a NEW formation of theirs somewhere, and you know where, append a fenced \`\`\`deploy block after your normal prose (never instead of it) containing a JSON array with one entry per recommended deployment: {"type":"infantry|armor|air|naval|artillery|garrison","name":"<what to call it>","composition":"<what it is made of, e.g. 2 frigates>","strength":<1-100, percent of established strength>,"lng":<real longitude>,"lat":<real latitude>}.
 Use real coordinates for the place you are actually recommending — 0,0 is open ocean and is never valid. Omit the block entirely unless you are recommending a specific placement at a specific place; most replies need none, and a general discussion of strategy is not a deployment. Anything the player places is a REQUEST: the simulation confirms, repositions or rejects it, so say so rather than promising it will stand.
 
 Example:
@@ -1603,7 +1610,19 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}\n\n${ADVISOR_FORMATTING_DIRECTIVE}`;
+    // The forces directive is beta-only — promptContext leaves forcePosture empty
+    // in the classic system rather than paying for the territory index, so the
+    // heading would introduce a section with nothing under it.
+    const betaUnits = isBetaUnits();
+    const directives = [
+        buildAdvisorActionsDirective(variables.plannedActionsWithIds),
+        ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        buildAdvisorDeployDirective(betaUnits),
+        buildAdvisorProjectsDirective(variables.projectsSummary),
+        ...(betaUnits ? [buildAdvisorForcesDirective(variables.forcePosture)] : []),
+        ADVISOR_FORMATTING_DIRECTIVE,
+    ];
+    return `${rendered}\n\n${directives.join("\n\n")}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
