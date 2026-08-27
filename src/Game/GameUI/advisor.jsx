@@ -7,6 +7,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import StatsPane from "./stats.jsx";
 
@@ -41,57 +42,7 @@ const ThinkingDots = () => {
 // extractFencedJson now lives in advisorBlocks.js so it can be unit-tested (this
 // file cannot be — JSX, and it reaches maplibre-gl through assets.js).
 
-// Pulls each contiguous "> "-quoted block out of the reply text, in the order
-// it appears. Used to recover a drafted message's text positionally from the
-// ```senddraft JSON (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx) instead
-// of trusting the model to retype it into a JSON string field a second time —
-// that used to be how this worked, and an unescaped quote or a real line
-// break in the letter was enough to make the fence invalid JSON and silently
-// drop the button with no trace. A short "> " line still needs a match group
-// that can be empty (a bare "> " paragraph break inside a longer quote).
-const extractBlockquotes = (text) => {
-    const quotes = [];
-    let current = null;
-    for (const line of text.split("\n")) {
-        const match = line.match(/^>\s?(.*)$/);
-        if (match) {
-            current = current ?? [];
-            current.push(match[1]);
-        } else if (current !== null) {
-            quotes.push(current.join("\n").trim());
-            current = null;
-        }
-    }
-    if (current !== null) quotes.push(current.join("\n").trim());
-    return quotes.filter(Boolean);
-};
-
 const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
-
-// Pairs each ```senddraft entry with the blockquote holding its actual text.
-// `sourceText` is the reply as it stood right before the senddraft fence was
-// stripped, so the drafted letters are the LAST blockquotes in it — the
-// directive puts the fence immediately after them. Aligning from the end
-// rather than from index 0 is what makes that safe: the advisor also quotes
-// the player (or its own earlier line) mid-reply, and pairing forwards would
-// hand a draft the wrong body — silently sending the wrong letter to a live
-// diplomacy thread, which is worse than dropping the button.
-const buildMessageDrafts = (draftsRaw, sourceText) => {
-    const allQuotes = extractBlockquotes(sourceText);
-    const blockquotes = allQuotes.length > draftsRaw.length
-        ? allQuotes.slice(-draftsRaw.length)
-        : allQuotes;
-    return draftsRaw
-        .map((draft, index) => {
-            const country = draft && String(draft.country ?? "").trim();
-            if (!country) return null;
-            // A "text" field is still honored if present — older saved messages
-            // have one, and an explicit value beats the positional guess.
-            const text = String(draft?.text ?? "").trim() || blockquotes[index] || "";
-            return text ? { country, text } : null;
-        })
-        .filter(Boolean);
-};
 
 const parseMessage = (rawText) => {
     const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
@@ -683,6 +634,66 @@ const TabButton = ({ icon, label, active, onClick }) => (
     </button>
 );
 
+// An advisor reply's prose, with each drafted letter's Send button rendered
+// immediately under the letter it would send.
+//
+// The buttons used to be collected at the bottom of the message. In a reply that
+// drafts one letter and then goes on to say three other things — or drafts two —
+// that put "Send message to France" a long way from the France letter, and with
+// two of them side by side there was nothing on the button to say which quote it
+// belonged to. Here the pairing is positional and visible.
+//
+// A reply with no drafts renders as ONE markdown block, exactly as before: the
+// split is only worth its cost when there is something to interleave.
+const AdvisorReplyBody = ({ text, drafts, sentDrafts, onSendDraft }) => {
+    if (!drafts || drafts.length === 0) {
+        return <Markdown className="advisor-markdown">{text}</Markdown>;
+    }
+
+    const byQuote = new Map();
+    drafts.forEach((draft, draftIndex) => {
+        if (!Number.isInteger(draft.quoteIndex)) return;
+        byQuote.set(draft.quoteIndex, [...(byQuote.get(draft.quoteIndex) ?? []), { draft, draftIndex }]);
+    });
+
+    const placed = new Set();
+    const button = ({ draft, draftIndex }) => {
+        placed.add(draftIndex);
+        return (
+            <AdvisorDraftSend
+            key={`draft-${draftIndex}`}
+            draft={draft}
+            sent={!!sentDrafts?.includes(draftIndex)}
+            onSend={() => onSendDraft(draftIndex, draft)}
+            />
+        );
+    };
+
+    const segments = splitAtBlockquotes(text);
+    const rendered = segments.map((segment, index) => (
+        <React.Fragment key={index}>
+        <Markdown className="advisor-markdown">{segment.content}</Markdown>
+        {segment.type === "quote" && (byQuote.get(segment.quoteIndex) ?? []).map(button)}
+        </React.Fragment>
+    ));
+
+    // A draft whose quote is not in the rendered text — an older saved message
+    // carrying an explicit "text" field, or a reply whose blockquote was lost to
+    // a stripped fence. Never drop the button; fall back to the old position.
+    const orphans = drafts
+        .map((draft, draftIndex) => ({ draft, draftIndex }))
+        .filter(({ draftIndex }) => !placed.has(draftIndex));
+
+    // gap matches the 0.5rem a paragraph carries, so the interleaved blocks
+    // still read as one continuous reply.
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {rendered}
+        {orphans.map(button)}
+        </div>
+    );
+};
+
 // No closure over component state, so hoisted rather than redefined on every
 // AdvisorPanel render (and needed at module scope by the memoized row below).
 const formatAdvisorDate = (dateStr) => {
@@ -727,25 +738,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             boxSizing: "border-box",
         }}>
         {msg.role === "user" ? text : (
-            <Markdown className="advisor-markdown">{text}</Markdown>
+            <AdvisorReplyBody
+            text={text}
+            drafts={messageDrafts}
+            sentDrafts={msg.sentDrafts}
+            onSendDraft={(draftIndex, draft) => onSendDraft(msgIndex, draftIndex, draft)}
+            />
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
-        {messageDrafts && messageDrafts.length > 0 && (
-            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            {messageDrafts.map((draft, draftIndex) => (
-                <AdvisorDraftSend
-                key={draftIndex}
-                draft={draft}
-                sent={!!msg.sentDrafts?.includes(draftIndex)}
-                onSend={() => onSendDraft(msgIndex, draftIndex, draft)}
-                />
-            ))}
-            </div>
-        )}
         {deployments && deployments.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {deployments.map((deployment, deployIndex) => (
