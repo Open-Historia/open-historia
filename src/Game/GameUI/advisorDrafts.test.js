@@ -2,7 +2,55 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMessageDrafts, extractBlockquotes, splitAtBlockquotes } from "./advisorDrafts.js";
+import { buildMessageDrafts, extractBlockquotes, splitAtBlockquotes, toPlainText } from "./advisorDrafts.js";
+
+// The diplomacy composer shows the player's own message verbatim, so markup
+// handed over with the letter arrives as literal asterisks.
+test("emphasis markers come off, words stay", () => {
+  assert.equal(toPlainText("**Prime Minister's Office, London**"), "Prime Minister's Office, London");
+  assert.equal(toPlainText("*Prime Minister,*"), "Prime Minister,");
+  assert.equal(toPlainText("***urgent***"), "urgent");
+  assert.equal(toPlainText("~~withdrawn~~ offer"), "withdrawn offer");
+  assert.equal(toPlainText("the `Annex II` clause"), "the Annex II clause");
+});
+
+test("headings, bullets and rules become plain prose", () => {
+  assert.equal(toPlainText("## Terms"), "Terms");
+  assert.equal(toPlainText("* a) Citizenship rights"), "- a) Citizenship rights");
+  assert.equal(toPlainText("+ second"), "- second");
+  assert.equal(toPlainText("- already plain"), "- already plain");
+  // The rule's line goes entirely, leaving the blank lines that surrounded it.
+  assert.equal(toPlainText("one\n\n---\n\ntwo"), "one\n\n\ntwo");
+});
+
+test("a link keeps its words and loses its syntax", () => {
+  assert.equal(toPlainText("see [the annex](https://example.invalid/a)"), "see the annex");
+});
+
+// Removing markup must never remove words, and a letter's shape is its meaning.
+test("paragraphs and line breaks survive", () => {
+  const letter = "Prime Minister,\n\nThank you for chairing the session.\n\nYours sincerely,\nPrime Minister of the United Kingdom";
+  assert.equal(toPlainText(letter), letter);
+});
+
+test("a markdown hard break's trailing spaces are removed", () => {
+  assert.equal(toPlainText("London  \n2 November 2032  "), "London\n2 November 2032");
+});
+
+test("ordinary punctuation is not mistaken for markup", () => {
+  assert.equal(toPlainText("a * b and 3 * 4"), "a * b and 3 * 4");
+  assert.equal(toPlainText("the snake_case_name field"), "the snake_case_name field");
+  assert.equal(toPlainText("US$10 m (e.g. 5-10 units)"), "US$10 m (e.g. 5-10 units)");
+});
+
+test("an escaped marker means the character itself", () => {
+  assert.equal(toPlainText("5 \\* 3"), "5 * 3");
+});
+
+test("plain input and nullish input are safe", () => {
+  assert.equal(toPlainText("Nothing to strip here."), "Nothing to strip here.");
+  assert.equal(toPlainText(null), "");
+});
 
 const quoteTypes = (segments) => segments.map((segment) => segment.type).join(",");
 

@@ -41,6 +41,49 @@ export const extractBlockquotes = (text) => {
 // the player (or its own earlier line) mid-reply, and pairing forwards would
 // hand a draft the wrong body — silently sending the wrong letter to a live
 // diplomacy thread, which is worse than dropping the button.
+// Markdown out, plain prose in.
+//
+// The advisor writes its letters in markdown, because everything else it says is
+// rendered as markdown. A diplomatic message is not: the player's own messages
+// are shown verbatim in the chat (only the leaders' replies go through the
+// renderer), so a letter handed over with its markup intact arrives as a wall of
+// **asterisks** — and it would read that way to the recipient too.
+//
+// Deliberately conservative: it removes MARKUP, never words. Emphasis markers,
+// heading hashes, link syntax and code ticks come off; the text, the line breaks
+// and the paragraph structure of the letter all survive untouched.
+export const toPlainText = (value) => String(value ?? "")
+    .split("\n")
+    .map((line) => line
+        // Heading hashes and any blockquote marker that survived extraction.
+        .replace(/^\s{0,3}#{1,6}\s+/, "")
+        .replace(/^\s*>\s?/, "")
+        // A markdown bullet becomes a plain one. "*" and "+" read as typos in a
+        // letter; "-" reads as a dash, which is what was meant.
+        .replace(/^(\s*)[*+]\s+/, "$1- ")
+        // Trailing whitespace is markdown's hard line break — invisible markup.
+        .replace(/\s+$/, ""))
+    // A horizontal rule is pure presentation and has no plain-text meaning.
+    .filter((line) => !/^\s{0,3}(\*{3,}|-{3,}|_{3,})\s*$/.test(line))
+    .join("\n")
+    // Links: keep the words, drop the syntax. Images lose their alt text marker
+    // the same way.
+    .replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1")
+    // Emphasis, longest marker first so ** is never mistaken for two *.
+    .replace(/\*\*\*(\S(?:[\s\S]*?\S)?)\*\*\*/g, "$1")
+    .replace(/\*\*(\S(?:[\s\S]*?\S)?)\*\*/g, "$1")
+    .replace(/(^|[^\w*])\*(\S(?:[\s\S]*?\S)?)\*(?![\w*])/g, "$1$2")
+    .replace(/~~(\S(?:[\s\S]*?\S)?)~~/g, "$1")
+    // Underscores only at word boundaries, so snake_case names survive.
+    .replace(/(^|[^\w_])__(\S(?:[\s\S]*?\S)?)__(?![\w_])/g, "$1$2")
+    .replace(/(^|[^\w_])_(\S(?:[\s\S]*?\S)?)_(?![\w_])/g, "$1$2")
+    // Code ticks, including the fence lines a model sometimes wraps a letter in.
+    .replace(/^```.*$/gm, "")
+    .replace(/`([^`]+)`/g, "$1")
+    // A backslash-escaped markdown character meant the character itself.
+    .replace(/\\([\\`*_{}[\]()#+\-.!~>])/g, "$1")
+    .trim();
+
 export const buildMessageDrafts = (draftsRaw, sourceText) => {
     const allQuotes = extractBlockquotes(sourceText);
     // Where the paired run starts within allQuotes — the same end-alignment the
@@ -56,7 +99,9 @@ export const buildMessageDrafts = (draftsRaw, sourceText) => {
             if (!country) return null;
             // A "text" field is still honored if present — older saved messages
             // have one, and an explicit value beats the positional guess.
-            const text = String(draft?.text ?? "").trim() || blockquotes[index] || "";
+            // Plain text: this string goes into the diplomacy composer, which
+            // renders the player's own messages verbatim.
+            const text = toPlainText(String(draft?.text ?? "").trim() || blockquotes[index] || "");
             return text ? { country, text, quoteIndex: offset + index } : null;
         })
         .filter(Boolean);
