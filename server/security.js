@@ -41,8 +41,8 @@ export const isLoopbackAddress = (addr) => {
 //
 // Nothing header-based can tell that apart from the real app. Keeping an
 // attacker on the network out is the job of WHERE THE SERVER LISTENS, not of
-// this function — see OH_HOST in server.js, which binds loopback-only unless the
-// player opts into LAN play. Returns { allowed, reason }.
+// this function — see the host resolution in server.js, which binds loopback
+// until the player turns on LAN sharing (Settings → Network, or OH_HOST). Returns { allowed, reason }.
 export const crossOriginWriteAllowed = ({ method, origin, host, remoteAddress, allowAll = false }) => {
   if (allowAll) return { allowed: true, reason: "override" };
   if (SAFE_METHODS.has(String(method || "").toUpperCase())) return { allowed: true, reason: "safe-method" };
