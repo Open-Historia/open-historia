@@ -71,7 +71,13 @@ export const deriveNextMilestone = (project) => {
   if (pending.length === 0) return null;
   const dated = pending.filter((entry) => asText(entry.date)).sort((a, b) => a.date.localeCompare(b.date));
   const next = dated[0] || pending[0];
-  return { title: asText(next.title), date: asText(next.date), note: asText(next.note) };
+  return {
+    title: asText(next.title),
+    date: asText(next.date),
+    note: asText(next.note),
+    repeat: asText(next.repeat),
+    completedCount: Number(next.completedCount) || 0,
+  };
 };
 
 // What the card badges. Every field here is a pure function of the project and
@@ -115,6 +121,92 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
     milestoneMissed: open && milestoneMissed,
     stale: open && (asText(project?.status) === "stalled" || roundsSinceUpdate >= STALE_ROUNDS),
   };
+};
+
+// ---- recurring milestones --------------------------------------------------
+//
+// A standing commitment that comes round again: an annual drill, a quarterly
+// review, a monthly patrol rotation. Marking one done does not retire it — the
+// engine rolls it to its next occurrence and sets it pending again, so the board
+// always shows when the next one is due instead of going blank the moment the
+// last one was ticked off.
+export const MILESTONE_REPEATS = ["weekly", "monthly", "quarterly", "annual", "biennial"];
+
+// What a model actually writes when it means "every year". Same reasoning as the
+// project-op aliases: reject the synonym and the feature silently does nothing.
+const REPEAT_ALIASES = {
+  yearly: "annual", annually: "annual", year: "annual", "every year": "annual", "1y": "annual",
+  biannual: "biennial", "two-yearly": "biennial", "2y": "biennial",
+  quarter: "quarterly", "3m": "quarterly",
+  month: "monthly", "1m": "monthly",
+  week: "weekly", "1w": "weekly",
+  daily: "", day: "",
+};
+
+// Months to advance per occurrence; weekly is handled as days instead.
+const REPEAT_MONTHS = { monthly: 1, quarterly: 3, annual: 12, biennial: 24 };
+
+export const normalizeMilestoneRepeat = (value) => {
+  const raw = asText(value).toLowerCase();
+  if (!raw) return "";
+  if (MILESTONE_REPEATS.includes(raw)) return raw;
+  return REPEAT_ALIASES[raw] ?? "";
+};
+
+const parseYmd = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(asText(value));
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+};
+
+const pad = (n) => String(n).padStart(2, "0");
+const daysInMonth = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+// Clamps the day into the target month, so an exercise on the 31st does not
+// vanish in February — it lands on the 28th (or 29th) and keeps its slot.
+const buildYmd = ({ year, month, day }) => {
+  const carry = Math.floor((month - 1) / 12);
+  const normYear = year + carry;
+  const normMonth = ((month - 1) % 12 + 12) % 12 + 1;
+  return `${normYear}-${pad(normMonth)}-${pad(Math.min(day, daysInMonth(normYear, normMonth)))}`;
+};
+
+// The next occurrence of a recurring date STRICTLY AFTER `notBefore`.
+//
+// Rolls from the milestone's own date rather than from today, so an annual drill
+// on 1 June stays on 1 June year after year instead of drifting to whenever it
+// happened to be marked off. A commitment that was missed for several cycles
+// advances as many times as it takes to get ahead of the clock — the board should
+// show the next one that is actually coming, not a date already behind us.
+export const advanceRecurringDate = (date, repeat, notBefore = "") => {
+  const cadence = normalizeMilestoneRepeat(repeat);
+  const start = parseYmd(date);
+  if (!cadence || !start) return "";
+
+  const floor = parseYmd(notBefore);
+  const floorKey = floor ? buildYmd(floor) : "";
+
+  let next = { ...start };
+  // Bounded: a weekly commitment missed for a decade is ~520 rolls, and the cap
+  // keeps a nonsense date (year 0001) from spinning here forever.
+  for (let guard = 0; guard < 600; guard += 1) {
+    next = cadence === "weekly"
+      ? (() => {
+        const stepped = new Date(Date.UTC(next.year, next.month - 1, next.day + 7));
+        return { year: stepped.getUTCFullYear(), month: stepped.getUTCMonth() + 1, day: stepped.getUTCDate() };
+      })()
+      : { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
+
+    const candidate = buildYmd(next);
+    if (!floorKey || candidate > floorKey) return candidate;
+    // Re-seed from the normalised value so month overflow accumulates correctly.
+    const reparsed = parseYmd(candidate);
+    if (!reparsed) return candidate;
+    next = { ...reparsed, day: start.day };
+  }
+  return buildYmd(next);
 };
 
 // ---- sorting ---------------------------------------------------------------

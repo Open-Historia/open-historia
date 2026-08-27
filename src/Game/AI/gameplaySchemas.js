@@ -427,8 +427,21 @@ const projectMilestoneSchema = {
     date: textSchema("In-game date the checkpoint is expected or was reached (YYYY-MM-DD)."),
     status: {
       type: "string",
-      description: "pending until reached; done once achieved; missed if its date passed unmet.",
+      description:
+        "pending until reached; done once achieved; missed if its date passed unmet. "
+        + "For a recurring checkpoint, send done each time it is performed - the engine "
+        + "rolls it to the next occurrence and sets it pending again by itself.",
       enum: ["pending", "done", "missed"],
+    },
+    repeat: {
+      type: "string",
+      description:
+        "Set for a standing commitment that comes round again - an annual drill, a "
+        + "quarterly review, a monthly rotation. Marking it done does NOT retire it: the "
+        + "engine advances the date by one interval (keeping the same day of the year) and "
+        + "sets it pending, so the board always shows the next one. Leave empty for a "
+        + "one-off checkpoint that happens once and is finished.",
+      enum: ["weekly", "monthly", "quarterly", "annual", "biennial"],
     },
     note: textSchema("Brief detail about the checkpoint."),
   },

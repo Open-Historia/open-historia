@@ -10,6 +10,7 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { busyProviderMessage, errorPayloadText, isBusyErrorPayload, providerErrorReplyMessage } from "./providerErrors.js";
 import {
     buildPromptContext,
     renderTemplate,
@@ -427,11 +428,62 @@ export async function readOpenAIStreamedResponse(response) {
 // with room to think — a model or endpoint problem, not a setting to toggle.
 // Deliberately does NOT suggest turning reasoning off: reasoning is supported,
 // and the answer is to give it room, which the retry already did.
+// Builds the error the advisor shows AND the debug report behind its Copy
+// button. The message alone was never enough to act on: the interesting part is
+// what the provider actually sent, which is otherwise discarded the moment the
+// stream ends.
+//
+// The API key and the endpoint host are never included — those come from
+// headers and settings, and nothing here reads them. What IS included is model
+// output: the tail of the chain of thought and a few raw stream frames, because
+// without them an unfamiliar gateway's shape cannot be diagnosed at all. That
+// output can quote the campaign, so the UI warns before it is shared.
+function aiFailureError(message, diagnostics) {
+    const error = new Error(message);
+    error.diagnostics = diagnostics;
+    return error;
+}
+
 function emptyReplyMessage(providerLabel) {
     return `${providerLabel} returned no answer, even after being given more room to think. `
         + `The model may be out of context, or the endpoint may have dropped the response. `
         + `Try sending a shorter message, or check the model is loaded and healthy.`;
 }
+
+// errorPayloadText / isBusyErrorPayload / busyProviderMessage /
+// providerErrorReplyMessage live in providerErrors.js (imported at the top of
+// this file) so they can be unit-tested: nothing in main.jsx can be, and
+// deciding whether a provider is merely busy is exactly the kind of string
+// handling that needs to be. See that file for why it exists at all.
+
+// The error every streaming path throws when the stream ended with no answer.
+// If the provider said why, say what it said; otherwise fall back to the
+// caller's own wording. Written once because all four streaming call sites had
+// the same blind spot — Anthropic's overloaded_error and Gemini's UNAVAILABLE
+// arrive exactly like the OpenAI-compatible one above, inside the stream.
+function streamFailureError(providerLabel, streamResult, { retried = false, fallbackMessage } = {}) {
+    const detail = errorPayloadText(streamResult.streamError);
+    const busy = isBusyErrorPayload(streamResult.streamError);
+    return aiFailureError(
+        streamResult.streamError
+            ? (busy ? busyProviderMessage(providerLabel, detail, retried) : providerErrorReplyMessage(providerLabel, detail))
+            : fallbackMessage,
+        {
+            provider: providerLabel,
+            mode: "streaming chat",
+            ...(streamResult.streamError ? { providerError: detail || "(no message)", retriedAfterOverload: retried } : {}),
+            finishReason: streamResult.finishReason || "(none reported)",
+            streamFrames: streamResult.frames,
+            sampleFrames: streamResult.sample,
+        },
+    );
+}
+
+// One retry, five seconds later. Long enough for a load spike to pass, short
+// enough that the player is not left watching the dots — and capped at one, so a
+// provider that is genuinely down fails with a real message and a Retry button
+// rather than stalling the turn.
+const OVERLOADED_RETRY_DELAY = 5000;
 
 async function streamTextSSE(response, extractDelta, onChunk) {
     const reader = response.body.getReader();
@@ -439,6 +491,15 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     let buffer = "";
     let full = "";
     let reasoning = "";
+    // Diagnostics for the failure case only. finish_reason is the single most
+    // useful field when a reply comes back empty ("length" means it hit the
+    // token cap mid-thought), and a sample of the raw frames is what makes an
+    // unfamiliar gateway's shape debuggable at all — we cannot guess the field
+    // names a new backend invents.
+    let finishReason = "";
+    let frames = 0;
+    let streamError = null;
+    const sample = [];
     try {
         for (;;) {
             const { done, value } = await reader.read();
@@ -452,6 +513,15 @@ async function streamTextSSE(response, extractDelta, onChunk) {
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
+                frames += 1;
+                // An error object in place of a delta: the provider gave up
+                // mid-stream. Keep the FIRST one — it is the cause; anything
+                // after it is fallout.
+                if (!streamError && json?.error) streamError = json.error;
+                if (json?.choices?.[0]?.finish_reason) finishReason = json.choices[0].finish_reason;
+                // Keep the first few frames and nothing more: enough to show the
+                // shape a gateway is using, small enough to paste into a report.
+                if (sample.length < 3) sample.push(payload.slice(0, 400));
                 // An extractor may return a plain string (content only) or
                 // { content, reasoning } — the providers that separate the two.
                 const delta = extractDelta(json);
@@ -469,7 +539,14 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
-    return { text: stripThinking(full), reasoning: reasoning.trim() };
+    return {
+        text: stripThinking(full),
+        reasoning: reasoning.trim(),
+        finishReason,
+        frames,
+        streamError,
+        sample,
+    };
 }
 
 // One incremental text chunk per provider's stream event. NOTE: joinGeminiParts
@@ -599,27 +676,40 @@ async function callGemini(systemPrompt, history, {
     // deliberately sends NO cap so long simulations are never truncated.
     if (onChunk && !tool) {
         const streamUrl = getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
-        const response = await fetch(streamUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: history,
-                generationConfig: {
-                    maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
-                    ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
-                },
-                ...customParams,
-            }),
-            signal,
-        });
-        if (!response.ok) {
-            const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+        // Two passes at most: the second only ever happens when the first came
+        // back with an overloaded/unavailable error INSIDE the stream, which
+        // arrives as an HTTP 200 and so never reaches the status-code retry.
+        for (let pass = 1; ; pass += 1) {
+            const response = await fetch(streamUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    system_instruction: { parts: [{ text: systemPrompt }] },
+                    contents: history,
+                    generationConfig: {
+                        maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
+                        ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+                    },
+                    ...customParams,
+                }),
+                signal,
+            });
+            if (!response.ok) {
+                const payload = await readErrorPayload(response);
+                throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+            }
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            if (pass === 1 && isBusyErrorPayload(streamResult.streamError) && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                console.warn(`[ai] Gemini reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Gemini", streamResult, {
+                retried: pass > 1,
+                fallbackMessage: "Gemini response did not contain text.",
+            });
         }
-        const { text: streamed } = await streamTextSSE(response, geminiStreamDelta, onChunk);
-        if (!streamed) throw new Error("Gemini response did not contain text.");
-        return streamed;
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -717,6 +807,9 @@ async function callOpenAIStyleChatCompletions({
     // model its own maximum, which is what the no-cap branch below already does.
     // It can only flip once, so the retry it drives can only ever add one pass.
     let liftedCapForReasoning = false;
+    // Same one-shot discipline as liftedCapForReasoning: it drives a retry that
+    // does not consume an attempt, so it must only ever be able to flip once.
+    let retriedAfterOverload = false;
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -845,9 +938,23 @@ async function callOpenAIStyleChatCompletions({
         // on the actual content-type so a gateway that ignored stream:true (plain
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed, reasoning: streamedReasoning } =
-                await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             if (streamed) return streamed;
+            // The provider said what went wrong inside the stream. Say THAT
+            // rather than the generic empty-reply guess below — and if it was
+            // simply busy, wait and ask again before troubling the player.
+            if (streamError) {
+                const detail = errorPayloadText(streamError);
+                const busy = isBusyErrorPayload(streamError);
+                if (busy && !retriedAfterOverload && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                    retriedAfterOverload = true;
+                    console.warn(`[ai] ${providerLabel} reported "${detail}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                    await sleep(OVERLOADED_RETRY_DELAY, signal);
+                    continue;
+                }
+                throw streamFailureError(providerLabel, streamResult, { retried: retriedAfterOverload });
+            }
             // The model thought and never answered: it spent the whole budget
             // reasoning. Give it room and ask once more, rather than erroring or
             // (worse) passing its chain of thought off as advice. Anthropic has
@@ -858,7 +965,20 @@ async function callOpenAIStyleChatCompletions({
                 console.warn(`[ai] ${providerLabel} returned only reasoning; retrying with the token cap lifted`);
                 continue;
             }
-            throw new Error(emptyReplyMessage(providerLabel));
+            throw aiFailureError(emptyReplyMessage(providerLabel), {
+                provider: providerLabel,
+                model,
+                mode: "streaming chat",
+                reasoningEnabled: wantsReasoning,
+                tokenCapLifted: liftedCapForReasoning,
+                requestedMaxTokens: Number(maxTokens) || 0,
+                finishReason: streamResult.finishReason || "(none reported)",
+                streamFrames: streamResult.frames,
+                answerChars: streamed.length,
+                reasoningChars: streamedReasoning.length,
+                reasoningTail: streamedReasoning.slice(-600),
+                sampleFrames: streamResult.sample,
+            });
         }
 
         // Local servers that honor stream:true answer as an event stream; ones
@@ -879,7 +999,34 @@ async function callOpenAIStyleChatCompletions({
         }
 
         if (!text) {
-            throw new Error(emptyReplyMessage(providerLabel));
+            // A gateway that ignored stream:true puts the same overload error in
+            // a 200 body instead of a frame — same cause, same handling.
+            const bufferedError = data?.error;
+            const bufferedDetail = errorPayloadText(bufferedError);
+            const bufferedBusy = isBusyErrorPayload(bufferedError);
+            if (bufferedBusy && !retriedAfterOverload && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] ${providerLabel} reported "${bufferedDetail}"; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            const bufferedMessage = bufferedError
+                ? (bufferedBusy ? busyProviderMessage(providerLabel, bufferedDetail, retriedAfterOverload)
+                    : providerErrorReplyMessage(providerLabel, bufferedDetail))
+                : emptyReplyMessage(providerLabel);
+            throw aiFailureError(bufferedMessage, {
+                provider: providerLabel,
+                model,
+                mode: "buffered chat",
+                ...(bufferedError ? { providerError: bufferedDetail || "(no message)", retriedAfterOverload } : {}),
+                reasoningEnabled: wantsReasoning,
+                requestedMaxTokens: Number(maxTokens) || 0,
+                finishReason: data?.choices?.[0]?.finish_reason || "(none reported)",
+                // The whole envelope, minus anything that could carry a key.
+                responseShape: Object.keys(data ?? {}),
+                messageKeys: Object.keys(data?.choices?.[0]?.message ?? {}),
+                rawResponse: JSON.stringify(data ?? {}).slice(0, 1500),
+            });
         }
 
         return text;
@@ -971,6 +1118,7 @@ async function callAnthropic(systemPrompt, history, {
     signal,
     tool,
 } = {}) {
+    let retriedAfterOverload = false;
     const settings = getProviderSettings("anthropic");
     const apiKey = settings.apiKey.trim();
 
@@ -1051,9 +1199,21 @@ async function callAnthropic(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
-            if (!streamed) throw new Error("Anthropic response did not contain text.");
-            return streamed;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            // overloaded_error arrives as an error EVENT on a 200 stream, so the
+            // status-code retry above never sees it. Wait and ask once more.
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Anthropic", streamResult, {
+                retried: retriedAfterOverload,
+                fallbackMessage: "Anthropic response did not contain text.",
+            });
         }
 
         const data = await response.json();
@@ -1081,6 +1241,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     signal,
     tool,
 } = {}) {
+    let retriedAfterOverload = false;
     const settings = getProviderSettings("anthropic-compatible");
     const endpoint = normalizeEndpoint(settings.endpoint);
 
@@ -1155,9 +1316,21 @@ async function callAnthropicCompatible(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const { text: streamed } = await streamTextSSE(response, anthropicStreamDelta, onChunk);
-            if (!streamed) throw new Error("Anthropic-compatible response did not contain text.");
-            return streamed;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            if (streamResult.text) return streamResult.text;
+            // overloaded_error arrives as an error EVENT on a 200 stream, so the
+            // status-code retry above never sees it. Wait and ask once more.
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic-compatible reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            throw streamFailureError("Anthropic-compatible", streamResult, {
+                retried: retriedAfterOverload,
+                fallbackMessage: "Anthropic-compatible response did not contain text.",
+            });
         }
 
         const data = await response.json();
@@ -1317,6 +1490,46 @@ Example:
 [{"type":"armor","name":"3rd Guards Division","composition":"2 tank regiments","strength":100,"lng":30.52,"lat":50.45}]
 \`\`\``;
 
+// What the advisor's prose is allowed to look like.
+//
+// Its replies are rendered as GitHub-flavoured markdown (src/Game/GameUI/markdown.jsx),
+// and until that renderer grew tables the model had no way to lay anything out —
+// so it improvised, and the player saw the improvisation raw: literal <br> tags
+// where it wanted a line break, and pipe-and-dash tables that never parsed. It
+// now has a real vocabulary, and this is where it is told what is in it and what
+// each part is FOR. Appended at call time for the same frozen-prompt reason as
+// the directives above: the campaigns that most need this already carry their
+// own copy of the advisor prompt.
+//
+// The two prohibitions matter more than the permissions. Raw HTML is not
+// rendered (deliberately — this is model output going into the DOM), so a tag is
+// always visible as text. And "> " blockquotes are load-bearing elsewhere:
+// ADVISOR_MESSAGE_DRAFT_DIRECTIVE reads the drafted letter back OUT of the
+// blockquote positionally, so a blockquote used for emphasis becomes a "send
+// this to France" button attached to something that was never a message.
+const ADVISOR_FORMATTING_DIRECTIVE = `[How Your Replies Are Displayed]
+Your prose is rendered as GitHub-flavoured markdown in a narrow side panel, so you can lay a reply out properly. Use that, but use it lightly: most replies are a few short paragraphs and need no structure at all, and a briefing that is all headings and tables reads like a form rather than like counsel.
+
+What you have:
+- **Bold** for the figure or name that matters, *italics* sparingly for emphasis, ~~strikethrough~~ for something now superseded, and \`inline code\` for an exact designation or codename.
+- ## Headings and ### subheadings to divide a genuinely long reply into sections. #### renders as a small label — use it for a one-line heading over a short block. A reply under about six lines needs no heading whatsoever.
+- Bullet lists with "- ", numbered lists with "1.", nested by indenting two spaces. Checklists with "- [ ] " for things not yet done and "- [x] " for things done.
+- A "---" rule between two major parts of a long briefing. At most one or two in a reply.
+- Tables, for genuinely tabular data ONLY — several items compared on the SAME few fields (fleets by strength and station, projects by progress and date, powers by stance). A table needs at least two columns AND at least two rows to be worth making. Keep it to two to four columns with short cells: the panel is narrow and a wide table has to be scrolled.
+
+When NOT to use a table: never to describe a single thing. One item's explanation is a paragraph, or a bolded label with prose after it — a two-column "Item / Detail" table with one row is worse than the sentence it replaces. If a cell would hold more than a short phrase, it is prose, not a table.
+
+Two hard rules:
+- No HTML, ever. Tags are not rendered, so the player sees the literal text "<br>". For a line break, press return and write the next line; for a gap between paragraphs, leave a blank line.
+- Never use a "> " blockquote for emphasis, for quoting the player back, or for a nice-looking pull quote. A blockquote means one thing in this conversation: the text of a diplomatic message the player can send, per [Drafting Messages to Send]. Anything else you put in one becomes a send button on something that was never a letter.
+
+Example of a table that earns its place:
+
+| Programme | Progress | Next milestone |
+|---|---|---|
+| Titan (Highlands) | 71% | Sea trials, Nov |
+| Hyperion Mk II | 34% | Core delivery, Jan |`;
+
 // Lets the advisor open and maintain the player's Projects & Operations board
 // from an ordinary chat reply, the same way the ```actions block manages the
 // action queue. Appended at call time for the same frozen-prompt reason as the
@@ -1344,7 +1557,11 @@ Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations]
 
 Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
 
-Not everything ends. For a standing effort with no planned completion — a permanent patrol, a continuous intelligence or security programme, an alliance kept in good repair — set "ongoing":true and leave targetDate out entirely. Never invent an end date for something that is simply meant to continue: the board flags a project overdue once its target date passes, so a made-up deadline turns a healthy standing operation into a false alarm. An ongoing effort still takes milestones, and can still be completed or cancelled later if it genuinely ends.
+Some checkpoints come round again. For a standing commitment — an annual drill, a quarterly review, a monthly rotation — add "repeat":"annual" (or weekly, monthly, quarterly, biennial) to the milestone. Then simply send it as done each time it is actually performed: the engine advances it to the next occurrence, keeping the same day of the year, and sets it pending again on its own. Do NOT create a fresh milestone for each year, and do NOT hand-write the next date — just mark the one that exists as done and it rolls. A checkpoint that happens once and is then finished takes no repeat.
+
+Not everything ends. For a standing effort with no planned completion — a permanent patrol, a continuous intelligence or security programme, an alliance kept in good repair — set "ongoing":true and leave targetDate out entirely. Never invent an end date for something that is simply meant to continue: the board flags a project overdue once its target date passes, so a made-up deadline turns a healthy standing operation into a false alarm. An ongoing effort still takes milestones, and can still be completed or cancelled later if it genuinely ends. Once set, it STAYS ongoing until you explicitly say otherwise — to give one a deadline later, send "ongoing":false together with the targetDate, or the date is ignored.
+
+When you mention a project that is already on the board, send only the fields that actually changed. Everything you leave out is kept as it was, so you never need to restate a project in full just to note that it progressed — and a brief mention can never quietly reset its status, progress or settings.
 
 The block must be STRICT JSON, and the one thing that reliably breaks it is a double quote inside a value: write (the Titan-class megalith), not (the "Titan-class" megalith). Use no quotation marks inside any summary, name or note — and no line breaks inside a value either. Straight double quotes around keys and values only; never curly quotes.
 
@@ -1384,7 +1601,7 @@ async function buildAdvisorSystemPrompt() {
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
     const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
-    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}`;
+    return `${rendered}\n\n${buildAdvisorActionsDirective(variables.plannedActionsWithIds)}\n\n${ADVISOR_MESSAGE_DRAFT_DIRECTIVE}\n\n${ADVISOR_DEPLOY_DIRECTIVE}\n\n${buildAdvisorProjectsDirective(variables.projectsSummary)}\n\n${buildAdvisorForcesDirective(variables.forcePosture)}\n\n${ADVISOR_FORMATTING_DIRECTIVE}`;
 }
 
 export async function buildDiplomaticSystemPrompt(countries, playerCountry) {

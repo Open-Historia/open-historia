@@ -1,6 +1,5 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
@@ -8,6 +7,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -181,6 +181,129 @@ const applyAdvisorActions = async (proposal) => {
     return items;
 };
 
+// Copy-to-clipboard, with the execCommand fallback still in place.
+//
+// The desktop build has no developer tools bound (no F12, no menu entry), so a
+// player who hits a provider error has no way to get at what actually happened.
+// navigator.clipboard needs a secure context, which the packaged app has but a
+// plain-http LAN host does not — hence the textarea fallback rather than a
+// silent failure.
+const copyToClipboard = async (text) => {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch { /* fall through to the legacy path */ }
+    try {
+        const scratch = document.createElement("textarea");
+        scratch.value = text;
+        scratch.setAttribute("readonly", "");
+        scratch.style.position = "fixed";
+        scratch.style.opacity = "0";
+        document.body.appendChild(scratch);
+        scratch.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(scratch);
+        return ok;
+    } catch {
+        return false;
+    }
+};
+
+const CopyButton = ({ text, label = "Copy for a bug report", tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
+    const [state, setState] = useState("idle");
+    return (
+        <button
+        type="button"
+        onClick={async () => {
+            setState(await copyToClipboard(text) ? "copied" : "failed");
+            setTimeout(() => setState("idle"), 2000);
+        }}
+        style={{ background: "none", border: `1px solid ${tone}`, borderRadius: "6px", color, cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}
+        >
+        {state === "copied" ? "✓ Copied" : state === "failed" ? "Copy failed — select the text below" : label}
+        </button>
+    );
+};
+
+const RetryIcon = () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+    </svg>
+);
+
+// The pasteable report.
+//
+// Contains no API key and no endpoint host. It DOES contain model output — the
+// tail of the reasoning and a few raw stream frames — because that is the part
+// that actually explains a failure, and it can quote the campaign. The UI says
+// so next to the button rather than letting someone paste it somewhere public
+// on the assumption that it is inert.
+const formatErrorReport = (message, diagnostics) => {
+    const lines = ["Open Historia — advisor error", "", `Message: ${message}`];
+    if (diagnostics && typeof diagnostics === "object") {
+        lines.push("");
+        for (const [key, value] of Object.entries(diagnostics)) {
+            if (value === "" || value === null || value === undefined) continue;
+            if (Array.isArray(value)) {
+                if (value.length === 0) continue;
+                lines.push(`${key}:`);
+                for (const entry of value) lines.push(`  ${String(entry)}`);
+                continue;
+            }
+            const text = String(value);
+            lines.push(text.includes("\n") ? `${key}:\n${text}` : `${key}: ${text}`);
+        }
+    }
+    return lines.join("\n");
+};
+
+// Shown under an advisor error. The message says what went wrong in plain
+// English; this is the part that says WHY, in enough detail to act on.
+//
+// The Retry button is offered on the NEWEST error only (see the caller). Most
+// advisor failures are the transport or an overloaded provider rather than
+// anything about the question, and the transport already waits and retries once
+// on its own before it gets here — so by this point the useful thing is a way to
+// ask again without retyping, not more advice.
+const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
+    const [open, setOpen] = useState(false);
+    const report = formatErrorReport(message, diagnostics);
+    const hasDetail = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
+
+    return (
+        <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+        {onRetry && (
+            <button type="button" onClick={onRetry} disabled={retrying}
+            style={{ alignItems: "center", background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "6px", color: "rgba(254,202,202,0.95)", cursor: retrying ? "default" : "pointer", display: "flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", opacity: retrying ? 0.6 : 1, padding: "0.2rem 0.55rem" }}>
+            <RetryIcon /> {retrying ? "Retrying…" : "Retry"}
+            </button>
+        )}
+        <CopyButton text={report} tone="rgba(239,68,68,0.45)" color="rgba(254,202,202,0.95)" />
+        {hasDetail && (
+            <button type="button" onClick={() => setOpen((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            {open ? "Hide details" : "Show details"}
+            </button>
+        )}
+        </div>
+        {open && (
+            <>
+            <p style={{ margin: "0.4rem 0 0", fontSize: "0.64rem", lineHeight: 1.4, color: "rgba(255,255,255,0.35)" }}>
+            No API key or endpoint is included. The model&apos;s own output is, so this may quote your campaign.
+            </p>
+            <pre data-no-translate style={{ margin: "0.35rem 0 0", padding: "0.5rem", background: "rgba(0,0,0,0.35)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", fontSize: "0.64rem", lineHeight: 1.45, maxHeight: "12rem", overflow: "auto", userSelect: "text", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {report}
+            </pre>
+            </>
+        )}
+        </div>
+    );
+};
+
 // Applies the advisor's ```projects proposal to the real board (world.projects,
 // the same field events write through impacts.projectOps) and reports what
 // actually happened, so the confirmation card shows real outcomes rather than
@@ -292,6 +415,13 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
             <button type="button" onClick={() => setShowExcerpt((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
             {showExcerpt ? "Hide" : "Show"} what broke
             </button>
+        )}
+        {excerpt && (
+            <CopyButton
+            text={formatErrorReport("projects block could not be applied", { detail, excerpt })}
+            tone="rgba(245,158,11,0.5)"
+            color="rgba(253,230,138,0.95)"
+            />
         )}
         </div>
         {excerpt && showExcerpt && (
@@ -573,7 +703,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment }) => {
     const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
         : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
@@ -597,12 +727,13 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             boxSizing: "border-box",
         }}>
         {msg.role === "user" ? text : (
-            <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
+            <Markdown className="advisor-markdown">{text}</Markdown>
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
+        {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
         {messageDrafts && messageDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {messageDrafts.map((draft, draftIndex) => (
@@ -640,7 +771,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -648,8 +779,12 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
         </p>
     )}
 
+    {/* The retry is offered on the LAST message only, and only when it is the
+        error: retrying anything older would re-ask a question the conversation
+        has already moved past. */}
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment}
+        onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     ))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -678,6 +813,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     // "while I'm reading this one", not permanent.
     const messagesContainerRef      = useRef(null);
     const shouldAutoScrollRef       = useRef(true);
+    // The transcript and the current runTurn, readable from a stable callback
+    // (handleRetryTurn) without making that callback depend on either.
+    const messagesRef               = useRef(messages);
+    const runTurnRef                = useRef(null);
     const handleMessagesScroll = React.useCallback(() => {
         const el = messagesContainerRef.current;
         if (!el) return;
@@ -768,8 +907,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         resizeTextarea();
     }, [input, resizeTextarea]);
 
-    const handleSend = async () => {
-        const text = input.trim();
+    // One turn with the advisor, from either entry point: the composer
+    // (handleSend) or the Retry button on a failed turn (handleRetryTurn).
+    //
+    // `replaceTrailingError` is what makes a retry a retry rather than a second
+    // question: the failed attempt's error bubble is dropped and the player's
+    // original question stays where it is, so the transcript reads as one
+    // exchange. sendMessage pops its own history entry when a call throws (see
+    // main.jsx), so the model never sees the question twice either.
+    const runTurn = async (text, { replaceTrailingError = false } = {}) => {
         if (!text || isLoading) return;
 
         const { gameDate } = await readJson(JSON_URLS.game, {
@@ -777,13 +923,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             force: true,
         }).catch(() => ({ gameDate: null }));
 
-        const userMessage = { role: "user", text, time: gameDate };
-        setInput("");
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
         // reply they scrolled away from, not the whole session.
         shouldAutoScrollRef.current = true;
-        setMessages(prev => [...prev, userMessage]);
+        setMessages(prev => (replaceTrailingError
+            ? (prev[prev.length - 1]?.role === "error" ? prev.slice(0, -1) : prev.slice())
+            : [...prev, { role: "user", text, time: gameDate }]));
         setIsLoading(true);
 
         // Streaming: the ThinkingDots show until the first token, then a live
@@ -862,7 +1008,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
-                const updated = [...base, { role: "error", text: err.message, time: gameDate }];
+                // Keep whatever the transport managed to learn about the failure,
+                // so the Copy button still works after a reload.
+                const updated = [...base, {
+                    role: "error",
+                    text: err.message,
+                    time: gameDate,
+                    ...(err?.diagnostics ? { diagnostics: err.diagnostics } : {}),
+                }];
                 saveMessages(updated);
                 return updated;
             });
@@ -870,6 +1023,27 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             setIsLoading(false);
         }
     };
+
+    const handleSend = () => {
+        const text = input.trim();
+        if (!text || isLoading) return;
+        setInput("");
+        return runTurn(text);
+    };
+
+    // Asks the last question again. Reads the transcript through a ref and calls
+    // runTurn through one, so this stays a stable reference across renders —
+    // AdvisorMessageList is memoized on its props, and a callback that changed
+    // identity every message would re-render the whole history each time (see
+    // AdvisorMessageRow's comment).
+    const handleRetryTurn = React.useCallback(() => {
+        const lastQuestion = [...messagesRef.current].reverse().find((msg) => msg.role === "user")?.text;
+        if (!lastQuestion) return;
+        runTurnRef.current?.(lastQuestion, { replaceTrailingError: true });
+    }, []);
+
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+    useEffect(() => { runTurnRef.current = runTurn; });
 
     const handleKeyDown = (e) => {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -1035,6 +1209,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         onOpenActions={onOpenActions}
         onOpenProjects={onOpenProjects}
         onRetryProjects={handleRetryProjects}
+        onRetry={handleRetryTurn}
+        retrying={isLoading}
         onSendDraft={handleSendDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
@@ -1068,31 +1244,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         </div>
         </>
     );
-};
-
-const markdownStyles = `
-.advisor-markdown p { margin: 0 0 0.5rem 0; }
-.advisor-markdown p:last-child { margin-bottom: 0; }
-.advisor-markdown ul, .advisor-markdown ol { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; }
-.advisor-markdown li { margin-bottom: 0.2rem; }
-.advisor-markdown strong { color: rgba(255,255,255,0.95); }
-.advisor-markdown em { color: rgba(255,255,255,0.75); }
-.advisor-markdown code { background: rgba(0,0,0,0.3); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; }
-.advisor-markdown pre { background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
-.advisor-markdown h1, .advisor-markdown h2, .advisor-markdown h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; color: rgba(255,255,255,0.9); }
-.advisor-markdown blockquote { border-left: 2px solid rgba(59,130,246,0.6); margin: 0.5rem 0; padding-left: 0.75rem; color: rgba(255,255,255,0.6); }
-`;
-
-const MarkdownStyleInjector = () => {
-    useEffect(() => {
-        if (!document.getElementById("advisor-md-styles")) {
-            const style = document.createElement("style");
-            style.id = "advisor-md-styles";
-            style.textContent = markdownStyles;
-            document.head.appendChild(style);
-        }
-    }, []);
-    return null;
 };
 
 export { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel };

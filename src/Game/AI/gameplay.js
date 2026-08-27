@@ -1,6 +1,7 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
@@ -219,137 +220,7 @@ const sentenceCase = (value) => {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 };
 
-const maybeJsonParse = (value) => {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-};
-
-// Parse, and when that fails, repair the JSON slips small local models make
-// most: trailing commas before } or ], and curly "smart" quotes as string
-// delimiters. Repairs are only ever attempted AFTER a strict parse failed, so
-// well-formed output is never touched.
-const lenientJsonParse = (value) => {
-  const direct = maybeJsonParse(value);
-  if (direct) return direct;
-  const repaired = value
-    .replace(/[“”]/g, '"')
-    .replace(/,\s*([}\]])/g, "$1");
-  return maybeJsonParse(repaired);
-};
-
-// Every balanced top-level {...} or [...] block in the text, string-aware, in
-// order of appearance. A greedy first-{-to-last-} regex dies when the model
-// writes prose containing a brace after its JSON, or emits two objects; walking
-// candidates and parsing each one survives both.
-const balancedJsonCandidates = (text) => {
-  const candidates = [];
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let opener = "";
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (start === -1) {
-      if (ch === "{" || ch === "[") {
-        start = i;
-        depth = 1;
-        opener = ch;
-        inString = false;
-        escaped = false;
-      }
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-    } else if (ch === "\\") {
-      escaped = inString;
-    } else if (ch === '"') {
-      inString = !inString;
-    } else if (!inString) {
-      if (ch === "{" || ch === "[") depth += 1;
-      else if (ch === "}" || ch === "]") {
-        depth -= 1;
-        if (depth === 0) {
-          candidates.push(text.slice(start, i + 1));
-          start = -1;
-        }
-      }
-    }
-  }
-  // Objects first: the payload is an object, and a stray inline array (e.g. in
-  // the model's commentary) must not shadow it.
-  return candidates.sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
-};
-
-// Some openai-compatible endpoints/models (seen with nvidia/nemotron models)
-// are asked to call the tool (tool_choice: "required") but don't actually
-// populate tool_calls — they answer with a normal text message that just
-// writes out what a tool call would look like, e.g.
-// `[{ "name": "submit_jump_result", "parameters": { events: [...], ... } }]`,
-// sometimes wrapped in an extra array. response.toolInput is null in that
-// case (there is no real tool_calls entry to extract), and extractJsonPayload
-// happily parses the text into that wrapper shape rather than the bare
-// arguments object the schema expects, so it fails validation (or, if the
-// wrapping breaks strict JSON parsing, fails to parse at all) and the whole
-// turn is discarded to the canned fallback. Unwrap it back to the actual
-// arguments object so the real content underneath still gets applied.
-const unwrapMimickedToolCall = (value, toolName) => {
-  let current = value;
-  for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
-    current = current[0];
-  }
-  if (!current || typeof current !== "object" || Array.isArray(current)) return value;
-  const name = normalizeString(current.name);
-  if (toolName && name && name !== toolName) return value;
-  // getGameplayTool returns null for tasks with no registered tool, so a name
-  // match can't always be demanded. When there is nothing to check against,
-  // require the wrapper to be NOTHING BUT an envelope — a real payload that
-  // happened to carry `name`/`parameters` would bring its own other fields
-  // along, and unwrapping it would throw the rest of the turn away.
-  if (!toolName || !name) {
-    const envelopeKeys = new Set(["name", "parameters", "arguments", "input"]);
-    if (Object.keys(current).some((key) => !envelopeKeys.has(key))) return value;
-  }
-  let args = current.parameters ?? current.arguments ?? current.input;
-  // The openai wire format these models are imitating carries `arguments` as a
-  // JSON *string*, not an object — which is exactly what a model reproducing
-  // that format from memory tends to write, so it is the likeliest shape here.
-  if (typeof args === "string") {
-    try { args = JSON.parse(args); } catch { return value; }
-  }
-  if (!args || typeof args !== "object" || Array.isArray(args)) return value;
-  return args;
-};
-
-export const extractJsonPayload = (rawText) => {
-  // Reasoning models (and several Ollama chat templates) prepend a think block
-  // the strict parser chokes on; the answer follows it.
-  const text = rawText
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^[\s\S]*?<\/think>/i, "")
-    .trim();
-
-  const direct = lenientJsonParse(text);
-  if (direct) return direct;
-
-  // Any fenced block, not just ```json — small models label fences ```JSON,
-  // ```javascript, or not at all.
-  for (const fence of text.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)) {
-    const parsed = fence[1] ? lenientJsonParse(fence[1].trim()) : null;
-    if (parsed && typeof parsed === "object") return parsed;
-  }
-
-  for (const candidate of balancedJsonCandidates(text)) {
-    const parsed = lenientJsonParse(candidate);
-    if (parsed && typeof parsed === "object") return parsed;
-  }
-
-  return null;
-};
+export { extractJsonPayload } from "./jsonSalvage.js";
 
 const loadPromptCatalog = async ({ force = false } = {}) =>
   normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
@@ -2691,15 +2562,19 @@ const IDLE_PULSE_CHANCE = 1 / 4;
 // unit may be re-postured or re-ordered, but nothing marches.
 const IDLE_PULSE_ELAPSED_DAYS = 0;
 let idleDiplomacyInFlight = false;
+// Narrower than idleDiplomacyInFlight above: true only for the half of a pulse
+// that actually asks whether a polity would send a note (allowChat). A
+// movement-only pulse sets the in-flight guard but not this.
+let idleChatPollInFlight = false;
 
-// Whether a country reaching out unprompted (idle diplomacy) or a broader
-// simulation (jump/auto-jump, a game-master command) that could itself emit
-// createdChats/diplomaticOutreach is currently in flight. Not a promise a chat
-// IS coming — most jumps don't create one — just "the AI is doing something
-// that could produce a new one right now". Polled by the chat UI (chat.jsx) to
-// show a "generating" state instead of leaving the badge looking idle while a
-// note is actually being drafted.
-export const isChatGenerationLikely = () => idleDiplomacyInFlight || isSimulationBusy();
+// Whether the model is right now being asked whether a country would reach out
+// unprompted. Deliberately NOT true for a jump/auto-jump, a game-master command,
+// or an advisor exchange: those take the same busy lock and MIGHT end up emitting
+// createdChats/diplomaticOutreach, but the indicator used to fire on every one of
+// them, so simulating a turn or talking to the advisor lit up the chat button for
+// the whole run. "Might produce a chat eventually" is not worth an indicator —
+// only a poll whose entire purpose is that question gets one.
+export const isChatGenerationLikely = () => idleChatPollInFlight;
 
 // Apply a pulse's unit ops to the LIVE world. Routed through
 // applyEventImpactsToWorld with a synthetic event rather than a hand-rolled
@@ -2767,6 +2642,7 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
   // while the movement half runs on every pulse.
   const allowChat = roll < Math.min(chance, IDLE_DIPLOMACY_CHANCE);
   idleDiplomacyInFlight = true;
+  idleChatPollInFlight = allowChat;
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
@@ -2835,6 +2711,7 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
     return null; // silence is always the safe outcome
   } finally {
     idleDiplomacyInFlight = false;
+    idleChatPollInFlight = false;
   }
 };
 
