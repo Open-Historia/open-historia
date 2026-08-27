@@ -320,7 +320,7 @@ const Main = ({
       />
       {isSettingsOpen && (
         <SettingsMenu
-          discordUrl="https://discord.gg/C3AVwHacZ4"
+          discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
           githubUrl="https://github.com/Open-Historia/open-historia"
           onOpenCheats={() => {

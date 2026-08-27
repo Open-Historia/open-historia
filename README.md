@@ -9,7 +9,7 @@
 
 <div align="center">
   <!-- Discord -->
-  <a href="https://discord.gg/C3AVwHacZ4">
+  <a href="https://discord.gg/QaqAK7fQAg">
     <img src="https://img.shields.io/badge/discord-join-5865F2.svg?style=flat-square&logo=discord&logoColor=white"
       alt="Discord" />
   </a>
