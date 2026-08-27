@@ -12,7 +12,7 @@ what upstream packages.
 | | Official app | This fork's beta |
 | --- | --- | --- |
 | Installer | `Open-Historia-Setup.exe` | `Open-Historia-Beta-Setup.exe` |
-| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia (Beta)` |
+| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia Beta` |
 | Start Menu | Open Historia | Open Historia (Beta) |
 | Icon & in-app logo | the compass | the compass with a purple BETA banner |
 | Window title | Open Historia | Open Historia (Beta) — fork build |

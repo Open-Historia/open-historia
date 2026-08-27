@@ -30,9 +30,12 @@ const CHANNEL = (() => {
   }
 })();
 const IS_BETA = CHANNEL === "beta";
-// One name for the beta, used for its Chromium profile, its window title and the
-// shared-library lock, so all three agree with the Start Menu entry the installer
-// creates (electron-builder.beta.yml `productName`).
+// One name for the beta: its Chromium profile, its window title and the
+// shared-library lock, matching the Start Menu shortcut the installer creates
+// (electron-builder.beta.yml `nsis.shortcutName`). The installer's `productName`
+// drops the parentheses because they would push the install folder onto a fallback
+// name — see the comment there; the two are allowed to differ because nothing
+// derives one from the other.
 const BETA_APP_NAME = "Open Historia (Beta)";
 
 // Electron derives userData — the Chromium profile, and with it the

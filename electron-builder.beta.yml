@@ -23,7 +23,14 @@
 # gets its own userData from its own productName, but electron/main.cjs points
 # the save library at the stable app's folder on purpose — see SHARED_LIBRARY_NAME.
 appId: io.github.seventhdread.openhistoria.beta
-productName: Open Historia (Beta)
+# Deliberately WITHOUT parentheses. This name becomes the install folder, and
+# electron-builder only uses productName for that when it matches its allow-list
+# /^[-_+0-9a-zA-Z .]+$/ (targetUtil.ts, getWindowsInstallationDirName). Parentheses
+# fail it, and the fallback is package.json's `name` — which would put the beta in
+# …\Programs\open-historia: no mention of the beta, and a name a future upstream
+# change could plausibly want too. The parenthesised name still reaches the player
+# through nsis.shortcutName and the window title.
+productName: Open Historia Beta
 
 files:
   - dist/**
