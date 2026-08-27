@@ -95,7 +95,7 @@ const css = `
 .oh-btn.primary:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
 .oh-foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin-top:20px;font-family:var(--display);font-size:.78rem;letter-spacing:.05em;color:var(--sepia2)}
 .oh-foot a{border:0;color:var(--sepia2)}.oh-foot a:hover{color:var(--ink)}
-.oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}.oh-demo{margin:14px 0 0;padding:11px 13px;border:1px solid var(--line2);border-left:3px solid var(--bronze);border-radius:8px;background:rgba(154,107,47,.07);text-align:left}.oh-demo b{color:var(--ink)}.oh-demo-t{color:var(--ink);font-size:.92rem;font-weight:600;margin-bottom:3px}.oh-demo-b{color:var(--sepia);font-size:.85rem;line-height:1.45}.oh-demo-b a{color:var(--bronze);text-decoration:underline}
+.oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}.oh-demo{margin:14px 0 0;padding:11px 13px;border:1px solid var(--line2);border-left:3px solid var(--bronze);border-radius:8px;background:rgba(154,107,47,.07);text-align:left}.oh-demo b{color:var(--ink)}.oh-demo-t{color:var(--ink);font-size:.92rem;font-weight:600;margin-bottom:3px}.oh-demo-b{color:var(--sepia);font-size:.85rem;line-height:1.45}.oh-demo-b a{color:var(--bronze);text-decoration:underline}.oh-modal{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(26,18,8,.66);backdrop-filter:blur(3px)}.oh-modal-box{max-width:520px;width:100%;background:var(--marble);border:1px solid var(--line2);border-top:4px solid var(--bronze);border-radius:12px;padding:24px 24px 20px;box-shadow:var(--shadow);text-align:left}.oh-modal-h{color:var(--ink);font-size:1.28rem;font-weight:700;margin:0 0 10px}.oh-modal-p{color:var(--sepia);font-size:.95rem;line-height:1.55;margin:0 0 11px}.oh-modal-p b{color:var(--ink)}.oh-modal-p a{color:var(--bronze);text-decoration:underline}.oh-modal-acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.oh-modal-acts .oh-btn{flex:1 1 190px;margin:0;width:auto;display:flex;align-items:center;justify-content:center;text-align:center;text-decoration:none}
 `;
 
 const el = (tag, props = {}, ...kids) => { const n = document.createElement(tag); Object.assign(n, props); for (const k of kids) if (k != null) n.append(k); return n; };
@@ -148,6 +148,57 @@ const renderConnection = (c) => {
 
 const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } overlay?.remove(); overlay = null; };
 
+// Shown in front of the Enter button rather than beside it: the same words on
+// the card were next to a large primary button and went unread. Dismissing it is
+// the only way through, and it is remembered for the tab session so a player who
+// has read it is not asked again.
+const DEMO_ACK_KEY = "oh:demo-ack";
+const demoAcknowledged = () => {
+  try { return sessionStorage.getItem(DEMO_ACK_KEY) === "1"; } catch { return false; }
+};
+
+const showDemoNotice = (onContinue) => {
+  if (demoAcknowledged()) return onContinue();
+
+  const close = () => {
+    try { sessionStorage.setItem(DEMO_ACK_KEY, "1"); } catch { /* private mode */ }
+    document.removeEventListener("keydown", onKey);
+    modal.remove();
+    onContinue();
+  };
+  // Esc continues rather than cancelling: there is nothing to cancel, and a
+  // dialog that traps someone who pressed Esc is worse than one that lets go.
+  const onKey = (event) => { if (event.key === "Escape") close(); };
+
+  const go = el("button", { className: "oh-btn primary", textContent: "Play the demo anyway", onclick: close });
+  const modal = el("div", { className: "oh-modal" },
+    el("div", { className: "oh-modal-box" },
+      el("h2", { className: "oh-modal-h", id: "oh-demo-h", textContent: "This is a demo of the game" }),
+      el("p", { className: "oh-modal-p" },
+        "Open Historia is meant to be played in the ",
+        el("b", { textContent: "desktop app" }),
+        ", which runs the world map from your own machine.",
+      ),
+      el("p", { className: "oh-modal-p" },
+        "The browser version streams every map tile over the network, so expect ",
+        el("b", { textContent: "noticeable lag" }),
+        " — especially when zooming or panning. It is here to try the game, not to be the best way to play it.",
+      ),
+      el("p", { className: "oh-modal-p", textContent: "Either way, your games are saved on this device." }),
+      el("div", { className: "oh-modal-acts" },
+        el("a", { className: "oh-btn ghost", href: "https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable", target: "_blank", rel: "noopener", textContent: "Get the desktop app" }),
+        go,
+      ),
+    ),
+  );
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "oh-demo-h");
+  document.addEventListener("keydown", onKey);
+  document.body.append(modal);
+  go.focus();
+};
+
 export const showHomePage = () => {
   if (typeof document === "undefined" || document.getElementById("oh-home-root")) return;
   if (!document.getElementById("oh-home-fonts")) {
@@ -159,7 +210,7 @@ export const showHomePage = () => {
   renderConnection(null); // initial "finding…" state
   // Starts disabled: renderConnection enables it once a node (or the origin
   // fallback) is settled, so nobody can enter a half-connected session.
-  const play = el("button", { className: "oh-btn primary", textContent: "⚔  Enter Open Historia", onclick: enter });
+  const play = el("button", { className: "oh-btn primary", textContent: "⚔  Enter Open Historia", onclick: () => showDemoNotice(enter) });
   play.disabled = true;
   playBtn = play;
   const foot = el("div", { className: "oh-foot" },
@@ -175,16 +226,6 @@ export const showHomePage = () => {
     el("div", { className: "oh-rule" }),
     connPanel,
     el("div", { className: "oh-rule" }),
-    el("div", { className: "oh-demo" },
-      el("div", { className: "oh-demo-t", textContent: "This is a demo of the game" }),
-      el("div", { className: "oh-demo-b" },
-        "Open Historia is meant to be played in the ",
-        el("a", { href: "https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable", target: "_blank", rel: "noopener", textContent: "desktop app" }),
-        ", which runs the world map from your own machine. The browser version streams every map tile over the network, so expect ",
-        el("b", { textContent: "noticeable lag" }),
-        " — especially when zooming or panning. Your games are saved either way.",
-      ),
-    ),
     play,
     el("div", { className: "oh-trust", textContent: "Trust is in the checksum and the project signature — never in the node itself." }),
     foot,
