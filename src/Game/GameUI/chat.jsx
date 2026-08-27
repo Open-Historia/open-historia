@@ -476,7 +476,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         const el = composerRef.current;
         if (!el) return;
         el.style.height = "auto";
-        el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+        // scrollHeight measures the PADDING box, but styles.css sets
+        // `* { box-sizing: border-box }`, so a height of scrollHeight leaves the
+        // content 2px short of its own 1px borders. The box then overflows by
+        // exactly that, and overflow-y:auto shows a scrollbar on a single line of
+        // text. Add the borders back and the bar appears only when it is real.
+        const borders = el.offsetHeight - el.clientHeight;
+        el.style.height = `${Math.min(el.scrollHeight + borders, COMPOSER_MAX_HEIGHT)}px`;
     }, []);
 
     // A letter the advisor drafted, arriving in the composer for the player to
@@ -759,7 +765,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 onChange={e => setPlayerInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
                 onInput={fitComposer}
-                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", transition: "border-color 0.2s" }}
+                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
                 onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
                 onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                 />
