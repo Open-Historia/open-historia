@@ -30,6 +30,10 @@ const CHANNEL = (() => {
   }
 })();
 const IS_BETA = CHANNEL === "beta";
+// One name for the beta, used for its Chromium profile, its window title and the
+// shared-library lock, so all three agree with the Start Menu entry the installer
+// creates (electron-builder.beta.yml `productName`).
+const BETA_APP_NAME = "Open Historia (Beta)";
 
 // Electron derives userData — the Chromium profile, and with it the
 // single-instance lock — from the app name, which for both builds is package.json's
@@ -41,7 +45,7 @@ const IS_BETA = CHANNEL === "beta";
 //
 // This moves ONLY Chromium's own state. Saves, scenarios, settings and the map
 // live under USER_ROOT below, which is deliberately the stable app's folder.
-if (IS_BETA) app.setName("Open Historia Beta");
+if (IS_BETA) app.setName(BETA_APP_NAME);
 
 // Where a beta build looks for ITS updates and sends ITS feedback. Pointing these
 // at the fork is the whole reason they are not left at the defaults in
@@ -81,7 +85,7 @@ const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
 // loses a turn. Electron's requestSingleInstanceLock is per-build (it is keyed on
 // the app's own userData) and so cannot see the other install at all.
 const LOCK_FILE = path.join(USER_ROOT, "library-lock.json");
-const LOCK_LABEL = IS_BETA ? "Open Historia Beta" : "Open Historia";
+const LOCK_LABEL = IS_BETA ? BETA_APP_NAME : "Open Historia";
 
 const lockHolder = () => {
   let held;
@@ -148,6 +152,9 @@ process.env.OH_CHANNEL = CHANNEL;
 if (IS_BETA) {
   process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
   process.env.OH_FORK_FEEDBACK_URL = BETA_FEEDBACK_URL;
+  // The BETA-badged artwork the server serves in place of the compass. Inside the
+  // asar, which is fine: express only reads these.
+  process.env.OH_BETA_ASSETS_DIR = path.join(__dirname, "beta-assets");
 }
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
@@ -327,7 +334,7 @@ const createMainWindow = () => {
     show: false,
     // The beta says so in the one place a player always sees, even after they
     // have both builds pinned to the taskbar and forgotten which is which.
-    title: IS_BETA ? "Open Historia Beta — fork build" : "Open Historia",
+    title: IS_BETA ? `${BETA_APP_NAME} — fork build` : "Open Historia",
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },

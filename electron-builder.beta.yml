@@ -9,6 +9,9 @@
 #                          the beta installs BESIDE the official app instead of
 #                          upgrading over it. Uninstalling one leaves the other.
 #   artifactName         — a download nobody can confuse with the official one.
+#   icon                 — the compass with a BETA banner, so the
+#                          two are told apart in the Start Menu and on the taskbar,
+#                          where the names are truncated but the icons are not.
 #
 # What tells the RUNNING app it is the beta is not here: it is electron/channel.json,
 # stamped by scripts/stamp-channel.mjs (see `npm run dist:win:beta`). electron-builder's
@@ -20,7 +23,7 @@
 # gets its own userData from its own productName, but electron/main.cjs points
 # the save library at the stable app's folder on purpose — see SHARED_LIBRARY_NAME.
 appId: io.github.seventhdread.openhistoria.beta
-productName: Open Historia Beta
+productName: Open Historia (Beta)
 
 files:
   - dist/**
@@ -44,7 +47,7 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: public/icon-512.png
+  icon: electron/beta-assets/icon-beta.png
   artifactName: Open-Historia-Beta-Setup-${os}.${ext}
 
 nsis:
@@ -53,7 +56,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Open Historia Beta
+  shortcutName: Open Historia (Beta)
   artifactName: Open-Historia-Beta-Setup.${ext}
 
 mac:
@@ -62,7 +65,7 @@ mac:
       arch:
         - x64
         - arm64
-  icon: public/icon-512.png
+  icon: electron/beta-assets/icon-beta.png
   category: public.app-category.strategy-games
   artifactName: Open-Historia-Beta-mac-${arch}.${ext}
 
@@ -71,6 +74,6 @@ linux:
     - target: AppImage
       arch:
         - x64
-  icon: public/icon-512.png
+  icon: electron/beta-assets/icon-beta.png
   category: Game
   artifactName: Open-Historia-Beta-${arch}.${ext}

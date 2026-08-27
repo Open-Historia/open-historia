@@ -87,6 +87,7 @@
       "dist/**",
       "server/**",
       "electron/**",
+      "!electron/beta-assets",
       "scripts/fetch-map-assets.mjs",
       "scripts/map-assets.json",
       "public/lang/**",
