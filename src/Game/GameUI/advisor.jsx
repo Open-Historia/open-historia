@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
-import { sendAdvisorDraftedMessage } from "../AI/gameplay.js";
+import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
@@ -417,43 +417,44 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
     );
 };
 
-// One drafted message's send button. Local status state so a click shows
-// "Sending…" then "✓ Sent" immediately without waiting on a parent re-render;
-// `sent` (persisted on the message itself, see AdvisorPanel's handleSendDraft)
-// is what survives a reload — the local state just tracks an in-flight click.
-const AdvisorDraftSend = ({ draft, sent, onSend }) => {
-    const [status, setStatus] = useState(sent ? "sent" : "idle");
-    const [error, setError] = useState("");
+// Puts the drafted letter in the recipient's diplomacy composer. It does NOT
+// send it, deliberately: the player reads it over in the chat window, edits it
+// if they want, and presses send there.
+//
+// It used to send — writing the letter AND generating the reply in one click,
+// which meant a long wait on a button that said "Sending…", and a message the
+// player never got to look at before it was in front of a foreign government.
+// The button is a hand-off now, so it returns immediately and there is nothing
+// to fail: at worst the chat opens with the text waiting in it.
+const AdvisorDraftSend = ({ draft, onDraft }) => {
+    const [handedOff, setHandedOff] = useState(false);
+    const resetTimer = useRef(null);
 
-    useEffect(() => { if (sent) setStatus("sent"); }, [sent]);
+    useEffect(() => () => clearTimeout(resetTimer.current), []);
 
-    const handleClick = async () => {
-        if (status === "sending" || status === "sent") return;
-        setStatus("sending");
-        setError("");
-        const result = await onSend();
-        if (result?.ok) setStatus("sent");
-        else {
-            setStatus("error");
-            setError(result?.error || "Failed to send.");
-        }
+    const handleClick = () => {
+        onDraft();
+        setHandedOff(true);
+        // Back to the plain label after a moment — the draft can be handed over
+        // again (the player may have cleared the composer, or want it back).
+        clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(() => setHandedOff(false), 3000);
     };
 
-    const busy = status === "sending" || status === "sent";
     return (
         <div>
-        <button type="button" onClick={handleClick} disabled={busy} style={{
+        <button type="button" onClick={handleClick} style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
-            background: status === "sent" ? "rgba(52,211,153,0.12)" : "rgba(59,130,246,0.16)",
-            border: `1px solid ${status === "sent" ? "rgba(52,211,153,0.4)" : "rgba(59,130,246,0.45)"}`,
+            background: handedOff ? "rgba(52,211,153,0.12)" : "rgba(59,130,246,0.16)",
+            border: `1px solid ${handedOff ? "rgba(52,211,153,0.4)" : "rgba(59,130,246,0.45)"}`,
             borderRadius: "8px",
-            color: status === "sent" ? "rgba(167,243,208,0.95)" : "rgba(191,219,254,0.95)",
-            cursor: busy ? "default" : "pointer",
+            color: handedOff ? "rgba(167,243,208,0.95)" : "rgba(191,219,254,0.95)",
+            cursor: "pointer",
             fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+            textAlign: "left",
         }}>
-        {status === "sent" ? `✓ Sent to ${draft.country}` : status === "sending" ? `Sending to ${draft.country}…` : `✉️ Send message to ${draft.country}`}
+        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.country}`}
         </button>
-        {status === "error" && <div style={{ fontSize: "0.7rem", color: "rgba(248,113,113,0.85)", marginTop: "0.3rem" }}>{error}</div>}
         </div>
     );
 };
@@ -645,7 +646,7 @@ const TabButton = ({ icon, label, active, onClick }) => (
 //
 // A reply with no drafts renders as ONE markdown block, exactly as before: the
 // split is only worth its cost when there is something to interleave.
-const AdvisorReplyBody = ({ text, drafts, sentDrafts, onSendDraft }) => {
+const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
     if (!drafts || drafts.length === 0) {
         return <Markdown className="advisor-markdown">{text}</Markdown>;
     }
@@ -663,8 +664,7 @@ const AdvisorReplyBody = ({ text, drafts, sentDrafts, onSendDraft }) => {
             <AdvisorDraftSend
             key={`draft-${draftIndex}`}
             draft={draft}
-            sent={!!sentDrafts?.includes(draftIndex)}
-            onSend={() => onSendDraft(draftIndex, draft)}
+            onDraft={() => onDraftMessage(draft)}
             />
         );
     };
@@ -714,7 +714,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
     const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
         : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
@@ -741,8 +741,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             <AdvisorReplyBody
             text={text}
             drafts={messageDrafts}
-            sentDrafts={msg.sentDrafts}
-            onSendDraft={(draftIndex, draft) => onSendDraft(msgIndex, draftIndex, draft)}
+            onDraftMessage={onDraftMessage}
             />
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
@@ -775,7 +774,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onSendDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -787,7 +786,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
         error: retrying anything older would re-ask a question the conversation
         has already moved past. */}
     {messages.map((msg, i) => (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onSendDraft={onSendDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     ))}
 
@@ -1070,21 +1069,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         inputRef.current?.focus();
     }, []);
 
-    const handleSendDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
-        try {
-            const { chat } = await sendAdvisorDraftedMessage({ countryName: draft.country, text: draft.text });
-            setMessages((prev) => {
-                const next = prev.slice();
-                const target = next[msgIndex];
-                if (!target) return prev;
-                next[msgIndex] = { ...target, sentDrafts: [...(target.sentDrafts || []), draftIndex] };
-                saveMessages(next);
-                return next;
-            });
-            return { ok: true, chatId: chat?.id };
-        } catch (err) {
-            return { ok: false, error: err.message || "Failed to send message." };
-        }
+    // Hands the drafted letter to the diplomacy panel: opens (or reuses) the
+    // chat with that country and drops the text in its composer, where the
+    // player sends it themselves. Nothing is written to the transcript here, so
+    // there is no state to persist and nothing that can half-succeed.
+    const handleDraftMessage = React.useCallback((draft) => {
+        requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
     }, []);
 
     // Places one deployment the advisor recommended, through the very same
@@ -1092,7 +1082,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     // queued order for the AI to adjudicate, exactly like a hand-placed one, and
     // then flies the map there so the player sees it. Marked on the ADVISOR
     // message (not local state) so the button stays "✓ placed" across a reload.
-    // Stable reference, for the same memoization reason as handleSendDraft.
+    // Stable reference, for the same memoization reason as handleDraftMessage.
     const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
         try {
             const { deployUnit } = await import("../Map/unitsController.js");
@@ -1215,7 +1205,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         onRetryProjects={handleRetryProjects}
         onRetry={handleRetryTurn}
         retrying={isLoading}
-        onSendDraft={handleSendDraft}
+        onDraftMessage={handleDraftMessage}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}

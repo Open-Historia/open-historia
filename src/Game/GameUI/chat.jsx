@@ -435,7 +435,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
-const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, unread = false, onToggleRead }) => {
+const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, unread = false, onToggleRead, draft = "", onDraftApplied }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -459,10 +459,42 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const lastPlayerMessage = useRef("");
     const messagesEndRef    = useRef(null);
     const messagesRef       = useRef(chat.messages ?? []);
+    const composerRef       = useRef(null);
 
     useEffect(() => {
         countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
     }, [countries]);
+
+    // Grows the composer to fit what is in it. The textarea is rows={1} with
+    // overflow hidden, so without this a drafted letter would sit in a one-line
+    // box with all but its first line invisible.
+    const fitComposer = React.useCallback(() => {
+        const el = composerRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    }, []);
+
+    // A letter the advisor drafted, arriving in the composer for the player to
+    // read over and send. It is only ever text in a box: nothing is sent, and
+    // nothing reaches the transcript, until they press the button themselves.
+    useEffect(() => {
+        if (!draft) return;
+        setPlayerInput(draft);
+        onDraftApplied?.();
+        // After paint, so the textarea holds the new value: put the caret at the
+        // end, ready to edit.
+        requestAnimationFrame(() => {
+            const el = composerRef.current;
+            if (!el) return;
+            el.focus();
+            el.selectionStart = el.selectionEnd = el.value.length;
+        });
+    }, [draft, onDraftApplied]);
+
+    // Covers the changes onInput never sees: a draft arriving, and the box being
+    // emptied on send (which would otherwise leave it standing at letter height).
+    useEffect(() => { fitComposer(); }, [playerInput, fitComposer]);
 
     useEffect(() => {
         const saved = chat.messages ?? [];
@@ -713,11 +745,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             ) : phase === "player" && !isLoading ? (
                 <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
                 <textarea
+                ref={composerRef}
                 placeholder="Send a diplomatic message…"
                 rows={1} value={playerInput}
                 onChange={e => setPlayerInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
-                onInput={e => { e.target.style.height = "auto"; }}
+                onInput={fitComposer}
                 style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "hidden", transition: "border-color 0.2s" }}
                 onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
                 onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
@@ -928,14 +961,17 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false })
 
 // ── Main ChatPanel ────────────────────────────────────────────────────────────
 
-// Bridge so the map region popup can request a diplomatic chat with a country.
+// Bridge so the map region popup can request a diplomatic chat with a country —
+// and so the advisor can hand one a letter it drafted, which lands in the
+// composer for the player to read over and send themselves. Nothing here sends
+// anything: `draft` is text in a textarea until the player presses the button.
 const _chatOpenSubs = new Set();
-export const requestDiplomaticChat = (country) => {
+export const requestDiplomaticChat = (country, { draft = "" } = {}) => {
     if (!country || !country.name) return;
-    _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
+    _chatOpenSubs.forEach((fn) => { try { fn(country, draft); } catch { /* noop */ } });
 };
 
-const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGenerating = false }) => {
+const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onConsumeRequest, isGenerating = false }) => {
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -943,6 +979,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
+    // A letter the advisor drafted, waiting for the conversation it belongs to to
+    // mount. Tied to a chat id so navigating to a DIFFERENT chat never inherits it.
+    const [composerDraft, setComposerDraft]       = useState(null);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
     const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
 
@@ -1200,29 +1239,49 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
         if (activeChat?.id === id) setActiveChat(null);
     };
 
-    // Open (or reuse) a 1-on-1 chat with a country requested from the region popup.
-    const consumePending = (country) => {
+    // Open (or reuse) a 1-on-1 chat with a country requested from the region popup
+    // or from the advisor, optionally seeding the composer with a drafted letter.
+    const consumePending = (country, draftText = "") => {
         setShowSelector(false);
+        // The advisor knows a polity by name only; the flag and the nation colour
+        // both key off the code, so fill it in from the loaded roster rather than
+        // opening a chat wearing the fallback white flag.
+        const code = country.code
+            || countries.find(c => (c?.name || "").toLowerCase() === country.name.toLowerCase())?.code
+            || "";
         setChats(prev => {
             const existing = prev.find(
                 c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
                      (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
             );
-            if (existing) { setActiveChat(existing); return prev; }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code: country.code || "" }], messages: [], status: "open" };
+            if (existing) {
+                setActiveChat(existing);
+                if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
+                return prev;
+            }
+            const newChat = { id: Date.now(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
             saveAllChats(u);
             setActiveChat(newChat);
+            if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
             return u;
         });
     };
 
+    // Waits for the initial load. A request that arrives while the panel is
+    // mounting — which is the NORMAL case, since asking for a chat is what opens
+    // the panel in the first place — would otherwise run against an empty `chats`
+    // array: it would miss the existing conversation with that country, open a
+    // duplicate, and then saveAllChats would persist that one chat as the whole
+    // list, taking every other conversation with it. hasLoadedInitialData is set
+    // on both the success and failure paths above, so this cannot strand a
+    // request forever.
     useEffect(() => {
-        if (!isOpen || !requestedCountry) return;
-        consumePending(requestedCountry);
+        if (!isOpen || !requestedCountry || !hasLoadedInitialData) return;
+        consumePending(requestedCountry, requestedDraft);
         onConsumeRequest?.();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, requestedCountry]);
+    }, [isOpen, requestedCountry, hasLoadedInitialData]);
 
         return (
             <>
@@ -1233,7 +1292,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate}
-                unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => setChatReadState(activeChat, unreadIds.has(String(activeChat.id)))} />
+                unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => setChatReadState(activeChat, unreadIds.has(String(activeChat.id)))}
+                draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
+                onDraftApplied={() => setComposerDraft(null)} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -1291,6 +1352,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, isGene
 const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
+    const [pendingDraft, setPendingDraft] = useState("");
     const [unseenCount, setUnseenCount] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
     const setChatOpen = () => { onToggle(); };
@@ -1346,8 +1408,9 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     }, [isOpen]);
 
     useEffect(() => {
-        const handler = (country) => {
+        const handler = (country, draft) => {
             setPendingCountry(country);
+            setPendingDraft(draft || "");
             if (!isOpen) onToggle();
         };
         _chatOpenSubs.add(handler);
@@ -1355,7 +1418,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     }, [isOpen, onToggle]);
         return (
             <>
-            {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} isGenerating={isGenerating} />}
+            {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} requestedDraft={pendingDraft} onConsumeRequest={() => { setPendingCountry(null); setPendingDraft(""); }} isGenerating={isGenerating} />}
             <button title={isGenerating ? "Chat — diplomacy in progress" : "Chat"} style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
             onClick={() => setChatOpen(o => !o)}>
