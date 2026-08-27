@@ -1002,10 +1002,9 @@ const WorldMap = ({ isGlobe = false }) => {
     "line-opacity": showStockCountries ? 1 : 0,
   };
   // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
-  // Tile hairlines only fade in alongside the tile FILLS (z5.5-6.5): below
-  // that the fills come from the seed geometry, and hairlines from the
-  // simplified low-zoom tiles sit visibly off those fills — disconnected
-  // borders. The far hairlines come from the seed geometry itself instead.
+  // Tile hairlines fade in alongside the tile fills. The seed hairlines stay
+  // underneath for a little longer as a safety net: if a vector tile is late,
+  // the fallback fill should not turn into one borderless slab while panning.
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
@@ -1147,21 +1146,25 @@ const WorldMap = ({ isGlobe = false }) => {
           filter={STOCK_GEOMETRY_FILTER}
           paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
         />
-        {/* Far hairlines from the SAME seed geometry as the far fills, so
-            zoomed-out region borders sit exactly on the colored areas. They
-            hand off to the stock-tile hairlines with the fill crossfade. */}
+        {/* Seed hairlines stay beneath the detailed tile outlines through the
+            handoff window. A late tile can then lose detail, not the border
+            itself; once close-detail tiles are established this fades away. */}
         <Layer
           id="custom-regions-hairline-far"
           type="line"
-          maxzoom={7}
+          beforeId="regions-outline"
+          maxzoom={9}
           filter={STOCK_GEOMETRY_FILTER}
           paint={{
             "line-color": "#000",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
-            // Fades in over the same 3->4 band as the fill above, handing off from the
-            // ultra tier's hairlines so borders never double up or blink.
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6, 9, 0.8],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              ? ["interpolate", ["linear"], ["zoom"],
+                  3, 0.35,
+                  5.5, 0.55,
+                  6.5, 0.4,
+                  8, 0.25,
+                  9, 0]
               : 0,
           }}
         />
