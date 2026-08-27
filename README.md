@@ -94,11 +94,11 @@ and open it to install (allow installs from your browser when Android asks).
 It's a thin client: the game itself runs on whatever server it connects to, so you need
 one of the two:
 
-- **A desktop on the same network** running the launcher — type its address
-  (e.g. `http://192.168.1.20:3000`) into the app once; it's remembered.
-  Start that server with `OH_HOST=0.0.0.0` (see
-  [Reaching the server from another device](#reaching-the-server-from-another-device)),
-  or it only answers the machine it runs on.
+- **A desktop on the same network** running the launcher — turn on
+  **Settings → Network → "Let other devices connect"** there, then type the
+  address it shows you (e.g. `http://192.168.1.20:3000`) into the app once;
+  it's remembered. See
+  [Reaching the server from another device](#reaching-the-server-from-another-device).
 - **[Termux](https://termux.dev/) on the phone itself** running the server — the app
   finds it on first launch by itself, no address needed.
 
@@ -136,24 +136,36 @@ Then open **http://localhost:3000** in your browser.
 
 ### Reaching the server from another device
 
-The server listens on **`127.0.0.1` only** — the machine it runs on. That covers
+Out of the box the server answers **only the machine it runs on** — which covers
 the desktop app, Termux on the same phone, and a browser on the same computer.
 
-To play from your phone or another computer, tell it to listen on the network:
+To play from your phone or another computer, turn on
+**Settings → Network → "Let other devices connect"**. It takes effect
+immediately (no restart), it is remembered for next time, and it shows you the
+exact address to type into the Android app, so you never have to go and find
+your own IP:
+
+> Type this into the Android app:
+> `http://192.168.1.20:3000`
+
+Worth knowing before you do: **the game's API has no password.** While sharing is
+on, anyone who can reach that address can read, change and delete your games and
+scenarios — the server can't tell them apart from you. That's fine on a home
+network you control and a bad idea on café, hotel, dorm or office Wi-Fi. The
+switch is off by default for that reason, not because sharing is discouraged.
+
+Running headless — Termux, a NAS, a box with no screen to click a toggle on? Set
+`OH_HOST`. It overrides the setting and makes the in-game switch read-only, so a
+script and a player can't disagree about who can reach the server:
 
 ```bash
 OH_HOST=0.0.0.0 node server/server.js      # every interface
-OH_HOST=192.168.1.20 node server/server.js # one interface
+OH_HOST=192.168.1.20 node server/server.js # one interface only
 ```
-
-Worth knowing before you do: **the game's API has no password.** Anyone who can
-reach that address can read, change and delete your games and scenarios — the
-server can't tell them apart from you. That's fine on a home network you control
-and a bad idea on café, hotel, dorm or office Wi-Fi. Two related switches:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `OH_HOST` | `127.0.0.1` | Which interface to listen on. Anything but loopback puts the API on your network. |
+| `OH_HOST` | unset | Which interface to listen on. Overrides the Settings toggle and locks it. Anything but loopback puts the API on your network. |
 | `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. |
 | `OH_RATE_LIMIT` | `1200` | Requests per minute per network client (loopback is exempt). |
 

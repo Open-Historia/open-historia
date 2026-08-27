@@ -2,6 +2,7 @@
 import crypto from "crypto";
 import express from "express";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import url from "url";
 import {
@@ -74,17 +75,56 @@ const distDir = path.join(__dirname, "../dist");
 //
 // So this used to be `app.listen(PORT)`, which binds every interface: on a café
 // or dorm network, every device on it had full control of the player's saves.
-// Now it binds loopback unless the player asks for LAN play, which is the case
-// the Android client and "play from another room" need:
+// Now it binds loopback unless the player asks for LAN play — which they need
+// for the Android client and for "play from another room", so asking has to be
+// easy. Three ways, in precedence order:
 //
-//   OH_HOST=0.0.0.0 node server/server.js     # phone / other devices can reach it
-//   OH_HOST=192.168.1.9 node server/server.js # one interface only
-//
-// The desktop app, Termux on the same phone, and a browser on the same machine
-// all arrive over loopback, so the default costs them nothing.
-const HOST = process.env.OH_HOST || "127.0.0.1";
-const LAN_ENABLED = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
-const LISTEN_ARGS = [PORT, HOST];
+//   1. OH_HOST, for headless boxes, Termux and anyone scripting it:
+//        OH_HOST=0.0.0.0 node server/server.js     # any device on the network
+//        OH_HOST=192.168.1.9 node server/server.js # one interface only
+//      When set it WINS and pins the setting — the in-game toggle reports that
+//      the environment owns the decision rather than fighting it.
+//   2. The in-game toggle (Settings → Network → "Let other devices connect"),
+//      which persists to network-settings.json and rebinds the listener live —
+//      no restart, no terminal. This is what the desktop app uses, where an
+//      environment variable is not a thing a player can set.
+//   3. Neither: loopback. The desktop app, Termux on the same phone and a
+//      browser on the same machine all arrive over loopback, so the default
+//      costs them nothing.
+const NETWORK_SETTINGS_FILE = path.join(DATA_DIR, "network-settings.json");
+const LOOPBACK_HOST = "127.0.0.1";
+const ALL_INTERFACES_HOST = "0.0.0.0";
+
+const isLanHost = (host) => host !== LOOPBACK_HOST && host !== "localhost" && host !== "::1";
+
+const readNetworkSettings = () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(NETWORK_SETTINGS_FILE, "utf8"));
+    return { lanAccess: parsed?.lanAccess === true };
+  } catch {
+    return { lanAccess: false };
+  }
+};
+
+const writeNetworkSettings = (settings) => {
+  fs.mkdirSync(path.dirname(NETWORK_SETTINGS_FILE), { recursive: true });
+  fs.writeFileSync(NETWORK_SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
+};
+
+// Set = the environment decides and the toggle is read-only.
+const HOST_FROM_ENV = process.env.OH_HOST || "";
+let HOST = HOST_FROM_ENV || (readNetworkSettings().lanAccess ? ALL_INTERFACES_HOST : LOOPBACK_HOST);
+let LAN_ENABLED = isLanHost(HOST);
+
+// The addresses a phone or another computer would actually type in. Doing this
+// here is the difference between "enable LAN play" being a setting and being a
+// chore: the player never has to go and find their own IP.
+const lanAddresses = () =>
+  Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) =>
+    (addresses ?? [])
+      .filter((address) => address.family === "IPv4" && !address.internal)
+      .map((address) => ({ interface: name, url: `http://${address.address}:${PORT}` })),
+  );
 
 // Body limits. These used to be 2048mb, which let a single request exhaust the
 // process's memory before any handler ran. The real ceiling is a scenario bundle
@@ -174,7 +214,7 @@ const sendError = (res, statusCode, error) => {
 //
 // This stops browsers, which is what CSRF is. It does NOT stop a non-browser
 // client on the network, which sets Origin and Host itself — that is what the
-// loopback default in OH_HOST is for, not this. Set OH_ALLOW_CROSS_ORIGIN=1 to
+// loopback default is for, not this. Set OH_ALLOW_CROSS_ORIGIN=1 to
 // restore the old fully-open behavior (this guard off, CORS back to `*`).
 const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
 app.use((req, res, next) => {
@@ -757,6 +797,65 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   }
 });
 
+// --- LAN sharing, from the UI ---------------------------------------------
+// Reading it is harmless (the page shows the toggle's state); the ADDRESSES are
+// only handed to a caller on this machine, since they describe the host's other
+// interfaces and a phone already knows the one it used.
+app.get("/api/server/network", (req, res) => {
+  const local = isLoopbackAddress(req.socket?.remoteAddress);
+  res.json({
+    lanEnabled: LAN_ENABLED,
+    host: HOST,
+    port: Number(PORT),
+    lockedByEnv: Boolean(HOST_FROM_ENV),
+    addresses: local ? lanAddresses() : [],
+  });
+});
+
+// Turn LAN sharing on or off without restarting anything.
+//
+// Only this machine may call it: whether the server is reachable from the
+// network is a decision for the person sitting at it, not for whoever is
+// already on the network. (With LAN off there is nobody else to ask; with LAN
+// on, the remote caller could otherwise switch it off under the owner.)
+app.post("/api/server/network", jsonParser, (req, res) => {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) {
+    return sendError(res, 403, new Error("Only the machine running the server can change this."));
+  }
+  if (HOST_FROM_ENV) {
+    return sendError(
+      res,
+      409,
+      new Error(`OH_HOST is set to "${HOST_FROM_ENV}", so it decides who can reach this server. Unset it to use this switch.`),
+    );
+  }
+
+  const lanEnabled = req.body?.lanEnabled === true;
+  const nextHost = lanEnabled ? ALL_INTERFACES_HOST : LOOPBACK_HOST;
+  if (nextHost === HOST) {
+    return res.json({ lanEnabled: LAN_ENABLED, host: HOST, port: Number(PORT), lockedByEnv: false, addresses: lanAddresses() });
+  }
+
+  try {
+    writeNetworkSettings({ lanAccess: lanEnabled });
+  } catch (error) {
+    return sendError(res, 500, error);
+  }
+
+  // Answer BEFORE rebinding: the reply travels over a connection this is about
+  // to drop. Loopback stays reachable either way (0.0.0.0 includes it), so the
+  // page that flipped the switch keeps working — only devices on the network
+  // gain or lose access.
+  res.json({
+    lanEnabled,
+    host: nextHost,
+    port: Number(PORT),
+    lockedByEnv: false,
+    addresses: lanEnabled ? lanAddresses() : [],
+  });
+  setTimeout(() => rebindListener(nextHost), 250);
+});
+
 // Shut the server down from the UI (the ⏻ button in the top bar) — handy on
 // phones/Termux and headless installs where no terminal is in sight. Responds
 // first so the client can show its "server stopped" screen, then exits.
@@ -1034,17 +1133,63 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-const httpServer = app.listen(...LISTEN_ARGS, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+const describeBinding = () => {
   if (LAN_ENABLED) {
     console.log(`Reachable from your network on ${HOST}:${PORT}. This API has no password:`);
     console.log("anyone who can reach that address can read, change and delete your games.");
-    console.log("Only do this on a network you trust; unset OH_HOST to go back to this machine only.");
+    for (const { url } of lanAddresses()) console.log(`  ${url}`);
+    console.log(
+      HOST_FROM_ENV
+        ? "Unset OH_HOST to go back to this machine only."
+        : "Turn it off in Settings → Network, or unset it there when you're done.",
+    );
   } else {
     console.log("Listening on 127.0.0.1 only (this machine).");
-    console.log("To play from your phone or another device, restart with OH_HOST=0.0.0.0 set.");
+    console.log(
+      HOST_FROM_ENV
+        ? "OH_HOST pins this. Set OH_HOST=0.0.0.0 to let other devices connect."
+        : "To play from your phone or another device, turn on Settings → Network → \"Let other devices connect\".",
+    );
   }
+};
+
+const httpServer = app.listen(PORT, HOST, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+  describeBinding();
 });
+
+// Move the listener to a different interface in place, so the LAN toggle takes
+// effect immediately instead of asking the player to restart a game they are in
+// the middle of. Node lets a closed server listen() again; if the new bind
+// fails (something else already holds the port on that interface) we go back to
+// the one that was working rather than leaving the player with no server.
+const rebindListener = (nextHost) => {
+  const previousHost = HOST;
+  const onError = (error) => {
+    console.error(`Could not rebind to ${nextHost}:${PORT} (${error.message}); staying on ${previousHost}.`);
+    httpServer.removeListener("error", onError);
+    HOST = previousHost;
+    LAN_ENABLED = isLanHost(HOST);
+    try {
+      writeNetworkSettings({ lanAccess: LAN_ENABLED });
+    } catch { /* the binding is what matters; the file is a hint for next boot */ }
+    httpServer.listen(PORT, previousHost);
+  };
+
+  // Keep-alive connections would hold close() open indefinitely, and one of them
+  // is the page that just flipped the switch.
+  httpServer.closeAllConnections?.();
+  httpServer.close(() => {
+    httpServer.once("error", onError);
+    httpServer.listen(PORT, nextHost, () => {
+      httpServer.removeListener("error", onError);
+      HOST = nextHost;
+      LAN_ENABLED = isLanHost(HOST);
+      console.log(`Rebound to ${HOST}:${PORT}.`);
+      describeBinding();
+    });
+  });
+};
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers
 // then reported as a bare "Server stopped." — say what actually happened.
