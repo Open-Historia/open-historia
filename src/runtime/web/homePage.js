@@ -8,8 +8,6 @@
 // build only, never in the local download.
 
 import { connectBestNode } from "./nodeConnect.js";
-import { isSignedIn, getEmail, signOut, signInWithGoogle, googleClientId } from "./account.js";
-import { accountConfigured } from "./account.js";
 
 const ENTERED_KEY = "oh:entered";
 const FONTS_HREF = "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap";
@@ -150,50 +148,6 @@ const renderConnection = (c) => {
 
 const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } overlay?.remove(); overlay = null; };
 
-// Load Google Identity Services once; resolves with window.google.
-let gisPromise = null;
-const loadGis = () => {
-  if (gisPromise) return gisPromise;
-  gisPromise = new Promise((resolve, reject) => {
-    if (window.google?.accounts?.id) return resolve(window.google);
-    const s = el("script", { src: "https://accounts.google.com/gsi/client", async: true, defer: true });
-    s.onload = () => resolve(window.google);
-    s.onerror = () => reject(new Error("Couldn't load Google sign-in — check your connection."));
-    document.head.append(s);
-  });
-  return gisPromise;
-};
-
-const accountSection = async () => {
-  const box = el("div", { className: "oh-acct" });
-  if (!accountConfigured() || !googleClientId()) return box; // sign-in not wired for this build
-  box.append(el("div", { className: "oh-h4", textContent: "Save your games across devices" }));
-  if (await isSignedIn()) {
-    box.append(
-      el("div", { className: "oh-msg", textContent: `Signed in as ${(await getEmail()) || "your account"} · games sync automatically.` }),
-      el("button", { className: "oh-btn ghost", textContent: "Sign out", style: "margin-top:10px", onclick: async () => { await signOut(); refreshAccount(box); } }),
-    );
-  } else {
-    const mount = el("div", { className: "oh-gbtn" });
-    const msg = el("div", { className: "oh-msg" });
-    box.append(mount, msg);
-    loadGis().then((google) => {
-      google.accounts.id.initialize({
-        client_id: googleClientId(),
-        callback: async (resp) => {
-          msg.textContent = "Signing you in…";
-          try { await signInWithGoogle(resp.credential); refreshAccount(box); }
-          catch (e) { msg.textContent = e.message; }
-        },
-      });
-      google.accounts.id.renderButton(mount, { theme: "outline", size: "large", text: "continue_with", shape: "pill" });
-    }).catch((e) => { msg.textContent = e.message; });
-  }
-  return box;
-};
-
-const refreshAccount = async (box) => { const fresh = await accountSection(); box.replaceWith(fresh); };
-
 export const showHomePage = () => {
   if (typeof document === "undefined" || document.getElementById("oh-home-root")) return;
   if (!document.getElementById("oh-home-fonts")) {
@@ -203,7 +157,6 @@ export const showHomePage = () => {
 
   connPanel = el("div", { className: "oh-conn" });
   renderConnection(null); // initial "finding…" state
-  const acctBox = el("div", { className: "oh-acct" }); // filled async so the overlay appears instantly
   // Starts disabled: renderConnection enables it once a node (or the origin
   // fallback) is settled, so nobody can enter a half-connected session.
   const play = el("button", { className: "oh-btn primary", textContent: "⚔  Enter Open Historia", onclick: enter });
@@ -221,7 +174,6 @@ export const showHomePage = () => {
     el("p", { className: "oh-tag", textContent: "An AI-driven alternate-history strategy game. Lead any nation on a living world map and reshape history." }),
     el("div", { className: "oh-rule" }),
     connPanel,
-    acctBox,
     el("div", { className: "oh-rule" }),
     el("div", { className: "oh-demo" },
       el("div", { className: "oh-demo-t", textContent: "This is a demo of the game" }),
@@ -240,8 +192,7 @@ export const showHomePage = () => {
   overlay = el("div", { className: "oh-home", id: "oh-home-root" }, colonnade(), card);
   document.body.append(overlay); // up immediately — no flash of the game behind
 
-  // Fill the login + connect to the best node in the background.
-  accountSection().then((section) => acctBox.replaceWith(section)).catch(() => {});
+  // Connect to the best node in the background.
   connectBestNode().then(renderConnection).catch(() => renderConnection({ origin: true }));
 };
 
