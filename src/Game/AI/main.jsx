@@ -1517,7 +1517,9 @@ What you have:
 - A "---" rule between two major parts of a long briefing. At most one or two in a reply.
 - Tables, for genuinely tabular data ONLY — several items compared on the SAME few fields (fleets by strength and station, projects by progress and date, powers by stance). A table needs at least two columns AND at least two rows to be worth making. Keep it to two to four columns with short cells: the panel is narrow and a wide table has to be scrolled.
 
-When NOT to use a table: never to describe a single thing. One item's explanation is a paragraph, or a bolded label with prose after it — a two-column "Item / Detail" table with one row is worse than the sentence it replaces. If a cell would hold more than a short phrase, it is prose, not a table.
+Every row must have a real value in EVERY column. A column you leave blank down the whole table still takes its share of a narrow panel and gives the player nothing.
+
+When NOT to use a table: never to describe a single thing. One item's explanation is a paragraph, or a bolded label with prose after it — a two-column "Item / Detail" table with one row is worse than the sentence it replaces. If a cell would hold more than a short phrase, it is prose, not a table. And if you find the whole answer going into the first cell of each row while the other columns sit empty, the table was the wrong shape from the start: write it as a bulleted list instead, one bullet per item, the name in bold and the explanation after a dash.
 
 Two hard rules:
 - No HTML, ever. Tags are not rendered, so the player sees the literal text "<br>". For a line break, press return and write the next line; for a gap between paragraphs, leave a blank line.

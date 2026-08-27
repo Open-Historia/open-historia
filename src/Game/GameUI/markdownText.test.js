@@ -75,6 +75,56 @@ test("alignment markers and pipe-less prose do not confuse the table detector", 
   assert.equal(normalizeMarkdown("Reactor A | Reactor B"), "Reactor A | Reactor B");
 });
 
+// The advisor wrote a three-column header and then filled only the first cell of
+// every row. GFM pads the rest, so two dead columns ate most of a 20rem panel.
+test("columns no row ever fills are dropped", () => {
+  const source = [
+    "| Thread | What gave it away | Why it matters |",
+    "|---|---|---|",
+    "| 1. Indigenous grid-hardening audits |",
+    "| 2. Signals-intelligence cross-cue |",
+  ].join("\n");
+  assert.equal(
+    normalizeMarkdown(source),
+    [
+      "| Thread |",
+      "| --- |",
+      "| 1. Indigenous grid-hardening audits |",
+      "| 2. Signals-intelligence cross-cue |",
+    ].join("\n"),
+  );
+});
+
+test("a column filled by only one row is kept", () => {
+  const source = "| A | B |\n|---|---|\n| 1 | |\n| 2 | x |";
+  assert.equal(normalizeMarkdown(source), source);
+});
+
+// The other direction: GFM DROPS cells past the header's width, so content the
+// model wrote never reaches the screen.
+test("a row wider than its header widens the header rather than losing cells", () => {
+  const source = "| A | B |\n|---|---|\n| 1 | 2 | 3 |";
+  assert.equal(
+    normalizeMarkdown(source),
+    "| A | B |  |\n| --- | --- | --- |\n| 1 | 2 | 3 |",
+  );
+});
+
+test("alignment markers survive a repair", () => {
+  const source = "| A | B | C |\n|:--|--:|:-:|\n| 1 | | 3 |";
+  assert.equal(normalizeMarkdown(source), "| A | C |\n| :--- | :---: |\n| 1 | 3 |");
+});
+
+test("an escaped pipe stays inside its cell", () => {
+  const source = "| A | B |\n|---|---|\n| a \\| b | |";
+  assert.equal(normalizeMarkdown(source), "| A |\n| --- |\n| a \\| b |");
+});
+
+test("a header-only table keeps every column", () => {
+  const source = "| A | B |\n|---|---|";
+  assert.equal(normalizeMarkdown(source), source);
+});
+
 test("a heading missing its space is repaired", () => {
   assert.equal(normalizeMarkdown("###Titan"), "### Titan");
   assert.equal(normalizeMarkdown("### Titan"), "### Titan");
