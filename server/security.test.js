@@ -110,7 +110,8 @@ test("isAllowedHubUrl: any *.githubusercontent.com CDN host is allowed on redire
 // if the LAN were covered. It isn't, and pretending otherwise is how a guard
 // gets trusted for something it never did. Pin the real behaviour: a client that
 // sets its own headers walks straight through the same-origin branch, which is
-// why the server binds loopback by default (OH_HOST) rather than relying on this.
+// why the server binds loopback until the player shares it (server/network.test.js)
+// rather than relying on this.
 test("crossOriginWriteAllowed: a spoofed Origin from the LAN is NOT blocked", () => {
   const spoofed = crossOriginWriteAllowed({
     method: "DELETE",
