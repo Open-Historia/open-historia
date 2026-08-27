@@ -435,6 +435,9 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 
 // ── Conversation view ─────────────────────────────────────────────────────────
 
+// 12rem at the default 16px root, matching the composer's max-height below.
+const COMPOSER_MAX_HEIGHT = 192;
+
 const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, unread = false, onToggleRead, draft = "", onDraftApplied }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
@@ -465,14 +468,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
     }, [countries]);
 
-    // Grows the composer to fit what is in it. The textarea is rows={1} with
-    // overflow hidden, so without this a drafted letter would sit in a one-line
-    // box with all but its first line invisible.
+    // Grows the composer to fit what is in it, up to the 12rem the stylesheet
+    // caps it at — past which it scrolls, since a drafted letter runs to many
+    // more lines than that and every one of them has to be reachable. The
+    // textarea is rows={1}, so without this a letter would sit in a one-line box.
     const fitComposer = React.useCallback(() => {
         const el = composerRef.current;
         if (!el) return;
         el.style.height = "auto";
-        el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+        el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
     }, []);
 
     // A letter the advisor drafted, arriving in the composer for the player to
@@ -488,7 +492,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const el = composerRef.current;
             if (!el) return;
             el.focus();
+            // Caret at the end, so a stray keystroke appends rather than landing
+            // in the middle of the letter — but scrolled to the TOP, because a
+            // long letter is there to be read from its opening line.
             el.selectionStart = el.selectionEnd = el.value.length;
+            el.scrollTop = 0;
         });
     }, [draft, onDraftApplied]);
 
@@ -751,7 +759,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 onChange={e => setPlayerInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
                 onInput={fitComposer}
-                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "hidden", transition: "border-color 0.2s" }}
+                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", transition: "border-color 0.2s" }}
                 onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
                 onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                 />
