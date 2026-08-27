@@ -1,0 +1,76 @@
+# Packaging config for the UNOFFICIAL beta build of the fork
+# (github.com/SeventhDread/open-historia). Used as `electron-builder --config
+# electron-builder.beta.yml`; the `build` block in package.json is ignored when
+# this is passed, so this file is a complete config rather than a patch, and the
+# stable build's config stays untouched.
+#
+# What is deliberately different from package.json's `build`:
+#   appId / productName  — a DIFFERENT application to Windows, macOS and Linux, so
+#                          the beta installs BESIDE the official app instead of
+#                          upgrading over it. Uninstalling one leaves the other.
+#   artifactName         — a download nobody can confuse with the official one.
+#
+# What tells the RUNNING app it is the beta is not here: it is electron/channel.json,
+# stamped by scripts/stamp-channel.mjs (see `npm run dist:win:beta`). electron-builder's
+# `extraMetadata` would have done the same job by editing the packaged package.json,
+# but it gets there by rewriting the project's own package.json mid-build, which can
+# leave the repo's copy stripped if a build is interrupted.
+#
+# What is deliberately the SAME: everything the game reads and writes. The beta
+# gets its own userData from its own productName, but electron/main.cjs points
+# the save library at the stable app's folder on purpose — see SHARED_LIBRARY_NAME.
+appId: io.github.seventhdread.openhistoria.beta
+productName: Open Historia Beta
+
+files:
+  - dist/**
+  - server/**
+  - electron/**
+  - scripts/fetch-map-assets.mjs
+  - scripts/map-assets.json
+  - public/lang/**
+  - package.json
+  - "!**/*.map"
+
+asarUnpack:
+  - scripts/**
+
+directories:
+  output: release
+  buildResources: build
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/icon-512.png
+  artifactName: Open-Historia-Beta-Setup-${os}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Open Historia Beta
+  artifactName: Open-Historia-Beta-Setup.${ext}
+
+mac:
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: public/icon-512.png
+  category: public.app-category.strategy-games
+  artifactName: Open-Historia-Beta-mac-${arch}.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  icon: public/icon-512.png
+  category: Game
+  artifactName: Open-Historia-Beta-${arch}.${ext}

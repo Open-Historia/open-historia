@@ -387,7 +387,14 @@ const APP_UPDATE_MANIFESTS = {
   // The desktop app checks through here rather than from the page: a release asset
   // sends no CORS headers, and the GitHub API is rate limited per IP. Exactly the
   // reason the Android tracks are served this way.
-  desktop: "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/latest.json",
+  //
+  // OH_DESKTOP_UPDATE_URL lets the desktop shell point this at its OWN release
+  // instead (electron/main.cjs sets it for the beta/fork build). Without it a
+  // fork's testers would be offered the upstream installer as an "update" and
+  // quietly leave the build they signed up to test.
+  desktop:
+    process.env.OH_DESKTOP_UPDATE_URL ||
+    "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/latest.json",
 };
 const APP_UPDATE_TTL_MS = 3 * 60 * 1000;
 const appUpdateCache = new Map(); // track -> { at, data }
@@ -430,6 +437,24 @@ app.get("/api/app-update", async (req, res) => {
   } catch {
     res.json(cached ? cached.data : {}); // offline / timeout -> fail-open
   }
+});
+
+// FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE (with ForkBuildBadge.jsx and its
+// mount in src/App.jsx). What the in-app beta badge reads. Answers {} for every
+// build that is not the fork's desktop beta — the website, the APK, a dev run and
+// the stable desktop app all set no OH_CHANNEL — so the badge renders nothing
+// there and no other surface has to know this exists.
+app.get("/api/fork-build", (_req, res) => {
+  const channel = String(process.env.OH_CHANNEL || "stable");
+  if (channel === "stable") {
+    res.json({});
+    return;
+  }
+  res.json({
+    channel,
+    build: String(process.env.OH_DESKTOP_BUILD || ""),
+    feedback: String(process.env.OH_FORK_FEEDBACK_URL || ""),
+  });
 });
 
 app.get("/api/scenarios/:scenarioId", (req, res) => {

@@ -8,6 +8,8 @@ const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
 import AppUpdateBanner from "./runtime/AppUpdateBanner.jsx";
+// FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE (see ForkBuildBadge.jsx).
+import ForkBuildBadge from "./runtime/ForkBuildBadge.jsx";
 import {
   STARTUP_TIME_BUDGET_MS,
   createInitialStartupState,
@@ -212,6 +214,8 @@ function App() {
   return (
     <>
       <AppUpdateBanner />
+      {/* FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE (see ForkBuildBadge.jsx). */}
+      <ForkBuildBadge />
       <ErrorBoundary>
         <GameApp />
       </ErrorBoundary>

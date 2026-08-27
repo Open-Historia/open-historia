@@ -1,0 +1,140 @@
+# Builds the UNOFFICIAL beta of this fork (github.com/SeventhDread/open-historia)
+# for Windows, macOS and Linux and publishes it to a pre-release.
+#
+# It is the same pipeline as desktop-installer.yml with one substitution — the
+# electron-builder config — and that config is what makes the beta a separate
+# application: it installs alongside the official Open Historia rather than over
+# it, while electron/main.cjs points both builds at the SAME save library, so a
+# tester can move between the two mid-campaign. Nothing here touches the stable
+# release or its `desktop-stable` tag.
+name: Desktop beta (fork)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish the beta installers to
+        required: false
+        default: desktop-beta
+  push:
+    tags:
+      - "desktop-beta-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one platform failing must not throw away the other two
+      matrix:
+        include:
+          # Each installer must be built on its own OS: electron-builder shells out
+          # to platform tooling (NSIS on Windows, hdiutil for the .dmg), and a macOS
+          # build simply cannot be produced anywhere but macOS.
+          - os: windows-latest
+            args: --win
+          - os: macos-latest
+            args: --mac
+          - os: ubuntu-latest
+            args: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Spotlight holds the mounted build volume and makes `hdiutil detach` fail
+      # with exit 16, which takes the whole macOS build with it. Nothing here
+      # needs an index. (Same reason as the stable workflow.)
+      - name: Stop Spotlight indexing the build volume
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      # One id for all three platforms in this run, baked into the app and written
+      # into latest.json below. The beta app compares the two — against the FORK's
+      # manifest, not upstream's — to know one of your newer builds exists.
+      - name: Stamp the build id
+        shell: bash
+        run: |
+          echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
+          cat electron/build-id.json
+
+      # What makes the packaged app behave as the beta at RUNTIME: its own Chromium
+      # profile, the fork's update manifest, the in-app badge. The installer config
+      # below only decides how it is installed and what it is called.
+      - name: Stamp the release channel
+        run: node scripts/stamp-channel.mjs beta
+
+      - name: Build the client
+        run: npm run build
+
+      # --config is the only difference from the stable workflow: separate appId,
+      # productName, artifact names, and ohChannel=beta baked into the packaged
+      # package.json.
+      - name: Build the installer
+        run: npx electron-builder ${{ matrix.args }} --config electron-builder.beta.yml --publish never
+        env:
+          # No code-signing certificate. Without this electron-builder tries to
+          # discover one and fails the build rather than skipping signing.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-historia-beta-${{ matrix.os }}
+          # Only the finished installers; release/ also holds the unpacked app tree.
+          path: |
+            release/*.exe
+            release/*-mac-*.zip
+            release/*.AppImage
+          if-no-files-found: error
+
+      - name: Attach to the beta release
+        if: github.event_name == 'push' || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        shell: bash
+        run: |
+          # --prerelease so GitHub labels it, and never marks it "Latest" over a
+          # stable release in the same repo. Three jobs race here, so creating it
+          # tolerates "already exists"; --clobber lets a re-run replace assets.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' \
+              '**Unofficial beta build of a fork of Open Historia.** Not the official game — see [Open-Historia/open-historia](https://github.com/Open-Historia/open-historia) for that.' \
+              '' \
+              'It installs **alongside** the official app (its own Start Menu entry, "Open Historia Beta") and **shares your saves** with it: the same games, scenarios, settings and downloaded world map. Play a campaign here, then open the official app and carry on with it.' \
+              '' \
+              '- Windows: `Open-Historia-Beta-Setup.exe`' \
+              '- macOS: `Open-Historia-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
+              '- Linux: `Open-Historia-Beta-x86_64.AppImage`' \
+              '' \
+              '**Do not run both builds at the same time** — they write the same save files. The beta warns you if the other one is already running.' \
+              '' \
+              'Beta-only features (units, projects) may be dropped from a save if you then play that save in the official app. Back up `%APPDATA%\Open Historia\server\data` before testing anything you care about.' \
+              '' \
+              'Feedback: [open an issue](https://github.com/SeventhDread/open-historia/issues).' \
+              > notes.md
+            gh release create "$TAG" --prerelease \
+              --title "Open Historia Beta — unofficial fork build" \
+              --notes-file notes.md || true
+          fi
+          shopt -s nullglob
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage)
+          # Only the Windows job writes latest.json, so three racing jobs cannot
+          # each publish a different view of the same release.
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            B="https://github.com/${{ github.repository }}/releases/download/$TAG"
+            printf '{\n  "build": "%s",\n  "windows": "%s/Open-Historia-Beta-Setup.exe",\n  "mac": "%s/Open-Historia-Beta-mac-arm64.zip",\n  "linux": "%s/Open-Historia-Beta-x86_64.AppImage"\n}\n' \
+              "${{ github.run_id }}" "$B" "$B" "$B" > latest.json
+            cat latest.json
+            files+=(latest.json)
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
