@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import {
   DUE_SOON_DAYS,
   STALE_ROUNDS,
+  advanceRecurringDate,
+  normalizeMilestoneRepeat,
   collectProjectTags,
   deriveNextMilestone,
   deriveProjectFlags,
@@ -299,4 +301,54 @@ test("ongoing does not suppress a missed milestone", () => {
 test("describeTimeline says ongoing rather than showing a bare start date", () => {
   assert.equal(describeTimeline(project({ ongoing: true, targetDate: "" }), "2033-01-01"), "Began 1962-03-01 · ongoing");
   assert.equal(describeTimeline(project({ ongoing: true, targetDate: "", startedAt: "" }), "2033-01-01"), "Ongoing");
+});
+
+// ---- recurring milestones --------------------------------------------------
+
+test("advanceRecurringDate steps each cadence", () => {
+  assert.equal(advanceRecurringDate("2033-06-01", "annual", "2033-06-01"), "2034-06-01");
+  assert.equal(advanceRecurringDate("2033-06-01", "biennial", "2033-06-01"), "2035-06-01");
+  assert.equal(advanceRecurringDate("2033-01-15", "quarterly", "2033-01-15"), "2033-04-15");
+  assert.equal(advanceRecurringDate("2033-01-15", "monthly", "2033-01-15"), "2033-02-15");
+  assert.equal(advanceRecurringDate("2033-01-01", "weekly", "2033-01-01"), "2033-01-08");
+});
+
+test("a month-end date clamps rather than overflowing, and recovers after", () => {
+  // A drill on the 31st must not skip February or slide to March 3rd.
+  assert.equal(advanceRecurringDate("2033-01-31", "monthly", "2033-01-31"), "2033-02-28");
+  assert.equal(advanceRecurringDate("2033-01-31", "monthly", "2033-02-28"), "2033-03-31");
+  assert.equal(advanceRecurringDate("2032-01-31", "monthly", "2032-01-31"), "2032-02-29", "leap year");
+});
+
+test("a commitment missed for years catches up past the clock", () => {
+  assert.equal(advanceRecurringDate("2020-06-01", "annual", "2033-01-01"), "2033-06-01");
+  // And keeps its day of the year rather than drifting to when it was noticed.
+  assert.ok(advanceRecurringDate("2020-06-01", "annual", "2033-09-20").endsWith("-06-01"));
+});
+
+test("advanceRecurringDate refuses what it cannot compute", () => {
+  assert.equal(advanceRecurringDate("2033-06-01", ""), "", "not recurring");
+  assert.equal(advanceRecurringDate("1200 BCE", "annual"), "", "non-Gregorian");
+  assert.equal(advanceRecurringDate("", "annual"), "");
+  assert.equal(advanceRecurringDate("2033-13-45", "annual"), "", "impossible date");
+});
+
+test("normalizeMilestoneRepeat accepts the synonyms a model reaches for", () => {
+  for (const [input, expected] of [
+    ["annual", "annual"], ["yearly", "annual"], ["Annually", "annual"], ["every year", "annual"],
+    ["quarter", "quarterly"], ["month", "monthly"], ["week", "weekly"], ["biannual", "biennial"],
+  ]) {
+    assert.equal(normalizeMilestoneRepeat(input), expected, `"${input}"`);
+  }
+  assert.equal(normalizeMilestoneRepeat("fortnightly"), "", "an unsupported cadence is not guessed at");
+  assert.equal(normalizeMilestoneRepeat(""), "");
+});
+
+test("deriveNextMilestone carries the recurrence through to the card", () => {
+  const next = deriveNextMilestone(project({
+    nextMilestone: null,
+    milestones: [{ id: "m", title: "Annual drill", date: "2034-06-01", status: "pending", note: "", repeat: "annual", completedCount: 2 }],
+  }));
+  assert.equal(next.repeat, "annual");
+  assert.equal(next.completedCount, 2);
 });
