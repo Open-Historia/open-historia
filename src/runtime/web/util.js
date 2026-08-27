@@ -35,7 +35,6 @@ export const normalizeId = (value, prefix = "item", maxLen = 0) => {
 export const ensureUniqueId = async (requestedId, exists) => {
   let candidate = requestedId;
   let suffix = 2;
-  // eslint-disable-next-line no-await-in-loop
   while (await exists(candidate)) {
     candidate = `${requestedId}-${suffix}`;
     suffix += 1;

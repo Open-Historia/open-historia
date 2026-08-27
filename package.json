@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:web": "vite preview --outDir dist-web",
-    "test": "node --test \"server/**/*.test.js\"",
+    "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\"",
     "electron": "electron .",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
