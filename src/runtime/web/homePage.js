@@ -97,7 +97,7 @@ const css = `
 .oh-btn.primary:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
 .oh-foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin-top:20px;font-family:var(--display);font-size:.78rem;letter-spacing:.05em;color:var(--sepia2)}
 .oh-foot a{border:0;color:var(--sepia2)}.oh-foot a:hover{color:var(--ink)}
-.oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}
+.oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}.oh-demo{margin:14px 0 0;padding:11px 13px;border:1px solid var(--line2);border-left:3px solid var(--bronze);border-radius:8px;background:rgba(154,107,47,.07);text-align:left}.oh-demo b{color:var(--ink)}.oh-demo-t{color:var(--ink);font-size:.92rem;font-weight:600;margin-bottom:3px}.oh-demo-b{color:var(--sepia);font-size:.85rem;line-height:1.45}.oh-demo-b a{color:var(--bronze);text-decoration:underline}
 `;
 
 const el = (tag, props = {}, ...kids) => { const n = document.createElement(tag); Object.assign(n, props); for (const k of kids) if (k != null) n.append(k); return n; };
@@ -223,6 +223,16 @@ export const showHomePage = () => {
     connPanel,
     acctBox,
     el("div", { className: "oh-rule" }),
+    el("div", { className: "oh-demo" },
+      el("div", { className: "oh-demo-t", textContent: "This is a demo of the game" }),
+      el("div", { className: "oh-demo-b" },
+        "Open Historia is meant to be played in the ",
+        el("a", { href: "https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable", target: "_blank", rel: "noopener", textContent: "desktop app" }),
+        ", which runs the world map from your own machine. The browser version streams every map tile over the network, so expect ",
+        el("b", { textContent: "noticeable lag" }),
+        " — especially when zooming or panning. Your games are saved either way.",
+      ),
+    ),
     play,
     el("div", { className: "oh-trust", textContent: "Trust is in the checksum and the project signature — never in the node itself." }),
     foot,
