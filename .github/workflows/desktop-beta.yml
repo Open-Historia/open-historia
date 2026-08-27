@@ -110,7 +110,7 @@ jobs:
             printf '%s\n' \
               '**Unofficial beta build of a fork of Open Historia.** Not the official game — see [Open-Historia/open-historia](https://github.com/Open-Historia/open-historia) for that.' \
               '' \
-              'It installs **alongside** the official app (its own Start Menu entry, "Open Historia Beta") and **shares your saves** with it: the same games, scenarios, settings and downloaded world map. Play a campaign here, then open the official app and carry on with it.' \
+              'It installs **alongside** the official app (its own Start Menu entry, "Open Historia (Beta)", with a BETA-badged icon) and **shares your saves** with it: the same games, scenarios, settings and downloaded world map. Play a campaign here, then open the official app and carry on with it.' \
               '' \
               '- Windows: `Open-Historia-Beta-Setup.exe`' \
               '- macOS: `Open-Historia-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
@@ -123,7 +123,7 @@ jobs:
               'Feedback: [open an issue](https://github.com/SeventhDread/open-historia/issues).' \
               > notes.md
             gh release create "$TAG" --prerelease \
-              --title "Open Historia Beta — unofficial fork build" \
+              --title "Open Historia (Beta) — unofficial fork build" \
               --notes-file notes.md || true
           fi
           shopt -s nullglob

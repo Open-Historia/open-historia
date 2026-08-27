@@ -12,9 +12,10 @@ what upstream packages.
 | | Official app | This fork's beta |
 | --- | --- | --- |
 | Installer | `Open-Historia-Setup.exe` | `Open-Historia-Beta-Setup.exe` |
-| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia Beta` |
-| Start Menu | Open Historia | Open Historia Beta |
-| Window title | Open Historia | Open Historia Beta — fork build |
+| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia (Beta)` |
+| Start Menu | Open Historia | Open Historia (Beta) |
+| Icon & in-app logo | the compass | the compass with a purple BETA banner |
+| Window title | Open Historia | Open Historia (Beta) — fork build |
 | In-game marker | none | a `BETA · unofficial fork build` pill |
 | Updates from | Open-Historia/open-historia | SeventhDread/open-historia |
 | Saves, scenarios, settings, world map | **shared — one library, both apps** | |
@@ -35,9 +36,17 @@ basemap libraries, and the ~200MB downloaded world map under `public/assets` —
 is read and written by both builds. The beta therefore needs no second map download and
 no re-entering of API keys.
 
-The beta keeps its **own** Chromium profile (`%APPDATA%\Open Historia Beta`): caches,
+The beta keeps its **own** Chromium profile (`%APPDATA%\Open Historia (Beta)`): caches,
 cookies and the per-app single-instance lock. That is what lets the two apps exist as
 separate applications; none of it is game data.
+
+### Where the BETA branding comes from
+
+The client bundle is identical in both builds — it asks for `/logo.png`, `/icon-192.png`
+and `/icon-512.png` either way. In a beta build the embedded server answers those three
+URLs with the badged copies from `electron/beta-assets/` before the static mount sees
+them, so the library header, the startup screen and the window's favicon all carry the
+banner without a second set of source assets or a second client build.
 
 ### Do not run both at once
 
@@ -84,8 +93,13 @@ first — electron-builder writes into `release/` and will happily clobber a run
   cross-build lock, sets the window title, and hands the fork's update + feedback URLs to
   the server.
 - **`electron-builder.beta.yml`** is the installer identity: appId, product name, artifact
-  names. Passing it with `--config` replaces the `build` block in `package.json`, which is
-  why it is a complete config rather than a patch.
+  names, and the installer icon. Passing it with `--config` replaces the `build` block in
+  `package.json`, which is why it is a complete config rather than a patch.
+- **`electron/beta-assets/`** holds the badged artwork — the app icon, the in-app logo and
+  the 192px favicon, each the upstream asset with a purple BETA banner across its bottom
+  fifth. `scripts/make-beta-icons.ps1` regenerates all three if upstream's artwork changes.
+  The word is only legible from ~32px up; below that the banner's colour is what tells the
+  two apps apart on a taskbar.
 - **`.github/workflows/desktop-beta.yml`** builds and publishes.
 
 `extraMetadata` would have been the obvious way to pass the channel through
@@ -100,6 +114,9 @@ Three things are fork-only and must come out. They are marked in-place with
 1. `src/runtime/ForkBuildBadge.jsx` (delete)
 2. its import + `<ForkBuildBadge />` in `src/App.jsx`
 3. the `/api/fork-build` route in `server/server.js`
+4. the beta-branding route in `server/server.js`, with `electron/beta-assets/`, its
+   `OH_BETA_ASSETS_DIR` line in `electron/main.cjs`, and the `!electron/beta-assets`
+   entry in `package.json`'s `build.files`
 
 The rest is upstream-safe and arguably useful to upstream as-is: the shared-library
 resolution is a no-op for the stable build, `OH_DESKTOP_UPDATE_URL` only overrides a

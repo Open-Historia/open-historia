@@ -1152,6 +1152,32 @@ app.delete("/api/basemaps/:id", (req, res) => {
 const fmgDistDir = path.join(__dirname, "../fmg/dist");
 if (fs.existsSync(fmgDistDir)) app.use("/fmg", express.static(fmgDistDir));
 
+// FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE (with the beta-assets folder and
+// the OH_BETA_ASSETS_DIR line in electron/main.cjs). Swaps the app's compass for
+// the BETA-badged one everywhere the page asks for it — the library header, the
+// startup screen, the window's favicon — so a screenshot from a tester is
+// self-identifying. Serving them here rather than editing the artwork in public/
+// keeps ONE set of source assets and one client bundle: an unstamped build asks
+// for the same URLs and gets the originals from dist.
+//
+// Registered before the static mount, which is what makes it a replacement rather
+// than an addition.
+const betaAssetsDir = process.env.OH_BETA_ASSETS_DIR;
+if (betaAssetsDir) {
+  const betaBranding = {
+    "/logo.png": "logo-beta.png",
+    "/icon-192.png": "icon-192-beta.png",
+    "/icon-512.png": "icon-beta.png",
+  };
+  for (const [route, file] of Object.entries(betaBranding)) {
+    const replacement = path.join(betaAssetsDir, file);
+    // Checked once at startup: a missing file must fall through to the real asset,
+    // not 500 the favicon on every page load.
+    if (!fs.existsSync(replacement)) continue;
+    app.get(route, (_req, res) => res.sendFile(replacement));
+  }
+}
+
 app.use(express.static(distDir));
 
 app.get("*splat", (_req, res) => {
