@@ -468,6 +468,13 @@ const runJsonTask = async (taskKey, {
   // actual text that failed to parse. Kept across attempts so whichever one
   // the loop last saw is what the warning below can show.
   let lastRawText = "";
+  // Why the FIRST answer was rejected, and the answer itself when it was a
+  // complete one. Both exist for the same reason: attempt 2 can die before it
+  // produces anything (a provider 500, a timeout), and when it does, everything
+  // learned from attempt 1 used to be thrown away with it. See the catch block
+  // and the salvage pass below the loop.
+  let firstFailureReason = "";
+  let salvageCandidate = null;
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
@@ -514,6 +521,11 @@ const runJsonTask = async (taskKey, {
       let validation = parsed
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      // Clearing the schema means this is a complete, applicable turn. Only the
+      // task validator can still reject it below, and while a retry remains it
+      // does so STRICTLY — for shape-of-story problems it would have salvaged
+      // had this been the last word. Worth keeping for exactly that case.
+      const schemaValid = validation.valid;
       if (validation.valid && validatePayload) {
         // finalAttempt tells the validator this is the last chance: callers use
         // it to switch from strict (return a corrective error for the retry) to
@@ -534,6 +546,8 @@ const runJsonTask = async (taskKey, {
       }
 
       failureReason = validation.error;
+      if (!firstFailureReason) firstFailureReason = validation.error;
+      if (schemaValid && !salvageCandidate) salvageCandidate = parsed;
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
@@ -555,7 +569,16 @@ const runJsonTask = async (taskKey, {
     }
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
-    failureReason = normalizeString(actualError?.message || actualError) || failureReason;
+    const transportReason = normalizeString(actualError?.message || actualError);
+    // The retry dying in transport used to ERASE why the first answer was
+    // rejected, so the debug report the player copies out read "Internal server
+    // error" above a raw response that had nothing to do with it — the text
+    // shown is attempt 1's (lastRawText is only reassigned once a call returns),
+    // and its actual rejection reason was gone. Report the first answer's reason
+    // first, since that is the one the raw text belongs to.
+    failureReason = firstFailureReason
+      ? `${firstFailureReason}${transportReason ? ` The retry then failed: ${transportReason}` : ""}`
+      : transportReason || failureReason;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
@@ -567,6 +590,28 @@ const runJsonTask = async (taskKey, {
     throw signal.reason instanceof Error
       ? signal.reason
       : new DOMException("Timeline jump cancelled.", "AbortError");
+  }
+
+  // Last chance before the canned fallback. An earlier answer that cleared the
+  // schema is a finished turn — every event, transfer and projectOp the model
+  // wrote — and the task validator rejected it only under `strict`, which is on
+  // solely BECAUSE a retry remained: an event count, a stray date, an invented
+  // region name, all of which it repairs in place on the final attempt. When the
+  // retry then produced nothing usable (a provider 500, a timeout, a second
+  // answer that failed outright), that final-attempt pass never ran, and the
+  // player lost a complete turn to a rule the model was never given the chance
+  // to satisfy. Run it now — the same salvage the second answer would have got.
+  if (salvageCandidate) {
+    try {
+      const salvageError = validatePayload
+        ? normalizeString(await validatePayload(salvageCandidate, { attempt: 2, finalAttempt: true }))
+        : "";
+      if (!salvageError) {
+        return { generation: { source: "ai", fallbackReason: "" }, payload: salvageCandidate };
+      }
+    } catch {
+      // Salvage validation is best-effort; fall through to the fallback below.
+    }
   }
 
   if (typeof fallback !== "function") {
