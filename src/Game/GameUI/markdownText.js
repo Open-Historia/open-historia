@@ -112,6 +112,104 @@ const spaceOutTables = (lines) => {
     return out;
 };
 
+// One row's cells, split on the pipes that actually separate them: an escaped
+// \| is content, not a boundary.
+const splitCells = (line) => {
+    const inner = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    const cells = [];
+    let current = "";
+    for (let index = 0; index < inner.length; index += 1) {
+        if (inner[index] === "\\" && inner[index + 1] === "|") {
+            current += "\\|";
+            index += 1;
+            continue;
+        }
+        if (inner[index] === "|") {
+            cells.push(current.trim());
+            current = "";
+            continue;
+        }
+        current += inner[index];
+    }
+    cells.push(current.trim());
+    return cells;
+};
+
+const buildRow = (cells) => `| ${cells.join(" | ")} |`;
+
+// Keep each kept column's alignment marker; anything unrecognised becomes plain.
+const buildDelimiter = (cells) => buildRow(cells.map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    if (left && right) return ":---:";
+    if (right) return "---:";
+    if (left) return ":---";
+    return "---";
+}));
+
+// Repairs the two ways a model's column count goes wrong, both of which cost the
+// player something real:
+//
+//   - A row with MORE cells than the header. GFM silently drops the extras, so
+//     content the model wrote never reaches the screen. Widen the header instead.
+//   - A column no row ever fills. GFM pads the missing cells, so a header of
+//     three columns over rows that only ever fill the first renders as one
+//     column of text and two empty ones — which in a 20rem panel is most of the
+//     width spent on nothing. Drop the columns that are empty all the way down.
+//
+// Rows are only rewritten when one of those actually applies: a well-formed
+// table is returned exactly as the model wrote it, spacing and all.
+const repairTableColumns = (lines) => {
+    const out = [];
+    let index = 0;
+
+    while (index < lines.length) {
+        const next = lines[index + 1];
+        if (!(isTableRow(lines[index]) && next !== undefined && isDelimiterRow(next))) {
+            out.push(lines[index]);
+            index += 1;
+            continue;
+        }
+
+        const header = splitCells(lines[index]);
+        const delimiter = splitCells(next);
+        const bodyStart = index + 2;
+        let bodyEnd = bodyStart;
+        while (bodyEnd < lines.length && isTableRow(lines[bodyEnd]) && !isDelimiterRow(lines[bodyEnd])) bodyEnd += 1;
+        const body = lines.slice(bodyStart, bodyEnd).map(splitCells);
+
+        const width = Math.max(header.length, ...body.map((row) => row.length));
+        const pad = (row) => (row.length >= width ? row.slice(0, width) : [...row, ...Array(width - row.length).fill("")]);
+
+        const paddedHeader = pad(header);
+        const paddedBody = body.map(pad);
+        // A column counts as filled if ANY row has something in it. With no body
+        // rows at all there is nothing to judge, so keep every column.
+        const keep = paddedBody.length === 0
+            ? paddedHeader.map((cell, column) => column)
+            : paddedHeader
+                .map((cell, column) => column)
+                .filter((column) => paddedBody.some((row) => row[column] !== ""));
+        const kept = keep.length > 0 ? keep : paddedHeader.map((cell, column) => column);
+
+        const widened = width > header.length;
+        const pruned = kept.length < width;
+
+        if (!widened && !pruned) {
+            for (let line = index; line < bodyEnd; line += 1) out.push(lines[line]);
+        } else {
+            const pick = (row) => kept.map((column) => row[column] ?? "");
+            out.push(buildRow(pick(paddedHeader)));
+            out.push(buildDelimiter(pick(pad(delimiter))));
+            for (const row of paddedBody) out.push(buildRow(pick(row)));
+        }
+
+        index = bodyEnd;
+    }
+
+    return out;
+};
+
 // "###Heading" is not a heading in CommonMark — the space is required, and a
 // model dropping it is common enough to be worth repairing.
 const spaceOutHeadings = (line) => line.replace(/^(\s{0,3})(#{1,6})([^#\s])/, "$1$2 $3");
@@ -132,7 +230,9 @@ const normalizeSegment = (segment) => {
     // The paragraph tags above can leave runs of blank lines behind.
     text = text.replace(/\n{3,}/g, "\n\n");
 
-    const lines = spaceOutTables(text.split("\n").map(spaceOutHeadings));
+    // Spacing first: repairTableColumns can only see a table the parser would
+    // see, and a table glued to the paragraph above is not one yet.
+    const lines = repairTableColumns(spaceOutTables(text.split("\n").map(spaceOutHeadings)));
 
     return lines.join("\n").replace(/\u0000(\d+)\u0000/g, (whole, index) => spans[Number(index)] ?? whole);
 };
