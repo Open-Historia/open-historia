@@ -762,6 +762,126 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
     </button>
 );
 
+// --- Network: let other devices connect -------------------------------------
+// The server binds loopback by default, which is right for the desktop app and
+// wrong for the two setups this game has always supported: the Android client
+// pointed at a desktop, and a browser on another computer. Those used to work
+// because the server was open to the network whether or not anyone wanted it.
+// Now they work because the player says so, here — no environment variable, no
+// restart, and the address to type into the phone is on screen instead of being
+// something you go and look up.
+//
+// Server-backed builds only: the hosted website has no local server to share.
+const NetworkSharing = () => {
+    const [state, setState] = useState(null);   // null until we know there is a server
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch("/api/server/network");
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!cancelled) setState(data);
+            } catch {
+                /* no server behind this build — leave the section hidden */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    if (!state) return null;
+
+    const toggle = async () => {
+        if (busy || state.lockedByEnv) return;
+        setBusy(true);
+        setError("");
+        const next = !state.lanEnabled;
+        try {
+            const response = await fetch("/api/server/network", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ lanEnabled: next }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "Could not change this.");
+            setState(data);
+        } catch (nextError) {
+            setError(nextError.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Network</div>
+
+        <div style={state.lockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+        <Toggle
+        label="Let other devices connect"
+        enabled={state.lanEnabled}
+        onToggle={toggle}
+        />
+        </div>
+
+        {state.lockedByEnv ? (
+            <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+            Set by the OH_HOST environment variable ({state.host}), so this switch is read-only. Unset it to control sharing from here.
+            </div>
+        ) : (
+            <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+            On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
+            </div>
+        )}
+
+        {state.lanEnabled && state.addresses?.length > 0 && (
+            <div style={{
+                background: "rgba(59,130,246,0.12)",
+                border: "1px solid rgba(96,165,250,0.35)",
+                borderRadius: "8px",
+                fontSize: "0.74rem",
+                lineHeight: 1.5,
+                marginBottom: "0.5rem",
+                padding: "0.5rem 0.6rem",
+            }}>
+            <div style={{ marginBottom: "0.25rem", opacity: 0.8 }}>Type this into the Android app:</div>
+            {state.addresses.map((address) => (
+                <div key={address.url} style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>
+                {address.url}
+                {state.addresses.length > 1 && (
+                    <span style={{ fontWeight: 400, opacity: 0.55 }}> ({address.interface})</span>
+                )}
+                </div>
+            ))}
+            </div>
+        )}
+
+        {state.lanEnabled && (
+            <div style={{
+                background: "rgba(245,158,11,0.12)",
+                border: "1px solid rgba(245,158,11,0.35)",
+                borderRadius: "8px",
+                color: "#fbbf24",
+                fontSize: "0.72rem",
+                lineHeight: 1.45,
+                marginBottom: "0.4rem",
+                padding: "0.45rem 0.6rem",
+            }}>
+            This server has no password. Anyone on the same network can open, change and delete your games while this is on — fine at home, not on public Wi-Fi.
+            </div>
+        )}
+
+        {error && (
+            <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginBottom: "0.4rem" }}>{error}</div>
+        )}
+        </div>
+    );
+};
+
 const SettingsMenu = ({
     topOffset = "0.5rem",
     isFullscreenEnabled,
@@ -899,6 +1019,8 @@ const SettingsMenu = ({
         On: time skips give the model 5 minutes, then fall back to canned events. Off (default): generation waits as long as the model needs. Cancel works either way.
         </div>
         </div>
+
+        <NetworkSharing />
 
         {typeof onOpenCheats === "function" && (
             <button
