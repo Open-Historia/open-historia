@@ -656,6 +656,9 @@ const readGameMeta = (gameId) => {
 
   return {
     accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_GAME_META.accentColor,
+    // Hidden from the library but fully intact on disk — the "I want it out of
+    // the way, not gone" case that delete cannot serve.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? new Date().toISOString(),
     description,
@@ -1709,6 +1712,7 @@ const updateGame = (
   gameId,
   {
     accentColor,
+    archived,
     description,
     eyebrow,
     game,
@@ -1734,6 +1738,7 @@ const updateGame = (
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
+                archived: typeof archived === "boolean" ? archived : currentMeta.archived,
                 description: String(description ?? currentMeta.description).trim() || currentMeta.description,
                 eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
                 heroSubtitle:
@@ -1742,6 +1747,29 @@ const updateGame = (
                 name: String(name ?? currentMeta.name).trim() || currentMeta.name,
                 subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
+
+  // Archiving the game you are currently IN would hide it from the library while
+  // leaving it active: the player is dropped into a session they can no longer
+  // see, or switch away from, because switching happens from the list it just
+  // left. Hand the active slot to the most recently played game that is still
+  // visible. Enforced here rather than in the UI so a direct API call cannot
+  // skip it, and only on the archive transition so unarchiving stays inert.
+  if (archived === true && !currentMeta.archived) {
+    const manifest = getGameManifest();
+    if (manifest.activeGameId === gameId) {
+      const fallback = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID)
+        .filter((id) => id !== gameId && fs.existsSync(getGameMetaPath(id)))
+        .map((id) => readGameMeta(id))
+        .filter((meta) => !meta.archived)
+        .sort((left, right) => String(right.lastPlayedAt ?? "").localeCompare(String(left.lastPlayedAt ?? "")))[0];
+      // Only reassign when there is somewhere to go. Archiving the LAST visible
+      // game leaves it active on purpose: you have to be in some game, and it is
+      // still reachable and marked Current on the Archived shelf. Blanking the id
+      // instead would just make buildGameCatalog re-elect games[0] anyway, which
+      // is the same outcome reached by accident.
+      if (fallback) saveGameManifest({ ...manifest, activeGameId: fallback.id });
+    }
+  }
 
   // See the note in updateScenario: game.country is an owner reference and needs
   // the world to resolve a preset's polity.
