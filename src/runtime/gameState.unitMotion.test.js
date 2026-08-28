@@ -451,3 +451,31 @@ test("idlePulseTick survives a normalize round trip", () => {
   assert.equal(normalizeWorldState({ idlePulseTick: 7 }).idlePulseTick, 7);
   assert.equal(normalizeWorldState({}).idlePulseTick, 0);
 });
+
+// A unit that reached its destination used to be stamped "moving" unless its
+// posture happened to be "patrol" — and pruneSatisfiedUnitOrders then dropped the
+// order, so nothing was ever left to correct it. The map counter kept its yellow
+// moving ring for the rest of the campaign, and the classic popup's Status row read
+// "moving" for a formation sitting still.
+test("arriving stands a unit down whatever its posture", () => {
+  for (const posture of ["", "holding", "massing", "blockade", "patrol"]) {
+    const result = applyUnitOpBatch(
+      [unit({ type: "naval", lng: 0, lat: 1, posture })],
+      [],
+      [{ op: "move", unitId: "unit-1", toLng: 1, toLat: 0, posture }],
+      { gameDate: "2024-01-01", elapsedDays: 7, round: 3 },
+    );
+    assert.equal(result.units[0].status, "idle", `posture "${posture}" left the unit reading as moving`);
+  }
+});
+
+// The other side of the same line: still short of the destination is still moving.
+test("falling short of the destination still reads as moving", () => {
+  const result = applyUnitOpBatch(
+    [unit({ type: "infantry", lng: 0, lat: 1, posture: "holding" })],
+    [],
+    [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0 }],
+    { gameDate: "2024-01-01", elapsedDays: 7 },
+  );
+  assert.equal(result.units[0].status, "moving");
+});

@@ -851,6 +851,31 @@ const PROJECT_KIND_SET = new Set(["project", "operation"]);
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
 
+// The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
+// mark a checkpoint reached writes "completed" or "achieved" about as often as it
+// writes "done", and an unrecognised value fell through to the "pending" default —
+// which is not a no-op: mergeInto below assigns the status unconditionally, so a
+// checkpoint already marked done was pushed BACK to pending by the very op meant to
+// confirm it, while the op still counted as a change and the advisor's receipt card
+// reported "1 updated". The structured event path is fenced by the schema's enum;
+// the advisor's ```projects block has no schema at all, and that is the path every
+// button on the Projects panel drives.
+const PROJECT_MILESTONE_STATUS_ALIASES = {
+  complete: "done", completed: "done", finished: "done", achieved: "done",
+  reached: "done", met: "done", delivered: "done", passed: "done",
+  slipped: "missed", late: "missed", overdue: "missed", failed: "missed", unmet: "missed",
+  outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
+};
+
+// "" when the op carried no status at all, so mergeInto can tell "leave it alone"
+// from "set it to pending" — a model re-dating a checkpoint must not un-complete it.
+const resolveMilestoneStatus = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (!raw) return "";
+  if (PROJECT_MILESTONE_STATUS_SET.has(raw)) return raw;
+  return PROJECT_MILESTONE_STATUS_ALIASES[raw] || "pending";
+};
+
 // Synonyms a model actually writes for these, mapped onto the closed vocabulary.
 // Observed in the field: a real backfill came back with "status":"completed" on
 // a finished operation, which fell through to the "active" default and put a
@@ -900,13 +925,15 @@ const normalizeProjectMilestone = (entry, index = 0) => {
   const title = normalizeOptionalString(entry.title || entry.name || entry.label);
   if (!title) return null;
 
-  const status = normalizeOptionalString(entry.status).toLowerCase();
   const completedCount = Number(entry.completedCount);
   return {
     id: normalizeOptionalString(entry.id) || generateId(`milestone-${index}`),
     title,
     date: canonicalizeDateString(entry.date || entry.due || entry.targetDate),
-    status: PROJECT_MILESTONE_STATUS_SET.has(status) ? status : "pending",
+    // A STORED milestone always has a status, so an absent one is "pending" here.
+    // Whether an OP meant to change it is a separate question — see the
+    // statusProvided flag normalizeProjectOp records.
+    status: resolveMilestoneStatus(entry.status) || "pending",
     note: normalizeOptionalString(entry.note || entry.description),
     // A standing commitment that comes round again — an annual drill, a
     // quarterly review. Marking one done rolls it to its next occurrence rather
@@ -1135,9 +1162,18 @@ const normalizeProjectOp = (entry) => {
 
   if (op === "milestone") {
     if (!projectId && !name) return null;
-    const milestone = normalizeProjectMilestone(entry.milestone ?? entry, 0);
+    const source = entry.milestone ?? entry;
+    const milestone = normalizeProjectMilestone(source, 0);
     if (!milestone) return null;
-    return { op: "milestone", projectId, name, milestone };
+    // Did the op actually SAY what the checkpoint's status is? normalizeProjectMilestone
+    // fills every field, so without this a model re-dating a checkpoint —
+    // {"title":"Sea trials","date":"1936-11-01"} — would silently un-complete it.
+    // Persisted on the op because events.json is replayed by the staged reveal, and
+    // re-normalizing must not widen an absent status into a stated one.
+    const statusProvided = typeof entry.statusProvided === "boolean"
+      ? entry.statusProvided
+      : normalizeOptionalString(source && typeof source === "object" ? source.status : "") !== "";
+    return { op: "milestone", projectId, name, milestone, statusProvided };
   }
 
   if (op === "complete" || op === "finish" || op === "completed") {
@@ -1181,6 +1217,24 @@ const PROJECT_PATCHABLE_FIELDS = [
   "startedAt", "targetDate", "lastUpdate", "note", "focus",
   "linkedUnitIds", "linkedMarkerIds",
 ];
+
+// The first key of `field`'s alias list that the patch actually carries, or "" for
+// a field it left out.
+//
+// This used to be a bare `patch[field] !== undefined`, i.e. canonical names only —
+// so every alias PROJECT_FIELD_ALIASES documents and normalizeProjectEntry accepts
+// was silently dropped on an update. A model writing the natural thing,
+// {"op":"update","name":"Project Leviathan","description":"Hull complete",
+// "dueDate":"1938-03-01"}, changed nothing at all: the field never reached the
+// merged object, so the normalizer never saw the alias it knows how to read.
+//
+// The structured event path is fenced by projectOpSchema's canonical-only update
+// variant. The advisor's ```projects block has no schema, and that is the path
+// every button on the Projects panel drives.
+const patchedAlias = (patch, field) => {
+  const aliases = PROJECT_FIELD_ALIASES[field] ?? [field];
+  return aliases.find((alias) => patch[alias] !== undefined) ?? "";
+};
 
 // Apply a batch of project ops (pure).
 //
@@ -1276,7 +1330,12 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
       const merged = { ...current };
       for (const field of PROJECT_PATCHABLE_FIELDS) {
-        if (patch[field] !== undefined) merged[field] = patch[field];
+        // Written under the CANONICAL key whichever alias carried it, so
+        // normalizeProjectEntry below reads the new value rather than the one it
+        // is replacing (its own `entry.summary || entry.description` fallback
+        // would otherwise keep the old summary and ignore the patch's).
+        const alias = patchedAlias(patch, field);
+        if (alias) merged[field] = patch[alias];
       }
       // tags follows the countryTags rule exactly: an ARRAY replaces the list
       // wholesale (so [] really does mean "this has no tags any more"), while an
@@ -1309,7 +1368,10 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           ...entry,
           title: op.milestone.title || entry.title,
           date: op.milestone.date || entry.date,
-          status: op.milestone.status,
+          // Only when the op said so. An op that merely re-dates or annotates a
+          // checkpoint must not reset a completed one back to pending — see the
+          // statusProvided flag in normalizeProjectOp.
+          status: op.statusProvided ? op.milestone.status : entry.status,
           note: op.milestone.note || entry.note,
           repeat: op.milestone.repeat || entry.repeat,
           id: entry.id,
@@ -1319,7 +1381,13 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         // to the next occurrence after whichever is later — the date it was due or
         // the date it was actually marked off — and set it pending, so the board
         // shows the next one instead of an empty "next milestone".
-        if (merged.status === "done" && merged.repeat) {
+        //
+        // Gated on the op HAVING said done, not merely on the merged status being
+        // done: a roll is the answer to "this was performed", and an entry can sit
+        // at done without one (advanceRecurringDate declines an undated
+        // milestone), which a later re-dating op would otherwise bank as a second
+        // performance it never reported.
+        if (op.statusProvided && merged.status === "done" && merged.repeat) {
           const rolled = advanceRecurringDate(merged.date, merged.repeat, date || merged.date);
           if (rolled) {
             return {
@@ -1684,7 +1752,14 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
           lng: step.lng,
           lat: step.lat,
           regionId: op.regionId || unit.regionId,
-          status: step.arrived && posture === "patrol" ? "idle" : "moving",
+          // Arrival is arrival, whatever the formation is there to do. This used
+          // to read `step.arrived && posture === "patrol"`, so a unit that reached
+          // its destination under any other posture was stamped "moving" — and
+          // pruneSatisfiedUnitOrders then dropped the order, leaving nothing to
+          // ever correct it. The counter kept its yellow moving ring for the rest
+          // of the campaign, and the classic popup's Status row said "moving" for
+          // a fleet sitting still.
+          status: step.arrived ? "idle" : "moving",
           posture,
           orderId: "",
           ...(eventId ? { eventId } : {}),
