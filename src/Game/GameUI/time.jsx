@@ -1033,7 +1033,9 @@ const TimelineHistoryPanel = ({
     onRevealAll,
     lookups,
     onClose,
+    canRollbackTurn,
     onCopyDebugMessage,
+    onRollbackTurn,
     record,
     topOffset,
     visibleEventCount,
@@ -1055,6 +1057,18 @@ const TimelineHistoryPanel = ({
         const succeeded = await onCopyDebugMessage();
         setCopyState(succeeded ? "copied" : "failed");
         setTimeout(() => setCopyState("idle"), 2000);
+    };
+    // idle | working — the undo runs without switching panels, so this button is
+    // the only place the player can see that anything is happening.
+    const [rollbackState, setRollbackState] = useState("idle");
+    const handleRollbackClick = async () => {
+        if (rollbackState === "working" || !canRollbackTurn || typeof onRollbackTurn !== "function") return;
+        setRollbackState("working");
+        try {
+            await onRollbackTurn();
+        } finally {
+            setRollbackState("idle");
+        }
     };
 
     useEffect(() => {
@@ -1091,6 +1105,7 @@ const TimelineHistoryPanel = ({
             }}
             >
             {warning}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.6rem" }}>
             {typeof onCopyDebugMessage === "function" && (
                 <button
                 type="button"
@@ -1108,7 +1123,6 @@ const TimelineHistoryPanel = ({
                     fontSize: "0.72rem",
                     fontWeight: 600,
                     gap: "0.35rem",
-                    marginTop: "0.6rem",
                     padding: "0.4rem 0.7rem",
                     transition: "background 0.15s, border-color 0.15s, color 0.15s",
                 }}
@@ -1116,6 +1130,38 @@ const TimelineHistoryPanel = ({
                 {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy — try again" : copyState === "copying" ? "Copying…" : "📋 Copy debugging message"}
                 </button>
             )}
+            {/* Only offered while a restore point actually exists — a fallback on
+                the very first turn has nothing behind it to roll back to. The
+                working state keeps it rendered: canRollbackTurn goes false the
+                moment the undo starts loading, which would otherwise unmount the
+                button mid-click and take its progress label with it. */}
+            {typeof onRollbackTurn === "function" && (canRollbackTurn || rollbackState === "working") && (
+                <button
+                type="button"
+                onClick={handleRollbackClick}
+                disabled={rollbackState === "working"}
+                title="Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
+                style={{
+                    alignItems: "center",
+                    background: "rgba(180,83,9,0.22)",
+                    border: "1px solid rgba(245,158,11,0.45)",
+                    borderRadius: "8px",
+                    color: "#fcd9a8",
+                    cursor: rollbackState === "working" ? "default" : "pointer",
+                    display: "flex",
+                    fontFamily: "sans-serif",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    gap: "0.35rem",
+                    opacity: rollbackState === "working" ? 0.7 : 1,
+                    padding: "0.4rem 0.7rem",
+                    transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                }}
+                >
+                {rollbackState === "working" ? "Rolling back…" : "↩ Rollback turn"}
+                </button>
+            )}
+            </div>
             </div>
         )}
         {!record ? (
@@ -1388,12 +1434,16 @@ const DateWidget = ({
         return () => { active = false; };
     }, [gameData?.round]);
 
-    const runUndo = async () => {
+    // stayOnHistory: called from the fallback warning's "Rollback turn" button,
+    // which lives in the history panel — yanking that panel away mid-undo would
+    // hide the very thing the player just acted on. The Timeline panel's own
+    // undo button still switches, since that is where it is already looking.
+    const runUndo = async ({ stayOnHistory = false } = {}) => {
         if (isLoading || undoCount <= 0) {
-            return;
+            return false;
         }
 
-        setPanel("skip");
+        if (!stayOnHistory) setPanel("skip");
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
@@ -1407,6 +1457,7 @@ const DateWidget = ({
                 setVisibleEventCount(1);
                 setUndoCount(result.remaining);
                 setPanel("history");
+                return true;
             }
         } catch (undoError) {
             console.error("Failed to undo turn:", undoError);
@@ -1414,6 +1465,7 @@ const DateWidget = ({
         } finally {
             setIsLoading(false);
         }
+        return false;
     };
 
     // Display-name lookups for the timeline's own labels, off the same catalogs
@@ -1731,6 +1783,11 @@ const DateWidget = ({
         lookups={lookups}
         onClose={() => setPanel(null)}
         onCopyDebugMessage={handleCopyDebugMessage}
+        // A fallback turn is usually a turn the player wants gone; the undo it
+        // needs already exists over in the Timeline panel, so this just saves
+        // the trip. Same restore point, same code path.
+        canRollbackTurn={undoCount > 0 && !isLoading}
+        onRollbackTurn={() => runUndo({ stayOnHistory: true })}
         record={latestTurnRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}
