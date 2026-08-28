@@ -4,6 +4,7 @@ import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
@@ -132,36 +133,6 @@ const applyAdvisorActions = async (proposal) => {
     return items;
 };
 
-// Copy-to-clipboard, with the execCommand fallback still in place.
-//
-// The desktop build has no developer tools bound (no F12, no menu entry), so a
-// player who hits a provider error has no way to get at what actually happened.
-// navigator.clipboard needs a secure context, which the packaged app has but a
-// plain-http LAN host does not — hence the textarea fallback rather than a
-// silent failure.
-const copyToClipboard = async (text) => {
-    try {
-        if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(text);
-            return true;
-        }
-    } catch { /* fall through to the legacy path */ }
-    try {
-        const scratch = document.createElement("textarea");
-        scratch.value = text;
-        scratch.setAttribute("readonly", "");
-        scratch.style.position = "fixed";
-        scratch.style.opacity = "0";
-        document.body.appendChild(scratch);
-        scratch.select();
-        const ok = document.execCommand("copy");
-        document.body.removeChild(scratch);
-        return ok;
-    } catch {
-        return false;
-    }
-};
-
 const CopyButton = ({ text, label = "Copy for a bug report", tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
     const [state, setState] = useState("idle");
     return (
@@ -265,7 +236,14 @@ const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
 // The read-modify-write spreads the WHOLE world back. A shallow patch here would
 // drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
 // — the same trap saveGame documents in libraryBar.jsx.
-const applyAdvisorProjects = async (proposal, gameDate) => {
+// `round` matters as much as the date: applyProjectOps stamps it onto
+// updatedRound, which is the ONLY thing deriveProjectFlags uses to decide whether a
+// programme has gone quiet. Without it an advisor update kept whatever round the
+// last EVENT stamped, so asking the advisor to brief you on a project — it updates
+// the board, the receipt card says "1 updated" — left the card still wearing "No
+// recent progress". The event path has always passed it (gameplay.js); this one had
+// not.
+const applyAdvisorProjects = async (proposal, gameDate, round) => {
     if (!Array.isArray(proposal) || proposal.length === 0) return null;
 
     const world = await readWorldState({ force: true });
@@ -273,7 +251,10 @@ const applyAdvisorProjects = async (proposal, gameDate) => {
 
     // applyProjectOps normalizes defensively, so the raw parsed ops are fine
     // here; it also drops anything aimed at a project that does not exist.
-    const next = applyProjectOps(world.projects, proposal, { date: String(gameDate || "") });
+    const next = applyProjectOps(world.projects, proposal, {
+        date: String(gameDate || ""),
+        round: Number(round) || 0,
+    });
 
     const items = [];
     for (const project of next) {
@@ -921,10 +902,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     const runTurn = async (text, { replaceTrailingError = false } = {}) => {
         if (!text || isLoading) return;
 
-        const { gameDate } = await readJson(JSON_URLS.game, {
-            defaultValue: { gameDate: null },
+        // `round` rides along with the date for applyAdvisorProjects — see its
+        // comment for why a project update without one reads as stale.
+        const { gameDate, round: gameRound } = await readJson(JSON_URLS.game, {
+            defaultValue: { gameDate: null, round: 0 },
             force: true,
-        }).catch(() => ({ gameDate: null }));
+        }).catch(() => ({ gameDate: null, round: 0 }));
 
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
@@ -967,7 +950,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
-            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate).catch((error) => {
+            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
                 console.error("Failed to apply advisor-proposed projects:", error);
                 return null;
             });

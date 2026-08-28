@@ -17,6 +17,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "
 
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { PROJECT_BOARD_LIMIT, readEventsState, readWorldState } from "../../runtime/gameState.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   PROJECT_SORTS,
   collectProjectTags,
@@ -419,7 +420,13 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         }
         setGameDate(String(game?.gameDate ?? ""));
         setRound(Number(game?.round) || 0);
-        setPlayerCountry(String(game?.country ?? ""));
+        // Canonicalised here, not in projects.js, which is deliberately
+        // import-free. game.country is written from the country picker's option
+        // `code`, which on a stock scenario is a bare GADM code ("GBR"), while
+        // every project's ownerCode has been through toCountryName ("United
+        // Kingdom") — so comparing them raw filed the player's own programmes
+        // under Foreign.
+        setPlayerCountry(toCountryName(String(game?.country ?? "")));
         setHasLoaded(true);
       } catch {
         // A failed read leaves the last good board on screen rather than
@@ -436,17 +443,40 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   // Event titles for the activity feed, fetched only once a card is actually
   // expanded. events.json is the biggest of the runtime documents and almost
   // every open of this panel never expands anything.
+  //
+  // Fetched on DEMAND rather than once. The guard used to be `eventTitles.size > 0`,
+  // i.e. read the log once and never again — and this panel is never unmounted (the
+  // hasOpened latch keeps it alive for the session), so after a few more rounds a
+  // card would say "Activity (3)" and then "The events behind this are no longer in
+  // the log" about three events that were very much in it.
+  const expandedProject = useMemo(
+    () => (expandedId ? projects.find((project) => project.id === expandedId) : null),
+    [expandedId, projects],
+  );
+  // Ids the open card needs and the lookup does not carry. Stays true when an event
+  // has genuinely aged out of the log, but the effect's deps do not change on a
+  // failed lookup, so that costs one read per expand rather than a loop.
+  const needsEventTitles = Boolean(
+    expandedProject?.eventIds.some((id) => !eventTitles.has(id)),
+  );
+
   useEffect(() => {
-    if (!expandedId || eventTitles.size > 0) return undefined;
+    if (!needsEventTitles) return undefined;
     let cancelled = false;
-    readEventsState()
+    readEventsState({ force: true })
       .then((events) => {
         if (cancelled) return;
-        setEventTitles(new Map(events.map((event) => [event.id, { date: event.date, title: event.title }])));
+        // Merged, not replaced: an id learned earlier must survive a read taken
+        // after the log has been pruned past it.
+        setEventTitles((current) => {
+          const next = new Map(current);
+          for (const event of events) next.set(event.id, { date: event.date, title: event.title });
+          return next;
+        });
       })
       .catch(() => { /* the feed just stays empty */ });
     return () => { cancelled = true; };
-  }, [expandedId, eventTitles.size]);
+  }, [needsEventTitles, expandedId]);
 
   // Closing the panel resets the transient view state, so reopening is a clean
   // read rather than whatever was half-filtered last time.
