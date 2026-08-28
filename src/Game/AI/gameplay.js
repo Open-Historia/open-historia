@@ -1,5 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { callAI } from "./main.jsx";
+import { logAi } from "../../runtime/logClient.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -503,6 +504,15 @@ const runJsonTask = async (taskKey, {
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      logAi("ai.request", `${taskKey} attempt ${outputAttempt}`, {
+        task: taskKey,
+        attempt: outputAttempt,
+        promptChars: systemPrompt.length,
+        historyMessages: Array.isArray(history) ? history.length : 0,
+        // The whole context, so "what does the AI actually know here" is
+        // answerable from the log rather than by re-deriving it.
+        systemPrompt,
+      });
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
@@ -587,6 +597,11 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     failureReason = normalizeString(actualError?.message || actualError) || failureReason;
+    logAi("ai.failed", `${taskKey}: ${failureReason}`, {
+      task: taskKey,
+      aborted: controller.signal.aborted,
+      stack: actualError?.stack ? String(actualError.stack).slice(0, 4000) : undefined,
+    }, "error");
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }

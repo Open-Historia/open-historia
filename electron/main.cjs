@@ -29,6 +29,41 @@ const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
 
+// Main-process crashes are the ones that reach the player as a bare "A
+// JavaScript error occurred in the main process" dialog with nothing to act on —
+// the EADDRINUSE port clash was exactly that. They also happen BEFORE the server
+// exists, so this writes the same JSONL directly rather than POSTing to /api/log
+// like the page does. Same file, same shape; logStore.js owns rotation and
+// redaction for everything written later.
+const LOG_FILE = path.join(DATA_DIR, "logs", "app.log");
+const logMain = (level, event, message, data) => {
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    fs.appendFileSync(LOG_FILE, JSON.stringify({
+      at: new Date().toISOString(),
+      level,
+      source: "main",
+      event,
+      message: String(message ?? "").slice(0, 8000),
+      ...(data === undefined ? {} : { data }),
+    }) + "\n", "utf8");
+  } catch {
+    // Diagnostics must never become the failure they were meant to explain.
+  }
+};
+
+process.on("uncaughtException", (error) => {
+  logMain("error", "main.uncaughtException", error && error.message, {
+    stack: error && error.stack ? String(error.stack).slice(0, 8000) : undefined,
+    code: error && error.code,
+  });
+});
+process.on("unhandledRejection", (reason) => {
+  logMain("error", "main.unhandledRejection", reason && (reason.message || String(reason)), {
+    stack: reason && reason.stack ? String(reason.stack).slice(0, 8000) : undefined,
+  });
+});
+
 // The build id the release workflow stamped in. The server passes it to the page so
 // the update banner can compare it against the published one. Deliberately routed
 // this way rather than through a preload: attaching a preload to the game window is
@@ -173,6 +208,7 @@ const startServer = async () => {
   const port = await findFreePort(requested);
   if (port !== requested) {
     console.log(`Port ${requested} is in use — starting Open Historia on ${port} instead.`);
+    logMain("warn", "server.portInUse", `Port ${requested} is in use; using ${port} instead.`);
   }
   // Both server.js and the loadURL below read this, so they cannot disagree.
   process.env.PORT = String(port);
