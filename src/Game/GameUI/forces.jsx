@@ -10,6 +10,7 @@ import {
   clearInteractionMode,
 } from "../Map/unitsController.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.js";
 
 const TYPE_LABEL = {
@@ -29,15 +30,33 @@ const TYPE_GLYPH = {
   garrison: "🏰",
 };
 
-// Deploy is the only interaction mode left — units depict what the events say,
-// so movement and combat belong to the AI, not to the player's mouse.
 // Strength is a percentage of the formation's established strength, so the bands
 // are readable: near full, worn down, or a shell of itself.
 export const strengthColor = (strength) =>
   strength > 60 ? "#4ade80" : strength > 25 ? "#fbbf24" : "#f87171";
 
+// Intent, in the player's language rather than the schema's. Shared with the unit
+// popup (Selection/Units.jsx), which imports it from here — the two must not
+// disagree about what "massing" is called.
+export const POSTURE_LABEL = {
+  holding: "Holding position",
+  massing: "Massing",
+  patrol: "Patrolling",
+  transit: "In transit",
+  exercise: "On exercise",
+  blockade: "Blockading",
+  withdrawing: "Withdrawing",
+};
+
+// Deploy exists in both unit systems. Move and attack are CLASSIC-only, but they
+// are very much still reachable there — the unit popup arms them and the click
+// dispatcher in Nations.jsx consumes them — so their hints have to stay. Trimming
+// this to `deploy` alone left a classic player who pressed Move with the generic
+// "Select a target" fallback, which is not even the right instruction.
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
+  move: "Click a destination to move the unit",
+  attack: "Click an enemy unit, a city, or a structure to attack",
 };
 
 const surface = {
@@ -49,6 +68,23 @@ const surface = {
   color: "white",
   fontFamily: "sans-serif",
   boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+};
+
+// What the row says a formation is doing.
+//
+// Posture belongs to the beta system: it is the AI's statement of intent and the
+// engine acts on it. In classic nothing does — but a save carried over from beta
+// play still HOLDS its postures on disk (that is what makes switching lossless), so
+// showing them there would label a fleet "Patrolling" with no engine patrolling it,
+// while the map's own heading lines and station rings correctly hide themselves.
+// Gate on the system, exactly as Map/Units.jsx does.
+//
+// The label is the player's word for it, not the schema's token — "Holding
+// position", not "holding" — matching the unit popup, which reads POSTURE_LABEL
+// from here.
+const unitActivity = (unit) => {
+  if (!isBetaUnits()) return unit.status;
+  return POSTURE_LABEL[unit.posture] || unit.posture || unit.status;
 };
 
 const UnitRow = ({ unit, dimmed, onClick }) => (
@@ -76,7 +112,7 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
         {unit.name}
       </div>
       <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.55)" }}>
-        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unit.posture || unit.status}
+        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unitActivity(unit)}
       </div>
     </div>
     <span style={{ fontSize: "12px", fontWeight: 700, color: strengthColor(unit.strength) }}>

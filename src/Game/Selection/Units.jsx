@@ -20,6 +20,9 @@ import {
   setInteractionMode,
 } from "../Map/unitsController.js";
 import { readEventsState } from "../../runtime/gameState.js";
+// One posture vocabulary for the popup and the Forces panel — two copies of this
+// map would drift and label the same formation two different things.
+import { POSTURE_LABEL } from "../GameUI/forces.jsx";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { haversineKm } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -61,17 +64,6 @@ const TYPE_GLYPH = {
   naval: "⚓",
   artillery: "💥",
   garrison: "🏰",
-};
-
-// Intent, in the player's language rather than the schema's.
-const POSTURE_LABEL = {
-  holding: "Holding position",
-  massing: "Massing",
-  patrol: "Patrolling",
-  transit: "In transit",
-  exercise: "On exercise",
-  blockade: "Blockading",
-  withdrawing: "Withdrawing",
 };
 
 const ANIM_ID = "unit-popup-anims";
@@ -193,10 +185,17 @@ const UnitPopup = () => {
     return unsubscribe;
   }, []);
 
-  // Resolve "what put this formation here" from the event log. Cached for the
-  // lifetime of the popup module: the log is re-read at most once per selected
-  // unit that actually carries an eventId, never on every render or map move.
-  const eventCache = useRef(null);
+  // Resolve "what put this formation here" from the event log. Cached by id, so
+  // the log is read at most once per selected unit that carries an eventId and
+  // never on a render or a map move.
+  //
+  // The cache used to be the whole log, read ONCE. This popup is mounted for the
+  // life of the map, so every unit spawned by an event after that first read
+  // resolved to nothing and silently lost its "Detected" row — the card's main
+  // reason for existing. Re-read when the id we want is not in hand; a miss is
+  // remembered as null so an event that has genuinely aged out of the log costs one
+  // read, not one per selection.
+  const eventCache = useRef(new Map());
   const eventId = unit?.eventId || "";
   useEffect(() => {
     let cancelled = false;
@@ -204,16 +203,23 @@ const UnitPopup = () => {
       setOriginEvent(null);
       return undefined;
     }
+    if (eventCache.current.has(eventId)) {
+      setOriginEvent(eventCache.current.get(eventId));
+      return undefined;
+    }
     const resolve = async () => {
-      if (!eventCache.current) {
-        try {
-          eventCache.current = await readEventsState({ force: true });
-        } catch {
-          eventCache.current = [];
-        }
+      let events = [];
+      try {
+        events = await readEventsState({ force: true });
+      } catch {
+        // A failed read is not an answer: leave the id unrecorded so selecting the
+        // unit again tries once more, rather than pinning it to "not found".
+        return;
       }
+      for (const entry of events) eventCache.current.set(entry.id, entry);
+      if (!eventCache.current.has(eventId)) eventCache.current.set(eventId, null);
       if (cancelled) return;
-      setOriginEvent(eventCache.current.find((entry) => entry.id === eventId) ?? null);
+      setOriginEvent(eventCache.current.get(eventId) ?? null);
     };
     resolve();
     return () => {
@@ -492,6 +498,17 @@ const UnitPopup = () => {
                 </div>
               )}
             </>
+          )}
+
+          {/* Classic: the only thing telling a player how attacking works. The
+              two branches above are both `isOwn && …`, so replacing the old
+              `isOwn ? buttons : hint` pair with them left a foreign unit's popup
+              rendering nothing at all. Beta needs no hint — nobody attacks by
+              hand there, and the card is an intelligence readout on its own. */}
+          {!isOwn && !betaUnits && (
+            <div style={{ marginTop: "9px", fontSize: "10px", color: "rgba(255,255,255,0.4)", textAlign: "center" }}>
+              Enemy unit — select one of your own units to attack it.
+            </div>
           )}
         </div>
       </div>
