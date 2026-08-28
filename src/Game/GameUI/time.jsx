@@ -12,6 +12,7 @@ import {
 } from "../../runtime/assets.js";
 import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -1516,16 +1517,14 @@ const DateWidget = ({
         ].join("\n");
     };
 
+    // Through the shared helper, not navigator.clipboard directly: that API needs a
+    // secure context, and a browser reaching this game over plain http on the LAN —
+    // which Settings → Network now offers as a supported setup — does not have one.
+    // The button whose whole point is "no DevTools needed" failed every time there.
     const handleCopyDebugMessage = async () => {
         const message = buildFallbackDebugMessage();
         if (!message) return false;
-        try {
-            await navigator.clipboard.writeText(message);
-            return true;
-        } catch (error) {
-            console.error("Failed to copy debugging message:", error);
-            return false;
-        }
+        return copyToClipboard(message);
     };
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     const parsedGameDate = rawGameDate ? dayjs(rawGameDate) : null;
