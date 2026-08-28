@@ -10,7 +10,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { NO_RESPONSE_BODY_NOTE, loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { isMainMenuOpen } from "./libraryBar";
@@ -1512,8 +1512,17 @@ const DateWidget = ({
             "-- Most recent prior events --",
             recentEvents,
             "",
-            "-- Raw model response that failed to parse --",
-            record.rawResponse || "(not captured — this turn happened before raw-response logging was added; a future fallback will include it)",
+            // A transport failure has no response to show, so do not label the
+            // note that explains that as one — it sent readers hunting for a
+            // parsing bug when the real cause was the provider config.
+            record.rawResponse === NO_RESPONSE_BODY_NOTE
+                ? "-- Model response --"
+                : "-- Raw model response that failed to parse --",
+            // Every fallback now fills this in — with the raw text when there was
+            // one, or with a note saying no response body arrived (gameplay.js).
+            // So an empty field can only be a turn recorded before that, and this
+            // line must not claim to know which failure it was.
+            record.rawResponse || "(not captured — recorded by an older build that only saved the failure reason; re-run the turn to capture the response, or the note explaining that none arrived)",
         ].join("\n");
     };
 
