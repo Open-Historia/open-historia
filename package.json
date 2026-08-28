@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:web": "vite preview --outDir dist-web",
-    "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\"",
+    "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\" \"electron/**/*.test.cjs\"",
     "electron": "electron .",
     "dist:win": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --win",
     "dist:mac": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --mac",

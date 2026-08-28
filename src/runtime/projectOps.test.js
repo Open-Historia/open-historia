@@ -156,3 +156,124 @@ test("ending a project keeps it on the board; only remove erases", () => {
   }
   assert.equal(applyProjectOps([before], [{ op: "remove", name: before.name }], {}).length, 0);
 });
+
+// PROJECT_FIELD_ALIASES documents the field names the normalizer accepts, and the
+// create path has always honoured them. The update path matched canonical keys
+// only, so the natural thing for a model to write changed nothing at all — and the
+// advisor's ```projects block, which every button on the Projects panel drives,
+// has no schema to keep it to canonical names.
+test("an update op is applied through the same field aliases create accepts", () => {
+  const before = open()[0];
+  const after = applyProjectOps([before], [{
+    op: "update",
+    name: before.name,
+    description: "Hull complete; fitting out begins.",
+    dueDate: "2038-03-01",
+    owner: "Germany",
+    type: "project",
+    classification: "restricted",
+    startDate: "2029-05-05",
+    progress: 55,
+    ongoing: false,
+  }], { date: "2034-01-01" })[0];
+
+  assert.equal(after.summary, "Hull complete; fitting out begins.", "description alias dropped");
+  assert.equal(after.targetDate, "2038-03-01", "dueDate alias dropped");
+  assert.equal(after.ownerCode, "Germany", "owner alias dropped");
+  assert.equal(after.kind, "project", "type alias dropped");
+  assert.equal(after.secrecy, "restricted", "classification alias dropped");
+  assert.equal(after.startedAt, "2029-05-05", "startDate alias dropped");
+  assert.equal(after.progress, 55, "canonical field stopped working");
+});
+
+// A model asked to mark a checkpoint reached writes "completed" or "achieved" about
+// as often as it writes "done". An unrecognised value fell through to the "pending"
+// default, which is not a no-op: the merge assigned it unconditionally, so the op
+// meant to confirm a checkpoint pushed it back to pending — while still counting as
+// a change, so the advisor's receipt card reported an update that never happened.
+test("milestone status synonyms mark a checkpoint reached", () => {
+  const before = open([{ ...standingWatch, milestones: [{ title: "Sea trials", date: "2034-06-01" }] }])[0];
+
+  for (const status of ["done", "complete", "completed", "achieved", "reached"]) {
+    const after = applyProjectOps([before], [{
+      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
+    }], { date: "2034-06-03" })[0];
+    assert.equal(after.milestones[0].status, "done", `status "${status}" did not mark it done`);
+    assert.equal(after.nextMilestone, null, `status "${status}" left it outstanding`);
+  }
+
+  for (const status of ["missed", "slipped", "late"]) {
+    const after = applyProjectOps([before], [{
+      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
+    }], { date: "2034-06-03" })[0];
+    assert.equal(after.milestones[0].status, "missed", `status "${status}" did not mark it missed`);
+  }
+});
+
+// The other half of that fix: an op that only re-dates or annotates a checkpoint
+// carries no status, and normalizeProjectMilestone fills every field — so without
+// the statusProvided flag the merge would silently un-complete it.
+test("a milestone op with no status leaves the status alone", () => {
+  const done = applyProjectOps(
+    open([{ ...standingWatch, milestones: [{ title: "Sea trials", date: "2034-06-01" }] }]),
+    [{ op: "milestone", name: standingWatch.name, milestone: { title: "Sea trials", status: "done" } }],
+    { date: "2034-06-03" },
+  );
+  assert.equal(done[0].milestones[0].status, "done");
+
+  const redated = applyProjectOps(done, [{
+    op: "milestone", name: standingWatch.name, milestone: { title: "Sea trials", date: "2034-11-01" },
+  }], { date: "2034-07-01" })[0];
+
+  assert.equal(redated.milestones[0].status, "done", "re-dating un-completed the checkpoint");
+  assert.equal(redated.milestones[0].date, "2034-11-01", "the new date was not applied");
+});
+
+// updatedRound is the only thing deriveProjectFlags uses to decide a programme has
+// gone quiet, so an op batch that carries a round has to stamp it whichever verb it
+// used — otherwise the advisor updates a project and the card still reads stale.
+test("every op stamps updatedRound when the caller supplies a round", () => {
+  const before = { ...open()[0], updatedRound: 5 };
+  const cases = [
+    ["update", { op: "update", name: before.name, lastUpdate: "Fitting out." }],
+    ["create-as-restatement", { op: "create", name: before.name, summary: "The patrol continues." }],
+    ["milestone", { op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" } }],
+    ["complete", { op: "complete", name: before.name }],
+  ];
+
+  for (const [label, op] of cases) {
+    const after = applyProjectOps([before], [op], { date: "2034-06-03", round: 12 })[0];
+    assert.equal(after.updatedRound, 12, `op "${label}" did not stamp the round`);
+  }
+});
+
+// A model writes {"title":"Annual drill","repeat":"annual"} with no date more or
+// less constantly. advanceRecurringDate cannot roll from nothing, so the roll was
+// declined and the commitment was marked done and quietly retired for good —
+// despite carrying the very flag that says it never finishes.
+test("an undated recurring milestone rolls from the date it was performed", () => {
+  const before = open([{
+    ...standingWatch,
+    milestones: [{ title: "Annual drill", repeat: "annual" }],
+  }])[0];
+  assert.equal(before.milestones[0].date, "", "the fixture should start undated");
+
+  const after = applyProjectOps([before], [{
+    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
+  }], { date: "2034-06-03" })[0];
+
+  assert.equal(after.milestones[0].date, "2035-06-03", "did not roll to a next occurrence");
+  assert.equal(after.milestones[0].status, "pending", "a standing commitment was retired");
+  assert.equal(after.milestones[0].completedCount, 1);
+  assert.equal(after.milestones[0].lastCompletedAt, "2034-06-03");
+});
+
+// The roll must not fire twice for one performance. A dated milestone still
+// anchors on its own date, so the annual drill on 1 June stays on 1 June.
+test("a dated recurring milestone still keeps its own day of the year", () => {
+  const before = open()[0];
+  const after = applyProjectOps([before], [{
+    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
+  }], { date: "2034-06-03" })[0];
+  assert.equal(after.milestones[0].date, "2035-06-01");
+});

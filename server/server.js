@@ -1214,37 +1214,70 @@ const httpServer = app.listen(PORT, HOST, () => {
 // the middle of. Node lets a closed server listen() again; if the new bind
 // fails (something else already holds the port on that interface) we go back to
 // the one that was working rather than leaving the player with no server.
+// True while a LAN-toggle rebind is in flight. The startup error handler below
+// must stand aside for it: that handler exits the process on EADDRINUSE, it was
+// registered first, and Node runs "error" listeners in REGISTRATION ORDER — so
+// without this flag it fired before the recovery handler here ever ran, and a
+// rebind that could not take the new interface killed the game server out from
+// under a player mid-campaign instead of falling back to the interface that was
+// working. The rollback below was unreachable code.
+let rebinding = false;
+
 const rebindListener = (nextHost) => {
   const previousHost = HOST;
+
+  // Registered explicitly rather than passed to listen() as its callback, because
+  // a callback handed to listen() becomes a one-shot "listening" listener the
+  // moment listen() is called and a FAILED bind does not take it back off. It
+  // then fired on the fallback bind below, and the server reported itself
+  // shared — host 0.0.0.0, lanEnabled true — while the socket was actually back
+  // on loopback. The Settings panel and the addresses it tells the player to
+  // type into their phone were both wrong, with nothing listening on them.
+  const onListening = () => {
+    httpServer.removeListener("error", onError);
+    HOST = nextHost;
+    LAN_ENABLED = isLanHost(HOST);
+    rebinding = false;
+    console.log(`Rebound to ${HOST}:${PORT}.`);
+    describeBinding();
+  };
+
   const onError = (error) => {
     console.error(`Could not rebind to ${nextHost}:${PORT} (${error.message}); staying on ${previousHost}.`);
+    httpServer.removeListener("listening", onListening);
     httpServer.removeListener("error", onError);
     HOST = previousHost;
     LAN_ENABLED = isLanHost(HOST);
     try {
       writeNetworkSettings({ lanAccess: LAN_ENABLED });
     } catch { /* the binding is what matters; the file is a hint for next boot */ }
+    // Cleared BEFORE the fallback bind, deliberately. If even the interface that
+    // was working a moment ago will not take the port there is nothing left to
+    // fall back to, and the fatal handler below saying so beats leaving a live
+    // process with no listener on it at all.
+    rebinding = false;
     httpServer.listen(PORT, previousHost);
   };
 
+  rebinding = true;
   // Keep-alive connections would hold close() open indefinitely, and one of them
   // is the page that just flipped the switch.
   httpServer.closeAllConnections?.();
   httpServer.close(() => {
     httpServer.once("error", onError);
-    httpServer.listen(PORT, nextHost, () => {
-      httpServer.removeListener("error", onError);
-      HOST = nextHost;
-      LAN_ENABLED = isLanHost(HOST);
-      console.log(`Rebound to ${HOST}:${PORT}.`);
-      describeBinding();
-    });
+    httpServer.once("listening", onListening);
+    httpServer.listen(PORT, nextHost);
   });
 };
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers
 // then reported as a bare "Server stopped." — say what actually happened.
+//
+// Startup only. A failure during a rebind is rebindListener's to recover from,
+// and exiting there would turn "that interface is busy" into "your game server is
+// gone"; the listener it registers puts the previous binding back instead.
 httpServer.on("error", (error) => {
+  if (rebinding) return;
   if (error?.code === "EADDRINUSE") {
     console.error(`Port ${PORT} is already in use — Open Historia is probably already running.`);
     console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
