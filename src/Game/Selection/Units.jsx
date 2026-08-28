@@ -20,9 +20,10 @@ import {
   setInteractionMode,
 } from "../Map/unitsController.js";
 import { readEventsState } from "../../runtime/gameState.js";
-// One posture vocabulary for the popup and the Forces panel — two copies of this
-// map would drift and label the same formation two different things.
-import { POSTURE_LABEL } from "../GameUI/forces.jsx";
+// One posture vocabulary and one set of strength bands for the popup and the
+// Forces panel — duplicates of either would drift and describe the same formation
+// two different ways on two screens.
+import { POSTURE_LABEL, strengthColor } from "../GameUI/forces.jsx";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { haversineKm } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -427,7 +428,7 @@ const UnitPopup = () => {
               style={{
                 width: `${strengthPct}%`,
                 height: "100%",
-                background: unit.strength > 60 ? "#4ade80" : unit.strength > 25 ? "#fbbf24" : "#f87171",
+                background: strengthColor(unit.strength),
               }}
             />
           </div>

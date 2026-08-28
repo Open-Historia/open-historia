@@ -1388,14 +1388,23 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         // milestone), which a later re-dating op would otherwise bank as a second
         // performance it never reported.
         if (op.statusProvided && merged.status === "done" && merged.repeat) {
-          const rolled = advanceRecurringDate(merged.date, merged.repeat, date || merged.date);
+          // Anchored on the milestone's own date so an annual drill on 1 June
+          // stays on 1 June — but falling back to the date it was performed when
+          // it has none. A model reaches for {"title":"Annual drill",
+          // "repeat":"annual"} with no date more or less constantly, and
+          // advanceRecurringDate cannot roll from nothing: the commitment was
+          // marked done, never rolled, and quietly retired for good despite
+          // carrying a repeat. Rolling from the performance date keeps a standing
+          // commitment standing, which is the entire point of the flag.
+          const anchor = merged.date || date;
+          const rolled = advanceRecurringDate(anchor, merged.repeat, date || anchor);
           if (rolled) {
             return {
               ...merged,
               date: rolled,
               status: "pending",
               completedCount: (Number(entry.completedCount) || 0) + 1,
-              lastCompletedAt: date || merged.date,
+              lastCompletedAt: date || anchor,
             };
           }
         }

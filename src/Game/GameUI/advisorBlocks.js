@@ -299,9 +299,25 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false } = {})
 // with nothing salvageable, JSON too broken to repair, valid JSON whose every op
 // was rejected — all look identical to the player: a wall of JSON in the chat (or
 // a reply that just stops) and a board that never changes.
+// Kept in step with normalizeProjectOp's verb list BY HAND — the two live in
+// different modules (this one is deliberately import-free so its tests run in a
+// bare checkout) and nothing can check them against each other. A verb missing
+// here is not a dropped op; it is a SILENT one: the block fails to parse, this
+// says "not a projects block", and the player gets no "Board not fully updated"
+// warning at all. cancelled/shelve/fail/failed/drop were all missing.
+const PROJECT_OP_VERBS = [
+  "create", "start", "launch", "open", "add",
+  "update", "progress", "edit",
+  "milestone",
+  "complete", "finish", "completed",
+  "cancel", "cancelled", "abandon", "shelve",
+  "fail", "failed",
+  "remove", "delete", "drop",
+].join("|");
+
 export const looksLikeProjectOps = (text) => {
   const source = String(text ?? "");
   if (!source.includes('"op"') && !source.includes("“op”")) return false;
-  return /["“]op["”]\s*:\s*["“](create|start|launch|open|add|update|progress|edit|milestone|complete|finish|completed|remove|cancel|abandon|delete)["”]/.test(source)
+  return new RegExp(`["“]op["”]\\s*:\\s*["“](${PROJECT_OP_VERBS})["”]`).test(source)
     && /["“](name|project|projectId)["”]\s*:/.test(source);
 };
