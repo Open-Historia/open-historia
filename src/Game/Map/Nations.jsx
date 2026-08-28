@@ -694,6 +694,10 @@ const WorldMap = ({ isGlobe = false }) => {
       // when there was an owner and a raw GADM code when there wasn't, and the
       // difference only showed up as an occasional "RUS" where a country name
       // belonged. owner === "" means genuinely unclaimed and must stay empty.
+      // Regions.jsx resolves through `owner` first now (selectionOwner) and only
+      // falls back to this field, so the panel is right whichever convention the
+      // caller follows. Both are deliberate: this keeps every existing GID_0
+      // reader on the live owner, that keeps the panel correct without it.
       GID_0: owner || (owner === "" ? "" : toCountryName(gid0)),
       // A stock-tile hit carries GADM's own COUNTRY attribute; a custom region has
       // no such property (and no longer carries `country` at all), so name it from
