@@ -14,9 +14,12 @@
 
 import { useEffect, useState } from "react";
 
+import { useIsMobile } from "./useIsMobile.js";
+
 // Only the fork's desktop beta answers this with a channel; everything else —
 // the website, the APK, a dev run, the stable desktop app — answers {} and the
-// badge stays unmounted.
+// badge stays unmounted. (A phone browser pointed at a desktop beta over the LAN
+// setting does get it, which is why the narrow layout below matters.)
 const wrap = {
   position: "fixed",
   bottom: "0.6rem",
@@ -41,10 +44,32 @@ const wrap = {
   font: "600 0.7rem/1 system-ui, sans-serif",
   letterSpacing: "0.02em",
   whiteSpace: "nowrap",
+  // Never wider than the viewport, whatever the build string turns out to be.
+  maxWidth: "calc(100vw - 1.2rem)",
   // The badge is a label, not a control: clicks fall through to the map unless
   // they land on the feedback link below.
   pointerEvents: "none",
 };
+
+// The bottom edge is the busiest row in the HUD: the toolbar sits bottom-left
+// (three buttons, ~12.8rem since Projects was added) and the advisor launcher
+// bottom-right (~4rem). On a phone that leaves roughly five characters of gap in
+// the middle, and the full badge — nowrap, at z-index 10055 — simply lay across
+// both of them, hiding the Chat/Actions/Projects buttons behind a label.
+//
+// So the narrow layout drops to what actually identifies the build: the dot and
+// the word BETA. The build number and the wording move into the title, and the
+// whole pill becomes the feedback link rather than carrying a separate one, so
+// nothing is lost but the width.
+const compactWrap = {
+  ...wrap,
+  gap: "0.35rem",
+  padding: "0.24rem 0.5rem",
+  pointerEvents: "auto",
+  textDecoration: "none",
+  color: "#f4ead0",
+};
+
 const dot = {
   width: "0.42rem",
   height: "0.42rem",
@@ -62,6 +87,7 @@ const link = {
 
 export default function ForkBuildBadge() {
   const [info, setInfo] = useState(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let dropped = false;
@@ -80,11 +106,42 @@ export default function ForkBuildBadge() {
   }, []);
 
   if (!info) return null;
+
+  const build = info.build ? `#${info.build.slice(-6)}` : "";
+  const full = `BETA · unofficial fork build${build ? ` ${build}` : ""}`;
+
+  if (isMobile) {
+    const label = (
+      <>
+        <span style={dot} />
+        <span>BETA</span>
+      </>
+    );
+    // A link only where there is somewhere to send them; otherwise the same pill
+    // as a plain label, so the markup never promises a tap that does nothing.
+    return info.feedback ? (
+      <a
+        style={compactWrap}
+        role="status"
+        title={`${full} — tap to report feedback`}
+        href={info.feedback}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {label}
+      </a>
+    ) : (
+      <div style={{ ...compactWrap, pointerEvents: "none" }} role="status" title={full}>
+        {label}
+      </div>
+    );
+  }
+
   return (
     <div style={wrap} role="status">
       <span style={dot} />
       <span>BETA · unofficial fork build</span>
-      {info.build ? <span style={muted}>#{info.build.slice(-6)}</span> : null}
+      {build ? <span style={muted}>{build}</span> : null}
       {info.feedback ? (
         <a style={link} href={info.feedback} target="_blank" rel="noopener noreferrer">
           Report feedback

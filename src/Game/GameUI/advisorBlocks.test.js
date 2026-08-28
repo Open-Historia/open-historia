@@ -238,3 +238,29 @@ test("a fully valid batch is untouched by any of this", () => {
   const source = '[{"op":"create","name":"A","summary":"s","milestones":[{"title":"m","date":"2030-01-01"}]}]';
   assert.deepEqual(repairTruncatedJsonArray(source), JSON.parse(source));
 });
+
+// Every verb normalizeProjectOp accepts has to be recognised here too. A verb this
+// list misses is not a dropped op — it is a SILENT one: the block fails to parse,
+// this says "not a projects block", and the player gets no "Board not fully
+// updated" warning at all. cancelled/shelve/fail/failed/drop were all missing.
+test("looksLikeProjectOps knows every verb the engine accepts", () => {
+  const verbs = [
+    "create", "start", "launch", "open", "add",
+    "update", "progress", "edit",
+    "milestone",
+    "complete", "finish", "completed",
+    "cancel", "cancelled", "abandon", "shelve",
+    "fail", "failed",
+    "remove", "delete", "drop",
+  ];
+  for (const verb of verbs) {
+    assert.equal(
+      looksLikeProjectOps(`[{"op":"${verb}","name":"Project Leviathan"}]`),
+      true,
+      `verb "${verb}" would have failed silently`,
+    );
+  }
+  // Still not fooled by a verb from a different op family, or by prose.
+  assert.equal(looksLikeProjectOps('[{"op":"spawn","name":"1st Fleet"}]'), false);
+  assert.equal(looksLikeProjectOps('[{"op":"fail"}]'), false, "an op with nothing to target is not a board change");
+});

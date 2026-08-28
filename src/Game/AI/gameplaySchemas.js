@@ -455,8 +455,10 @@ const projectMilestoneSchema = {
         "Set for a standing commitment that comes round again - an annual drill, a "
         + "quarterly review, a monthly rotation. Marking it done does NOT retire it: the "
         + "engine advances the date by one interval (keeping the same day of the year) and "
-        + "sets it pending, so the board always shows the next one. Leave empty for a "
-        + "one-off checkpoint that happens once and is finished.",
+        + "sets it pending, so the board always shows the next one. Give a recurring "
+        + "checkpoint a date, so it keeps the slot it is meant to fall on; without one the "
+        + "engine can only count forward from whenever it was last performed. Leave empty "
+        + "for a one-off checkpoint that happens once and is finished.",
       enum: ["weekly", "monthly", "quarterly", "annual", "biennial"],
     },
     note: textSchema("Brief detail about the checkpoint."),

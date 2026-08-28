@@ -181,4 +181,57 @@ describe("LAN sharing", () => {
     assert.equal(status, 409);
     assert.match(body.error, /OH_HOST/);
   });
+
+  // The rollback in rebindListener used to be unreachable code. The startup error
+  // handler is registered first and calls process.exit(1) on EADDRINUSE, and Node
+  // runs "error" listeners in REGISTRATION ORDER — so a LAN toggle that could not
+  // take the new interface killed the game server out from under a player
+  // mid-campaign instead of staying on the interface that was already working.
+  test("a rebind that cannot take the new interface leaves the server running", async (t) => {
+    const lan = lanAddress();
+    if (!lan) {
+      t.skip("no non-loopback address on this host");
+      return;
+    }
+
+    // A clean loopback binding to rebind AWAY from, with the switch unlocked.
+    await stop();
+    await start({ OH_HOST: "" });
+    await setLan(port, false);
+
+    // Hold the port on one real interface. The server's next move is to bind
+    // 0.0.0.0 on the same port, which this makes impossible.
+    const squatter = net.createServer();
+    await new Promise((resolve, reject) => {
+      squatter.once("error", reject);
+      squatter.listen(port, lan, resolve);
+    });
+
+    try {
+      await setLan(port, true);
+
+      // The reply is sent before the rebind is attempted (by design — it travels
+      // over a connection the rebind drops), so the rolled-back state is what a
+      // FOLLOW-UP read reports. Poll: the fallback bind takes a moment to land.
+      let state = null;
+      for (let attempt = 0; attempt < 40 && !state; attempt += 1) {
+        assert.equal(child.exitCode, null, "the server exited instead of falling back");
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/api/server/network`, {
+            signal: AbortSignal.timeout(500),
+          });
+          if (response.ok) state = await response.json();
+        } catch {
+          /* mid-rebind: loopback is briefly closed */
+        }
+        if (!state) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      assert.ok(state, "the server never came back on loopback after a failed rebind");
+      assert.equal(state.lanEnabled, false, "it should have rolled back to the binding that worked");
+      assert.equal(child.exitCode, null, "the server must survive a rebind it cannot complete");
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
+  });
 });

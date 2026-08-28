@@ -411,7 +411,12 @@ export const buildProjectsSummaryText = (world, game) => {
 
   const gameDate = normalizeString(game?.gameDate);
   const round = Number(game?.round) || 0;
-  const player = normalizeString(game?.country);
+  // game.country can still be a bare GADM code — the country picker writes the
+  // option's `code`, which on a stock scenario is "GBR" — while a project's
+  // ownerCode has already been through toCountryName ("United Kingdom"). Comparing
+  // the two raw told the model "run by United Kingdom" about the player's OWN
+  // programme. Same canonicalisation buildTerritoryText below already does.
+  const player = toCountryName(normalizeString(game?.country));
   const OPEN = new Set(["proposed", "active", "stalled", "paused"]);
 
   // Do not label it twice: half of these are already called "Operation X" or
@@ -425,7 +430,10 @@ export const buildProjectsSummaryText = (world, game) => {
 
   const ownerOf = (project) => {
     const owner = normalizeString(project.ownerCode);
-    return owner && owner !== player ? `run by ${owner}` : "ours";
+    // Case-insensitively, the same way projects.js's isPlayerProject compares —
+    // the two must agree or the board's Mine/Foreign filter and what the model is
+    // told about the same project disagree.
+    return owner && owner.toLowerCase() !== player.toLowerCase() ? `run by ${owner}` : "ours";
   };
 
   const timelineOf = (project) => {
