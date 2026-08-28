@@ -1661,6 +1661,15 @@ export const rollBackToSnapshot = async (index = 0) => {
     ]);
     await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
     const bundle = await readGameStateBundle({ force: true });
+    // A rollback is the one event that legitimately moves the clock BACKWARDS.
+    // The timeline's 5s poll refuses any read older than what it already shows
+    // (its guard against a stale read reverting a fresh turn), so without this
+    // announcement it discarded every read of the restored state and the panel
+    // stayed pinned on the undone turn until the app restarted — which is what
+    // made a cheats-menu rollback look like it had done nothing. Same convention
+    // as "oh:turn-complete"; fired from here so BOTH callers (the cheats menu and
+    // the timeline's own Undo) are covered by the one dispatch.
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:rolled-back"));
     return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
   } finally {
     endSimulation();

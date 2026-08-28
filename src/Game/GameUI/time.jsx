@@ -1328,9 +1328,27 @@ const DateWidget = ({
         loadState();
         const interval = setInterval(loadState, 5000);
 
+        // The staleness guard above cannot tell a stale read from a rollback — both
+        // arrive as "older than what is on screen" — so it rejected the restored
+        // state too, and the panel kept showing the undone turn's date, its events
+        // and its fallback warning until the app was restarted. rollBackToSnapshot
+        // announces itself (gameplay.js); clearing the stamp lets the restored read
+        // through, and reloading now means the player doesn't wait out the 5s tick.
+        const handleRolledBack = () => {
+            gameStampRef.current = { round: 0, date: "" };
+            setVisibleEventCount(1);
+            // The live warning belongs to the turn that just got undone. The
+            // persisted one clears itself, since it is derived from the restored
+            // simulationHistory that loadState is about to pull in.
+            setFallbackWarning("");
+            loadState();
+        };
+        window.addEventListener("oh:rolled-back", handleRolledBack);
+
         return () => {
             cancelled = true;
             clearInterval(interval);
+            window.removeEventListener("oh:rolled-back", handleRolledBack);
         };
     }, []);
 
