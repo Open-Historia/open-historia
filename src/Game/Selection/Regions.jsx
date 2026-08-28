@@ -177,15 +177,27 @@ const RegionPopup = () => {
     };
 
     // Era-aware display name for the selected owner (polity name > overrides > modern).
-    const resolveSelectionName = (sel) =>
-        polities[sel?.GID_0]?.name || resolveCountryDisplayName(sel?.COUNTRY, sel?.GID_0);
+    // Who holds this region NOW. GID_0 is the country baked into the PMTiles and
+    // never changes, so keying the panel on it left a captured region showing its
+    // previous owner's name, flag and stat sheet — and opening diplomacy with the
+    // nation that just lost it. The click handler already resolves the live owner
+    // (Nations.jsx: props.owner, else the ownership lookup); this just uses it.
+    // Falls back to GID_0 so an unclaimed region reads exactly as it did before.
+    const selectionOwner = (sel) => String(sel?.owner ?? "").trim() || sel?.GID_0 || "";
+
+    const resolveSelectionName = (sel) => {
+        const owner = selectionOwner(sel);
+        return polities[owner]?.name
+            || resolveCountryDisplayName(sel?.COUNTRY, owner)
+            || owner;
+    };
 
     // Open a diplomatic chat with the selected country (via the chat panel bridge).
     const handleOpenChat = () => {
         if (!_currentSelection) return;
         requestDiplomaticChat({
             name: resolveSelectionName(_currentSelection),
-            code: _currentSelection.GID_0,
+            code: selectionOwner(_currentSelection),
         });
         _dismiss?.();
     };
@@ -195,9 +207,10 @@ const RegionPopup = () => {
     const handleToggleStats = () => {
         const sel = _currentSelection;
         if (!sel) return;
-        const flagInfo = resolveEraFlagInfo(sel.GID_0, polities[sel.GID_0], customFlags);
+        const owner = selectionOwner(sel);
+        const flagInfo = resolveEraFlagInfo(owner, polities[owner], customFlags);
         openCountryPanel({
-            code: sel.GID_0,
+            code: owner,
             name: resolveSelectionName(sel),
             flagUrl: flagInfo?.imageUrl || null,
             flagEmoji: flagInfo?.emoji || null,
@@ -229,7 +242,8 @@ const RegionPopup = () => {
         // Era-correct flag only: the polity's own flag, else the owner's ISO flag.
         // Deliberately NO modern-country fallback — an era polity without a flag
         // shows "No flag available" rather than an anachronistic modern flag.
-        const flagInfo = resolveEraFlagInfo(selection.GID_0, polities[selection.GID_0], customFlags);
+        const owner = selectionOwner(selection);
+        const flagInfo = resolveEraFlagInfo(owner, polities[owner], customFlags);
         setFlagState(
             flagInfo
                 ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
