@@ -14,6 +14,10 @@ const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
+const {
+  claimSharedLibrary: claimLibrary,
+  releaseSharedLibrary: releaseLibrary,
+} = require("./libraryLock.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the fork's beta build (`npm run dist:win:beta` and the desktop-beta workflow);
@@ -83,71 +87,33 @@ const USER_ROOT = app.isPackaged
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
 const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
 
-// Sharing one library means two builds must never write it at once: both run an
-// embedded server over the same JSON files, and the loser of a race silently
-// loses a turn. Electron's requestSingleInstanceLock is per-build (it is keyed on
-// the app's own userData) and so cannot see the other install at all.
+// Sharing one library means two builds must never write it at once — see
+// libraryLock.cjs, which holds the whole rule (and is a separate file so it can be
+// tested; this one requires electron and `node --test` cannot load it).
 const LOCK_FILE = path.join(USER_ROOT, "library-lock.json");
 const LOCK_LABEL = IS_BETA ? BETA_APP_NAME : "Open Historia";
 
-const lockHolder = () => {
-  let held;
-  try {
-    held = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
-  } catch {
-    return null; // no lock, or an unreadable one: not evidence of anything
-  }
-  const pid = Number(held && held.pid);
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    // Signal 0 tests for the process without touching it. EPERM means it exists
-    // and belongs to someone else, which still counts as running.
-    process.kill(pid, 0);
-  } catch (error) {
-    if (error.code !== "EPERM") return null; // ESRCH: it died without cleaning up
-  }
-  if (pid === process.pid) return null;
-  return String(held.label || "Another copy of Open Historia");
-};
-
 // Returns false if the player chose to quit rather than share the library.
-const claimSharedLibrary = () => {
-  const holder = lockHolder();
-  if (holder) {
-    const choice = dialog.showMessageBoxSync({
-      type: "warning",
-      title: `${LOCK_LABEL} — saves in use`,
-      message: `${holder} is already running.`,
-      detail:
-        `${LOCK_LABEL} shares its saves, scenarios and settings with it, and two ` +
-        "copies writing at once can lose a turn or corrupt a save. Close the " +
-        "other one first.",
-      buttons: ["Quit", "Start anyway"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
-    });
-    if (choice === 0) return false;
-  }
-  try {
-    fs.mkdirSync(USER_ROOT, { recursive: true });
-    const held = { pid: process.pid, label: LOCK_LABEL, at: Date.now() };
-    fs.writeFileSync(LOCK_FILE, JSON.stringify(held));
-  } catch {
-    /* an unwritable lock is not a reason to keep a player out of the game */
-  }
-  return true;
-};
+const claimSharedLibrary = () =>
+  claimLibrary(LOCK_FILE, {
+    label: LOCK_LABEL,
+    ask: (holder) =>
+      dialog.showMessageBoxSync({
+        type: "warning",
+        title: `${LOCK_LABEL} — saves in use`,
+        message: `${holder} is already running.`,
+        detail:
+          `${LOCK_LABEL} shares its saves, scenarios and settings with it, and two ` +
+          "copies writing at once can lose a turn or corrupt a save. Close the " +
+          "other one first.",
+        buttons: ["Quit", "Start anyway"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      }) === 1,
+  });
 
-const releaseSharedLibrary = () => {
-  try {
-    // Only if it is still ours: "start anyway" leaves the other build's lock in
-    // place, and stealing its release would leave a third launch unwarned.
-    if (JSON.parse(fs.readFileSync(LOCK_FILE, "utf8")).pid === process.pid) fs.rmSync(LOCK_FILE);
-  } catch {
-    /* already gone, or never written */
-  }
-};
+const releaseSharedLibrary = () => releaseLibrary(LOCK_FILE);
 
 // Read by server.js. A stable build sets neither, and server.js keeps its own
 // upstream defaults; only the beta redirects its update check at the fork.
