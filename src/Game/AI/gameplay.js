@@ -1047,6 +1047,12 @@ const resolveRegionTransfers = async (containers, world) => {
     return "";
   };
 
+  // How many regions an UNFLAGGED transfer may move by being reinterpreted as a
+  // polity name. A real whole-country handover is dozens of regions and should say
+  // so with wholeCountry:true; a handful is the plausible size of a region/polity
+  // name collision, which is the case this fallback exists for.
+  const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
+
   const unresolved = [];
   for (const { impacts, path } of containers) {
     const transfers = normalizeArray(impacts?.regionTransfers);
@@ -1073,16 +1079,35 @@ const resolveRegionTransfers = async (containers, world) => {
         resolved.push(transfer);
         continue;
       }
-      // Not a region the map knows — but it may be a POLITY the model meant wholesale
-      // ("Austria-Hungary is partitioned"). Expanding beats dropping the change.
+      // Not a region the map knows — it MAY be a POLITY the model meant wholesale
+      // ("Austria-Hungary is partitioned"). But the prompt also tells the model to
+      // put a plain REGION name in regionId whenever it does not know the id, so an
+      // unmatched name is the ROUTINE case here, not an exceptional one. Expanding
+      // every one of them meant a single fuzzy name could hand over an entire
+      // nation's territory in a turn whose events never mentioned it — reported as
+      // "captured one region and it reverted all of Ukraine".
+      //
+      // An explicit wholeCountry:true still expands without limit (handled above);
+      // that is the model saying it means a whole nation. Without the flag, accept
+      // an expansion only while it is small enough to be a genuine name collision.
+      // Anything larger goes to the retry, which names the exact region that failed
+      // to match — and if the retry runs out, dropping one transfer is a far smaller
+      // failure than silently moving a country.
       const expanded = expandWholeCountry(transfer);
-      if (expanded.length) {
+      if (expanded.length && expanded.length <= IMPLICIT_WHOLE_COUNTRY_LIMIT) {
         console.info(
           `[ai] ${path}.regionTransfers treated "${normalizeString(transfer?.regionId)}" as a whole ` +
             `country -> ${normalizeString(transfer?.toCode)}: ${expanded.length} region(s).`,
         );
         resolved.push(...expanded);
         continue;
+      }
+      if (expanded.length) {
+        console.warn(
+          `[ai] ${path}.regionTransfers REFUSED to treat "${normalizeString(transfer?.regionId)}" as a ` +
+            `whole country -> ${normalizeString(transfer?.toCode)}: it would move ${expanded.length} ` +
+            `regions and the transfer did not set wholeCountry. Asking for an exact region id instead.`,
+        );
       }
       unresolved.push({
         label: normalizeString(transfer?.regionName) || normalizeString(transfer?.regionId),
