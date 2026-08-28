@@ -301,6 +301,12 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // time so it reaches existing frozen-prompt games too.
 const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color ONLY on a regime change (never for a mere new leader). On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, or rename a named structure or city. Three ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
+// Written into a fallback's rawResponse when there is no model output to show.
+// Exported so the debug report (time.jsx) can tell this apart from real model
+// text and label its section honestly, rather than matching on the wording.
+export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
+export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
@@ -468,6 +474,13 @@ const runJsonTask = async (taskKey, {
   // actual text that failed to parse. Kept across attempts so whichever one
   // the loop last saw is what the warning below can show.
   let lastRawText = "";
+  // Whether ANY attempt got as far as a response body. An empty lastRawText has
+  // two very different meanings — the request died in transport (a 404 from a
+  // mistyped base URL, a timeout, DNS) so the model never answered, versus the
+  // model answering with nothing — and the copied debug report used to blame
+  // both on "logging wasn't added yet". The first case is the more common one
+  // and points straight at provider settings, so say which happened.
+  let sawResponseBody = false;
   // Why the FIRST answer was rejected, and the answer itself when it was a
   // complete one. Both exist for the same reason: attempt 2 can die before it
   // produces anything (a provider 500, a timeout), and when it does, everything
@@ -490,6 +503,7 @@ const runJsonTask = async (taskKey, {
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       lastRawText = rawText;
+      sawResponseBody = true;
       const parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
@@ -625,11 +639,19 @@ const runJsonTask = async (taskKey, {
   // message" button next to the fallback warning (time.jsx) — that button, not
   // DevTools, is the primary way this reaches anyone now.
   const RAW_RESPONSE_LIMIT = 12000;
-  const rawResponse = lastRawText.length > RAW_RESPONSE_LIMIT
+  const capturedRawText = lastRawText.length > RAW_RESPONSE_LIMIT
     ? `${lastRawText.slice(0, RAW_RESPONSE_LIMIT)}\n…[${lastRawText.length - RAW_RESPONSE_LIMIT} more characters truncated]`
     : lastRawText;
-  if (rawResponse) {
-    console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${rawResponse}`);
+  // No body at all is itself the diagnosis, so say so instead of leaving the
+  // field empty and letting the report guess it is an old turn. The marker
+  // goes in the same field the raw text uses, so it survives the reload path
+  // (applySimulationResult → world.json) with no extra plumbing.
+  const rawResponse = capturedRawText
+    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+  if (capturedRawText) {
+    console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
+  } else {
+    console.warn(`[ai] task "${taskKey}" — ${rawResponse}`);
   }
   return {
     generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
