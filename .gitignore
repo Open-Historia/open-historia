@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-web
+# `npm run build:site` output (landing page + /play/), assembled from dist-web
+dist-site
 dist-ssr
 # electron-builder output (the packaged app + installer)
 release
