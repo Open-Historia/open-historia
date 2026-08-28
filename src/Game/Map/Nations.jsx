@@ -1132,11 +1132,16 @@ const WorldMap = ({ isGlobe = false }) => {
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)
           unless world.customRegions is set. */}
-      {/* tolerance 0: GeoJSON sources simplify geometry per zoom by default,
-          and each region simplifies independently — shared borders drift
-          apart at low zoom. Full resolution keeps them connected everywhere;
-          the seed geometry is coarse enough that this stays cheap. */}
-      <Source id="custom-regions-source" type="geojson" data={enrichedCustomRegionData} tolerance={0.6}>
+      {/* cap source tiling at the editor-safe z8 tier, but keep simplification
+          disabled there. otherwise overzooming a simplified z8 tile makes the
+          close-up borders look like they were cut out with safety scissors. */}
+      <Source
+        id="custom-regions-source"
+        type="geojson"
+        data={enrichedCustomRegionData}
+        maxzoom={8}
+        tolerance={0}
+      >
         {/* coarse seed geometry sits underneath the tile layer as a safety net.
             black holes are a worse fallback than slightly soft borders. */}
         <Layer
