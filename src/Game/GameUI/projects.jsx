@@ -479,10 +479,13 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   }, [needsEventTitles, expandedId]);
 
   // Closing the panel resets the transient view state, so reopening is a clean
-  // read rather than whatever was half-filtered last time.
+  // read rather than whatever was half-filtered last time. Closed is in here
+  // because it is a VIEW, not a filter: coming back to the board and being shown
+  // finished work is not what anyone opening it expects.
   useEffect(() => {
     if (isOpen) return;
     setExpandedId(null);
+    setShowClosed(false);
   }, [isOpen]);
 
   const availableTags = useMemo(() => collectProjectTags(projects), [projects]);
@@ -509,6 +512,15 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
 
   const closedCount = useMemo(() => projects.filter(isProjectClosed).length, [projects]);
   const openCount = projects.length - closedCount;
+
+  // The Closed chip is the only way back out of the Closed view, and it is only
+  // rendered while there is something closed to show — so a board whose last
+  // closed entry goes away (reopened, removed, or evicted by the board cap) left
+  // the player looking at "No closed entries match those filters." with the way
+  // back gone and no amount of clicking to fix it. Drop the view with its chip.
+  useEffect(() => {
+    if (closedCount === 0) setShowClosed(false);
+  }, [closedCount]);
 
   const toggleTag = useCallback((tag) => {
     setActiveTags((current) => (current.includes(tag)
