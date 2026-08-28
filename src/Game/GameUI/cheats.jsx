@@ -37,6 +37,7 @@ const TOOLS = [
     { id: "add-feature", title: "Add Map Feature", subtitle: "Create new map features with custom properties" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Clean up old and irrelevant features" },
     { id: "events", title: "Events", subtitle: "Edit historical events and their descriptions" },
+    { id: "logs", title: "Diagnostics Log", subtitle: "Errors, API failures and the context the AI was given" },
 ];
 
 const inputStyle = {
@@ -332,6 +333,79 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     );
 };
 
+// Reads the shared diagnostics log. Newest first, because the thing that just
+// went wrong is what the reporter is looking at.
+const LEVEL_TONE = { error: "#ff6b6b", warn: "#ffc861", info: "rgba(255,255,255,0.72)", debug: "rgba(255,255,255,0.45)" };
+
+const LogsPanel = ({ header }) => {
+    const [entries, setEntries] = React.useState([]);
+    const [file, setFile] = React.useState("");
+    const [onlyProblems, setOnlyProblems] = React.useState(false);
+    const [expanded, setExpanded] = React.useState(null);
+    const [note, setNote] = React.useState("");
+
+    const load = React.useCallback(async () => {
+        try {
+            const response = await fetch("/api/log?limit=500", { cache: "no-store" });
+            const data = await response.json();
+            setEntries(Array.isArray(data.entries) ? data.entries.slice().reverse() : []);
+            setFile(String(data.file || ""));
+        } catch (error) {
+            setNote(`Could not read the log: ${error.message}`);
+        }
+    }, []);
+
+    React.useEffect(() => { load(); }, [load]);
+
+    const shown = onlyProblems ? entries.filter((e) => e.level === "error" || e.level === "warn") : entries;
+
+    const copyAll = async () => {
+        try {
+            await navigator.clipboard.writeText(shown.map((e) => JSON.stringify(e)).join("\n"));
+            setNote(`Copied ${shown.length} entr${shown.length === 1 ? "y" : "ies"}.`);
+        } catch {
+            setNote("Clipboard blocked — the file path is shown above.");
+        }
+    };
+
+    return (
+        <>
+        {header}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
+        <button type="button" style={buttonStyle} onClick={load}>Refresh</button>
+        <button type="button" style={buttonStyle} onClick={() => setOnlyProblems((v) => !v)}>
+        {onlyProblems ? "Showing problems" : "Showing everything"}
+        </button>
+        <button type="button" style={buttonStyle} onClick={copyAll}>Copy for a bug report</button>
+        </div>
+        {file && <div style={{ ...labelStyle, wordBreak: "break-all", marginBottom: "0.5rem" }}>{file}</div>}
+        {note && <div style={{ ...labelStyle, marginBottom: "0.5rem" }}>{note}</div>}
+        {shown.length === 0 && <div style={labelStyle}>Nothing logged yet.</div>}
+        {shown.map((entry, index) => (
+            <div key={index} style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", padding: "0.4rem 0" }}>
+            <div
+            onClick={() => setExpanded(expanded === index ? null : index)}
+            style={{ cursor: entry.data ? "pointer" : "default", display: "flex", gap: "0.5rem", fontSize: "0.78rem" }}
+            >
+            <span style={{ color: "rgba(255,255,255,0.4)", whiteSpace: "nowrap" }}>{String(entry.at || "").slice(11, 19)}</span>
+            <span style={{ color: LEVEL_TONE[entry.level] || LEVEL_TONE.info, fontWeight: 700, whiteSpace: "nowrap" }}>{entry.source}</span>
+            <span style={{ color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap" }}>{entry.event}</span>
+            <span style={{ color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.message}</span>
+            {entry.data && <span style={{ color: "rgba(255,255,255,0.35)" }}>{expanded === index ? "▾" : "▸"}</span>}
+            </div>
+            {expanded === index && entry.data && (
+                <pre style={{
+                    background: "rgba(0,0,0,0.35)", borderRadius: 6, color: "rgba(255,255,255,0.8)",
+                    fontSize: "0.72rem", margin: "0.4rem 0 0", maxHeight: "18rem", overflow: "auto", padding: "0.5rem",
+                    whiteSpace: "pre-wrap", wordBreak: "break-word",
+                }}>{typeof entry.data === "string" ? entry.data : JSON.stringify(entry.data, null, 2)}</pre>
+            )}
+            </div>
+        ))}
+        </>
+    );
+};
+
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
@@ -373,6 +447,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const nameOf = (code) => politiesByCode.get(code)?.name || code || "unclaimed land";
 
     // ----- individual tools -----
+
+    if (tool === "logs") {
+        return <LogsPanel header={header} />;
+    }
 
     if (tool === "master-ai") {
         return (

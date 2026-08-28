@@ -54,6 +54,7 @@ import {
   isAllowedHubUrl,
   parseByteRange,
 } from "./security.js";
+import { appendLog, appendLogBatch, readLogTail, logFilePath } from "./logStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -95,6 +96,15 @@ ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
+  // Single choke point for every API failure, which is what makes logging them
+  // one line rather than forty.
+  appendLog({
+    level: statusCode >= 500 ? "error" : "warn",
+    source: "server",
+    event: `http.${statusCode}`,
+    message,
+    data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
+  });
   res.status(statusCode).json({ error: message });
 };
 
@@ -247,6 +257,33 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));
     res.json(next);
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+// ---- Diagnostics log ------------------------------------------------------
+// The page, the AI layer and the Electron main process all write here, so a bug
+// report can carry what actually happened instead of "it broke". Redaction and
+// rotation live in logStore.js. This sits behind the same cross-origin write
+// guard as every other POST, so a random page cannot stuff the player's log.
+app.post("/api/log", largeJsonParser, (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const written = Array.isArray(body.entries)
+      ? appendLogBatch(body.entries)
+      : (appendLog(body), 1);
+    res.json({ ok: true, written });
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/log", (req, res) => {
+  try {
+    const limit = Number.parseInt(String(req.query.limit ?? "500"), 10);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ file: logFilePath(), entries: readLogTail(Number.isFinite(limit) ? limit : 500) });
   } catch (error) {
     sendError(res, 500, error);
   }

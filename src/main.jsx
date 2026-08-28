@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { configureMapRuntime } from "./runtime/assets.js";
 import { startTranslator } from "./runtime/translator.js";
+import { installLogClient } from "./runtime/logClient.js";
 import App from "./App.jsx";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
@@ -16,6 +17,9 @@ const registerServiceWorker = () => {
 };
 
 const mount = () => {
+    // First, so a throw anywhere below is captured rather than lost to a console
+    // nobody had open.
+    installLogClient();
     configureMapRuntime();
     createRoot(document.getElementById("root")).render(
         <App />,
