@@ -1033,11 +1033,36 @@ const SettingsMenu = ({
         On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing.
         </div>
         {/* The running session is pinned to whatever the flag said at startup (see
-            isBetaUnits), so a flip only means something after a restart. Say so, but
-            only while the two actually disagree — a permanent notice would be noise. */}
+            isBetaUnits), so a flip only means something after the page is loaded
+            again. Shown only while the two actually disagree — a permanent notice
+            would be noise.
+
+            This used to say "Restart the game" and stop there, which in the
+            packaged app reads as "quit and reopen it". Nothing needs quitting: the
+            pin is module state in the page's own bundle, and every bit of campaign
+            state lives on the server, so a reload is the whole of it — hence a
+            button rather than an instruction. */}
         {mapSettings.betaUnits !== isBetaUnits() && (
-            <div style={{ fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
-            Restart the game to apply this change.
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
+            <span>Takes effect when the game reloads.</span>
+            <button
+            type="button"
+            onClick={() => window.location.reload()}
+            title="Reloads the page. Your campaign is saved on the server, so nothing is lost — but finish any turn that is still generating first."
+            style={{
+                background: "rgba(255,210,74,0.14)",
+                border: "1px solid rgba(255,210,74,0.5)",
+                borderRadius: "6px",
+                color: "#ffd24a",
+                cursor: "pointer",
+                fontFamily: "sans-serif",
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                padding: "0.2rem 0.55rem",
+            }}
+            >
+            Reload now
+            </button>
             </div>
         )}
         </div>

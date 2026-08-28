@@ -866,15 +866,32 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     }, [messages]);
 
     // A starter message from outside (the Actions panel's "Help brainstorm
-    // actions" button) lands in the input box, not auto-sent — the player still
-    // reviews/edits it before it becomes a real message. Waits for bootstrap so
-    // it never races the history-load effect above into stomping on a restored
-    // draft-less session.
+    // actions" button, a project card's "Ask advisor") lands in the input box,
+    // not auto-sent — the player still reviews/edits it before it becomes a real
+    // message. Waits for bootstrap so it never races the history-load effect
+    // above into stomping on a restored draft-less session.
+    //
+    // APPENDED, never assigned over. This was setInput(requestedPrompt), so a
+    // half-typed question was destroyed by pressing a button somewhere else in
+    // the HUD — and the player's own words are the one thing in this panel that
+    // cannot be got back. Two prompts stacked in the composer read oddly for a
+    // moment; deleting the one you did not want is a keystroke, retyping the one
+    // you did is not.
     useEffect(() => {
         if (!requestedPrompt || !hasBootstrapped) return;
-        setInput(requestedPrompt);
+        setInput((current) => {
+            const typed = current.trim();
+            if (!typed) return requestedPrompt;
+            // Already sitting there (they pressed the same button twice): leave
+            // the composer exactly as it is rather than stuttering the prompt.
+            if (typed.includes(requestedPrompt.trim())) return current;
+            return `${current.replace(/\s+$/, "")}\n\n${requestedPrompt}`;
+        });
         onConsumeRequest?.();
-        inputRef.current?.focus();
+        const el = inputRef.current;
+        el?.focus();
+        // Caret at the end, on the text that was just added.
+        if (el) el.selectionStart = el.selectionEnd = el.value.length;
     }, [requestedPrompt, hasBootstrapped, onConsumeRequest]);
 
     const resizeTextarea = React.useCallback(() => {
