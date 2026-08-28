@@ -717,7 +717,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem", flex: 1, overflowY: "auto", padding: "0.75rem 1rem 1rem" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem", flex: 1, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", padding: "0.75rem 1rem 1rem" }}>
         {!hasLoaded && (
           <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.75rem", padding: "1rem 0", textAlign: "center" }}>
             Loading…
