@@ -1832,11 +1832,16 @@ export const generateCountryStatSheet = async ({ code, name } = {}) => {
   return payload;
 };
 
-export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {
+export const refinePlayerAction = async (rawInput, { persist = true, signal } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput });
   const { payload } = await runJsonTask("descriptionToAction", {
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
+    // Improve can be stopped mid-generation, exactly like a timeline jump.
+    // runJsonTask already links an external signal to the controller it hands
+    // the provider, so on a local model the next token write fails and inference
+    // stops rather than running to completion unheard.
+    signal,
     userMessage: "Convert the player's raw intent into one structured in-game command as JSON only.",
     variables,
   });
