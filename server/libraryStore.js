@@ -1214,8 +1214,17 @@ const buildGameCatalog = () => {
 
   const games = orderedGameIds
   .map((gameId) => {
-    const metaPath = getGameMetaPath(gameId);
-    if (!fs.existsSync(metaPath)) {
+    // A save is its game.json, not its metadata. Requiring game-instance.json
+    // made one missing cosmetic file (an interrupted write, a locked or
+    // half-synced file) delete a game FROM THE LIBRARY: it vanished from the
+    // list while its world, events and chat sat intact on disk, and — because
+    // the active id then failed the check below — the manifest was repointed at
+    // an unrelated game and every runtime write started landing in THAT game's
+    // files, overwriting a second save with the first one's state. readGameMeta
+    // already fills every field from defaults when the file is absent, so a
+    // directory holding a real game.json is listed with a default name rather
+    // than dropped.
+    if (!fs.existsSync(getGameMetaPath(gameId)) && !fs.existsSync(getGameJsonPath(gameId, "game"))) {
       return null;
     }
 
@@ -1259,6 +1268,17 @@ const buildGameCatalog = () => {
   : games[0]?.id ?? "";
 
   if (activeGameId !== manifest.activeGameId) {
+    // Reached when the recorded active game is genuinely gone (deleted outside
+    // the app, say) — handing off to another game is right, but doing it in
+    // silence is not: from here on every runtime write goes to a DIFFERENT save
+    // than the one the player last had open, and the first sign of that used to
+    // be another game's data overwritten. Say so where it can be found.
+    if (manifest.activeGameId) {
+      console.warn(
+        `[games] active game "${manifest.activeGameId}" is not in the library`
+        + ` — handing off to "${activeGameId || "(none)"}". Game writes now go to that save.`,
+      );
+    }
     saveGameManifest({
       ...manifest,
       activeGameId,
