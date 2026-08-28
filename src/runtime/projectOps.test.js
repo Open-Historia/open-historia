@@ -246,3 +246,34 @@ test("every op stamps updatedRound when the caller supplies a round", () => {
     assert.equal(after.updatedRound, 12, `op "${label}" did not stamp the round`);
   }
 });
+
+// A model writes {"title":"Annual drill","repeat":"annual"} with no date more or
+// less constantly. advanceRecurringDate cannot roll from nothing, so the roll was
+// declined and the commitment was marked done and quietly retired for good —
+// despite carrying the very flag that says it never finishes.
+test("an undated recurring milestone rolls from the date it was performed", () => {
+  const before = open([{
+    ...standingWatch,
+    milestones: [{ title: "Annual drill", repeat: "annual" }],
+  }])[0];
+  assert.equal(before.milestones[0].date, "", "the fixture should start undated");
+
+  const after = applyProjectOps([before], [{
+    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
+  }], { date: "2034-06-03" })[0];
+
+  assert.equal(after.milestones[0].date, "2035-06-03", "did not roll to a next occurrence");
+  assert.equal(after.milestones[0].status, "pending", "a standing commitment was retired");
+  assert.equal(after.milestones[0].completedCount, 1);
+  assert.equal(after.milestones[0].lastCompletedAt, "2034-06-03");
+});
+
+// The roll must not fire twice for one performance. A dated milestone still
+// anchors on its own date, so the annual drill on 1 June stays on 1 June.
+test("a dated recurring milestone still keeps its own day of the year", () => {
+  const before = open()[0];
+  const after = applyProjectOps([before], [{
+    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
+  }], { date: "2034-06-03" })[0];
+  assert.equal(after.milestones[0].date, "2035-06-01");
+});

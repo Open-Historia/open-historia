@@ -1111,6 +1111,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         setUnreadIds(new Set());
     };
 
+    // The id of a chat the player has DELIBERATELY marked unread while reading it
+    // — "leave this for later". The auto-mark-read effect below has to stand aside
+    // for that, or the gesture is undone by the next message to arrive, which for
+    // an open conversation is usually seconds later. Scoped to the chat: leaving
+    // it and coming back is a fresh read.
+    const [heldUnreadId, setHeldUnreadId] = useState(null);
+
     // Opening a chat marks it read immediately (list row clears right away, not
     // just in storage). The effect below keeps it marked read for as long as it
     // stays the active chat, so messages that arrive WHILE the player is looking
@@ -1118,14 +1125,29 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // above the last-seen baseline and resurface as unread on the next visit.
     const openChatFromList = (chat) => {
         setActiveChat(chat);
+        setHeldUnreadId(null);
         setChatReadState(chat, true);
+    };
+
+    // The envelope in the conversation header. Marking the open chat unread has to
+    // survive the effect below, so it is remembered here as well as written.
+    const toggleActiveChatRead = (chat) => {
+        const wasUnread = unreadIds.has(String(chat.id));
+        setHeldUnreadId(wasUnread ? null : String(chat.id));
+        setChatReadState(chat, wasUnread);
     };
 
     useEffect(() => {
         if (!activeChat) return;
+        if (heldUnreadId === String(activeChat.id)) return;
         setChatReadState(activeChat, true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeChat?.id, activeChat?.messages?.length]);
+    }, [activeChat?.id, activeChat?.messages?.length, heldUnreadId]);
+
+    // Leaving a chat ends the hold — the next visit is an ordinary read.
+    useEffect(() => {
+        if (!activeChat && heldUnreadId) setHeldUnreadId(null);
+    }, [activeChat, heldUnreadId]);
 
     useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
@@ -1306,7 +1328,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate}
-                unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => setChatReadState(activeChat, unreadIds.has(String(activeChat.id)))}
+                unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)} />
             ) : (
