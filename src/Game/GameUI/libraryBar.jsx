@@ -11,6 +11,7 @@ import {
   clearScenarioAsset,
   createGame,
   createScenario,
+  downloadGameJsonAsset,
   downloadScenarioJsonAsset,
   ensureLibraryCatalog,
   exportScenarioBundle,
@@ -29,6 +30,7 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
+import { DEFAULT_INDEX_ROWS, normalizeIndexRows, toIndexKey } from "../../runtime/statsSheet.js";
 import FactionCreator from "./FactionCreator.jsx";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -190,6 +192,7 @@ const editorSectionLabels = {
   bundles: "Bundles",
   overview: "Overview",
   prompts: "Prompts",
+  stats: "Stat Sheet",
   world: "World",
 };
 
@@ -282,6 +285,130 @@ const AssetBadgeRow = ({ badges }) =>
       ))}
     </div>
   ) : null;
+
+// Builds the scenario's stat-sheet indices — the rows a country panel shows and
+// the ones the AI is told to write. An empty list means "use the stock sheet",
+// which is what every scenario that has never opened this tab has.
+const StatsSectionEditor = ({ onChange, rows }) => {
+  const isCustom = rows.length > 0;
+  const shown = isCustom ? rows : DEFAULT_INDEX_ROWS;
+
+  // A row's key follows its label only until the row has been saved once
+  // (isNew). After that the key is frozen: it is what the AI writes and what
+  // every country's stored sheet is keyed by, so renaming "Radiation" to
+  // "Fallout" must not orphan the numbers already recorded under it.
+  const update = (index, patch) =>
+    onChange(rows.map((row, position) => {
+      if (position !== index) return row;
+      const next = { ...row, ...patch };
+      if (row.isNew && typeof patch.label === "string") {
+        const taken = new Set(rows.filter((_, other) => other !== index).map((other) => other.key));
+        const base = toIndexKey(patch.label);
+        if (base && !taken.has(base)) next.key = base;
+      }
+      return next;
+    }));
+
+  const move = (index, delta) => {
+    const target = index + delta;
+    if (target < 0 || target >= rows.length) return;
+    const next = [...rows];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+
+  const add = () => {
+    // A placeholder key so the row has a React identity before it is named; the
+    // real one is derived from the label as it is typed (see update).
+    const used = new Set(rows.map((row) => row.key));
+    let key = "";
+    for (let n = rows.length + 1; !key || used.has(key); n += 1) key = `index${n}`;
+    onChange([...rows, { color: "#8b5cf6", icon: "", isNew: true, key, label: "" }]);
+  };
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
+      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.82rem", marginBottom: "0.85rem" }}>
+        The strategic indices on every country's stat panel. Leave this alone for the
+        standard six, or define your own — Radiation and Water for a wasteland, Legitimacy
+        and Grain for an ancient world. The AI is told to fill in exactly these.
+      </div>
+
+      <div style={{ display: "grid", gap: "0.5rem" }}>
+        {shown.map((row, index) => (
+          <div
+            key={row.isNew ? `new-${index}` : row.key}
+            style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "14px", display: "flex", gap: "0.4rem", opacity: isCustom ? 1 : 0.55, padding: "0.55rem 0.6rem" }}
+          >
+            <input
+              disabled={!isCustom}
+              maxLength={4}
+              onChange={(event) => update(index, { icon: event.target.value })}
+              placeholder="icon"
+              style={{ ...inputStyle, flex: "0 0 3rem", textAlign: "center" }}
+              value={row.icon}
+            />
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+              <input
+                disabled={!isCustom}
+                maxLength={48}
+                onChange={(event) => update(index, { label: event.target.value })}
+                placeholder="Index name"
+                style={inputStyle}
+                value={row.label}
+              />
+              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.7rem", marginTop: "0.2rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {row.key}
+              </div>
+            </div>
+            <input
+              disabled={!isCustom}
+              onChange={(event) => update(index, { color: event.target.value })}
+              style={{ ...inputStyle, flex: "0 0 2.6rem", height: "2.6rem", padding: "0.2rem" }}
+              type="color"
+              value={row.color}
+            />
+            {isCustom && (
+              <div style={{ display: "flex", gap: "0.25rem" }}>
+                <button onClick={() => move(index, -1)} style={{ ...actionButtonStyle, minWidth: "2rem", padding: 0 }} type="button">^</button>
+                <button onClick={() => move(index, 1)} style={{ ...actionButtonStyle, minWidth: "2rem", padding: 0 }} type="button">v</button>
+                <button
+                  onClick={() => onChange(rows.filter((_, position) => position !== index))}
+                  style={{ ...actionButtonStyle, background: "rgba(244,63,94,0.16)", minWidth: "2rem", padding: 0 }}
+                  type="button"
+                >
+                  X
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: "0.45rem", marginTop: "0.8rem" }}>
+        <button
+          disabled={isCustom && rows.length >= 12}
+          onClick={isCustom ? add : () => onChange(DEFAULT_INDEX_ROWS.map((row) => ({ ...row })))}
+          style={{ ...actionButtonStyle, opacity: isCustom && rows.length >= 12 ? 0.4 : 1 }}
+          type="button"
+        >
+          {isCustom ? "Add index" : "Customize"}
+        </button>
+        {isCustom && (
+          <button onClick={() => onChange([])} style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.03)" }} type="button">
+            Use the standard sheet
+          </button>
+        )}
+      </div>
+
+      {isCustom && rows.some((row) => !row.label.trim()) && (
+        <div style={{ color: "rgba(251,191,36,0.9)", fontSize: "0.78rem", marginTop: "0.6rem" }}>
+          Rows without a name are dropped when this saves.
+        </div>
+      )}
+    </div>
+  );
+};
 
 const PromptSectionEditor = ({
   onChangeHelper,
@@ -711,6 +838,8 @@ const EditorDrawer = ({
   promptSectionKey,
   setEditorSection,
   setPromptSectionKey,
+  setStatIndexRows,
+  statIndexRows,
 }) => {
   if (!details || !formState) {
     return null;
@@ -719,8 +848,8 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "prompts", "assets", "bundles"]
-      : ["overview", "world", "prompts", "assets"];
+      ? ["overview", "world", "prompts", "stats", "assets", "bundles"]
+      : ["overview", "world", "prompts", "stats", "assets"];
 
   return (
     <div
@@ -904,6 +1033,10 @@ const EditorDrawer = ({
         />
       )}
 
+      {editorSection === "stats" && (
+        <StatsSectionEditor onChange={setStatIndexRows} rows={statIndexRows} />
+      )}
+
       {editorSection === "assets" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ display: "grid", gap: "0.7rem" }}>
@@ -1071,6 +1204,12 @@ const LibraryTopBar = () => {
   const [editorState, setEditorState] = useState(null);
   const [editorError, setEditorError] = useState(null);
   const [editorSection, setEditorSection] = useState("overview");
+  // The scenario's stat-sheet indices. An empty list means "the stock sheet",
+  // which is also what a scenario with no stats.json has. Kept apart from
+  // editorState because it is an asset file, not scenario metadata — Save
+  // uploads it, and statIndexBaseline is what it compares against.
+  const [statIndexRows, setStatIndexRows] = useState([]);
+  const [statIndexBaseline, setStatIndexBaseline] = useState("[]");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
   const assetFileInputsRef = useRef({});
@@ -1091,6 +1230,18 @@ const LibraryTopBar = () => {
     setPromptSectionKey("leader");
   };
 
+  // stats.json rides the optional-asset pipeline, so it is not in the details
+  // payload — it has to be fetched. A failure here is not an editor failure: the
+  // scenario simply has no custom sheet.
+  const loadStatIndexRows = async (kind, id) => {
+    const raw = kind === "scenario"
+      ? await downloadScenarioJsonAsset(id, "stats")
+      : await downloadGameJsonAsset(id, "stats");
+    const rows = normalizeIndexRows(raw) ?? [];
+    setStatIndexRows(rows);
+    setStatIndexBaseline(JSON.stringify(rows));
+  };
+
   const openScenarioEditor = async (scenarioId) => {
     setEditorError(null);
     setIsBusy(true);
@@ -1102,6 +1253,7 @@ const LibraryTopBar = () => {
       setEditorState(buildScenarioEditorState(details));
       setEditorSection("overview");
       setPromptSectionKey("leader");
+      await loadStatIndexRows("scenario", scenarioId);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -1120,6 +1272,7 @@ const LibraryTopBar = () => {
       setEditorState(buildGameEditorState(details));
       setEditorSection("overview");
       setPromptSectionKey("leader");
+      await loadStatIndexRows("game", gameId);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -1459,6 +1612,23 @@ const LibraryTopBar = () => {
     }));
   };
 
+  const saveStatIndexRows = async (kind, id) => {
+    const rows = normalizeIndexRows(statIndexRows) ?? [];
+    const serialized = JSON.stringify(rows);
+    if (serialized === statIndexBaseline) return;
+    if (rows.length) {
+      const file = new Blob([JSON.stringify({ indices: rows })], { type: "application/json" });
+      if (kind === "scenario") await uploadScenarioAsset(id, "stats", file);
+      else await uploadGameAsset(id, "stats", file);
+    } else if (kind === "scenario") {
+      await clearScenarioAsset(id, "stats").catch(() => {});
+    } else {
+      await clearGameAsset(id, "stats").catch(() => {});
+    }
+    setStatIndexRows(rows);
+    setStatIndexBaseline(serialized);
+  };
+
   const handleSave = async () => {
     if (!editorKind || !editorDetails || !editorState) {
       return;
@@ -1503,6 +1673,7 @@ const LibraryTopBar = () => {
         });
         setEditorDetails(details);
         setEditorState(buildScenarioEditorState(details));
+        await saveStatIndexRows("scenario", editorDetails.scenario.id);
       } else {
         const currentGame = editorDetails.data?.game ?? {};
         const currentWorld = editorDetails.data?.world ?? {};
@@ -1533,6 +1704,7 @@ const LibraryTopBar = () => {
         });
         setEditorDetails(details);
         setEditorState(buildGameEditorState(details));
+        await saveStatIndexRows("game", editorDetails.game.id);
       }
     } catch (nextError) {
       setEditorError(nextError.message);
@@ -2575,6 +2747,8 @@ const LibraryTopBar = () => {
         onSave={handleSave}
         promptSectionKey={promptSectionKey}
         setEditorSection={setEditorSection}
+        setStatIndexRows={setStatIndexRows}
+        statIndexRows={statIndexRows}
         setPromptSectionKey={setPromptSectionKey}
       />
 

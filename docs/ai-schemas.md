@@ -203,7 +203,7 @@ A complete national statistics sheet. Every top-level object below is required; 
 |---|---|---|
 | top level | `capital`, `continent`, `government`, `leader` | nonempty string |
 | top level | `stability` | percentage (int 0–100) |
-| `indices` | `sovereignty`, `foodAutonomy`, `energyAutonomy`, `economicIndependence`, `internalSecurity`, `internationalReputation` | percentage each |
+| `indices` | `sovereignty`, `foodAutonomy`, `energyAutonomy`, `economicIndependence`, `internalSecurity`, `internationalReputation` — or whatever indices the scenario's `stats.json` defines instead (keys are open, values stay 0-100 integers) | percentage each |
 | `economy` | `gdp`, `gdpGrowth`, `gdpPerCapita`, `currency`, `inflation`, `unemployment`, `publicDebt`, `budgetBalance` | nonempty string each |
 | `gdpBreakdown` | `agriculture`, `industry`, `services` | percentage each — **must sum to exactly 100** (see §5.3) |
 

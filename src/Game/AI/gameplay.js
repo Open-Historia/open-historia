@@ -3,6 +3,7 @@ import { callAI } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { DEFAULT_INDEX_ROWS, describeIndexRows, loadIndexRows } from "../../runtime/statsSheet.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -437,6 +438,18 @@ const runJsonTask = async (taskKey, {
     // Place renaming: appended at call time so existing frozen-prompt campaigns get it
     // too; the markerOps rename op ships via the LIVE tool schema either way.
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
+  }
+
+  if (["jumpForward", "autoJumpForward", "countryStatSheet"].includes(taskKey)) {
+    try {
+      const rows = await loadIndexRows();
+      if (rows !== DEFAULT_INDEX_ROWS) {
+        systemPrompt = `${systemPrompt}\n\n[Stat Sheet Indices]\nThis scenario defines its OWN strategic indices, and they are the only ones its country sheets show. When you write a country's indices (a full sheet, or polityChanges.stats.indices), use exactly these keys, each an integer 0-100: ${describeIndexRows(rows)}. Do not emit any other index key — one that is not on this list is discarded and never reaches the player.`;
+      }
+    } catch {
+      // No stats.json, or it could not be read: the stock sheet applies and the
+      // prompt needs no addition.
+    }
   }
 
   // The consolidator's summary REPLACES what it covers, so anything it leaves out

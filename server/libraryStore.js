@@ -263,6 +263,12 @@ const OPTIONAL_JSON_ASSET_FILES = {
   // every 5s by the running game, and a few hundred flags is megabytes that would
   // ride every poll. Like colors, this is fetched only when the scenario changes.
   flags: "flags.json",
+  // The scenario's stat-panel definition: which strategic indices its country
+  // sheets carry. A scenario without one gets the stock six, so every existing
+  // scenario is unchanged. Optional, static, author-set — the same shape of data
+  // as flags and tags, so it rides every path they already have (bundle export
+  // and import, the runtime read, the editor's asset handling).
+  stats: "stats.json",
   // Author-set country tags: owner code -> string[] ("socialist", "anti-nato"…).
   // A JSON asset for the same reason as flags: static author data that world.json's
   // 5s poll has no business carrying. These are the starting tags — the AI's own
@@ -332,6 +338,7 @@ const JSON_ASSET_DEFAULTS = {
   events: [],
   game: {},
   prompts: {},
+  stats: {},
   world: {},
   snapshots: [],
 };
@@ -2548,6 +2555,10 @@ const exportScenarioBundle = (scenarioId, { mode = "light" } = {}) => {
       // characterisation of every country and the model reads them as context, so a
       // shared map that loses them plays differently than its author intended.
       tags: buildScenarioBundleAsset(scenarioId, "tags", mode),
+      // The stat-sheet definition travels too. It has to: the update-in-place
+      // path clears every uploadable slot a bundle omits, so a scenario that
+      // exported without it would lose its custom sheet on the next update.
+      stats: buildScenarioBundleAsset(scenarioId, "stats", mode),
       countries: buildScenarioBundleAsset(scenarioId, "countries", mode),
       regions: buildScenarioBundleAsset(scenarioId, "regions", mode),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson", mode),
