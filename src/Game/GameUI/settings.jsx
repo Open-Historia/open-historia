@@ -17,10 +17,14 @@ import {
 } from "../../runtime/i18n.js";
 import {
     MAP_SETTING_KEYS,
+    applySaveBetaUnits,
     getMapSetting,
     isBetaUnits,
+    resolveBetaUnits,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildDebugLogReport,
@@ -1103,12 +1107,56 @@ const SettingsMenu = ({
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
-        betaUnits: getMapSetting(MAP_SETTING_KEYS.betaUnits),
+        // Not getMapSetting: this one belongs to the save, not the browser
+        // profile (see mapSettings.js). resolveBetaUnits falls back to the
+        // localStorage key for a save that has never chosen.
+        betaUnits: resolveBetaUnits(),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
+    };
+
+    // The save's own value arrives asynchronously (library.js reads game.json),
+    // and it changes again whenever a different save is activated — both of them
+    // after this panel's state was seeded. Without this the checkbox keeps
+    // showing the app-wide default, which for a beta save is the wrong box.
+    useEffect(() => {
+        const onUpdated = () =>
+            setMapSettingsState((current) => {
+                const next = resolveBetaUnits();
+                return current.betaUnits === next ? current : { ...current, betaUnits: next };
+            });
+        onUpdated();
+        window.addEventListener("mapSettings:updated", onUpdated);
+        return () => window.removeEventListener("mapSettings:updated", onUpdated);
+    }, []);
+
+    // The unit system is stored in the active save's game.json so it survives a
+    // restart of either desktop build and travels with a copied or duplicated
+    // save. The localStorage write still happens (through updateMapSetting): it
+    // is no longer where the setting lives, only the default handed to the next
+    // save that has never chosen one.
+    //
+    // Order matters — applySaveBetaUnits first, because writeGameData re-stamps
+    // the flag from it rather than from the object it is handed, which is what
+    // makes this safe to do while a turn is generating.
+    const updateBetaUnits = (value) => {
+        updateMapSetting("betaUnits", MAP_SETTING_KEYS.betaUnits, value);
+        const gameId = getLibraryState().activeGameId;
+        // With no save open there is nothing to store it on, and writing game.json
+        // anyway would have the server CREATE a session from the selected scenario
+        // (writeRuntimeJsonAsset's no-active-game branch) — a settings click must
+        // not start a campaign. The localStorage default above is enough: the save
+        // the player opens next inherits it.
+        if (!gameId) return;
+        applySaveBetaUnits(gameId, value);
+        readGameData({ force: true })
+            .then((game) => writeGameData(game))
+            .catch((error) => {
+                console.warn("Failed to store the unit system on this save:", error);
+            });
     };
 
     return (
@@ -1223,15 +1271,16 @@ const SettingsMenu = ({
         <Toggle
         label="Beta unit system"
         enabled={mapSettings.betaUnits}
-        onToggle={() => updateMapSetting("betaUnits", MAP_SETTING_KEYS.betaUnits, !mapSettings.betaUnits)}
+        onToggle={() => updateBetaUnits(!mapSettings.betaUnits)}
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing.
+        On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing. Set per save: it is stored with this campaign, so it survives a restart and follows a copy of the save.
         </div>
-        {/* The running session is pinned to whatever the flag said at startup (see
-            isBetaUnits), so a flip only means something after the page is loaded
-            again. Shown only while the two actually disagree — a permanent notice
-            would be noise.
+        {/* The running session is pinned to what THIS SAVE said when it was opened
+            (see isBetaUnits), so a flip only means something after the page is
+            loaded again — the save already has the new value on disk by then.
+            Shown only while the two actually disagree — a permanent notice would
+            be noise.
 
             This used to say "Restart the game" and stop there, which in the
             packaged app reads as "quit and reopen it". Nothing needs quitting: the

@@ -1,5 +1,6 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { getBetaUnitsToStamp } from "./mapSettings.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { advanceRecurringDate, normalizeMilestoneRepeat } from "./projects.js";
@@ -2556,10 +2557,15 @@ const canonicalizeDateString = (value) => {
 
 export const normalizeGameData = (game) => {
   const nextGame = game && typeof game === "object" ? game : {};
+  // Pulled out of the spread below rather than overwritten after it: absent is a
+  // third state here (see the betaUnits note further down), and a save carrying an
+  // explicit null — which is what a stripped-out choice looks like — has to come
+  // back absent rather than as a null nobody downstream expects.
+  const { betaUnits, ...restGame } = nextGame;
 
   return {
     ...GAME_DEFAULTS,
-    ...nextGame,
+    ...restGame,
     country: normalizeOptionalString(nextGame.country),
     difficulty: normalizeOptionalString(nextGame.difficulty) || GAME_DEFAULTS.difficulty,
     gameDate: canonicalizeDateString(nextGame.gameDate),
@@ -2569,6 +2575,13 @@ export const normalizeGameData = (game) => {
         ? Math.trunc(Number(nextGame.round))
         : GAME_DEFAULTS.round,
     startDate: canonicalizeDateString(nextGame.startDate),
+    // Which unit system this SAVE plays under (runtime/mapSettings.js). Kept out
+    // of GAME_DEFAULTS on purpose: absent is a third state, and it has to stay
+    // distinguishable from an explicit `false`. A save that has never chosen
+    // inherits the app-wide default, which is what silently migrates every save
+    // written before the setting moved off localStorage — defaulting it to false
+    // here would instead switch those saves to classic behind the player.
+    ...(betaUnits === undefined || betaUnits === null ? {} : { betaUnits: Boolean(betaUnits) }),
   };
 };
 
@@ -2598,8 +2611,27 @@ export const writeWorldState = async (world, options = {}) => {
 export const readGameData = async ({ force = false } = {}) =>
   normalizeGameData(await readJson(JSON_URLS.game, { defaultValue: GAME_DEFAULTS, force }));
 
-export const writeGameData = async (game, options = {}) =>
-  writeJson(JSON_URLS.game, normalizeGameData(game), { pretty: true, ...options });
+// Every game.json write re-stamps the player's unit-system choice rather than
+// trusting whatever the caller is holding, because none of these callers holds a
+// current copy: a turn writes a game object it read before the turn started, and
+// rollBackToSnapshot writes one captured a whole turn ago. Without this, flipping
+// the toggle while a jump generates — or rolling that jump back afterwards —
+// silently put the old value back, and the setting only shows its effect after a
+// reload, so the player would see it revert for no visible reason. The unit
+// system is a setting, not turn state; it does not roll back with the turn.
+//
+// null means no save is open to stamp, and then nothing is written — see
+// mapSettings.getBetaUnitsToStamp, which also covers why a save that has never
+// chosen has its inherited value written down here rather than on load.
+export const writeGameData = async (game, options = {}) => {
+  const next = normalizeGameData(game);
+  const chosenBetaUnits = getBetaUnitsToStamp();
+  return writeJson(
+    JSON_URLS.game,
+    chosenBetaUnits === null ? next : { ...next, betaUnits: chosenBetaUnits },
+    { pretty: true, ...options },
+  );
+};
 
 export const readActionsState = async ({ force = false } = {}) =>
   normalizeActions(await readJson(JSON_URLS.actions, { defaultValue: [], force }));
