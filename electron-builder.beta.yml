@@ -1,8 +1,7 @@
-# Packaging config for the UNOFFICIAL beta build of the fork
-# (github.com/SeventhDread/open-historia). Used as `electron-builder --config
-# electron-builder.beta.yml`; the `build` block in package.json is ignored when
-# this is passed, so this file is a complete config rather than a patch, and the
-# stable build's config stays untouched.
+# Packaging config for the UNOFFICIAL beta build built from the Seventh-Dread-Beta
+# branch. Used as `electron-builder --config electron-builder.beta.yml`; the `build`
+# block in package.json is ignored when this is passed, so this file is a complete
+# config rather than a patch, and the stable build's config stays untouched.
 #
 # What is deliberately different from package.json's `build`:
 #   appId / productName  — a DIFFERENT application to Windows, macOS and Linux, so
@@ -22,15 +21,21 @@
 # What is deliberately the SAME: everything the game reads and writes. The beta
 # gets its own userData from its own productName, but electron/main.cjs points
 # the save library at the stable app's folder on purpose — see SHARED_LIBRARY_NAME.
-appId: io.github.seventhdread.openhistoria.beta
+# A DIFFERENT appId to the one the earlier `Open Historia Beta` build shipped with,
+# on purpose: Windows keys the uninstall entry off it, so a new id makes this a new
+# application that installs into the new folder below rather than upgrading the old
+# beta in place and inheriting its recorded install path. Testers uninstall the old
+# one by hand; if they don't, the two coexist harmlessly (libraryLock.cjs stops them
+# writing the shared saves at once).
+appId: io.github.seventhdread.openhistoria.sdbeta
 # Deliberately WITHOUT parentheses. This name becomes the install folder, and
 # electron-builder only uses productName for that when it matches its allow-list
 # /^[-_+0-9a-zA-Z .]+$/ (targetUtil.ts, getWindowsInstallationDirName). Parentheses
 # fail it, and the fallback is package.json's `name` — which would put the beta in
-# …\Programs\open-historia: no mention of the beta, and a name a future upstream
-# change could plausibly want too. The parenthesised name still reaches the player
-# through nsis.shortcutName and the window title.
-productName: Open Historia Beta
+# …\Programs\open-historia: no mention of whose beta it is, and a name a future
+# upstream change could plausibly want too. The parenthesised name still reaches the
+# player through nsis.shortcutName, nsis.uninstallDisplayName and the window title.
+productName: Open Historia SeventhDread Beta
 
 files:
   - dist/**
@@ -55,7 +60,7 @@ win:
       arch:
         - x64
   icon: electron/beta-assets/icon-beta.png
-  artifactName: Open-Historia-Beta-Setup-${os}.${ext}
+  artifactName: Open-Historia-SeventhDread-Beta-Setup-${os}.${ext}
 
 nsis:
   oneClick: false
@@ -63,8 +68,11 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Open Historia (Beta)
-  artifactName: Open-Historia-Beta-Setup.${ext}
+  shortcutName: Open Historia (SeventhDread Beta)
+  # Without this, "Apps & features" falls back to productName and the parenthesised
+  # name the player sees everywhere else would not match the entry they uninstall.
+  uninstallDisplayName: Open Historia (SeventhDread Beta)
+  artifactName: Open-Historia-SeventhDread-Beta-Setup.${ext}
 
 mac:
   target:
@@ -74,7 +82,7 @@ mac:
         - arm64
   icon: electron/beta-assets/icon-beta.png
   category: public.app-category.strategy-games
-  artifactName: Open-Historia-Beta-mac-${arch}.${ext}
+  artifactName: Open-Historia-SeventhDread-Beta-mac-${arch}.${ext}
 
 linux:
   target:
@@ -83,4 +91,4 @@ linux:
         - x64
   icon: electron/beta-assets/icon-beta.png
   category: Game
-  artifactName: Open-Historia-Beta-${arch}.${ext}
+  artifactName: Open-Historia-SeventhDread-Beta-${arch}.${ext}

@@ -32,7 +32,7 @@ test("a lock whose process is gone is not a holder", () => {
   // would be worse than the race this guards against.
   assert.equal(lockHolder(file, { pid: 200, isRunning: never }), null);
   assert.equal(
-    claimSharedLibrary(file, { label: "Open Historia (Beta)", ask: refuse, pid: 200, isRunning: never }),
+    claimSharedLibrary(file, { label: "Open Historia (SeventhDread Beta)", ask: refuse, pid: 200, isRunning: never }),
     true,
   );
 });
@@ -43,7 +43,7 @@ test("the second build is told who holds the library, and can quit", () => {
 
   let asked = "";
   const quit = claimSharedLibrary(file, {
-    label: "Open Historia (Beta)",
+    label: "Open Historia (SeventhDread Beta)",
     pid: 200,
     isRunning: running(100),
     ask: (holder) => { asked = holder; return false; },
@@ -62,7 +62,7 @@ test("starting anyway leaves the first build's lock intact", () => {
   claimSharedLibrary(file, { label: "Open Historia", ask: refuse, pid: 100 });
 
   const started = claimSharedLibrary(file, {
-    label: "Open Historia (Beta)",
+    label: "Open Historia (SeventhDread Beta)",
     pid: 200,
     isRunning: running(100),
     ask: () => true,
@@ -90,7 +90,7 @@ test("quitting normally releases the library for the next launch", () => {
 
   assert.equal(fs.existsSync(file), false);
   assert.equal(
-    claimSharedLibrary(file, { label: "Open Historia (Beta)", ask: refuse, pid: 200, isRunning: running(100) }),
+    claimSharedLibrary(file, { label: "Open Historia (SeventhDread Beta)", ask: refuse, pid: 200, isRunning: running(100) }),
     true,
   );
 });

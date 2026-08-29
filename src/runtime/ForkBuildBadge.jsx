@@ -1,13 +1,14 @@
-/*! Open Historia — fork beta badge. Fork-only; see the header below. */
+/*! Open Historia — SeventhDread beta badge. Beta-branch only; see the header below. */
 
 // ============================================================================
 // FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE.
 //
 // This file, the `/api/fork-build` route in server/server.js, and the single
 // <ForkBuildBadge /> line in src/App.jsx are the whole feature. They exist so a
-// tester running the SeventhDread fork build can never mistake it for the
-// official app when they file feedback or post a screenshot — the two installs
-// share one save library, so "which build was this?" is otherwise unanswerable.
+// tester running the SeventhDread beta build can never mistake it for the
+// official app — nor for anyone else's beta — when they file feedback or post a
+// screenshot. The two installs share one save library, so "which build was this?"
+// is otherwise unanswerable.
 //
 // Deleting all three leaves upstream byte-identical to what it was.
 // ============================================================================
@@ -16,7 +17,7 @@ import { useEffect, useState } from "react";
 
 import { useIsMobile } from "./useIsMobile.js";
 
-// Only the fork's desktop beta answers this with a channel; everything else —
+// Only the SeventhDread desktop beta answers this with a channel; everything else —
 // the website, the APK, a dev run, the stable desktop app — answers {} and the
 // badge stays unmounted. (A phone browser pointed at a desktop beta over the LAN
 // setting does get it, which is why the narrow layout below matters.)
@@ -58,7 +59,7 @@ const wrap = {
 // both of them, hiding the Chat/Actions/Projects buttons behind a label.
 //
 // So the narrow layout drops to what actually identifies the build: the dot and
-// the word BETA. The build number and the wording move into the title, and the
+// the words SD BETA. The build number and the wording move into the title, and the
 // whole pill becomes the feedback link rather than carrying a separate one, so
 // nothing is lost but the width.
 const compactWrap = {
@@ -108,13 +109,13 @@ export default function ForkBuildBadge() {
   if (!info) return null;
 
   const build = info.build ? `#${info.build.slice(-6)}` : "";
-  const full = `BETA · unofficial fork build${build ? ` ${build}` : ""}`;
+  const full = `SEVENTHDREAD BETA · unofficial beta build${build ? ` ${build}` : ""}`;
 
   if (isMobile) {
     const label = (
       <>
         <span style={dot} />
-        <span>BETA</span>
+        <span>SD BETA</span>
       </>
     );
     // A link only where there is somewhere to send them; otherwise the same pill
@@ -140,7 +141,7 @@ export default function ForkBuildBadge() {
   return (
     <div style={wrap} role="status">
       <span style={dot} />
-      <span>BETA · unofficial fork build</span>
+      <span>SEVENTHDREAD BETA · unofficial beta build</span>
       {build ? <span style={muted}>{build}</span> : null}
       {info.feedback ? (
         <a style={link} href={info.feedback} target="_blank" rel="noopener noreferrer">

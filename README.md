@@ -41,18 +41,23 @@
 
 ---
 
-## 🧪 This is a fork — the beta build lives here
+## 🧪 This branch builds the SeventhDread beta
 
-This repository is an **unofficial fork** of
-[Open-Historia/open-historia](https://github.com/Open-Historia/open-historia), used to try
-features out early. The official game is over there and is not affected by anything here.
+This is the `Seventh-Dread-Beta` branch — an **unofficial beta** maintained by SeventhDread,
+used to try features out early. The official game is what `main` builds, and nothing here
+affects it.
 
-**[Download the beta](https://github.com/SeventhDread/open-historia/releases/tag/desktop-beta)**
-— it installs *alongside* the official app and **shares your saves with it**, so you can
-play a campaign in the beta, then open the official app and carry straight on. Run only
-one of them at a time; the beta will tell you if the other is already open. Feedback goes
-in [issues](https://github.com/SeventhDread/open-historia/issues), and
-[docs/fork-beta.md](docs/fork-beta.md) has the details (including what to back up).
+**[Download the beta](https://github.com/Open-Historia/open-historia/releases/tag/desktop-seventhdread-beta)**
+— it installs *alongside* the official app as **Open Historia (SeventhDread Beta)** and
+**shares your saves with it**, so you can play a campaign in the beta, then open the official
+app and carry straight on. Run only one of them at a time; the beta will tell you if the other
+is already open. Feedback goes in
+[issues](https://github.com/Open-Historia/open-historia/issues), and
+[docs/seventhdread-beta.md](docs/seventhdread-beta.md) has the details (including what to
+back up).
+
+> Upgrading from the older **Open Historia Beta**? Uninstall it first — this is a separate
+> application with its own install folder. Your saves are untouched by that.
 
 ---
 

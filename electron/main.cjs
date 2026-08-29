@@ -20,7 +20,7 @@ const {
 } = require("./libraryLock.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
-// the fork's beta build (`npm run dist:win:beta` and the desktop-beta workflow);
+// the SeventhDread beta build (`npm run dist:win:beta` and the release workflow);
 // the stable build ships no such file, reads "stable", and every branch below is
 // the behaviour it has always had. OH_CHANNEL overrides it for `npm run electron`,
 // which is the only way to exercise the beta paths unpackaged.
@@ -40,7 +40,7 @@ const IS_BETA = CHANNEL === "beta";
 // drops the parentheses because they would push the install folder onto a fallback
 // name — see the comment there; the two are allowed to differ because nothing
 // derives one from the other.
-const BETA_APP_NAME = "Open Historia (Beta)";
+const BETA_APP_NAME = "Open Historia (SeventhDread Beta)";
 
 // Electron derives userData — the Chromium profile, and with it the
 // single-instance lock — from the app name, which for both builds is package.json's
@@ -54,13 +54,16 @@ const BETA_APP_NAME = "Open Historia (Beta)";
 // live under USER_ROOT below, which is deliberately the stable app's folder.
 if (IS_BETA) app.setName(BETA_APP_NAME);
 
-// Where a beta build looks for ITS updates and sends ITS feedback. Pointing these
-// at the fork is the whole reason they are not left at the defaults in
-// server.js: a beta that polled the upstream release would offer to "update" a
-// tester onto a different app.
+// Where a beta build looks for ITS updates and sends ITS feedback. The repo is now
+// the same one the stable app is released from — what keeps the two apart is the
+// TAG. server.js defaults the desktop track to .../desktop-stable/latest.json, so
+// without this override a tester would be offered the official installer as an
+// "update" and quietly leave the build they signed up to test. The tag is fixed on
+// purpose: it is baked into every shipped build, so the release workflow must keep
+// publishing to it rather than to a per-build tag.
 const BETA_UPDATE_MANIFEST =
-  "https://github.com/SeventhDread/open-historia/releases/download/desktop-beta/latest.json";
-const BETA_FEEDBACK_URL = "https://github.com/SeventhDread/open-historia/issues";
+  "https://github.com/Open-Historia/open-historia/releases/download/desktop-seventhdread-beta/latest.json";
+const BETA_FEEDBACK_URL = "https://github.com/Open-Historia/open-historia/issues";
 
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
@@ -116,7 +119,7 @@ const claimSharedLibrary = () =>
 const releaseSharedLibrary = () => releaseLibrary(LOCK_FILE);
 
 // Read by server.js. A stable build sets neither, and server.js keeps its own
-// upstream defaults; only the beta redirects its update check at the fork.
+// upstream defaults; only the beta redirects its update check at its own release.
 process.env.OH_CHANNEL = CHANNEL;
 if (IS_BETA) {
   process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
@@ -303,7 +306,7 @@ const createMainWindow = () => {
     show: false,
     // The beta says so in the one place a player always sees, even after they
     // have both builds pinned to the taskbar and forgotten which is which.
-    title: IS_BETA ? `${BETA_APP_NAME} — fork build` : "Open Historia",
+    title: IS_BETA ? `${BETA_APP_NAME} — beta build` : "Open Historia",
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },
