@@ -15,7 +15,7 @@ import {
 import { buildRegionOwnershipText } from "./regionVocab.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { buildForcePostureText } from "./forcePosture.js";
-import { describeTimeline, deriveProjectFlags } from "../../runtime/projects.js";
+import { STALE_ROUNDS, describeTimeline, deriveProjectFlags } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -436,6 +436,15 @@ export const buildProjectsSummaryText = (world, game) => {
     return owner && owner.toLowerCase() !== player.toLowerCase() ? `run by ${owner}` : "ours";
   };
 
+  // Printed ONLY when it is not normal. Putting "priority: normal" on twenty
+  // entries spends the model's attention teaching it that the field means
+  // nothing; the two exceptional values are the whole signal.
+  const priorityNote = (project) => {
+    if (project.priority === "high") return " [HIGH PRIORITY]";
+    if (project.priority === "low") return " [low priority]";
+    return "";
+  };
+
   const timelineOf = (project) => {
     const timeline = describeTimeline(project, gameDate);
     return timeline ? `${timeline}.` : "";
@@ -457,7 +466,7 @@ export const buildProjectsSummaryText = (world, game) => {
     const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
     const warnings = warningsOf(project, flags);
     return [
-      `- ${titleOf(project)} [id ${project.id}], ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
+      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
       project.summary,
       project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
       timeline,
@@ -476,7 +485,7 @@ export const buildProjectsSummaryText = (world, game) => {
     const next = flags.nextMilestone
       ? ` Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
       : "";
-    return `- ${titleOf(project)} [id ${project.id}], ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
+    return `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
       + `${next}${warnings.length ? ` [${warnings.join("; ")}]` : ""}`;
   };
 
@@ -495,6 +504,36 @@ export const buildProjectsSummaryText = (world, game) => {
   if (closed.length > 0) {
     sections.push(`Finished or abandoned — do not re-open these:\n${closed.map(compact).join("\n")}`);
   }
+
+  // The engine's own verdict on what has gone quiet, restated at the END as a
+  // short work list.
+  //
+  // The per-project [OVERDUE; no progress reported recently] tags above have been
+  // there all along and were being read as decoration: they sit inside a
+  // twenty-project wall of prose, each qualifying a different entry, and not one
+  // of them ASKS for anything. This does, and the jump directive points straight
+  // at it with the four acceptable answers. Nothing new is judged here — it is
+  // the same derived flags, and that is the point: this is the calendar talking,
+  // and it cannot be argued with the way a written status can.
+  const needsAttention = ranked.filter((project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    return flags.overdue || flags.milestoneMissed || flags.stale;
+  });
+  if (needsAttention.length > 0) {
+    const rows = needsAttention.map((project) => {
+      const flags = deriveProjectFlags(project, gameDate, round);
+      const why = [
+        flags.overdue ? `target date passed ${Math.abs(flags.daysToTarget)} days ago` : "",
+        flags.milestoneMissed ? "a milestone slipped" : "",
+        flags.stale
+          ? `nothing reported for ${Math.max(round - project.updatedRound, STALE_ROUNDS)} rounds`
+          : "",
+      ].filter(Boolean).join(", ");
+      return `- [id ${project.id}] ${project.name}${priorityNote(project)} — ${why}.`;
+    });
+    sections.push(`Needs a decision this jump:\n${rows.join("\n")}`);
+  }
+
   return sections.join("\n\n");
 };
 

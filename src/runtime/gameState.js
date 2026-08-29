@@ -557,6 +557,48 @@ const normalizeRegionTransfer = (entry) => {
   };
 };
 
+// One polity asserting a claim over a region it does not hold — an irredentist
+// declaration, a proclaimed union, a contested border, a government-in-exile's
+// title. The middle state the world model was missing.
+//
+// world.regionClaimants has existed since the map editor: Nations.jsx paints a
+// claimed region in stripes of every claimant's colour, normalizeWorldState folds
+// renames through it, and applyEventImpactsToWorld deletes the entry when the
+// region actually changes hands. But nothing could ever CREATE one except the
+// scenario seed and the cheats panel — so a unilateral claim had nowhere to go,
+// and the simulation's only way to acknowledge one was to open a project and let
+// a progress bar stand in for a border that never moved (see issue #7).
+//
+// `drop` is the other half, and it matters as much: a claim renounced, or a
+// claimant defeated, has to be able to clear its stripes. A dispute nothing can
+// end is worse than no dispute at all.
+const normalizeRegionClaim = (entry) => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const regionId = normalizeOptionalString(entry.regionId || entry.id || entry.gid || entry.GID_1);
+  // Same namespace and the same reason as normalizeRegionTransfer's toCode above:
+  // this is written into world.regionClaimants, which the striping reads owner
+  // colours out of, so a bare "ESP" would stripe the region in a phantom country's
+  // (absent) colour.
+  const claimantCode = toCountryName(normalizeOptionalString(
+    entry.claimantCode || entry.claimant || entry.byCode || entry.ownerCode || entry.code,
+  ));
+
+  if (!regionId || !claimantCode) {
+    return null;
+  }
+
+  return {
+    claimantCode,
+    drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
+    note: normalizeOptionalString(entry.note || entry.reason),
+    regionId,
+    regionName: normalizeOptionalString(entry.regionName || entry.name),
+  };
+};
+
 const normalizePolityChange = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -896,6 +938,34 @@ const resolveProjectStatus = (value) => {
   return PROJECT_STATUS_ALIASES[raw] || "active";
 };
 
+// How much attention the player wants a project to get. The ONE field on this
+// board the player authors themselves: events and the advisor own what a project
+// IS, and that stays true — this says only how hard to push it, and it is what
+// makes a board of thirty programmes manageable rather than a wall.
+//
+// Read by the prompt summary (promptContext's buildProjectsSummaryText) and acted
+// on by the jump directive: a high-priority effort may not sit unmoved two jumps
+// running, a low-priority one is allowed to drift with a one-line note.
+export const PROJECT_PRIORITIES = ["high", "normal", "low"];
+const PROJECT_PRIORITY_SET = new Set(PROJECT_PRIORITIES);
+// Same alias treatment, and the same reason, as PROJECT_STATUS_ALIASES above: the
+// advisor writes "critical" or "routine" as readily as "high" or "low", and an
+// unrecognised value falling through to the "normal" default does not merely lose
+// a nuance — it silently discards an instruction the PLAYER gave.
+const PROJECT_PRIORITY_ALIASES = {
+  critical: "high", urgent: "high", top: "high", highest: "high", "top priority": "high",
+  priority: "high", important: "high", vital: "high", max: "high",
+  medium: "normal", standard: "normal", default: "normal", moderate: "normal", regular: "normal",
+  routine: "low", background: "low", minor: "low", lowest: "low", deferred: "low",
+  "back burner": "low", backburner: "low", idle: "low",
+};
+
+const resolveProjectPriority = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (PROJECT_PRIORITY_SET.has(raw)) return raw;
+  return PROJECT_PRIORITY_ALIASES[raw] || "normal";
+};
+
 // world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
 // unitsController), so everything riding inside it is on a bandwidth budget.
 //
@@ -984,6 +1054,38 @@ const deriveNextMilestoneFrom = (milestones, stored) => {
   };
 };
 
+// What COMPLETING this project does to the world.
+//
+// A project has never had an effect of its own: applyProjectOps' close branch
+// sets a status, pins progress to 100 and writes a note, and that is all. So
+// "annex the northern provinces" was a progress bar that reached the end and left
+// the map exactly as it was, and the player had to hope some later event happened
+// to narrate the same thing independently. That is issue #7's second defect, and
+// it is why a rename that "completed" left the country called what it always was.
+//
+// Deliberately the SAME vocabulary as impacts.polityChanges / regionTransfers /
+// regionClaims, normalized by the very same functions: it is applied through the
+// same code path, ACTIONS_REFERENCE already documents the shapes, and the model
+// therefore has nothing new to learn. The caps mirror the reasoning behind
+// MAX_PROJECT_EVENT_IDS — this rides inside world.json, and a completion that
+// rewrites eight polities or hands over forty regions is a model that has
+// misunderstood the field rather than a campaign event.
+//
+// Returns null rather than an empty object when there is nothing, because ~95% of
+// projects have no effects and world.json is force-re-read every five seconds by
+// two pollers: {"polityChanges":[],"regionTransfers":[],"regionClaims":[]} on
+// every entry of a 120-project board is pure wire cost for no information.
+const normalizeProjectOnComplete = (value) => {
+  if (!value || typeof value !== "object") return null;
+
+  const polityChanges = normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean).slice(0, 8);
+  const regionTransfers = normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean).slice(0, 24);
+  const regionClaims = normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean).slice(0, 24);
+
+  if (polityChanges.length === 0 && regionTransfers.length === 0 && regionClaims.length === 0) return null;
+  return { polityChanges, regionClaims, regionTransfers };
+};
+
 const normalizeProjectCoords = (value) => {
   if (!value || typeof value !== "object") return null;
   const lng = finiteOrNull(value.lng ?? value.lon ?? value.longitude);
@@ -1034,6 +1136,10 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
     summary: normalizeTextLike(entry.summary || entry.description),
     status: resolveProjectStatus(entry.status),
+    // The player's dial, not the model's — see PROJECT_PRIORITIES. Defaults to
+    // "normal", which is also what every project in a save written before this
+    // field existed reads as, so no migration is needed.
+    priority: resolveProjectPriority(entry.priority),
     progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
     tags: normalizeTagList(entry.tags),
     secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
@@ -1045,6 +1151,20 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     milestones,
     nextMilestone: deriveNextMilestoneFrom(milestones, entry.nextMilestone),
     lastUpdate: normalizeTextLike(entry.lastUpdate),
+    // See normalizeProjectOnComplete. null for the great majority of projects.
+    onComplete: normalizeProjectOnComplete(entry.onComplete || entry.completionEffects),
+    // The one-way latch that makes onComplete fire exactly ONCE.
+    //
+    // Effects are released on the TRANSITION into `complete`, never again. Without
+    // this, a model restating {"op":"complete"} on an already-finished annexation
+    // — and a chatty campaign restates constantly — would hand the same regions
+    // over a second time, or re-apply a rename on top of a name the story has
+    // since moved past. Stamped by applyProjectOps at the moment of the
+    // transition, and read by releaseProjectCompletionEffects just before it.
+    //
+    // Engine-owned: deliberately absent from PROJECT_FIELD_ALIASES and
+    // PROJECT_PATCHABLE_FIELDS, so no model can set or clear it.
+    onCompleteAppliedAt: normalizeOptionalString(entry.onCompleteAppliedAt),
     // Newest first: the activity feed reads top-down, so the cap must drop the
     // oldest entry rather than the most recent one.
     eventIds: normalizeIdList(entry.eventIds, MAX_PROJECT_EVENT_IDS),
@@ -1106,6 +1226,8 @@ const PROJECT_FIELD_ALIASES = {
   ownerCode: ["ownerCode", "owner", "code"],
   summary: ["summary", "description"],
   status: ["status"],
+  priority: ["priority"],
+  onComplete: ["onComplete", "completionEffects"],
   progress: ["progress"],
   tags: ["tags"],
   secrecy: ["secrecy", "classification"],
@@ -1176,6 +1298,36 @@ const normalizeProjectOp = (entry) => {
     return { op: "milestone", projectId, name, milestone, statusProvided };
   }
 
+  // Idempotency for the op this function EMITS, not just the ones a model writes.
+  //
+  // Without this branch, no event has ever been able to close a project. The path:
+  // normalizeEventImpacts normalizes an event's projectOps on the way into
+  // events.json, turning {"op":"complete"} into {"op":"close","status":"complete"};
+  // applyProjectOps then defensively re-normalizes every op it is handed (it must,
+  // because the advisor feeds it a freshly parsed block that has NOT been through
+  // here); and "close" matched nothing, so normalizeProjectOp returned null and the
+  // op was dropped on the floor. A jump that narrated a programme finishing left it
+  // sitting at active and 60%, and the same held for cancel and fail. Only the
+  // advisor path worked, because its ops reach the normalizer exactly once.
+  //
+  // `remove` never had the bug because the op it emits is spelled the same as the
+  // op it accepts. This is the general lesson: every op this function returns must
+  // survive being passed back through it.
+  if (op === "close") {
+    if (!projectId && !name) return null;
+    const status = resolveProjectStatus(entry.status);
+    return {
+      op: "close",
+      // Anything that is not a recognised ending is treated as cancelled rather
+      // than silently promoted to a success — the one outcome that releases
+      // onComplete effects must never be reached by a fallback.
+      status: status === "complete" || status === "failed" ? status : "cancelled",
+      projectId,
+      name,
+      note: normalizeOptionalString(entry.note),
+    };
+  }
+
   if (op === "complete" || op === "finish" || op === "completed") {
     if (!projectId && !name) return null;
     return { op: "close", status: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
@@ -1213,9 +1365,9 @@ const normalizeProjectOp = (entry) => {
 // lowercase. Renaming goes through an explicit `newName`, the same way a marker
 // rename does.
 const PROJECT_PATCHABLE_FIELDS = [
-  "kind", "ownerCode", "summary", "status", "progress", "secrecy", "ongoing",
+  "kind", "ownerCode", "summary", "status", "priority", "progress", "secrecy", "ongoing",
   "startedAt", "targetDate", "lastUpdate", "note", "focus",
-  "linkedUnitIds", "linkedMarkerIds",
+  "linkedUnitIds", "linkedMarkerIds", "onComplete",
 ];
 
 // The first key of `field`'s alias list that the patch actually carries, or "" for
@@ -1236,11 +1388,112 @@ const patchedAlias = (patch, field) => {
   return aliases.find((alias) => patch[alias] !== undefined) ?? "";
 };
 
+// Which project an op is addressing: id first, then case-insensitive name — the
+// same order applyMarkerOps uses, and for the same reason: the model reliably
+// knows what it called something and only sometimes knows the id it was given.
+//
+// Module-level, and used by BOTH applyProjectOps below and
+// releaseProjectCompletionEffects above it, because those two must never disagree.
+// If the pre-scan that releases a completion's effects matched a different entry
+// than the applier that stamps the latch, the effects would fire for one project
+// and be marked spent on another — and the next restatement would fire them again.
+const findProjectIndexForOp = (list, op) => {
+  if (op.projectId) {
+    const byId = list.findIndex((project) => project.id === op.projectId);
+    if (byId !== -1) return byId;
+  }
+  if (!op.name) return -1;
+  const wanted = op.name.toLowerCase();
+  return list.findIndex((project) => project.name.toLowerCase() === wanted);
+};
+
+// The effects a batch of ops is about to release, worked out BEFORE anything is
+// applied. Pure.
+//
+// This exists because of an ordering constraint that cannot be worked around any
+// other way. applyEventImpactsToWorld applies an event's polityChanges and
+// regionTransfers FIRST (they rebuild the owner alias map that everything else in
+// the event is resolved through) and its projectOps LAST (so the ops see the world
+// the event has already reshaped). Both orderings are right and neither can move.
+// So a project completed by an event has to have its effects folded into that
+// event's OWN polityChanges/regionTransfers before either list is touched — which
+// means knowing, in advance, which projects this batch completes.
+//
+// The purity is load-bearing, not stylistic. The staged event reveal in time.jsx
+// replays a turn's impacts against the pre-turn rollback snapshot to build a
+// display-only world, and it must reproduce exactly what the real apply did. It
+// does, because identical inputs go in. NOTHING may be written back into the
+// event: an effect cached onto events.json impacts would be applied a second time
+// by any later replay, which is precisely the bug the latch exists to prevent.
+export const releaseProjectCompletionEffects = (projects, ops) => {
+  const list = normalizeProjects(projects);
+  const polityChanges = [];
+  const regionClaims = [];
+  const regionTransfers = [];
+  const projectIds = [];
+  const fired = new Set();
+
+  for (const raw of normalizeArray(ops)) {
+    const op = normalizeProjectOp(raw);
+    if (!op) continue;
+
+    // Two ways a project reaches `complete`, and the second is the one a model
+    // reaches for at least as often: an explicit close op, and a plain update
+    // carrying status "complete" (status is in PROJECT_PATCHABLE_FIELDS, so it
+    // lands). Handling only the first would make this fire about half the time,
+    // which is worse than not shipping it — an annexation that transfers the
+    // border on some completions and not others is unreadable to the player.
+    let completing = op.op === "close" && op.status === "complete";
+    if (!completing && op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const alias = patchedAlias(patch, "status");
+      completing = Boolean(alias) && resolveProjectStatus(patch[alias]) === "complete";
+    }
+    if (!completing) continue;
+
+    const index = findProjectIndexForOp(list, op);
+    if (index === -1) continue;
+    const project = list[index];
+
+    if (fired.has(project.id)) continue;
+    if (!project.onComplete) continue;
+    // Only the TRANSITION fires. A project that is already closed is a
+    // restatement, and one already latched has spent its effects.
+    if (!PROJECT_OPEN_STATUSES.has(project.status)) continue;
+    if (project.onCompleteAppliedAt) continue;
+
+    fired.add(project.id);
+    projectIds.push(project.id);
+    polityChanges.push(...project.onComplete.polityChanges);
+    regionClaims.push(...project.onComplete.regionClaims);
+    regionTransfers.push(...project.onComplete.regionTransfers);
+  }
+
+  return { polityChanges, projectIds, regionClaims, regionTransfers };
+};
+
+// Stamps the onComplete latch on the transition into `complete`.
+//
+// The invariant a future edit will break if it is not stated: this fires under
+// EXACTLY the predicate releaseProjectCompletionEffects fires under — the project
+// was open, it carries effects, it is not already latched, and it is completing
+// (not cancelled, not failed). The two agree by construction because they are
+// handed the same list, the same op and the same matcher; if you change the
+// condition in one, change it in the other or a completion will either transfer
+// its regions twice or never transfer them at all.
+//
+// Stamped whether or not THIS caller applied the effects. Both call sites
+// (applyEventImpactsToWorld and applyProjectOpsToWorld) run the release first, and
+// the alternative — threading a "did you apply them?" flag down here — is a flag
+// that eventually arrives false and silently swallows a country's annexation.
+const stampCompletionLatch = (project, completing, when) => (
+  completing && project.onComplete && !project.onCompleteAppliedAt
+    ? when
+    : project.onCompleteAppliedAt);
+
 // Apply a batch of project ops (pure).
 //
-// Matching is by id first, then case-insensitive name — the same order
-// applyMarkerOps uses, and for the same reason: the model reliably knows what it
-// called something and only sometimes knows the id it was given.
+// Matching is findProjectIndexForOp above, shared with the completion pre-scan.
 //
 // `ctx` carries the event that caused the change ({date, eventId, round}), which
 // is what builds the activity feed without the model having to maintain it.
@@ -1249,15 +1502,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
   const stamp = new Date().toISOString();
   let next = normalizeProjects(projects);
 
-  const indexOf = (op) => {
-    if (op.projectId) {
-      const byId = next.findIndex((project) => project.id === op.projectId);
-      if (byId !== -1) return byId;
-    }
-    if (!op.name) return -1;
-    const wanted = op.name.toLowerCase();
-    return next.findIndex((project) => project.name.toLowerCase() === wanted);
-  };
+  const indexOf = (op) => findProjectIndexForOp(next, op);
 
   // Every mutation routes through here so the "when did this last move" fields
   // and the activity feed cannot be updated in one branch and forgotten in
@@ -1349,7 +1594,15 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         index,
       );
       if (!normalized) continue;
-      next = next.map((project, i) => (i === index ? touch(normalized) : project));
+      // A model completes a project with a plain status patch at least as often
+      // as with an explicit close op, so the latch has to be stamped here too.
+      const completedHere = PROJECT_OPEN_STATUSES.has(current.status) && normalized.status === "complete";
+      next = next.map((project, i) => (i === index
+        ? touch({
+          ...normalized,
+          onCompleteAppliedAt: stampCompletionLatch(current, completedHere, date || stamp),
+        })
+        : project));
       continue;
     }
 
@@ -1441,6 +1694,13 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
             (entry.status === "pending" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
+          // Cancel and fail never release effects: `succeeded` is the only gate,
+          // so a called-off annexation leaves the border exactly where it was.
+          onCompleteAppliedAt: stampCompletionLatch(
+            project,
+            succeeded && PROJECT_OPEN_STATUSES.has(project.status),
+            date || stamp,
+          ),
         })
         : project));
       continue;
@@ -1943,6 +2203,7 @@ const normalizeEventImpacts = (value) => {
       markerOps: [],
       polityChanges: [],
       projectOps: [],
+      regionClaims: [],
       regionTransfers: [],
       unitOps: [],
     };
@@ -1954,6 +2215,7 @@ const normalizeEventImpacts = (value) => {
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
+    regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
     // event that narrates a deployment and troops that actually appear on the map,
@@ -2414,6 +2676,136 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // impacts purely for display and must not age the projects it is only redrawing.
 // `betaEngine` reaches applyUnitOpBatch unchanged — see its context docs. Pass
 // false alongside motion: null to run a jump entirely under the classic rules.
+// The territory-and-identity half of applying impacts: region transfers, region
+// claims, and everything a polityChange carries (name, colour, reputation, stats,
+// tags).
+//
+// Extracted from applyEventImpactsToWorld's event loop so that the NON-event
+// writers can reach it too. A project's onComplete effects have to be applied by
+// whoever completes the project, and the advisor's ```projects fence and the
+// Projects panel's own buttons both complete projects without an event anywhere in
+// sight. Two implementations of this would be two chances to get the owner-alias
+// resolution wrong; there is one.
+//
+// Mutates `world` and `colors` in place — both are already the caller's private
+// normalized copies.
+const applyPolityAndTerritoryImpacts = ({
+  colors, polityChanges = [], regionClaims = [], regionTransfers = [], resolveOwner, world,
+}) => {
+  // Claims before transfers, so a region claimed and then actually handed over in
+  // the same jump ends up settled rather than striped: the transfer's delete below
+  // clears the claim this loop just wrote. The reverse order would leave a border
+  // that has already moved still rendering as disputed.
+  for (const claim of regionClaims) {
+    const claimant = resolveOwner(claim.claimantCode) || claim.claimantCode;
+    const current = normalizeArray(world.regionClaimants[claim.regionId])
+      .map((entry) => normalizeOptionalString(entry))
+      .filter(Boolean);
+
+    if (claim.drop) {
+      const remaining = current.filter((entry) => entry.toLowerCase() !== claimant.toLowerCase());
+      // Delete the key rather than leaving an empty array behind: Nations.jsx
+      // tests `regionClaimants[id]?.length` for the stripe, but useWorldState
+      // diffs the whole object by JSON.stringify, so an empty array left lying
+      // around is a permanent phantom difference nobody can see.
+      if (remaining.length) world.regionClaimants[claim.regionId] = remaining;
+      else delete world.regionClaimants[claim.regionId];
+      continue;
+    }
+
+    // De-duplicated case-insensitively: a claim restated across several jumps is
+    // one dispute, not a region striped four times in the same colour.
+    if (current.some((entry) => entry.toLowerCase() === claimant.toLowerCase())) continue;
+    world.regionClaimants[claim.regionId] = [...current, claimant];
+  }
+
+  for (const transfer of regionTransfers) {
+    world.regionOwnershipOverrides[transfer.regionId] = resolveOwner(transfer.toCode);
+    // A transfer resolves whatever dispute the scenario seed declared for this
+    // region (regionClaimants — see Nations.jsx's stripe rendering): without
+    // this, regionClaimants is never written by anything else, so a region
+    // handed over cleanly (a negotiated cession, a conceded claim) kept
+    // rendering permanently striped with its old claimant forever, out of step
+    // with regionOwnershipOverrides (and the country panel's "Regions Owned")
+    // agreeing the transfer already happened.
+    delete world.regionClaimants[transfer.regionId];
+  }
+
+  for (const { change, code } of polityChanges) {
+    world.polityOverrides[code] = {
+      ...(world.polityOverrides[code] ?? {
+        aliases: [],
+        code,
+        color: "",
+        name: "",
+        note: "",
+      }),
+      ...(change.aliases?.length > 0 ? { aliases: change.aliases } : {}),
+      ...(change.color ? { color: change.color } : {}),
+      ...(change.name ? { name: change.name } : {}),
+      ...(change.note ? { note: change.note } : {}),
+    };
+
+    if (change.color) {
+      const normalizedColor = normalizeOptionalString(change.color);
+      const hexMatch = /^#?([a-f0-9]{6})$/i.exec(normalizedColor);
+      if (hexMatch) {
+        const hex = hexMatch[1];
+        colors[code] = [
+          Number.parseInt(hex.slice(0, 2), 16),
+          Number.parseInt(hex.slice(2, 4), 16),
+          Number.parseInt(hex.slice(4, 6), 16),
+        ];
+      }
+    }
+
+    // Reputation the AI set this turn becomes the polity's authoritative value.
+    if (Number.isFinite(change.reputation)) {
+      world.internationalReputation[code] = change.reputation;
+      // Keep the persisted sheet's reputation index in sync with the authoritative value.
+      if (world.countryStats?.[code]?.indices) {
+        world.countryStats[code] = {
+          ...world.countryStats[code],
+          indices: { ...world.countryStats[code].indices, internationalReputation: change.reputation },
+        };
+      }
+    }
+
+    // Persistent stat sheet: merge the AI's changed fields into the stored sheet so a
+    // country's stats change ONLY when the AI changes them (not every date). Deep-merge
+    // the nested groups and mirror the reputation index into the authoritative store.
+    if (change.stats && typeof change.stats === "object") {
+      if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
+      const prev = world.countryStats[code] && typeof world.countryStats[code] === "object"
+        ? world.countryStats[code]
+        : {};
+      const merged = { ...prev, ...change.stats };
+      for (const group of ["indices", "economy", "gdpBreakdown"]) {
+        if (change.stats[group] && typeof change.stats[group] === "object") {
+          merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
+        }
+      }
+      world.countryStats[code] = merged;
+      const rep = Number(merged.indices?.internationalReputation);
+      if (Number.isFinite(rep)) {
+        world.internationalReputation[code] = Math.max(0, Math.min(100, Math.round(rep)));
+      }
+    }
+
+    // Tags the AI set this turn replace the scenario's starting tags for this
+    // country, wholesale — the model sends the complete list, so a revolution
+    // that drops "socialist" must actually drop it. null means "unchanged",
+    // which is why normalizePolityChange distinguishes null from [].
+    if (Array.isArray(change.tags)) {
+      if (!world.countryTags || typeof world.countryTags !== "object") {
+        world.countryTags = {};
+      }
+      if (change.tags.length) world.countryTags[code] = change.tags;
+      else delete world.countryTags[code];
+    }
+  }
+};
+
 export const applyEventImpactsToWorld = ({
   colors = {}, events = [], world, motion = null, round = 0, betaEngine = true,
 }) => {
@@ -2429,11 +2821,25 @@ export const applyEventImpactsToWorld = ({
   let resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
 
   for (const event of normalizeEvents(events)) {
+    // A project this event COMPLETES releases its effects into this event, before
+    // anything at all is applied. See releaseProjectCompletionEffects for why it
+    // cannot be done further down where the project ops themselves are applied:
+    // those run last, and these have to run first.
+    //
+    // Folded into local copies only. The event in events.json is never rewritten,
+    // so a later replay derives the same effects from the same snapshot rather
+    // than finding them baked in and applying them a second time.
+    const released = releaseProjectCompletionEffects(nextWorld.projects, event.impacts.projectOps);
+
     // Resolve this event's polity changes first — both to fold the renames they
     // make into the alias map before any owner is read through it, and so a
     // change addressed to a polity's current display name lands on that polity
     // rather than creating a second one beside it.
-    const polityChanges = event.impacts.polityChanges.map((change) => ({
+    //
+    // The event's OWN changes go before the released ones: if both rename the same
+    // polity, what this event explicitly narrates should win the alias-map rebuild
+    // rather than fight a project's stored effect for it.
+    const polityChanges = [...event.impacts.polityChanges, ...released.polityChanges].map((change) => ({
       change,
       code: resolveOwner(change.code) || change.code,
     }));
@@ -2444,91 +2850,14 @@ export const applyEventImpactsToWorld = ({
       ));
     }
 
-    for (const transfer of event.impacts.regionTransfers) {
-      nextWorld.regionOwnershipOverrides[transfer.regionId] = resolveOwner(transfer.toCode);
-      // A transfer resolves whatever dispute the scenario seed declared for this
-      // region (regionClaimants — see Nations.jsx's stripe rendering): without
-      // this, regionClaimants is never written by anything else, so a region
-      // handed over cleanly (a negotiated cession, a conceded claim) kept
-      // rendering permanently striped with its old claimant forever, out of step
-      // with regionOwnershipOverrides (and the country panel's "Regions Owned")
-      // agreeing the transfer already happened.
-      delete nextWorld.regionClaimants[transfer.regionId];
-    }
-
-    for (const { change, code } of polityChanges) {
-      nextWorld.polityOverrides[code] = {
-        ...(nextWorld.polityOverrides[code] ?? {
-          aliases: [],
-          code,
-          color: "",
-          name: "",
-          note: "",
-        }),
-        ...(change.aliases?.length > 0 ? { aliases: change.aliases } : {}),
-        ...(change.color ? { color: change.color } : {}),
-        ...(change.name ? { name: change.name } : {}),
-        ...(change.note ? { note: change.note } : {}),
-      };
-
-      if (change.color) {
-        const normalizedColor = normalizeOptionalString(change.color);
-        const hexMatch = /^#?([a-f0-9]{6})$/i.exec(normalizedColor);
-        if (hexMatch) {
-          const hex = hexMatch[1];
-          nextColors[code] = [
-            Number.parseInt(hex.slice(0, 2), 16),
-            Number.parseInt(hex.slice(2, 4), 16),
-            Number.parseInt(hex.slice(4, 6), 16),
-          ];
-        }
-      }
-
-      // Reputation the AI set this turn becomes the polity's authoritative value.
-      if (Number.isFinite(change.reputation)) {
-        nextWorld.internationalReputation[code] = change.reputation;
-        // Keep the persisted sheet's reputation index in sync with the authoritative value.
-        if (nextWorld.countryStats?.[code]?.indices) {
-          nextWorld.countryStats[code] = {
-            ...nextWorld.countryStats[code],
-            indices: { ...nextWorld.countryStats[code].indices, internationalReputation: change.reputation },
-          };
-        }
-      }
-
-      // Persistent stat sheet: merge the AI's changed fields into the stored sheet so a
-      // country's stats change ONLY when the AI changes them (not every date). Deep-merge
-      // the nested groups and mirror the reputation index into the authoritative store.
-      if (change.stats && typeof change.stats === "object") {
-        if (!nextWorld.countryStats || typeof nextWorld.countryStats !== "object") nextWorld.countryStats = {};
-        const prev = nextWorld.countryStats[code] && typeof nextWorld.countryStats[code] === "object"
-          ? nextWorld.countryStats[code]
-          : {};
-        const merged = { ...prev, ...change.stats };
-        for (const group of ["indices", "economy", "gdpBreakdown"]) {
-          if (change.stats[group] && typeof change.stats[group] === "object") {
-            merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
-          }
-        }
-        nextWorld.countryStats[code] = merged;
-        const rep = Number(merged.indices?.internationalReputation);
-        if (Number.isFinite(rep)) {
-          nextWorld.internationalReputation[code] = Math.max(0, Math.min(100, Math.round(rep)));
-        }
-      }
-
-      // Tags the AI set this turn replace the scenario's starting tags for this
-      // country, wholesale — the model sends the complete list, so a revolution
-      // that drops "socialist" must actually drop it. null means "unchanged",
-      // which is why normalizePolityChange distinguishes null from [].
-      if (Array.isArray(change.tags)) {
-        if (!nextWorld.countryTags || typeof nextWorld.countryTags !== "object") {
-          nextWorld.countryTags = {};
-        }
-        if (change.tags.length) nextWorld.countryTags[code] = change.tags;
-        else delete nextWorld.countryTags[code];
-      }
-    }
+    applyPolityAndTerritoryImpacts({
+      colors: nextColors,
+      polityChanges,
+      regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
+      regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
+      resolveOwner,
+      world: nextWorld,
+    });
 
     if (event.impacts.unitOps?.length) {
       // A battalion's owner is the same namespace: spawned under a display name
@@ -2598,4 +2927,54 @@ export const applyEventImpactsToWorld = ({
     // time passed while the beta engine was not running (resumeStandingOrders).
     world: { ...nextWorld, unitSystem: betaEngine ? "beta" : "classic" },
   };
+};
+
+// The door every NON-EVENT writer to the projects board goes through: the
+// advisor's ```projects fence and the Projects panel's own buttons.
+//
+// The rule this enforces, and the reason it is a separate function from the event
+// path: ONLY AN EVENT MAY CHANGE THE WORLD. The advisor reports and plans; the
+// simulation enacts. Its write channels have always been chart/actions/senddraft/
+// deploy/projects, none of which touches a border or a polity's identity, and
+// onComplete must not become a side door around that — otherwise "rename us" gets
+// answered by opening a project carrying a polityChanges payload and closing it a
+// reply later, which renames the country from a chat window with no jump, no
+// event, and nothing in the campaign record to explain it.
+//
+// So a completing op is REFUSED here when the project carries effects, rather than
+// applied. The project stays open and its id comes back in deferredProjectIds, so
+// the caller can say plainly that the simulation has to enact it. The next jump
+// closes it for real (the jump directive already tells the model to close finished
+// work), and the effects are released there, on the event path, where every other
+// world change is made and where the narration sits beside it.
+//
+// Effects are never applied here, so this deliberately returns no colors change.
+export const applyProjectOpsToWorld = ({ date = "", eventId = "", ops, round = 0, world }) => {
+  const nextWorld = normalizeWorldState(world);
+  // The same pre-scan the event path runs, used here purely as a PREDICATE: what
+  // would this batch release? Anything it names is an op this door may not apply.
+  const released = releaseProjectCompletionEffects(nextWorld.projects, ops);
+  const deferred = new Set(released.projectIds);
+
+  const allowed = deferred.size === 0 ? normalizeArray(ops) : normalizeArray(ops).filter((raw) => {
+    const op = normalizeProjectOp(raw);
+    if (!op) return true;
+    const index = findProjectIndexForOp(nextWorld.projects, op);
+    if (index === -1) return true;
+    // Only the completing op is dropped. An update to the same project in the same
+    // batch — progress, a note, a milestone — still lands: refusing to close it is
+    // not a reason to lose everything else the reply said about it.
+    if (!deferred.has(nextWorld.projects[index].id)) return true;
+    if (op.op === "close" && op.status === "complete") return false;
+    if (op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const alias = patchedAlias(patch, "status");
+      if (alias && resolveProjectStatus(patch[alias]) === "complete") return false;
+    }
+    return true;
+  });
+
+  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, { date, eventId, round });
+
+  return { deferredProjectIds: [...deferred], world: nextWorld };
 };

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import {
   DUE_SOON_DAYS,
+  PROJECT_SORTS,
   STALE_ROUNDS,
   advanceRecurringDate,
   normalizeMilestoneRepeat,
@@ -44,6 +45,7 @@ const project = (overrides = {}) => ({
   note: "",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  priority: "normal",
   updatedRound: 4,
   ...overrides,
 });
@@ -351,4 +353,55 @@ test("deriveNextMilestone carries the recurrence through to the card", () => {
   }));
   assert.equal(next.repeat, "annual");
   assert.equal(next.completedCount, 2);
+});
+
+// --- priority sort ----------------------------------------------------------
+//
+// The player's own dial: how much attention they want a project to get. It is
+// the one field on this board they author, and the jump and advisor prompts act
+// on it, so the sort has to make it visible.
+
+const byPriority = (list) => sortProjects(list, "priority").map((entry) => entry.id);
+
+test("sortProjects: priority orders high, then normal, then low", () => {
+  const list = [
+    project({ id: "low", name: "C", priority: "low" }),
+    project({ id: "high", name: "A", priority: "high" }),
+    project({ id: "normal", name: "B", priority: "normal" }),
+  ];
+  assert.deepEqual(byPriority(list), ["high", "normal", "low"]);
+});
+
+// Open work outranks closed work under EVERY sort — a board whose first screen is
+// finished projects is not telling you anything, and a high-priority thing that
+// has already been cancelled is not the most urgent item on it.
+test("sortProjects: an abandoned high-priority project still sorts below live work", () => {
+  const list = [
+    project({ id: "dead", name: "A", priority: "high", status: "cancelled" }),
+    project({ id: "live", name: "B", priority: "low", status: "active" }),
+  ];
+  assert.deepEqual(byPriority(list), ["live", "dead"]);
+});
+
+// A save written before the field existed has no priority at all. It must read as
+// normal — sorting those to either end would reshuffle a board the player has
+// never touched.
+test("sortProjects: a project with no priority sorts as normal", () => {
+  const noField = project({ id: "legacy", name: "B" });
+  delete noField.priority;
+  const list = [
+    project({ id: "low", name: "C", priority: "low" }),
+    noField,
+    project({ id: "high", name: "A", priority: "high" }),
+  ];
+  assert.deepEqual(byPriority(list), ["high", "legacy", "low"]);
+});
+
+// The panel renders its sort menu by mapping PROJECT_SORTS, so a comparator with
+// no entry here is a dead sort nobody can reach.
+test("PROJECT_SORTS offers every comparator, priority included", () => {
+  assert.ok(PROJECT_SORTS.some((entry) => entry.key === "priority"));
+  for (const entry of PROJECT_SORTS) {
+    assert.ok(entry.label, "every sort needs a label for the menu");
+  }
 });

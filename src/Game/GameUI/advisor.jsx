@@ -7,7 +7,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
-import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
@@ -250,12 +250,21 @@ const applyAdvisorProjects = async (proposal, gameDate, round) => {
     const world = await readWorldState({ force: true });
     const before = new Map(world.projects.map((project) => [project.id, project]));
 
-    // applyProjectOps normalizes defensively, so the raw parsed ops are fine
-    // here; it also drops anything aimed at a project that does not exist.
-    const next = applyProjectOps(world.projects, proposal, {
+    // applyProjectOpsToWorld normalizes defensively, so the raw parsed ops are
+    // fine here; it also drops anything aimed at a project that does not exist.
+    //
+    // Not bare applyProjectOps: a project the advisor COMPLETES may carry
+    // onComplete effects — a border it hands over, a polity it renames — and those
+    // have to land whoever completed it. This is the same door the event path uses,
+    // in the same order, so a completion from chat and a completion from a jump
+    // change the world identically.
+    const { deferredProjectIds, world: nextWorld } = applyProjectOpsToWorld({
         date: String(gameDate || ""),
+        ops: proposal,
         round: Number(round) || 0,
+        world,
     });
+    const next = nextWorld.projects;
 
     const items = [];
     for (const project of next) {
@@ -274,8 +283,16 @@ const applyAdvisorProjects = async (proposal, gameDate, round) => {
             items.push({ change: "closed", title: project.name });
         }
     }
+    // A project whose completion would change the world is NOT closed from here —
+    // only an event may move a border or rename a polity. Say so on the card rather
+    // than silently doing nothing, or the advisor claims it finished something the
+    // board still shows as running and nobody can tell why.
+    for (const id of deferredProjectIds) {
+        const project = next.find((entry) => entry.id === id);
+        if (project) items.push({ change: "deferred", title: project.name });
+    }
     if (items.length === 0) return null;
-    await writeWorldState({ ...world, projects: next });
+    await writeWorldState(nextWorld);
     return items;
 };
 
@@ -287,11 +304,14 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         acc[item.change] = (acc[item.change] ?? 0) + 1;
         return acc;
     }, {});
-    const summary = ["opened", "updated", "completed", "closed"]
+    const summary = ["opened", "updated", "completed", "closed", "deferred"]
         .filter((change) => counts[change])
         .map((change) => `${counts[change]} ${change}`)
         .join(", ");
-    const verb = { opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: " };
+    const verb = {
+        opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: ",
+        deferred: "Awaiting the simulation: ",
+    };
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -307,6 +327,9 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         {items.map((item, index) => (
             <li key={index} data-no-translate style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
             {verb[item.change] || "Changed: "}{item.title}
+            {item.change === "deferred" && (
+                <span style={{ color: "rgba(252,211,77,0.9)" }}> — this one changes the world, so the next time skip enacts it</span>
+            )}
             </li>
         ))}
         </ul>
