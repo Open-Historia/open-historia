@@ -902,9 +902,11 @@ const NetworkSharing = () => {
 //
 // Two ways out, because the two report routes want different things. Copy is for
 // Discord, where a paste is one action and an attachment is four. Save is for a
-// GitHub issue and for the long logs — a full 400-entry buffer is tens of
+// GitHub issue and for the long logs — a full buffer is a couple of hundred
 // kilobytes, past what a Discord message will take, and an attached file is also
-// the only form that survives being read a week later.
+// the only form that survives being read a week later. Both sit above the
+// toggles: getting the log out is what a player comes to this section to do, and
+// the switches are set once and then left alone.
 //
 // The warning is not boilerplate. This log carries the names of the player's
 // countries, their queued orders and their in-game dates, and some of that is
@@ -1023,24 +1025,22 @@ const DiagnosticsPanel = () => {
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
         <div style={helperTextStyle}>
-        On (default): the log records in the background and costs nothing you would notice. Off: nothing is recorded, and the log already stored on this device is deleted. Your choice is remembered — it stays off through save changes and after you close and reopen the game.
+        On by default. Off: nothing is recorded, and the log stored on this device is deleted. Remembered across save changes and restarts.
         </div>
 
         <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
         <div style={helperTextStyle}>
-        Off by default. Turn it on when a maintainer asks, or before reproducing a bug you want fully captured — then reproduce it and send the log. Also remembered across saves and restarts. It adds:
+        Off by default, and remembered like the switch above. Turn it on before reproducing a bug, then send the log. Adds:
         <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1rem" }}>
-        <li><strong>Every AI task, not just the failures</strong> — which task ran, how big the prompt and the reply were, whether the model answered through a tool call, how long it took, and which attempt succeeded.</li>
-        <li><strong>Why the AI was rejected, including retries that then worked</strong> — the validation error and the raw model response for each attempt, so a model that keeps breaking one rule is visible even on turns that came out right.</li>
-        <li><strong>What each turn changed in the world</strong> — the event titles plus counts of region transfers, polity changes, unit and marker ops, projects and new chats. This is what shows an event that narrates a conquest while moving no borders.</li>
-        <li><strong>Every server request, not just the failed ones</strong> — method, path, response code, and a flag on anything that took over a second. Catches a request that never fired and one that quietly took ten seconds.</li>
-        <li><strong>Every save, with its size</strong> — each write of your world, events, orders and chats. A save file growing turn after turn is the usual reason a campaign gets slower, and it only shows up by comparing the same line at different points in a session.</li>
-        <li><strong>Which panels you opened, in order</strong> — so a crash can be tied to where you actually were.</li>
-        <li><strong>Full error stacks</strong> (eight frames instead of one) and much longer details — a truncated stack trace or a clipped model response is usually worth nothing.</li>
-        <li><strong>The game&apos;s routine console messages</strong>, which are normally left out as noise.</li>
+        <li>Every AI task, and why an answer was rejected</li>
+        <li>What each turn changed in the world</li>
+        <li>Every server request and every save, with sizes</li>
+        <li>Which panels you opened</li>
+        <li>Full error stacks and much longer details</li>
+        <li>The game&apos;s routine console messages</li>
         </ul>
         <div style={{ marginTop: "0.3rem" }}>
-        It fills the log far faster, so the log holds less history in the same space — and it quotes more of your campaign, which is worth a glance before posting it publicly.
+        Fills the log faster, so it holds less history — and quotes more of your campaign.
         </div>
         </div>
 
