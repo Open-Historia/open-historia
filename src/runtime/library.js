@@ -4,6 +4,7 @@ import {
   setCountryNameResolver,
   setRuntimeAssetEndpoints,
 } from "./assets.js";
+import { logDebugEvent, setDebugLogContext } from "./debugLog.js";
 import { enqueueContentStrings } from "./translator.js";
 
 const LIBRARY_API_ROOT = "/api/library";
@@ -106,7 +107,20 @@ const requestJson = async (pathname, { body, method = "GET" } = {}) => {
     method,
   });
 
-  return parseApiResponse(response);
+  try {
+    return await parseApiResponse(response);
+  } catch (error) {
+    // Every library call — load, save, activate, delete, every asset upload —
+    // funnels through here, so this one line puts "the save failed and here is
+    // what the server said" in the diagnostics log for all of them. Several
+    // callers swallow the throw or surface it only as a toast that is gone by
+    // the time a bug is reported.
+    //
+    // The path, not the body: a request body is a whole campaign and the log is
+    // meant to be pasteable.
+    logDebugEvent("api", `${method} ${pathname} failed`, error);
+    throw error;
+  }
 };
 
 const applyLibraryCatalog = (catalog) => {
@@ -122,6 +136,22 @@ const applyLibraryCatalog = (catalog) => {
     (activeGame
       ? scenarios.find((entry) => entry.id === activeGame.scenarioId) ?? null
       : null);
+
+  // The report header's campaign block, refreshed wherever the catalog lands:
+  // creating, saving, activating and deleting a game all pass through here, so
+  // a log pasted after switching saves names the save it is actually about.
+  if (activeGameId !== libraryState.activeGameId) {
+    logDebugEvent(
+      "game",
+      activeGame ? `Active game switched to "${activeGame.name || activeGameId}".` : "No active game.",
+      activeGameId ? { gameId: activeGameId, scenarioId: activeGame?.scenarioId || "" } : undefined,
+    );
+  }
+  setDebugLogContext({
+    gameId: activeGameId || "",
+    gameName: activeGame?.name || "",
+    scenario: runtimeScenario?.name || activeGame?.scenarioId || "",
+  });
 
   setLibraryState({
     activeGame,
@@ -351,6 +381,11 @@ export const createGame = async (payload) => {
     body: payload,
     method: "POST",
   });
+  logDebugEvent("game", `New game created: "${payload?.name || details?.id || "untitled"}".`, {
+    scenarioId: payload?.scenarioId || "",
+    country: payload?.country || "",
+    difficulty: payload?.difficulty || "",
+  });
   // Card text edits translate (and reach the server language pack) right away.
   enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
@@ -376,6 +411,10 @@ export const activateGame = async (gameId) => {
 };
 
 export const removeGame = async (gameId) => {
+  // Logged before the request, not after: "they deleted a save and then it
+  // broke" is the report this line exists for, and a delete that throws
+  // half-way is exactly the case where the after-the-fact line never runs.
+  logDebugEvent("game", "Deleting a save.", { gameId });
   const catalog = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     method: "DELETE",
   });

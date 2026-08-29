@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { configureMapRuntime } from "./runtime/assets.js";
+import { installDebugLogCapture, logDebugEvent, setDebugLogContext } from "./runtime/debugLog.js";
 import { startTranslator } from "./runtime/translator.js";
 import App from "./App.jsx";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -24,6 +25,17 @@ const mount = () => {
     startTranslator();
     registerServiceWorker();
 };
+
+// Before anything else runs, so the diagnostics log in Settings covers the whole
+// session — including a failure during the web backend install below, which
+// happens before a single component mounts and used to be visible only in a
+// console the packaged app has no way to open.
+installDebugLogCapture();
+setDebugLogContext({
+    build: import.meta.env.VITE_OH_WEB ? "web" : (import.meta.env.DEV ? "dev" : "desktop/local"),
+    language: typeof navigator !== "undefined" ? navigator.language : "",
+});
+logDebugEvent("app", "Open Historia started.");
 
 if (import.meta.env.VITE_OH_WEB) {
     // Web build (the hosted website): install the IndexedDB-backed /api

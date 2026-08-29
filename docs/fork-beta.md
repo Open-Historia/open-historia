@@ -23,6 +23,22 @@ what upstream packages.
 Installing the beta does not touch the official install, and uninstalling either leaves
 the other (and the saves) alone.
 
+## Reporting a bug from the beta
+
+**Settings → Diagnostics → 📋 Copy log** (or **💾 Save as file** for a long one) puts a
+plain-text log in the report: which build and campaign, then the saves opened, orders
+queued, turns taken and everything that went wrong, in order. It is the fastest thing a
+tester can attach, and the only one that survives a crash — the log is written to
+browser storage as it goes, so the entries from before a reload are still in it
+afterwards, marked with where the reload happened.
+
+Clearing it just before reproducing a bug gives a log containing only the steps that
+caused it, which is worth more than a full one.
+
+API keys are never in it (they are redacted as each entry is recorded, both by matching
+the keys this device has stored and by shape). Country names, queued orders and error
+messages are, so it is worth a glance before posting it in public.
+
 ## The library both builds share
 
 Everything the game writes lives in one folder, named after the stable app:
