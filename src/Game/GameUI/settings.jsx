@@ -1020,7 +1020,11 @@ const DiagnosticsPanel = () => {
         </div>
 
         <div style={{ margin: "0.5rem 0 1rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", lineHeight: 1.4 }}>
-        Your API key is never included. Country names, your queued orders and error messages are — read it before posting it somewhere public.
+        {/* The warning tracks the switch below rather than stating the worst
+            case always: a player reading "your conversations are included" on a
+            log that does not contain them learns to disbelieve this line, which
+            is the one line here that has to be believed. */}
+        Your API key is never included. Country names, your queued orders and error messages are{verbose ? ", and while detailed logging is on, everything you and the AI said to each other" : ""} — read it before posting it somewhere public.
         </div>
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
@@ -1032,7 +1036,10 @@ const DiagnosticsPanel = () => {
         <div style={helperTextStyle}>
         Off by default, and remembered like the switch above. Turn it on before reproducing a bug, then send the log. Adds:
         <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1rem" }}>
-        <li>Every AI task, and why an answer was rejected</li>
+        <li>Every message to and from your advisor, in full</li>
+        <li>Every diplomatic message, in full, with who said it to whom</li>
+        <li>Letters the advisor drafted, and the notes countries send you</li>
+        <li>Every AI task and what it answered, and why an answer was rejected</li>
         <li>What each turn changed in the world</li>
         <li>Every server request and every save, with sizes</li>
         <li>Which panels you opened</li>
@@ -1040,7 +1047,7 @@ const DiagnosticsPanel = () => {
         <li>The game&apos;s routine console messages</li>
         </ul>
         <div style={{ marginTop: "0.3rem" }}>
-        Fills the log faster, so it holds less history — and quotes more of your campaign.
+        The log gets a bigger allowance while this is on, but still fills faster. It now quotes your conversations word for word — read it before posting it somewhere public.
         </div>
         </div>
 
