@@ -33,9 +33,10 @@
 // entry as it is recorded — not at export time, so a key is never even held in
 // the buffer. See that function for what it catches.
 //
-// Campaign text is kept short on purpose: titles, counts and ids, not event
-// prose or chat bodies. A log a player is willing to paste in public is worth
-// more than a complete one they are not.
+// Campaign text in the NORMAL log is kept short on purpose: titles, counts and
+// ids, not event prose or chat bodies. A log a player is willing to paste in
+// public is worth more than a complete one they are not. Detailed mode is the
+// deliberate exception — see below.
 //
 // TWO SWITCHES, both in Settings → Diagnostics and both persisted in
 // localStorage so they survive closing the app and switching campaigns:
@@ -50,27 +51,49 @@
 //     It is off by default because it is heavier and quotes more of the
 //     campaign, and on when a maintainer asks for it.
 //
+//     It also carries the full text of every conversation with the model: what
+//     the player asked the advisor and what it answered, every diplomatic
+//     message in both directions, and the notes a turn or the idle drip put in
+//     the player's inbox. That is a deliberate choice, because the bugs people
+//     actually report about the advisor and diplomacy — "it forgot what I told
+//     it", "it replied as the wrong country", "it drafted a letter and sent
+//     something else", "the block it sent never reached the board" — are all
+//     about the CONTENT of an exchange, and a log recording only that an
+//     exchange happened cannot settle any of them. Everything on this path is
+//     campaign fiction the player wrote or the model wrote back; none of it is a
+//     credential (redactSecrets still runs over it), but it is much more of
+//     their campaign than the normal log quotes, and the Diagnostics panel says
+//     so beside the switch.
+//
 // The buffer is bounded by SIZE, not only by entry count, and drops its oldest
 // entries to stay there — see trimToBudget.
 
 // Two ceilings, and the size one is the one that really governs.
 //
 // MAX_ENTRIES stops a quiet session growing without bound; MAX_LOG_CHARS is what
-// keeps the log inside the storage it has to live in. Detailed mode raises the
-// entry ceiling because its entries are both more numerous and individually
-// larger — but it does NOT raise the size budget, so a detailed log simply holds
-// less history in the same space. That is the honest trade and the panel shows
-// the size so a player can see it.
+// keeps the log inside the storage it has to live in. Detailed mode raises both,
+// because it now carries whole conversations: an advisor exchange is a question
+// and a reply of a few thousand characters each, and a diplomatic round is one
+// of those per country at the table. Against the normal 192 KB budget a single
+// long consultation would evict the entire campaign that led up to it, which is
+// the exact opposite of what a detailed log is for.
 const MAX_ENTRIES = 400;
-const MAX_ENTRIES_VERBOSE = 2500;
+const MAX_ENTRIES_VERBOSE = 5000;
 // localStorage is a ~5 MB budget shared with the translator cache, the flag
-// library and every setting. The log is the least important thing in it.
+// library and every setting. The log is the least important thing in it, so the
+// normal budget stays small; the detailed one takes a bigger share on the
+// grounds that it is switched on deliberately, for one reproduction, by a player
+// who has been asked for it. Both are characters, not bytes — Chromium stores
+// them as UTF-16, so 1 MB here is ~2 MB of the quota, still well inside it.
 const MAX_LOG_CHARS = 192 * 1024;
+const MAX_LOG_CHARS_VERBOSE = 1024 * 1024;
 const MAX_DETAIL_CHARS = 600;
-// Detailed mode keeps far more of each detail: a truncated stack trace or a
-// clipped raw model response is usually worth nothing at all, and the whole
-// point of turning it on is to stop losing them.
-const MAX_DETAIL_CHARS_VERBOSE = 6000;
+// Detailed mode keeps far more of each detail: a truncated stack trace, a
+// clipped raw model response or an advisor reply cut off mid-sentence is usually
+// worth nothing at all, and the whole point of turning it on is to stop losing
+// them. 20k is chosen to clear a long advisor answer (a few thousand characters,
+// plus whatever fenced blocks it carries) whole.
+const MAX_DETAIL_CHARS_VERBOSE = 20_000;
 // Frames of an Error's stack. One is where it threw, which is all a normal log
 // needs; the rest is React internals nine times out of ten. Detailed mode keeps
 // enough to actually walk a call path.
@@ -91,8 +114,10 @@ const COALESCE_MS = 60_000;
 const STORAGE_KEY = "oh_debug_log_v1";
 // A backstop on the serialized form only. The real trimming happens against
 // MAX_LOG_CHARS as entries are recorded; this catches the case where the JSON
-// scaffolding costs more than the estimate below assumed.
+// scaffolding costs more than the estimate below assumed. Tracks whichever
+// budget is in force, at the same ~17% headroom.
 const MAX_STORED_CHARS = 224 * 1024;
+const MAX_STORED_CHARS_VERBOSE = 1200 * 1024;
 const PERSIST_DEBOUNCE_MS = 800;
 
 // Both settings persist in localStorage, which is what makes the choice survive
@@ -160,6 +185,8 @@ export const isDebugLogEnabled = () => loggingEnabled;
 export const isDebugLogVerbose = () => verboseLogging;
 
 const maxEntries = () => (verboseLogging ? MAX_ENTRIES_VERBOSE : MAX_ENTRIES);
+const maxLogChars = () => (verboseLogging ? MAX_LOG_CHARS_VERBOSE : MAX_LOG_CHARS);
+const maxStoredChars = () => (verboseLogging ? MAX_STORED_CHARS_VERBOSE : MAX_STORED_CHARS);
 const detailLimit = () => (verboseLogging ? MAX_DETAIL_CHARS_VERBOSE : MAX_DETAIL_CHARS);
 const stackFrames = () => (verboseLogging ? STACK_FRAMES_VERBOSE : STACK_FRAMES);
 
@@ -330,8 +357,9 @@ const entryCost = (entry) =>
 // buffer filled, most of which there was still room for.
 function trimToBudget() {
     const entryCeiling = maxEntries();
+    const charCeiling = maxLogChars();
     let dropped = 0;
-    while (entries.length > 1 && (entries.length > entryCeiling || usedChars > MAX_LOG_CHARS)) {
+    while (entries.length > 1 && (entries.length > entryCeiling || usedChars > charCeiling)) {
         usedChars -= entryCost(entries[0]);
         entries.shift();
         dropped += 1;
@@ -413,7 +441,7 @@ export const getDebugLogSize = () => entries.length;
 // a player watching "400 entries" sit still has no way to tell a quiet game from
 // a log that is silently rolling over.
 export const getDebugLogBytes = () => usedChars;
-export const getDebugLogLimitBytes = () => MAX_LOG_CHARS;
+export const getDebugLogLimitBytes = () => maxLogChars();
 export const getDebugLogDroppedCount = () => droppedEntries;
 
 // `silent` exists for the tests, which need a genuinely empty buffer to count
@@ -459,7 +487,8 @@ const persistNow = () => {
         // rather than one at a time because each pass re-serializes the whole
         // buffer, and in tenths rather than halves because halves threw away far
         // more history than the overrun called for.
-        while (payload.length > MAX_STORED_CHARS && entries.length > 1) {
+        const storedCeiling = maxStoredChars();
+        while (payload.length > storedCeiling && entries.length > 1) {
             const surplus = Math.max(1, Math.ceil(entries.length / 10));
             for (let index = 0; index < surplus && entries.length > 1; index += 1) {
                 usedChars -= entryCost(entries[0]);
@@ -652,7 +681,7 @@ export const buildDebugLogReport = () => {
         // from "detailed mode was off", and those lead to opposite conclusions.
         `Detailed logging: ${verboseLogging ? "ON" : "off"}`,
         "",
-        `Entries: ${entries.length} (${formatLogSize(usedChars)} of a ${formatLogSize(MAX_LOG_CHARS)} budget)`,
+        `Entries: ${entries.length} (${formatLogSize(usedChars)} of a ${formatLogSize(maxLogChars())} budget)`,
         droppedEntries
             ? `NOTE: ${droppedEntries} older ${droppedEntries === 1 ? "entry" : "entries"} were dropped to stay inside that budget — this log does not reach back to the start of the session.`
             : "",

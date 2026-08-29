@@ -480,6 +480,11 @@ const runJsonTask = async (taskKey, {
     tool: tool?.name || "(none — raw JSON expected)",
     timeoutMs: timeoutMs || "(no deadline)",
   }, { verbose: true });
+  // The instruction itself, separately. It is short (a sentence), it is the one
+  // part of the prompt that differs between two runs of the same task, and it is
+  // what a reader compares against a payload that came back about the wrong
+  // thing.
+  logDebugEvent("ai", `Task "${taskKey}" instruction.`, userMessage, { verbose: true });
   let failureReason = "The model did not return valid structured output.";
   // The player's only recourse when a turn falls back is "give Claude the
   // logs" — but the fallback warning below used to log only failureReason, a
@@ -513,6 +518,9 @@ const runJsonTask = async (taskKey, {
         deadline,
         signal: controller.signal,
         tool,
+        // Names this call in the ai-call transport entries, so a task's own
+        // entries and the request/response pair underneath them line up.
+        logLabel: `task "${taskKey}"`,
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       lastRawText = rawText;
@@ -575,6 +583,14 @@ const runJsonTask = async (taskKey, {
 
       if (validation.valid) {
         logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
+        // The payload that was ACCEPTED, not only the ones that were rejected.
+        // A turn that validates cleanly and still produces the wrong world — a
+        // transfer to a polity that does not exist, a chat opened with nobody in
+        // it — is a report about content that passed every check, and until now
+        // the only output text the log kept was from answers that failed.
+        // Logged from the payload rather than rawText so a tool call, which has
+        // no raw text at all, is recorded the same way as a JSON reply.
+        logDebugEvent("ai", `Task "${taskKey}" accepted payload.`, parsed, { verbose: true });
         return { generation: { source: "ai", fallbackReason: "" }, payload: parsed };
       }
 
@@ -1027,6 +1043,27 @@ const chatParticipantKey = (countries) =>
     .sort()
     .join("|");
 
+// Every message the game itself puts into a diplomatic thread passes through the
+// fold below — the notes a jump generates, the idle diplomacy drip, and the
+// advisor's own "send this to <country>" — so this is where a detailed log
+// records them.
+//
+// The bodies go in whole, alongside WHICH thread they landed in: the two things
+// reported about generated chats are "a country messaged me about something that
+// never happened" and "it opened a second thread with France instead of
+// answering in the one I had", and the second is invisible without knowing
+// whether the fold matched an existing chat or created a new one.
+const logGeneratedChat = (built, outcome) => {
+  const participants = (built?.countries ?? [])
+    .map((country) => country?.name || country?.code || "")
+    .filter(Boolean)
+    .join(", ") || "(no participants)";
+  logDebugEvent("diplomacy",
+    `Generated note ${outcome} — ${participants}: "${built?.title || "(untitled)"}" (source: ${built?.source || "unknown"}).`,
+    (built?.messages ?? []).map((msg) => `${msg?.speaker || msg?.role || "?"}: ${msg?.text ?? ""}`),
+    { verbose: true });
+};
+
 // Route freshly-generated chats into whichever existing OPEN thread already has
 // the same participants (appending their messages there) instead of always
 // forking a new one. `built` may itself contain chats that duplicate each other
@@ -1051,6 +1088,7 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
     const existingIdx = key ? chats.findIndex((chat) =>
       chat.status !== "closed" && chatParticipantKey(chat.countries) === key) : -1;
     if (existingIdx !== -1) {
+      logGeneratedChat(built, "appended to an existing thread");
       chats = chats.map((chat, index) => (index === existingIdx
         ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
         : chat));
@@ -1058,9 +1096,11 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
     }
     const createdIdx = key ? created.findIndex((chat) => chatParticipantKey(chat.countries) === key) : -1;
     if (createdIdx !== -1) {
+      logGeneratedChat(built, "merged into another note from the same turn");
       created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };
       continue;
     }
+    logGeneratedChat(built, "opened a new thread");
     created.push({ ...built, messages: stamp(built.messages) });
   }
 
