@@ -86,12 +86,36 @@ jobs:
       - name: Stamp the release channel
         run: node scripts/stamp-channel.mjs beta
 
+      # The build id above is what the BANNER compares; this is what the UPDATER
+      # compares, and they are not interchangeable. electron-updater decides an
+      # update exists by SEMVER, and package.json ships 0.0.0 on every branch — so
+      # without a real, increasing version here every beta would look identical to
+      # the one already installed and nothing would ever self-install, however many
+      # builds were published.
+      #
+      # run_number, not run_id: it increments by one per run of THIS workflow and
+      # is shared by all three jobs in a run, so one beta release is one version on
+      # every platform. run_id is unique but not ordered, and semver needs order.
+      # This counter is the beta workflow's own — that it is unrelated to the
+      # stable app's version is fine, and in fact the point: separate apps,
+      # separate feeds, no comparison between them is ever made.
+      - name: Stamp the app version
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          node -p "'version: '+require('./package.json').version"
+
       - name: Build the client
         run: npm run build
 
       # --config is the only difference from the stable workflow: separate appId,
       # productName, artifact names, and ohChannel=beta baked into the packaged
       # package.json.
+      #
+      # --publish never still WRITES the latest*.yml feed files — the `publish`
+      # block in electron-builder.beta.yml is what produces them, not this flag. It
+      # only declines to UPLOAD them, which the release step below does itself with
+      # the same gh call it already used for the installers.
       - name: Build the installer
         run: npx electron-builder ${{ matrix.args }} --config electron-builder.beta.yml --publish never
         env:
@@ -133,6 +157,8 @@ jobs:
               '- macOS: `Open-Historia-SeventhDread-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
               '- Linux: `Open-Historia-SeventhDread-Beta-x86_64.AppImage`' \
               '' \
+              '**You only need to download by hand once.** From this build on, Windows and Linux update themselves: the game tells you when a new beta is out, downloads it when you click Update, and swaps itself over when you restart. macOS still needs a manual download — the build is unsigned, and macOS will not let an unsigned app replace itself.' \
+              '' \
               '**Already running the older "Open Historia Beta"?** Uninstall it first — this is a separate application and installs to its own folder. Your saves live somewhere else entirely and are not touched by the uninstall.' \
               '' \
               '**Do not run two builds at the same time** — they write the same save files. This one warns you if another is already running.' \
@@ -149,7 +175,13 @@ jobs:
               --notes-file notes.md || true
           fi
           shopt -s nullglob
-          files=(release/*.exe release/*-mac-*.zip release/*.AppImage)
+          # The latest*.yml files ARE the update feed: electron-updater fetches
+          # latest.yml (Windows) / latest-linux.yml from the beta tag and compares
+          # the version in it against the running app. One per platform, so the
+          # three racing jobs cannot overwrite each other's. latest-mac.yml is
+          # uploaded too and simply never read — mac cannot self-update unsigned,
+          # so nothing there asks for it.
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot
           # each publish a different view of the same release. The filenames here
           # must match the artifactNames in electron-builder.beta.yml exactly — a
