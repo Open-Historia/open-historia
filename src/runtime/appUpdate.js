@@ -18,6 +18,23 @@ export const APP_UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 // A re-check when the app regains focus, throttled so rapid focus flips can't hammer it.
 export const APP_UPDATE_REFOCUS_THROTTLE_MS = 60 * 1000;
 
+// The desktop updater states that will never change again on their own. A progress
+// poll that sees one has nothing left to wait for and can stop; every OTHER state is
+// transient and must keep it alive.
+//
+// Listing what is FINISHED rather than what is running, deliberately. The updater
+// passes through "available" between finding an update and its first
+// download-progress event, and a poll that only recognized "checking" and
+// "downloading" tore itself down there and never restarted — leaving the banner
+// frozen mid-update while the download ran to completion behind it. Written this way
+// round, an unrecognized state keeps polling instead of silently stopping, so
+// another lifecycle state can be added without reintroducing that freeze.
+export const APP_UPDATE_SETTLED_STATES = ["ready", "error", "none"];
+
+// Whether the app's own updater has come to rest. Anything unrecognized — including
+// no reading at all — counts as still moving.
+export const isUpdateSettled = (state) => APP_UPDATE_SETTLED_STATES.includes(state);
+
 // A positive integer build number, or null for anything else (dev/web/desktop have
 // no stamped build, so they can never see an "update available").
 export const toBuild = (value) => {
