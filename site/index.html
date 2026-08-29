@@ -187,6 +187,7 @@
   .btn-ghost{background:var(--marble);border-color:var(--line2);color:var(--ink)}
   .btn-ghost:hover{background:var(--marble2)}
   .hero-note{font-size:.96rem;color:var(--sepia2);margin-top:8px;font-style:italic}
+  #heroNote{max-width:640px;margin-left:auto;margin-right:auto}
   .hero-note a{color:var(--bronze);border-bottom:1px solid rgba(154,107,47,.4)}
 
   .shot{margin:50px auto 0;max-width:940px;position:relative}
@@ -310,7 +311,7 @@
         <span>⬇</span> <span id="primaryLabel">Download for Desktop</span>
       </a>
     </div>
-    <p class="hero-note" id="heroNote">Play instantly in your browser — no install, nothing to download. Or <a href="#download">get the desktop app</a> for offline play.</p>
+    <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
     <div class="shot">
       <img src="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/screenshot.png" alt="Open Historia gameplay — a strategic world map with events and nations" loading="lazy" />
     </div>
@@ -508,7 +509,7 @@
   var bd = document.getElementById("bandDownload"); if (bd) bd.href = href;
   if (os === "ios"){
     var n = document.getElementById("heroNote");
-    if (n) n.innerHTML = "On iPhone &amp; iPad, tap <b>Play</b> to run it in Safari — add it to your Home Screen for fullscreen.";
+    if (n) n.innerHTML = "On iPhone &amp; iPad, tap <b>Demo</b> to try it in Safari — expect lag, and add it to your Home Screen for fullscreen.";
   }
 
   var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
