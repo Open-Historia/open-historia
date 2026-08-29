@@ -148,25 +148,95 @@ jobs:
           # stable release in the same repo. Three jobs race here, so creating it
           # tolerates "already exists"; --clobber lets a re-run replace assets.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            printf '%s\n' \
-              '**Unofficial beta build of Open Historia, maintained by SeventhDread.** Not the official release — that is the one marked `Latest` on this page.' \
-              '' \
-              'It installs **alongside** the official app as *Open Historia (SeventhDread Beta)*, with its own Start Menu entry and a BETA-badged icon, and **shares your saves** with it: the same games, scenarios, settings and downloaded world map. Play a campaign here, then open the official app and carry on with it.' \
-              '' \
-              '- Windows: `Open-Historia-SeventhDread-Beta-Setup.exe`' \
-              '- macOS: `Open-Historia-SeventhDread-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
-              '- Linux: `Open-Historia-SeventhDread-Beta-x86_64.AppImage`' \
-              '' \
-              '**You only need to download by hand once.** From this build on, Windows and Linux update themselves: the game tells you when a new beta is out, downloads it when you click Update, and swaps itself over when you restart. macOS still needs a manual download — the build is unsigned, and macOS will not let an unsigned app replace itself.' \
-              '' \
-              '**Already running the older "Open Historia Beta"?** Uninstall it first — this is a separate application and installs to its own folder. Your saves live somewhere else entirely and are not touched by the uninstall.' \
-              '' \
-              '**Do not run two builds at the same time** — they write the same save files. This one warns you if another is already running.' \
-              '' \
-              'Beta-only features (units, projects) may be dropped from a save if you then play that save in the official app. Back up `%APPDATA%\open-historia\server\data` before testing anything you care about.' \
-              '' \
-              'Feedback: [open an issue](https://github.com/Open-Historia/open-historia/issues).' \
-              > notes.md
+            # A heredoc rather than a per-line printf chain: these notes are markdown full
+            # of backticks, quotes and blockquotes, and re-quoting all of that for the
+            # shell is how the macOS instructions here came to be wrong for two releases.
+            # <<'MD' is unexpanded, so nothing below is touched by bash. The body sits at
+            # column 0 of this run block (heredocs take no indentation) and so does the MD.
+            cat > notes.md <<'MD'
+          # Open Historia — SeventhDread Beta
+
+          An unofficial beta build. It installs **alongside** the official app and **shares your saves** with it, so you can swap between them mid-campaign.
+
+          This is a beta, it may break your save games, make sure to back them up regularly.
+
+          > Run only one at a time — both write the same saves. 
+          > Upgrading from the older "Open Historia Beta" from my fork? Uninstall that first; it's a separate app. Your saves are safe.
+
+          - Windows: `Open-Historia-SeventhDread-Beta-Setup.exe`
+          - macOS: `Open-Historia-SeventhDread-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel)
+          - Linux: `Open-Historia-SeventhDread-Beta-x86_64.AppImage`
+
+          **macOS, first launch.** The build carries no Apple developer signature, so macOS stops it once. Control-click the app and choose **Open**; on macOS 15 and later, try to open it, then click **Open Anyway** under System Settings → Privacy & Security. If macOS instead calls the app *damaged* and offers you neither, it is the same missing signature — clear the download flag in Terminal, then open it again:
+
+          ```
+          xattr -dr com.apple.quarantine "/Applications/Open Historia SeventhDread Beta.app"
+          ```
+
+          ---
+
+          ## ⚠️ The new unit system is a separate toggle — WIP
+
+          **Settings → Experimental → "Beta unit system"** — **off** unless you turn it on.
+
+          It is **WIP**. Don't enable it on a campaign you care about. Everything else in this release is unaffected by that switch.
+
+          If you try it: it's stored per save, needs a reload to take effect (there's a button), and switching it back off loses nothing.
+
+          The new unit system is meant to push other countries to place more units, gives you the ability to give each unit an order, the AI is more likely to move your units etc based on your current events.
+
+          Other countries may start placing enemy units at your border as a sign of aggression.
+
+          A lot of this experimental unit system is currently broken and is in active development.
+
+          ## 📋 Turn on detailed logging before reporting a bug
+
+          **Settings → Diagnostics** → turn on **Detailed logging** → hit **Clear** → reproduce the bug → **📋 Copy log** and attach it to your issue. It's the most useful thing you can send us, and the only thing that survives a crash.
+
+          Feel free to leave Detailed logging on, it is capped at 1MB of data and will automatically delete the oldest data. 
+          By leaving it on, if you encounter a bug, you will already have detailed logs captured.
+
+          Your API keys are never in the log. Country names, your orders and — with detailed logging on — your conversations are, so give it a glance before posting it publicly.
+
+          ---
+
+          ## What's in my beta
+
+          **Advisor** 
+          One-click **"Send message to X"** for letters it drafts, no copy-pasting. 
+          It can create, edit and remove queued actions directly in chat. 
+          Proper markdown tables, and a retry button when a provider fails.
+          Advisor now sees the whole map, not just your territory
+
+          **Chat** 
+          Sorted by last activity, message timestamps, retry on failed messages, and fixes
+          for unread counts and stale threads.
+
+          **🎯 Projects & Operations** 
+          A new panel for efforts spanning multiple rounds: research, construction, military and covert operations. Progress bars, milestones, overdue and slipped-milestone warnings, tags and filters, "Ask advisor" and "Show on map". The AI keeps it updated; you set priority.
+
+          **Timeline** 
+          A **↩ Rollback turn** button, and the event camera no longer flies to the wrong country.
+
+          **Map** 
+          Unit flag icons, fixed layer ordering, regions stay clickable when zoomed in, and disputed territory renders and clears properly.
+          Fixed any issues in regions not transferring when taken over
+
+          **AI reliability**
+          Malformed model replies are repaired instead of throwing the turn away, odd tool-call formats are handled, and several cases where the game quietly ignored what the AI said are fixed.
+
+          **Network** 
+          **Settings → Network → "Let other devices connect"** for playing from your phone, which shows you the exact address to type in. Off by default for security reasons as it is not password protected.
+
+          **The build**
+          Its own installer, icon and window title, a lock so two copies can't corrupt a save. Feel free to have both this Beta and the stable build installed at the same time. 
+          While you can share save games, it's not recommended going from Beta to stable as this can have unknown issues. 
+
+          ---
+
+          Bugs and feedback → [Issues](https://github.com/Open-Historia/open-historia/issues)
+          Make sure to label your issue as part of my SeventhDread's beta, and include any debugging messages from fallbacks, or advisor chats as well as the logging file from settings.
+          MD
             # --target pins the tag to the commit this run built. Without it the tag
             # would be created on the repository's DEFAULT branch — main — which is
             # the one place a beta release must never point.
