@@ -1753,7 +1753,10 @@ export const rollBackToSnapshot = async (index = 0) => {
     if (!snap) return null;
     const s = snap.state ?? {};
     await Promise.all([
-      writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
+      // writeGameData rather than a raw writeJson: the snapshot was captured a
+      // whole turn ago and carries that turn's unit-system flag, and a setting
+      // must not roll back with the turn. See writeGameData in gameState.js.
+      writeGameData(s.game ?? {}),
       writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
       writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
       writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
