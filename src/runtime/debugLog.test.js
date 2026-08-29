@@ -344,30 +344,57 @@ test("V7 the report states which mode produced it", () => {
 
 // ---- Group B: the size budget -----------------------------------------------
 
+// The two budgets these tests work against: 192 KB normally, 1 MB while
+// detailed logging is on. Detailed mode carries whole advisor and diplomatic
+// exchanges, so it is given room for a session's worth of them.
+const NORMAL_BUDGET = 192 * 1024;
+const VERBOSE_BUDGET = 1024 * 1024;
+
 test("B1 a big log drops its OLDEST entries and keeps the newest", () => {
     reset();
-    // ~1 KB per entry, 400 of them: well past the 192 KB budget in detailed mode
-    // where the entry ceiling is not what bites first.
+    // ~1 KB per entry, 2000 of them: ~2 MB, past the detailed budget, and under
+    // the 5000-entry ceiling so it is the SIZE cap being tested here.
     setDebugLogVerbose(true);
-    for (let index = 0; index < 400; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
     const list = getDebugLogEntries();
-    assert.ok(list.length < 400, `expected trimming, kept ${list.length}`);
-    assert.equal(list.at(-1).message, "entry 399");
+    assert.ok(list.length < 2000, `expected trimming, kept ${list.length}`);
+    assert.equal(list.at(-1).message, "entry 1999");
     assert.ok(!list.some((entry) => entry.message === "entry 0"), "the oldest entry should have gone first");
 });
 
 test("B2 trimming holds the buffer under the size budget", () => {
     reset();
     setDebugLogVerbose(true);
-    for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "z".repeat(500));
-    assert.ok(getDebugLogBytes() <= 192 * 1024, `buffer was ${getDebugLogBytes()} chars`);
+    for (let index = 0; index < 4000; index += 1) logDebugEvent("ai", `entry ${index}`, "z".repeat(500));
+    assert.ok(getDebugLogBytes() <= VERBOSE_BUDGET, `buffer was ${getDebugLogBytes()} chars`);
 });
 
 test("B3 the report says entries were dropped rather than leaving a silent gap", () => {
     reset();
     setDebugLogVerbose(true);
-    for (let index = 0; index < 500; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
     assert.match(buildDebugLogReport(), /older entries were dropped to stay inside that budget/);
+});
+
+test("B3b detailed mode gets a bigger budget than normal mode", () => {
+    reset();
+    setDebugLogVerbose(true);
+    // ~400 KB: over the normal budget, comfortably inside the detailed one.
+    for (let index = 0; index < 400; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    assert.ok(getDebugLogBytes() > NORMAL_BUDGET,
+        `expected a detailed log to be allowed past ${NORMAL_BUDGET} chars, held ${getDebugLogBytes()}`);
+    assert.ok(getDebugLogEntries().some((entry) => entry.message === "entry 0"),
+        "nothing should have been dropped yet at ~400 KB in detailed mode");
+});
+
+test("B3c leaving detailed mode trims the buffer down to the smaller budget", () => {
+    reset();
+    setDebugLogVerbose(true);
+    for (let index = 0; index < 400; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    // The switch must not leave a 400 KB buffer sitting in a 192 KB budget until
+    // the next entry happens along to trim it.
+    setDebugLogVerbose(false);
+    assert.ok(getDebugLogBytes() <= NORMAL_BUDGET, `buffer was ${getDebugLogBytes()} chars after switching off`);
 });
 
 test("B4 a normal-mode log stays under the entry ceiling", () => {

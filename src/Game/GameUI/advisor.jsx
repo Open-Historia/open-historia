@@ -5,6 +5,7 @@ import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOps, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
@@ -993,6 +994,23 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             const projectsExcerptText = (projectsProblem === "unusable" || projectsProblem === "partial")
                 ? projectsExcerpt
                 : "";
+            // What the reply DID, next to the reply itself in the log. A block
+            // the advisor clearly sent and the board never showed is the most
+            // common complaint on this path, and it has three quite different
+            // causes — the fence was never found, it parsed and applied nothing,
+            // or it applied and the panel is stale. Only this line tells them
+            // apart, and it is logged whether or not anything went wrong so the
+            // "it worked, the player looked at the wrong panel" case is on the
+            // record too.
+            logDebugEvent("advisor", "Advisor reply blocks applied.", {
+                actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
+                actionsApplied: actionsSummary ? `${actionsSummary.length} change(s)` : "nothing",
+                projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
+                projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
+                projectsProblem: projectsProblem || "(none)",
+                projectsDetail: projectsDetail || "",
+                projectsExcerpt: projectsExcerptText || "",
+            }, { verbose: true });
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
@@ -1074,6 +1092,11 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     // player sends it themselves. Nothing is written to the transcript here, so
     // there is no state to persist and nothing that can half-succeed.
     const handleDraftMessage = React.useCallback((draft) => {
+        // The letter as the advisor wrote it. What is eventually SENT is logged
+        // separately by the diplomacy path (AI/main.jsx), after whatever the
+        // player edited in the composer — and the pair is the only way to answer
+        // "the advisor drafted one thing and something else went out".
+        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${draft.country}.`, draft.text, { verbose: true });
         requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
     }, []);
 

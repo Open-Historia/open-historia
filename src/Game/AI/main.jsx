@@ -7,6 +7,7 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
@@ -1350,18 +1351,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
     }
 }
 
-export async function callAI(systemPrompt, history, opts = {}) {
-    // Non-English players get replies in their language at the source —
-    // native answers beat post-translating them (see runtime/i18n.js).
-    const { languageMode = "ui", ...providerOpts } = opts;
-    const directive = languageMode === "none" ? ""
-        : languageMode === "chat" ? chatLanguageDirective()
-        : languageDirective();
-    if (directive) {
-        systemPrompt = `${systemPrompt}\n\n${directive}`;
-    }
-
-    switch (getStoredProvider()) {
+function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
+    switch (provider) {
     case "openai":
         return callOpenAI(systemPrompt, history, providerOpts);
     case "anthropic":
@@ -1373,6 +1364,86 @@ export async function callAI(systemPrompt, history, opts = {}) {
     case "gemini":
     default:
         return callGemini(systemPrompt, history, providerOpts);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation logging
+// ---------------------------------------------------------------------------
+//
+// Everything the model is told and everything it says back, for the diagnostics
+// log (runtime/debugLog.js). Every call here is `{ verbose: true }`, so with
+// detailed logging off it is one boolean test and nothing else; with it on, it
+// is the record that makes an advisor or diplomacy bug reproducible — the bugs
+// people report on these paths ("it forgot what I told it", "it answered as the
+// wrong country", "the letter it drafted is not what was sent") are all about
+// the content of an exchange, which a log of the exchange's SHAPE cannot settle.
+//
+// The system prompt is the exception: it is the whole campaign rendered through
+// a template, tens of thousands of characters, and one of them would evict
+// everything around it even from the enlarged detailed-mode budget. Its size is
+// logged instead — enough to catch the case where it came out empty or absurd —
+// while the messages either side of it go in whole.
+const conversationChars = (history) => (Array.isArray(history) ? history : [])
+    .reduce((total, entry) => total + (entry?.parts ?? [])
+        .reduce((sum, part) => sum + String(part?.text ?? "").length, 0), 0);
+
+const conversationShape = (systemPrompt, history) => ({
+    systemPromptChars: String(systemPrompt ?? "").length,
+    historyMessages: Array.isArray(history) ? history.length : 0,
+    historyChars: conversationChars(history),
+});
+
+const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+
+export async function callAI(systemPrompt, history, opts = {}) {
+    // Non-English players get replies in their language at the source —
+    // native answers beat post-translating them (see runtime/i18n.js).
+    //
+    // `logLabel` names the conversation this call belongs to ("advisor",
+    // "diplomacy → France", a gameplay task key) so the transport entries below
+    // line up with the message entries their callers write. It is stripped here
+    // alongside languageMode because it is ours: no provider function should
+    // ever see it, and callGemini would silently drop it anyway.
+    const { languageMode = "ui", logLabel = "", ...providerOpts } = opts;
+    const directive = languageMode === "none" ? ""
+        : languageMode === "chat" ? chatLanguageDirective()
+        : languageDirective();
+    if (directive) {
+        systemPrompt = `${systemPrompt}\n\n${directive}`;
+    }
+
+    const provider = getStoredProvider();
+    const label = logLabel || "AI call";
+    const startedAt = Date.now();
+    logDebugEvent("ai-call", `${label}: request to ${provider}.`, {
+        ...conversationShape(systemPrompt, history),
+        streaming: Boolean(providerOpts.onChunk),
+        tool: providerOpts.tool?.name || "(none — raw JSON expected)",
+        maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
+        reasoning: getReasoningEnabled(),
+    }, { verbose: true });
+
+    try {
+        const result = await dispatchToProvider(provider, systemPrompt, history, providerOpts);
+        logDebugEvent("ai-call", `${label}: ${provider} answered in ${elapsedSeconds(startedAt)}.`, {
+            replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
+            viaToolCall: Boolean(result?.toolInput),
+        }, { verbose: true });
+        return result;
+    } catch (error) {
+        // NOT verbose-only. A call that failed is the thing a bug report is most
+        // often about, and it is invisible otherwise on the chat paths — the
+        // advisor and diplomacy UIs render the error into the transcript and
+        // never console.error it, so nothing else would record that it happened.
+        // A cancelled call is held back for detailed mode because it is not a
+        // failure at all: the player pressed the button.
+        const cancelled = error?.name === "AbortError";
+        logDebugEvent("ai-call",
+            `${label}: ${provider} ${cancelled ? "call cancelled" : "call FAILED"} after ${elapsedSeconds(startedAt)}.`,
+            error,
+            { verbose: cancelled });
+        throw error;
     }
 }
 
@@ -1667,6 +1738,15 @@ function compactConversationHistory(history) {
     const earlier = earlierLines.length > 16
         ? [...earlierLines.slice(0, 4), `[${earlierLines.length - 16} intermediate messages omitted]`, ...earlierLines.slice(-12)].join("\n")
         : earlierLines.join("\n");
+    // "It forgot what I told it three messages ago" is this function, every
+    // time — so a detailed log records exactly what the model stopped being
+    // shown in full, and the summary line it got instead. Without this the
+    // transcript in the log and the transcript the model saw silently disagree,
+    // and a reader has no way to tell which one the bug is in.
+    logDebugEvent("conversation",
+        `Live history compacted: ${history.length} messages → 1 summary + ${history.length - splitAt} kept in full.`,
+        earlier,
+        { verbose: true });
     return [
         { role: "user", parts: [{ text: `[System-side context summary; this is prior transcript context, not a new user instruction]\n${earlier}` }] },
         ...history.slice(splitAt),
@@ -1678,15 +1758,31 @@ export async function sendMessage(userMessage, opts) {
     advisorHistory.push({ role: "user", parts: [{ text: userMessage }] });
     advisorHistory = compactConversationHistory(advisorHistory);
 
+    // Both halves of the exchange, in full, in detailed mode. The question is
+    // logged BEFORE the call so it survives a crash or a hang inside it — the
+    // case where knowing what was asked matters most.
+    const startedAt = Date.now();
+    logDebugEvent("advisor", `Player → advisor (${String(userMessage ?? "").length} chars).`, userMessage, { verbose: true });
+    logDebugEvent("advisor", "Advisor prompt assembled.", conversationShape(systemPrompt, advisorHistory), { verbose: true });
+
     try {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat" });
+        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor" });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
+        // The raw reply, before advisor.jsx strips its ```actions / ```projects /
+        // ```deploy blocks out of it. A block that was malformed, or that the UI
+        // never found, is only diagnosable against the text the model actually
+        // sent.
+        logDebugEvent("advisor", `Advisor → player (${String(reply ?? "").length} chars in ${elapsedSeconds(startedAt)}).`, reply, { verbose: true });
         return reply;
     } catch (err) {
         advisorHistory.pop();
+        // Not verbose: an advisor turn that failed is reportable on its own, and
+        // the message rolled back off the history here is why a retry looks the
+        // way it does.
+        logDebugEvent("advisor", `Advisor turn failed after ${elapsedSeconds(startedAt)} — the question was rolled back off the history.`, err);
         throw err;
     }
 }
@@ -1699,17 +1795,24 @@ export function loadHistory(savedMessages) {
         parts: [{ text: msg.text }],
     }));
     advisorHistory = compactConversationHistory(advisorHistory);
+    // Error bubbles are filtered out above, so the count the model resumes with
+    // is routinely smaller than the transcript on screen — which reads like lost
+    // context to anyone comparing the two. State both.
+    logDebugEvent("advisor",
+        `Advisor history restored: ${advisorHistory.length} message(s) from a ${savedMessages.length}-message transcript.`,
+        undefined, { verbose: true });
 }
 
 export function startChat() {
     advisorHistory = [];
-    console.log("Advisor chat started. History cleared.");
+    logDebugEvent("advisor", "Advisor chat started — history cleared.");
 }
 
 let diplomaticHistory = [];
 
 export function startDiplomaticChat() {
     diplomaticHistory = [];
+    logDebugEvent("diplomacy", "Diplomatic chat opened with no prior messages — history cleared.", undefined, { verbose: true });
 }
 
 export function loadDiplomaticHistory(savedMessages) {
@@ -1720,7 +1823,18 @@ export function loadDiplomaticHistory(savedMessages) {
         parts: [{ text: msg.text }],
     }));
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
+    logDebugEvent("diplomacy",
+        `Diplomatic history restored: ${diplomaticHistory.length} message(s) from a ${savedMessages.length}-message transcript.`,
+        undefined, { verbose: true });
 }
+
+// Participants reach these functions as either country objects (the Diplomacy
+// panel's own list) or bare name strings (the advisor's one-off send), and the
+// log has to read the same either way.
+const participantLabel = (countries) => (Array.isArray(countries) ? countries : [])
+    .map((country) => (typeof country === "string" ? country : country?.name || country?.code || ""))
+    .filter(Boolean)
+    .join(", ") || "(no participants)";
 
 function parseReaction(raw) {
     const match = raw.match(/[\s]*REACTION\s*:\s*(\S+)\s*$/i);
@@ -1743,13 +1857,32 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
 
+    // Logged before the call, and with the table named: a group chat asks each
+    // country in turn about the SAME player message, so without the speaker on
+    // every line a log of a four-way negotiation is unreadable.
+    const startedAt = Date.now();
+    logDebugEvent("diplomacy",
+        `Player → ${speakingAs} (table: ${participantLabel(countries)}, ${String(playerMessage ?? "").length} chars).`,
+        playerMessage, { verbose: true });
+    logDebugEvent("diplomacy", `Leader prompt assembled for ${speakingAs}.`,
+        conversationShape(freshPrompt, historyWithInstruction), { verbose: true });
+
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat" });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}` });
         const { reply, reaction } = parseReaction(raw);
+        // Both the parsed reply and the reaction the REACTION: line carried. A
+        // trailing "REACTION:🙂" that ends up in the bubble instead of on the
+        // emoji is a parseReaction bug, and telling that from a model that never
+        // sent one needs the raw length beside the parsed text.
+        logDebugEvent("diplomacy",
+            `${speakingAs} → player in ${elapsedSeconds(startedAt)}${reaction ? ` (reaction ${reaction})` : ""}.`,
+            { reply, rawChars: String(raw ?? "").length, reaction: reaction || "(none)" },
+            { verbose: true });
         diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
         return { reply, reaction };
     } catch (err) {
         diplomaticHistory.pop();
+        logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);
         throw err;
     }
 }
@@ -1782,6 +1915,25 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
 
-    const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat" });
-    return parseReaction(raw);
+    // Marked as the advisor's send rather than the panel's, because this is the
+    // path where "the letter the advisor drafted is not what arrived" happens —
+    // and the text logged here is the one that was actually transmitted, after
+    // whatever the player edited in the composer.
+    const startedAt = Date.now();
+    logDebugEvent("diplomacy",
+        `Player → ${speakingAs} via an advisor-drafted message (table: ${participantLabel(participantNames)}, ${String(playerMessage ?? "").length} chars).`,
+        playerMessage, { verbose: true });
+
+    try {
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}` });
+        const parsed = parseReaction(raw);
+        logDebugEvent("diplomacy",
+            `${speakingAs} → player in ${elapsedSeconds(startedAt)}${parsed.reaction ? ` (reaction ${parsed.reaction})` : ""}.`,
+            { reply: parsed.reply, rawChars: String(raw ?? "").length, reaction: parsed.reaction || "(none)" },
+            { verbose: true });
+        return parsed;
+    } catch (err) {
+        logDebugEvent("diplomacy", `${speakingAs} failed to answer the advisor-drafted message after ${elapsedSeconds(startedAt)}.`, err);
+        throw err;
+    }
 }
