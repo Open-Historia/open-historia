@@ -3,7 +3,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { toBuild, parseUpdateManifest, isUpdateAvailable } from "./appUpdate.js";
+import {
+  APP_UPDATE_SETTLED_STATES,
+  isUpdateAvailable,
+  isUpdateSettled,
+  parseUpdateManifest,
+  toBuild,
+} from "./appUpdate.js";
 
 test("toBuild accepts positive integers (number or string)", () => {
   assert.equal(toBuild(5), 5);
@@ -55,4 +61,30 @@ test("isUpdateAvailable accepts string build numbers on both sides", () => {
 test("isUpdateAvailable never throws on hostile input", () => {
   assert.doesNotThrow(() => isUpdateAvailable({}, []));
   assert.doesNotThrow(() => isUpdateAvailable(Symbol.iterator, () => {}));
+});
+
+// The banner polls for download progress only while the updater is unsettled, so a
+// state wrongly called settled stops that poll for good and freezes the banner
+// mid-update. These pin the classification rather than the wording.
+test("isUpdateSettled is true only for states that never change again", () => {
+  for (const state of APP_UPDATE_SETTLED_STATES) assert.equal(isUpdateSettled(state), true);
+});
+test("isUpdateSettled treats every transient updater state as still running", () => {
+  for (const state of ["idle", "checking", "available", "downloading"]) {
+    assert.equal(isUpdateSettled(state), false, `${state} must keep the progress poll alive`);
+  }
+});
+// The regression this was written for: "available" is what the updater reports
+// between finding an update and its first download-progress event. Classifying it as
+// settled stopped the poll there and left the banner stuck while the download ran on.
+test("isUpdateSettled keeps polling through 'available'", () => {
+  assert.equal(isUpdateSettled("available"), false);
+});
+test("isUpdateSettled treats an unknown or absent state as still running", () => {
+  for (const state of [undefined, null, "", "something-new", 0, {}]) {
+    assert.equal(isUpdateSettled(state), false);
+  }
+});
+test("APP_UPDATE_SETTLED_STATES holds exactly the finished states", () => {
+  assert.deepEqual([...APP_UPDATE_SETTLED_STATES].sort(), ["error", "none", "ready"]);
 });
