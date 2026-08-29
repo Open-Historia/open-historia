@@ -281,6 +281,13 @@ const APP_UPDATE_MANIFESTS = {
   // reason the Android tracks are served this way.
   desktop: "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/latest.json",
 };
+// The desktop app imports this server into its Electron main process
+// (electron/main.cjs startServer), so the updater living there is reachable
+// straight through globalThis — no IPC, and no preload on the game window. It is
+// absent everywhere else, which is what makes these routes inert in the zip build
+// and on the website.
+const desktopUpdater = () => globalThis.__ohAutoUpdate || null;
+
 const APP_UPDATE_TTL_MS = 3 * 60 * 1000;
 const appUpdateCache = new Map(); // track -> { at, data }
 
@@ -316,12 +323,47 @@ app.get("/api/app-update", async (req, res) => {
       // localhost page — and it is absent everywhere else, so no banner appears.
       current: String(process.env.OH_DESKTOP_BUILD || ""),
       download: str(raw && raw[{ win32: "windows", darwin: "mac", linux: "linux" }[process.platform]]),
+      // True when this app can install the update itself. False on a build that
+      // cannot (unsigned macOS, an unpackaged dev run), and the banner then offers
+      // the download link exactly as it did before.
+      autoUpdate: Boolean(desktopUpdater()),
     };
     appUpdateCache.set(track, { at: Date.now(), data });
     res.json(data);
   } catch {
     res.json(cached ? cached.data : {}); // offline / timeout -> fail-open
   }
+});
+
+app.get("/api/app-update/status", (req, res) => {
+  const updater = desktopUpdater();
+  res.json(updater ? { supported: true, ...updater.status() } : { supported: false });
+});
+
+app.post("/api/app-update/download", (req, res) => {
+  const updater = desktopUpdater();
+  if (!updater) {
+    res.status(404).json({ error: "This build cannot update itself." });
+    return;
+  }
+  // Fire-and-forget: the download takes as long as it takes, and the page follows
+  // it through /status rather than holding a request open for minutes.
+  updater.download();
+  res.json({ started: true });
+});
+
+app.post("/api/app-update/restart", (req, res) => {
+  const updater = desktopUpdater();
+  if (!updater) {
+    res.status(404).json({ error: "This build cannot update itself." });
+    return;
+  }
+  if (updater.status().state !== "ready") {
+    res.status(409).json({ error: "No downloaded update is ready to install." });
+    return;
+  }
+  res.json({ restarting: true });
+  updater.restart();
 });
 
 app.get("/api/scenarios/:scenarioId", (req, res) => {
@@ -903,7 +945,9 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-const httpServer = app.listen(PORT, () => {
+// Exported so a test can shut the listener down; nothing else imports it (the
+// app and the launchers import this module purely for its side effects).
+export const httpServer = app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
 
