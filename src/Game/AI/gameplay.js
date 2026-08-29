@@ -48,6 +48,7 @@ import {
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -467,6 +468,18 @@ const runJsonTask = async (taskKey, {
   const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
+  // Detailed mode follows every AI task, not only the ones that fail. Sizes and
+  // shapes, never the prompt itself: a jump's system prompt is tens of thousands
+  // of characters of campaign, which would fill the whole log budget in one
+  // entry — but "the prompt was 92k characters and there was no tool schema" is
+  // most of what a stuck task needs, and it is invisible otherwise.
+  const taskStartedAt = Date.now();
+  logDebugEvent("ai", `Task "${taskKey}" started.`, {
+    promptChars: systemPrompt.length,
+    userMessageChars: String(userMessage ?? "").length,
+    tool: tool?.name || "(none — raw JSON expected)",
+    timeoutMs: timeoutMs || "(no deadline)",
+  }, { verbose: true });
   let failureReason = "The model did not return valid structured output.";
   // The player's only recourse when a turn falls back is "give Claude the
   // logs" — but the fallback warning below used to log only failureReason, a
@@ -504,6 +517,11 @@ const runJsonTask = async (taskKey, {
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       lastRawText = rawText;
       sawResponseBody = true;
+      logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} answered.`, {
+        responseChars: rawText.length,
+        viaToolCall: Boolean(response?.toolInput),
+        elapsedMs: Date.now() - taskStartedAt,
+      }, { verbose: true });
       const parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
@@ -556,8 +574,17 @@ const runJsonTask = async (taskKey, {
       }
 
       if (validation.valid) {
+        logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
         return { generation: { source: "ai", fallbackReason: "" }, payload: parsed };
       }
+
+      // Every rejection, including the one attempt 2 goes on to fix. A turn that
+      // came out right on the retry still tells you which rule the model keeps
+      // breaking, and that is invisible in a log that only records failures.
+      logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} REJECTED: ${validation.error}`, {
+        clearedSchema: schemaValid,
+        rawResponse: rawText,
+      }, { verbose: true });
 
       failureReason = validation.error;
       if (!firstFailureReason) firstFailureReason = validation.error;
@@ -621,6 +648,7 @@ const runJsonTask = async (taskKey, {
         ? normalizeString(await validatePayload(salvageCandidate, { attempt: 2, finalAttempt: true }))
         : "";
       if (!salvageError) {
+        logDebugEvent("ai", `Task "${taskKey}" salvaged an earlier answer after the retry failed — the turn is real, not canned.`, undefined, { verbose: true });
         return { generation: { source: "ai", fallbackReason: "" }, payload: salvageCandidate };
       }
     } catch {

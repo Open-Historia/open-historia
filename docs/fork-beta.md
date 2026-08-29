@@ -35,6 +35,22 @@ afterwards, marked with where the reload happened.
 Clearing it just before reproducing a bug gives a log containing only the steps that
 caused it, which is worth more than a full one.
 
+Two toggles sit in the same section, and both are remembered across save changes and
+restarts:
+
+- **Keep a diagnostics log** — on by default. Turning it off stops recording and deletes
+  what is stored on the device.
+- **Detailed logging** — off by default. Turn it on when a maintainer asks, or before
+  reproducing a bug you want captured in full: it adds every AI task and its rejections
+  (including retries that then worked), what each turn changed in the world, every server
+  request and every save with its size, which panels you opened, and full error stacks.
+  The section lists all of it. It fills the log faster, so the log holds less history —
+  and it quotes more of your campaign.
+
+The log has a size budget and drops its oldest entries once it is reached, so it never
+grows without bound; the report says when that has happened rather than leaving an
+unexplained gap.
+
 API keys are never in it (they are redacted as each entry is recorded, both by matching
 the keys this device has stored and by shape). Country names, queued orders and error
 messages are, so it is worth a glance before posting it in public.

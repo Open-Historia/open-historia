@@ -22,14 +22,23 @@ globalThis.localStorage = {
 const {
     buildDebugLogReport,
     clearDebugLog,
+    getDebugLogBytes,
     getDebugLogEntries,
+    isDebugLogEnabled,
+    isDebugLogVerbose,
     logDebugEvent,
     redactSecrets,
     setDebugLogContext,
+    setDebugLogEnabled,
+    setDebugLogVerbose,
 } = await import("./debugLog.js");
 
 const reset = () => {
     store.clear();
+    // Back to shipped defaults: on, not detailed. Set before the clear so the
+    // clear itself is not swallowed by a disabled log.
+    setDebugLogEnabled(true);
+    setDebugLogVerbose(false);
     // Silent, because clearDebugLog's player-facing path leaves a "cleared"
     // note behind and every test below counts entries.
     clearDebugLog({ silent: true });
@@ -220,6 +229,157 @@ test("C5 a repeat is shown with its count and last time, a single entry is not",
     const report = buildDebugLogReport();
     assert.match(report, /Failed to fetch tile \(×2, last \d{2}:\d{2}:\d{2}\)/);
     assert.match(report, /\[turn\] Jump started$/m);
+});
+
+// ---- Group S: the on/off switch ---------------------------------------------
+
+test("S1 logging is ON with nothing stored — the shipped default", () => {
+    reset();
+    assert.equal(isDebugLogEnabled(), true);
+    logDebugEvent("turn", "recorded");
+    assert.equal(getDebugLogEntries().length, 1);
+});
+
+test("S2 turning it off stops recording", () => {
+    reset();
+    setDebugLogEnabled(false);
+    logDebugEvent("turn", "should not be recorded");
+    logDebugEvent("error", "nor this");
+    assert.equal(getDebugLogEntries().length, 0);
+});
+
+test("S3 turning it off clears what was already collected, storage included", () => {
+    reset();
+    logDebugEvent("turn", "collected before");
+    logDebugEvent("turn", "and this");
+    setDebugLogEnabled(false);
+    assert.equal(getDebugLogEntries().length, 0);
+    assert.equal(getDebugLogBytes(), 0);
+    assert.equal(store.get("oh_debug_log_v1"), undefined);
+});
+
+test("S4 the OFF choice is written to storage so it survives a restart", () => {
+    reset();
+    setDebugLogEnabled(false);
+    // What a fresh launch would read back.
+    assert.equal(store.get("oh_debug_log_enabled"), "0");
+});
+
+test("S5 turning it back on records again and says so", () => {
+    reset();
+    setDebugLogEnabled(false);
+    setDebugLogEnabled(true);
+    logDebugEvent("turn", "after");
+    const messages = getDebugLogEntries().map((entry) => entry.message);
+    assert.deepEqual(messages, ["Diagnostics logging turned on.", "after"]);
+});
+
+test("S6 setting it to the value it already has is a no-op", () => {
+    reset();
+    logDebugEvent("turn", "kept");
+    setDebugLogEnabled(true);
+    assert.deepEqual(getDebugLogEntries().map((entry) => entry.message), ["kept"]);
+});
+
+// ---- Group V: detailed logging ----------------------------------------------
+
+test("V1 detailed logging is OFF by default and verbose entries are dropped", () => {
+    reset();
+    assert.equal(isDebugLogVerbose(), false);
+    logDebugEvent("ai", "detail only", undefined, { verbose: true });
+    logDebugEvent("turn", "always");
+    assert.deepEqual(getDebugLogEntries().map((entry) => entry.message), ["always"]);
+});
+
+test("V2 turning it on lets verbose entries through", () => {
+    reset();
+    setDebugLogVerbose(true);
+    logDebugEvent("ai", "detail only", undefined, { verbose: true });
+    const messages = getDebugLogEntries().map((entry) => entry.message);
+    assert.ok(messages.includes("detail only"));
+});
+
+test("V3 the ON choice is written to storage so it survives a restart", () => {
+    reset();
+    setDebugLogVerbose(true);
+    assert.equal(store.get("oh_debug_log_verbose"), "1");
+});
+
+test("V4 details are truncated far less in detailed mode", () => {
+    reset();
+    logDebugEvent("ai", "raw", "x".repeat(50_000));
+    const plain = getDebugLogEntries()[0].detail.length;
+    setDebugLogVerbose(true);
+    logDebugEvent("ai", "raw again", "x".repeat(50_000));
+    const detailed = getDebugLogEntries().at(-1).detail.length;
+    assert.ok(detailed > plain * 5, `plain ${plain} vs detailed ${detailed}`);
+});
+
+test("V5 an error keeps one frame normally and a real stack in detailed mode", () => {
+    reset();
+    const error = new Error("boom");
+    error.stack = ["Error: boom", "  at a (f.js:1:1)", "  at b (f.js:2:2)", "  at c (f.js:3:3)"].join("\n");
+    logDebugEvent("error", "plain", error);
+    assert.equal(getDebugLogEntries()[0].detail.includes("at c"), false);
+    setDebugLogVerbose(true);
+    logDebugEvent("error", "detailed", error);
+    assert.equal(getDebugLogEntries().at(-1).detail.includes("at c"), true);
+});
+
+test("V6 a disabled log ignores verbose entries too", () => {
+    reset();
+    setDebugLogVerbose(true);
+    setDebugLogEnabled(false);
+    logDebugEvent("ai", "detail only", undefined, { verbose: true });
+    assert.equal(getDebugLogEntries().length, 0);
+});
+
+test("V7 the report states which mode produced it", () => {
+    reset();
+    logDebugEvent("turn", "x");
+    assert.match(buildDebugLogReport(), /Detailed logging: off/);
+    setDebugLogVerbose(true);
+    assert.match(buildDebugLogReport(), /Detailed logging: ON/);
+});
+
+// ---- Group B: the size budget -----------------------------------------------
+
+test("B1 a big log drops its OLDEST entries and keeps the newest", () => {
+    reset();
+    // ~1 KB per entry, 400 of them: well past the 192 KB budget in detailed mode
+    // where the entry ceiling is not what bites first.
+    setDebugLogVerbose(true);
+    for (let index = 0; index < 400; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    const list = getDebugLogEntries();
+    assert.ok(list.length < 400, `expected trimming, kept ${list.length}`);
+    assert.equal(list.at(-1).message, "entry 399");
+    assert.ok(!list.some((entry) => entry.message === "entry 0"), "the oldest entry should have gone first");
+});
+
+test("B2 trimming holds the buffer under the size budget", () => {
+    reset();
+    setDebugLogVerbose(true);
+    for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "z".repeat(500));
+    assert.ok(getDebugLogBytes() <= 192 * 1024, `buffer was ${getDebugLogBytes()} chars`);
+});
+
+test("B3 the report says entries were dropped rather than leaving a silent gap", () => {
+    reset();
+    setDebugLogVerbose(true);
+    for (let index = 0; index < 500; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    assert.match(buildDebugLogReport(), /older entries were dropped to stay inside that budget/);
+});
+
+test("B4 a normal-mode log stays under the entry ceiling", () => {
+    reset();
+    for (let index = 0; index < 900; index += 1) logDebugEvent("turn", `entry ${index}`);
+    assert.equal(getDebugLogEntries().length, 400);
+});
+
+test("B5 the size is reported in the header", () => {
+    reset();
+    logDebugEvent("turn", "x");
+    assert.match(buildDebugLogReport(), /Entries: 1 \(<1 KB of a \d+ KB budget\)/);
 });
 
 // ---- Group P: the report ----------------------------------------------------

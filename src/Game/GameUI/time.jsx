@@ -1380,6 +1380,11 @@ const DateWidget = ({
     }, [gameData, worldState, events]);
 
     function setPanel(panelName) {
+        // Where the player was looking, in detailed mode. On its own a panel
+        // change is trivia; interleaved with the turn and API entries it is what
+        // turns "it broke" into a reproduction — which panel was open when the
+        // crash landed, and what they had opened just before.
+        logDebugEvent("ui", `Panel: ${panelName || "closed"}`, undefined, { verbose: true });
         if (typeof onSetPanel === "function") {
             onSetPanel(panelName);
             return;
@@ -1392,6 +1397,8 @@ const DateWidget = ({
         if (isLoading && panelName !== "skip") {
             return;
         }
+
+        logDebugEvent("ui", `Panel toggled: ${panelName}`, undefined, { verbose: true });
 
         if (typeof onTogglePanel === "function") {
             onTogglePanel(panelName);
@@ -1449,6 +1456,31 @@ const DateWidget = ({
                     source: result.generation?.source || "ai",
                 });
             }
+            // What the turn actually DID to the world, in detailed mode. This is
+            // the entry that answers the most common report there is — "the
+            // event said my army took the province but the border never moved" —
+            // because a turn that narrates a capture with zero region transfers
+            // shows up here as `regionTransfers: 0` beside an event list that
+            // clearly describes one. Titles and counts, not event prose: the
+            // prose is in the player's own screenshot, and it is the part of a
+            // log they are least comfortable posting.
+            const lastTurn = (result.world?.simulationHistory ?? [])[0] ?? null;
+            const changeCount = (impactKey) => (result.events ?? [])
+                .reduce((total, event) => total + (event?.impacts?.[impactKey]?.length ?? 0), 0);
+            logDebugEvent("turn", `Turn ${result.game?.round ?? 0} world changes.`, {
+                events: (result.events ?? []).map((event) => event?.title || "(untitled)"),
+                regionTransfers: changeCount("regionTransfers"),
+                polityChanges: changeCount("polityChanges"),
+                unitOps: changeCount("unitOps"),
+                markerOps: changeCount("markerOps"),
+                projectOps: changeCount("projectOps"),
+                createdChats: changeCount("createdChats"),
+                units: result.world?.units?.length ?? 0,
+                pendingUnitOrders: result.world?.pendingUnitOrders?.length ?? 0,
+                projects: result.world?.projects?.length ?? 0,
+                summary: lastTurn?.summary || "",
+            }, { verbose: true });
+
             setPanel("history");
         } catch (jumpError) {
             if (controller.signal.aborted || jumpError?.name === "AbortError") {

@@ -101,6 +101,7 @@ const parseApiResponse = async (response) => {
 };
 
 const requestJson = async (pathname, { body, method = "GET" } = {}) => {
+  const startedAt = Date.now();
   const response = await fetch(pathname, {
     body: body == null ? undefined : JSON.stringify(body),
     headers: body == null ? undefined : { "Content-Type": "application/json" },
@@ -108,7 +109,24 @@ const requestJson = async (pathname, { body, method = "GET" } = {}) => {
   });
 
   try {
-    return await parseApiResponse(response);
+    const parsed = await parseApiResponse(response);
+    // Detailed mode records the calls that WORKED too. A save that silently
+    // never fired, one that took nine seconds, an autosave running twice a
+    // second — none of those raise an error, and all of them are diagnosed from
+    // the shape of this stream rather than from any single entry. The request
+    // body stays out at both levels: it is a whole campaign.
+    // The duration only goes in when it is worth seeing. The game polls the
+    // active game and the actions queue every five seconds, so a per-call
+    // millisecond figure would make every poll a unique entry and defeat the
+    // repeat collapsing — hundreds of near-identical lines burning the size
+    // budget. Identical fast calls now fold into one `(×120)` line, and a call
+    // slow enough to matter breaks out of the fold by itself, which is exactly
+    // when you want to see it.
+    const elapsed = Date.now() - startedAt;
+    logDebugEvent("api", `${method} ${pathname} → ${response.status}`,
+      elapsed >= 1000 ? { slowMs: elapsed } : undefined,
+      { verbose: true });
+    return parsed;
   } catch (error) {
     // Every library call — load, save, activate, delete, every asset upload —
     // funnels through here, so this one line puts "the save failed and here is
