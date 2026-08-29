@@ -166,7 +166,23 @@ try {
 // (CSC_IDENTITY_AUTO_DISCOVERY: false) because there is no Developer ID
 // certificate yet. Attempting it there produces an error and nothing else, so mac
 // keeps the manual download until there is a certificate to sign with.
-const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
+//
+// The beta is excluded for the same shape of reason: it has no update feed to
+// read. electron-builder writes the app-update.yml electron-updater needs out of
+// the `publish` block, that block lives in package.json's `build`, and
+// electron-builder.beta.yml replaces that config wholesale rather than extending
+// it — so `publish` never reaches the beta. Nor can electron-builder infer a
+// provider, because package.json carries no `repository` field.
+//
+// Without this the beta would ADVERTISE a self-install it cannot perform:
+// installAutoUpdater() publishes the handle, server.js reports autoUpdate: true
+// off it, and the banner offers "install it for you". The first press fails on
+// the missing feed and only then falls back to the download link — which already
+// works, and which BETA_UPDATE_MANIFEST already points at the beta's own release.
+// One confusing failure in place of nothing at all.
+//
+// Revert this line once the beta workflow publishes a feed of its own.
+const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin" && !IS_BETA;
 
 // What the banner polls. One object, replaced rather than mutated, so a read is
 // always internally consistent.
