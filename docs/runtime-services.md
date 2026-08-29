@@ -19,7 +19,7 @@ Related pages: [World state](world-state.md) · [Game state](game-state.md) · [
 | Country labels | `src/runtime/countryLabels.js` | map country-label GeoJSON (curved + point) | `src/Game/Map/Nations.jsx` |
 | Community flags | `src/runtime/communityFlags.js` | hub-hosted shared flags & flag packs | `src/Editor/FlagPicker.jsx` |
 | Map settings | `src/runtime/mapSettings.js` | localStorage map/AI toggles | map + settings components |
-| Diagnostics log | `src/runtime/debugLog.js` | rolling event log for bug reports, secret redaction | `src/main.jsx` (boot), Settings → Diagnostics, library/time/actions/settings hooks |
+| Diagnostics log | `src/runtime/debugLog.js` | rolling event log for bug reports, secret redaction, the on/off + detailed settings | `src/main.jsx` (boot), Settings → Diagnostics, library/assets/time/actions/settings/gameplay hooks |
 
 ---
 
@@ -312,12 +312,27 @@ The log a player pastes into a bug report: **Settings → Diagnostics → Copy l
 
 Sits beside the two older, narrower affordances rather than replacing them: the advisor's "Copy for a bug report" (`GameUI/advisor.jsx`) and the timeline's "Copy debugging message" (`GameUI/time.jsx`) still describe **one** failed AI turn in full, including the raw model response, which this log deliberately does not carry.
 
+### Two settings, both persisted
+
+Both live in `localStorage`, which is what makes them survive closing the app: the desktop build keeps its Chromium profile between runs, so a choice holds across restarts, save switches and new campaigns. Neither is stored in a save file — the choice is about this installation, not this campaign, and a save copied between machines must not carry someone else's logging preference. **Absent means default, and the two defaults differ, so the keys read differently on purpose.**
+
+| Setting | Key | Default | Off/on means |
+|---|---|---|---|
+| Logging | `oh_debug_log_enabled` | **ON** (absent or anything but `"0"`) | Off: nothing is recorded, and the stored log is deleted — see below |
+| Detailed logging | `oh_debug_log_verbose` | **off** (absent or anything but `"1"`) | On: the `{ verbose: true }` entries are kept, and every entry keeps far more of itself |
+
+Both are cached in module state rather than read per entry — `logDebugEvent` runs in the hot path of a turn and of every console call the game makes — and primed at module load, so the very first entry (logged from `src/main.jsx` before anything mounts) already obeys a saved choice. `setDebugLogEnabled` / `setDebugLogVerbose` write through the cache.
+
+**Turning logging off also clears what was collected**, storage included, and the toggle's helper text says so. A player switching this off is saying they would rather the game did not keep this; leaving the last session's log in storage would ignore half of that, and it would go on occupying the storage budget for a feature they just declined. `persistNow` refuses to write while disabled, so a stray flush (pagehide, the error boundary) cannot put the key back afterwards.
+
 ### What is recorded
 
 Two sources:
 
 1. **Explicit `logDebugEvent()` calls** at the milestones a report needs. Every one is listed under "Hook sites" below.
-2. **Everything the game already logged.** `installDebugLogCapture()` wraps `console.warn`/`console.error` and listens for `error` / `unhandledrejection` on `window`. The originals are still called, so a developer with DevTools open sees exactly what they saw before.
+2. **Everything the game already logged.** `installDebugLogCapture()` wraps `console.warn`/`console.error` (plus `console.log`/`console.info`, verbose-only) and listens for `error` / `unhandledrejection` on `window`. The originals are still called, so a developer with DevTools open sees exactly what they saw before.
+
+Detailed mode is expressed at the call site as a fourth argument — `logDebugEvent(cat, msg, detail, { verbose: true })` — and gated at the top of `logDebugEvent` rather than by an `if` around each call, so a hook cannot drift out of sync with the setting. It also raises what each entry keeps: `MAX_DETAIL_CHARS` 600 → 6000, and error stacks 1 frame → 8.
 
 ### What is never recorded
 
@@ -332,11 +347,15 @@ Provider and model **names** are in the header on purpose — the model is the m
 
 | Constant | Value | Why |
 |---|---|---|
-| `MAX_ENTRIES` | 400 | Oldest dropped; the report says so when the cap has been hit |
-| `MAX_DETAIL_CHARS` | 600 | A truncated detail keeps `… (+N chars)` |
-| `MAX_STORED_CHARS` | 192 KB | localStorage is a ~5 MB budget shared with the translator cache; on overflow the oldest half is dropped and the write retried |
+| `MAX_LOG_CHARS` | 192 KB | **The real governor.** localStorage is a ~5 MB budget shared with the translator cache; the log is the least important thing in it |
+| `MAX_ENTRIES` / `MAX_ENTRIES_VERBOSE` | 400 / 2500 | A ceiling on a quiet session. Detailed mode raises it because its entries are more numerous; it does **not** raise the size budget, so a detailed log simply holds less history in the same space |
+| `MAX_DETAIL_CHARS` / `_VERBOSE` | 600 / 6000 | A truncated detail keeps `… (+N chars)`. A clipped stack trace or model response is usually worth nothing, which is what detailed mode is for |
+| `STACK_FRAMES` / `_VERBOSE` | 1 / 8 | One frame is where it threw; the rest is React internals nine times out of ten |
+| `MAX_STORED_CHARS` | 224 KB | Backstop on the *serialized* form only, for when the JSON scaffolding costs more than `entryCost` estimated |
 | `COALESCE_WINDOW` / `COALESCE_MS` | 25 entries / 60 s | Repeat collapsing (below) |
 | `PERSIST_DEBOUNCE_MS` | 800 | A busy turn logs a dozen entries a second; a synchronous write per entry is a jank source |
+
+**Trimming (`trimToBudget`).** The buffer is bounded by **size**, not only by entry count, and drops its **oldest** entries until it is inside both ceilings — oldest-first because a report is read for what led up to the problem and the problem is at the end. `usedChars` is maintained incrementally (`entryCost` = message + detail + category + gameDate + ~120 chars of JSON scaffolding) rather than recomputed, because trimming runs on every entry and re-measuring a 2500-entry buffer each time is how a bad network becomes a frame-rate problem. Entries go one at a time, so a full log keeps as much history as it can hold. `droppedEntries` counts what went, and the report says so — "the log starts at 11:42 with no explanation" and "the log dropped 900 entries to stay under the cap" are very different things to a reader.
 
 **Repeat collapsing.** An entry identical (category + message + detail) to one in the last `COALESCE_WINDOW` entries and within `COALESCE_MS` bumps that entry's `repeat` counter instead of appending; the report renders `(×48, last 10:50:58)`. Without this a dead basemap host or content node evicts the whole campaign from the buffer — measured at ~100 entries in six seconds with the network down. It scans a window rather than only the previous entry because storms interleave (maplibre's `AJAXError` alternating with our own fetch rejection), which consecutive-only matching would collapse neither of.
 
@@ -346,8 +365,11 @@ Provider and model **names** are in the header on purpose — the model is the m
 
 | Export | Purpose |
 |---|---|
-| `installDebugLogCapture()` | Once, at boot (`src/main.jsx`), before anything else runs. Restores the previous session, wraps the console, binds the global error hooks |
-| `logDebugEvent(category, message, detail?)` | The only way in. `detail` is flattened (Errors keep name + message + throwing frame; objects are JSON; circular does not throw) and truncated |
+| `installDebugLogCapture()` | Once, at boot (`src/main.jsx`), before anything else runs. Restores the previous session (unless logging is off), wraps the console, binds the global error hooks |
+| `logDebugEvent(category, message, detail?, { verbose }?)` | The only way in. `detail` is flattened (Errors keep name + message + stack frames; objects are JSON; circular does not throw) and truncated. `verbose: true` marks an entry as detailed-mode-only |
+| `isDebugLogEnabled()` / `setDebugLogEnabled(bool)` | The on/off switch. Turning it off clears the buffer and the stored copy |
+| `isDebugLogVerbose()` / `setDebugLogVerbose(bool)` | Detailed mode. Turning it off re-trims to the smaller ceiling |
+| `getDebugLogBytes()` / `getDebugLogLimitBytes()` / `getDebugLogDroppedCount()` / `formatLogSize(chars)` | Size reporting for the settings panel and the report header. `formatLogSize` renders anything under a kilobyte as `<1 KB`, never `0 KB` — beside a live entry count that reads like a broken counter |
 | `setDebugLogContext(patch)` | Merges campaign/build context for the report header. Redacted like everything else |
 | `buildDebugLogReport()` | The plain-text block the player copies — header, then entries oldest-first. Text, not JSON: it is going into a Discord message or a GitHub issue |
 | `debugLogFilename()` | `open-historia-log-<ISO stamp>.txt` |
@@ -359,15 +381,29 @@ Provider and model **names** are in the header on purpose — the model is the m
 
 ### Hook sites
 
+Always recorded:
+
 | Where | Category | Records |
 |---|---|---|
 | `src/main.jsx` | `app` | Boot, build channel, browser language |
 | `src/runtime/library.js` | `game`, `api` | Active-game switches (and the header's campaign block), game creation, deletion, and **every** failed `/api/library`, `/api/games`, `/api/scenarios` call — the path and the server's message, never the request body |
+| `src/runtime/assets.js` | `save` | **Failed** `writeJson` — world, game, actions, events and chats all persist through there, so a failure is the campaign not reaching disk. It previously threw into callers that only surface it as a toast |
 | `src/Game/GameUI/time.jsx` | `turn` | Jump/auto-jump start, finish (with elapsed seconds, event count, source), **fallback with its reason**, cancel, undo; keeps the in-game date and round in the context |
 | `src/Game/GameUI/actions.jsx` | `action` | Orders queued (manual and from suggestions) and removed |
 | `src/runtime/mapSettings.js` | `setting` | Every map/AI/experimental toggle, by its UI label |
 | `src/Game/AI/providerConfig.js` | `setting` | Provider switches, reasoning toggle; syncs provider + model into the header |
-| `src/runtime/ErrorBoundary.jsx` | `crash` | Render crashes with the first frames of the component stack, then flushes |
+| `src/runtime/ErrorBoundary.jsx` | `crash` | Render crashes with the component stack, then flushes |
 | `window` / `console` | `crash`, `error`, `warn` | Uncaught errors, unhandled rejections, and everything the game already logged |
 
-Tests: `src/runtime/debugLog.test.js` (26 cases — redaction, buffer, coalescing, report).
+Detailed mode only (`{ verbose: true }`):
+
+| Where | Category | Records |
+|---|---|---|
+| `src/Game/AI/gameplay.js` | `ai` | Every task: start (prompt/user-message sizes, tool name, timeout), each attempt's answer (size, tool-call or prose, elapsed), **each rejection with its validation error and raw response — including retries that then succeeded**, which attempt won, and salvage |
+| `src/runtime/library.js` | `api` | The calls that *worked*: method, path, status. The duration goes in only past 1 s — the game polls every 5 s, and a per-call millisecond figure would make each poll unique and defeat the repeat collapsing |
+| `src/runtime/assets.js` | `save` | Every successful save with its byte size. Growth is the point: a `world.json` climbing past a megabyte makes every turn slower and is invisible in any single entry |
+| `src/Game/GameUI/time.jsx` | `turn`, `ui` | Per-turn world changes (event titles plus counts of region transfers, polity changes, unit/marker/project ops, chats, and the unit and project totals) — this is what exposes a turn that narrates a conquest while moving no borders. Plus timeline panel navigation |
+| `src/Game/GameUI/main.jsx` | `ui` | Which panels are open, as one effect over every panel flag rather than a call per handler — these panels are opened from a dozen places and per-handler calls would miss most of them |
+| `console` | `log` | `console.log` / `console.info`, the game's routine chatter — noise in a normal report, running commentary in a detailed one |
+
+Tests: `src/runtime/debugLog.test.js` (44 cases — redaction, buffer, coalescing, report, both switches and their persistence, and the size budget).

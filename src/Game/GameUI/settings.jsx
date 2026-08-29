@@ -26,7 +26,14 @@ import {
     buildDebugLogReport,
     clearDebugLog,
     debugLogFilename,
+    formatLogSize,
+    getDebugLogBytes,
+    getDebugLogLimitBytes,
     getDebugLogSize,
+    isDebugLogEnabled,
+    isDebugLogVerbose,
+    setDebugLogEnabled,
+    setDebugLogVerbose,
     subscribeToDebugLog,
 } from "../../runtime/debugLog.js";
 
@@ -911,8 +918,32 @@ const DiagnosticsPanel = () => {
     // wrong: "Entries: 0" after a crash means the log is not recording and the
     // player should say so, rather than pasting an empty report.
     const [count, setCount] = useState(() => getDebugLogSize());
+    const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // Both toggles are read from the module rather than held only here, because
+    // the module is where the persisted answer lives — this panel is unmounted
+    // every time the menu closes, and a useState default would otherwise be a
+    // second, disagreeing copy of the setting.
+    const [enabled, setEnabled] = useState(() => isDebugLogEnabled());
+    const [verbose, setVerbose] = useState(() => isDebugLogVerbose());
 
-    useEffect(() => subscribeToDebugLog(() => setCount(getDebugLogSize())), []);
+    useEffect(() => subscribeToDebugLog(() => {
+        setCount(getDebugLogSize());
+        setBytes(getDebugLogBytes());
+    }), []);
+
+    const toggleEnabled = () => {
+        const next = !enabled;
+        setDebugLogEnabled(next);
+        setEnabled(next);
+        setCount(getDebugLogSize());
+        setBytes(getDebugLogBytes());
+    };
+
+    const toggleVerbose = () => {
+        const next = !verbose;
+        setDebugLogVerbose(next);
+        setVerbose(next);
+    };
 
     const handleCopy = async () => {
         setCopyState("copying");
@@ -951,7 +982,7 @@ const DiagnosticsPanel = () => {
         The game keeps a running log of what you did — saves opened, orders queued, turns taken, and anything that went wrong. Send it with a bug report and it says what happened, in order.
         </div>
 
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", opacity: enabled ? 1 : 0.45 }}>
         <button
         type="button"
         onClick={handleCopy}
@@ -967,7 +998,14 @@ const DiagnosticsPanel = () => {
 
         <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
         <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>
-        {cleared ? "Cleared." : `${count} ${count === 1 ? "entry" : "entries"} recorded`}
+        {/* The size, not just the count, because the cap is otherwise invisible:
+            a player watching the count sit still cannot tell a quiet game from a
+            log that is silently rolling its oldest entries off the front. */}
+        {!enabled
+            ? "Not recording."
+            : cleared
+            ? "Cleared."
+            : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
         </span>
         <button
         type="button"
@@ -979,11 +1017,43 @@ const DiagnosticsPanel = () => {
         </button>
         </div>
 
-        <div style={{ marginTop: "0.5rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", lineHeight: 1.4 }}>
+        <div style={{ margin: "0.5rem 0 1rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", lineHeight: 1.4 }}>
         Your API key is never included. Country names, your queued orders and error messages are — read it before posting it somewhere public.
         </div>
+
+        <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
+        <div style={helperTextStyle}>
+        On (default): the log records in the background and costs nothing you would notice. Off: nothing is recorded, and the log already stored on this device is deleted. Your choice is remembered — it stays off through save changes and after you close and reopen the game.
+        </div>
+
+        <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
+        <div style={helperTextStyle}>
+        Off by default. Turn it on when a maintainer asks, or before reproducing a bug you want fully captured — then reproduce it and send the log. Also remembered across saves and restarts. It adds:
+        <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1rem" }}>
+        <li><strong>Every AI task, not just the failures</strong> — which task ran, how big the prompt and the reply were, whether the model answered through a tool call, how long it took, and which attempt succeeded.</li>
+        <li><strong>Why the AI was rejected, including retries that then worked</strong> — the validation error and the raw model response for each attempt, so a model that keeps breaking one rule is visible even on turns that came out right.</li>
+        <li><strong>What each turn changed in the world</strong> — the event titles plus counts of region transfers, polity changes, unit and marker ops, projects and new chats. This is what shows an event that narrates a conquest while moving no borders.</li>
+        <li><strong>Every server request, not just the failed ones</strong> — method, path, response code, and a flag on anything that took over a second. Catches a request that never fired and one that quietly took ten seconds.</li>
+        <li><strong>Every save, with its size</strong> — each write of your world, events, orders and chats. A save file growing turn after turn is the usual reason a campaign gets slower, and it only shows up by comparing the same line at different points in a session.</li>
+        <li><strong>Which panels you opened, in order</strong> — so a crash can be tied to where you actually were.</li>
+        <li><strong>Full error stacks</strong> (eight frames instead of one) and much longer details — a truncated stack trace or a clipped model response is usually worth nothing.</li>
+        <li><strong>The game&apos;s routine console messages</strong>, which are normally left out as noise.</li>
+        </ul>
+        <div style={{ marginTop: "0.3rem" }}>
+        It fills the log far faster, so the log holds less history in the same space — and it quotes more of your campaign, which is worth a glance before posting it publicly.
+        </div>
+        </div>
+
         </div>
     );
+};
+
+const helperTextStyle = {
+    marginTop: "-0.7rem",
+    marginBottom: "0.7rem",
+    fontSize: "0.72rem",
+    color: "rgba(255,255,255,0.45)",
+    lineHeight: 1.35,
 };
 
 const diagnosticsButton = {
