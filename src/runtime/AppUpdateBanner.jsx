@@ -85,7 +85,36 @@ export default function AppUpdateBanner() {
     }
   });
   const [updating, setUpdating] = useState(false);
+  // The main process's updater state, polled while an update is actually running.
+  // Null until the player asks for one — the banner is otherwise the same as it
+  // was, and a build that cannot update itself never sets this at all.
+  const [progress, setProgress] = useState(null);
   const lastRefocusRef = useRef(0);
+
+  // A second-by-second poll, but only between pressing Update and the update being
+  // ready (or failing) — never while the banner is merely sitting there.
+  const running = progress?.state === "checking" || progress?.state === "downloading";
+  useEffect(() => {
+    if (!running) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/app-update/status", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (stopped || !data?.supported) return;
+        setProgress(data);
+        // A failure mid-download hands the player back to the installer link, so
+        // the button has to become pressable again — otherwise it sits disabled
+        // reading "Opening…" while nothing is opening.
+        if (data.state === "error") setUpdating(false);
+      } catch {
+        /* a missed poll changes nothing: the next one has the same answer */
+      }
+    };
+    const timer = setInterval(tick, 1000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [running]);
 
   useEffect(() => {
     if (isApp || isWeb) return undefined;
@@ -99,7 +128,7 @@ export default function AppUpdateBanner() {
         // the ids are opaque, so a rollback counts just as much as a newer build.
         if (dropped || !data?.current || !data?.buildId || !data?.download) return;
         if (data.buildId === data.current) return;
-        setDesktop({ build: data.buildId, notes: data.notes || "", url: data.download });
+        setDesktop({ auto: Boolean(data.autoUpdate), build: data.buildId, notes: data.notes || "", url: data.download });
       } catch {
         /* fail open: no banner */
       }
@@ -161,10 +190,25 @@ export default function AppUpdateBanner() {
 
   const onUpdate = async () => {
     if (desktop) {
+      setUpdating(true);
+      // The app installs the update itself: the main process downloads it and
+      // swaps the installation on restart, so there is nothing for the player to
+      // find in a downloads folder and run.
+      if (desktop.auto && progress?.state !== "error") {
+        setProgress({ state: "checking", percent: 0 });
+        try {
+          const res = await fetch("/api/app-update/download", { method: "POST" });
+          if (res.ok) return;
+        } catch {
+          /* fall through to the download link below */
+        }
+        // The route is gone or refused — never leave the player with a button that
+        // did nothing. This is the behaviour that used to be the only one.
+        setProgress({ state: "error", error: "" });
+      }
       // window.open goes through the main process's window-open handler, which sends
       // it to the real browser — so the installer downloads where the player can see
       // it, and no extra bridge is needed to do it.
-      setUpdating(true);
       window.open(desktop.url, "_blank", "noopener");
       return;
     }
@@ -195,6 +239,17 @@ export default function AppUpdateBanner() {
     // Downloads the new APK; Android then prompts to install it and reopen the app.
     window.location.href = latest.apk;
   };
+  const onRestart = async () => {
+    try {
+      // The app quits and reopens on the new version; the response comes back
+      // before it goes, so a refusal is still visible.
+      const res = await fetch("/api/app-update/restart", { method: "POST" });
+      if (!res.ok) setProgress({ state: "error", error: "" });
+    } catch {
+      /* the app is already going down — nothing left to report to */
+    }
+  };
+
   const onDismiss = () => {
     setDismissed(info.build);
     try {
@@ -204,13 +259,28 @@ export default function AppUpdateBanner() {
     }
   };
 
+  // What the desktop line says depends on how far along the app's own update is.
+  // "error" is not shown as a failure: the button falls back to the installer
+  // download, so the honest thing to say is what the player can still do.
+  const desktopStatus = () => {
+    if (!desktop.auto || progress?.state === "error") {
+      return updating ? "Opening the download…" : "Download the new version and run it — your games are kept.";
+    }
+    if (progress?.state === "ready") return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "downloading") return `Downloading the update… ${progress.percent || 0}%`;
+    if (progress?.state === "checking") return "Fetching the update…";
+    return "Installs itself in the background — your games are kept.";
+  };
+  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready");
+  const busy = Boolean(desktop && desktop.auto && (progress?.state === "checking" || progress?.state === "downloading"));
+
   return (
     <div style={bar} role="status" aria-live="polite">
       <div style={text}>
         A new version of Open Historia is ready.
         <span style={sub}>
           {desktop
-            ? (updating ? "Opening the download…" : "Download the new version and run it — your games are kept.")
+            ? desktopStatus()
             : isWeb
             ? (updating ? "Reloading…" : "Reload to get the latest fixes. Your games are saved.")
             : updating
@@ -218,9 +288,17 @@ export default function AppUpdateBanner() {
               : latest.notes || `Build ${latest.build} · tap Update to download and install.`}
         </span>
       </div>
-      {isWeb || desktop || latest.apk ? (
-        <button type="button" style={btn} onClick={onUpdate} disabled={updating}>
-          {updating ? (isWeb ? "Reloading…" : desktop ? "Opening…" : "Downloading…") : "Update now"}
+      {ready ? (
+        <button type="button" style={btn} onClick={onRestart}>
+          Restart now
+        </button>
+      ) : isWeb || desktop || latest.apk ? (
+        <button type="button" style={btn} onClick={onUpdate} disabled={updating || busy}>
+          {busy
+            ? `${progress.percent || 0}%`
+            : updating
+              ? (isWeb ? "Reloading…" : desktop ? "Opening…" : "Downloading…")
+              : "Update now"}
         </button>
       ) : null}
       <button type="button" style={dismissBtn} onClick={onDismiss} aria-label="Dismiss update notice">

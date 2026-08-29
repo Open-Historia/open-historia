@@ -64,9 +64,23 @@ jobs:
           echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
           cat electron/build-id.json
 
+      # package.json ships 0.0.0 and electron-updater decides whether an update
+      # exists by comparing SEMVER — so without a real, increasing version here
+      # every build would look identical to the one already installed and the app
+      # would never update itself. run_number increments per run and is shared by
+      # all three jobs in it, so one release is one version on every platform.
+      - name: Stamp the app version
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          node -p "'version: '+require('./package.json').version"
+
       - name: Build the client
         run: npm run build
 
+      # --publish never still WRITES the latest*.yml feed files (the publish block
+      # in package.json is what produces them); it only declines to upload them,
+      # which the release step below does itself.
       - name: Build the installer
         run: npx electron-builder ${{ matrix.args }} --publish never
         env:
@@ -100,7 +114,11 @@ jobs:
               --notes "Windows, macOS and Linux downloads. The world map downloads on first launch." \
             || true
           shopt -s nullglob
-          files=(release/*.exe release/*-mac-*.zip release/*.AppImage)
+          # The latest*.yml files ARE the update feed: electron-updater fetches
+          # latest.yml (win) / latest-mac.yml / latest-linux.yml from this release
+          # and compares the version in it against the running app. One per
+          # platform, so the three jobs cannot overwrite each other's.
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot
           # each publish a different view of the same release.
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
