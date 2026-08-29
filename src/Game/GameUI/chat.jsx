@@ -12,6 +12,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
@@ -512,6 +513,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
     useEffect(() => {
         const saved = chat.messages ?? [];
+        // Which thread this is, logged where the switch happens. AI/main.jsx
+        // records the messages but holds one module-level history for whichever
+        // chat is open, so without this line a log of two threads read one after
+        // the other is a single run-on conversation.
+        logDebugEvent("diplomacy",
+            `Opened chat #${chat.id} with ${countries.map((country) => country.name).join(", ") || "(nobody)"} — ${saved.length} saved message(s).`,
+            undefined, { verbose: true });
         if (saved.length > 0) loadDiplomaticHistory(saved);
         else startDiplomaticChat();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -641,6 +649,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             pushMessages(nextMessages);
             setPlayerInput("");
             const queue = await buildResponsiveQueue(nextMessages);
+            // Who was asked, and in what order. A group chat sends the same
+            // message to each leader in turn, so "France answered as if it had
+            // heard Prussia's reply" is a question about this order — and the
+            // order is chosen by a model call (chooseNextDiplomaticSpeaker) that
+            // can quietly fall back to plain rotation.
+            logDebugEvent("diplomacy",
+                `Player sent in chat #${chat.id}; reply order: ${queue.map((country) => country.name).join(" → ") || "(nobody)"}.`,
+                undefined, { verbose: true });
             if (queue.length === 0) {
                 pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
                 return;
@@ -660,6 +676,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            logDebugEvent("diplomacy", `Retrying ${retry.country?.name || "a leader"}'s reply in chat #${chat.id}.`, undefined, { verbose: true });
             pushMessages(messagesRef.current.filter((_, i) => i !== index));
             setPendingCountry(null);
             setRemainingQueue([]);
