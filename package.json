@@ -98,6 +98,7 @@
     "asarUnpack": [
       "scripts/**"
     ],
+    "afterPack": "./scripts/mac-adhoc-sign.cjs",
     "publish": [
       {
         "provider": "generic",

@@ -50,6 +50,14 @@ files:
 asarUnpack:
   - scripts/**
 
+# Ad-hoc code-signs the packaged .app on macOS. Without it the build ships with
+# only the stock Electron binary's linker signature and no sealed resources, and
+# macOS refuses the quarantined download outright as "damaged" instead of showing
+# the ordinary bypassable unsigned-app warning. See the script for the detail.
+# The stable build sets the same hook in package.json's `build` block; --config
+# replaces that block wholesale, so it has to be repeated here.
+afterPack: ./scripts/mac-adhoc-sign.cjs
+
 # The beta's own update feed, and the reason it needs one HERE rather than
 # inheriting the stable app's. electron-builder turns this block into the
 # app-update.yml it packs inside the build, and app-update.yml is the only thing
