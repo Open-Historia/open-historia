@@ -39,6 +39,7 @@
     "chart.js": "^4.5.1",
     "d3-geo": "^3.1.1",
     "dayjs": "^1.11.19",
+    "electron-updater": "^6.8.9",
     "eslint": "^9.39.3",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.26",
@@ -96,6 +97,13 @@
     ],
     "asarUnpack": [
       "scripts/**"
+    ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable",
+        "channel": "latest"
+      }
     ],
     "directories": {
       "output": "release",

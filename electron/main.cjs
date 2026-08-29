@@ -148,6 +148,87 @@ try {
   /* dev build: unstamped, so no update is ever offered */
 }
 
+// --- automatic updates ------------------------------------------------------
+
+// The app used to answer "a new version exists" by opening the installer's
+// download URL in the player's browser and leaving them to run it. It now
+// downloads and applies the update itself; the download link stays only as the
+// fallback for the cases below.
+//
+// This is reachable from the page WITHOUT a preload and without IPC, because
+// startServer() imports server.js into THIS process — the Express routes and the
+// updater are the same process, so the server can call straight into it through
+// the handle published on globalThis at the bottom of this block. That matters:
+// attaching a preload to the game window is what broke the app last time.
+//
+// macOS is excluded. Squirrel.Mac validates the running app's code signature
+// before applying anything, and the release workflow builds unsigned
+// (CSC_IDENTITY_AUTO_DISCOVERY: false) because there is no Developer ID
+// certificate yet. Attempting it there produces an error and nothing else, so mac
+// keeps the manual download until there is a certificate to sign with.
+const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
+
+// What the banner polls. One object, replaced rather than mutated, so a read is
+// always internally consistent.
+let updateState = { state: "idle", percent: 0, version: "", error: "" };
+const setUpdateState = (patch) => { updateState = { ...updateState, ...patch }; };
+
+const setupAutoUpdater = () => {
+  // A dev run has no app-update.yml inside it, so electron-updater would only
+  // ever error; an unpackaged app also cannot be replaced by an installer.
+  if (!AUTO_UPDATE_SUPPORTED || !app.isPackaged) return null;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require("electron-updater"));
+  } catch {
+    return null; // not packaged with the app: fall back to the download link
+  }
+  // The banner decides when to download — a player on a metered connection
+  // should not have ~100MB pulled out from under them by opening the game.
+  autoUpdater.autoDownload = false;
+  // If they download but never press Restart, it installs on the next quit
+  // instead of being thrown away.
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("checking-for-update", () => setUpdateState({ state: "checking", error: "" }));
+  autoUpdater.on("update-available", (info) => setUpdateState({ state: "available", percent: 0, version: String(info?.version || ""), error: "" }));
+  autoUpdater.on("update-not-available", () => setUpdateState({ state: "none", percent: 0 }));
+  autoUpdater.on("download-progress", (progress) => setUpdateState({ state: "downloading", percent: Math.max(0, Math.min(100, Math.round(progress?.percent || 0))) }));
+  autoUpdater.on("update-downloaded", (info) => setUpdateState({ state: "ready", percent: 100, version: String(info?.version || ""), error: "" }));
+  // Every failure lands here — no signature, no latest.yml, offline mid-download.
+  // The banner reads it and offers the installer download instead, so a broken
+  // updater degrades to exactly the behaviour this replaced.
+  autoUpdater.on("error", (error) => setUpdateState({ state: "error", error: String(error?.message || error || "Update failed.") }));
+  return autoUpdater;
+};
+
+// Published on globalThis for server.js, which is imported into THIS process and
+// serves /api/app-update/{status,download,restart} straight off it. Called from
+// boot() before the server starts, so the routes are never live without it.
+const installAutoUpdater = () => {
+  const autoUpdater = setupAutoUpdater();
+  if (!autoUpdater) return;
+  globalThis.__ohAutoUpdate = {
+    status: () => updateState,
+    download: () => {
+      // checkForUpdates has to have run first — downloadUpdate with nothing found
+      // rejects. Chaining them here means the page needs one call, not two.
+      setUpdateState({ state: "checking", error: "" });
+      autoUpdater
+        .checkForUpdates()
+        .then((result) => (result?.updateInfo ? autoUpdater.downloadUpdate() : null))
+        .catch((error) => setUpdateState({ state: "error", error: String(error?.message || error) }));
+    },
+    // isSilent: the whole point is that the player does not meet an installer.
+    // The NSIS build is assisted (oneClick: false) and per-user (perMachine:
+    // false), so a silent update rewrites the existing install with no wizard and
+    // no elevation prompt. isForceRunAfter reopens the game once it is done.
+    //
+    // Deferred: the HTTP response for this request still has to be written, and
+    // quitAndInstall tears the process down immediately.
+    restart: () => { setTimeout(() => autoUpdater.quitAndInstall(true, true), 400); },
+  };
+};
+
 const APP_ROOT = path.join(__dirname, "..");
 // asarUnpack keeps scripts/ outside the archive so a child process can run it.
 const unpacked = (p) => p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
@@ -401,6 +482,7 @@ const startServer = async () => {
 };
 
 const boot = async () => {
+  installAutoUpdater();
   const pending = missingAssets();
   if (pending.length) {
     setupWindow = createSetupWindow();
