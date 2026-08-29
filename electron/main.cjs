@@ -14,6 +14,20 @@ const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
+const { needsNoSandbox } = require("./linuxSandbox.cjs");
+
+// Must run before app.whenReady(): Chromium reads its command line when the zygote
+// starts, and the crash this prevents happens there. See linuxSandbox.cjs — on an
+// AppImage whose kernel refuses unprivileged user namespaces there is no sandbox
+// available at all, and Chromium aborts on launch rather than continue without one.
+if (needsNoSandbox()) {
+  console.log(
+    "Unprivileged user namespaces are unavailable and an AppImage cannot use the setuid "
+    + "sandbox, so Open Historia is starting without Chromium's sandbox. Installing the "
+    + "app outside an AppImage restores it.",
+  );
+  app.commandLine.appendSwitch("no-sandbox");
+}
 
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
