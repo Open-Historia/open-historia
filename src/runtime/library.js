@@ -4,6 +4,7 @@ import {
   setCountryNameResolver,
   setRuntimeAssetEndpoints,
 } from "./assets.js";
+import { logDebugEvent, setDebugLogContext } from "./debugLog.js";
 import { enqueueContentStrings } from "./translator.js";
 
 const LIBRARY_API_ROOT = "/api/library";
@@ -100,13 +101,44 @@ const parseApiResponse = async (response) => {
 };
 
 const requestJson = async (pathname, { body, method = "GET" } = {}) => {
+  const startedAt = Date.now();
   const response = await fetch(pathname, {
     body: body == null ? undefined : JSON.stringify(body),
     headers: body == null ? undefined : { "Content-Type": "application/json" },
     method,
   });
 
-  return parseApiResponse(response);
+  try {
+    const parsed = await parseApiResponse(response);
+    // Detailed mode records the calls that WORKED too. A save that silently
+    // never fired, one that took nine seconds, an autosave running twice a
+    // second — none of those raise an error, and all of them are diagnosed from
+    // the shape of this stream rather than from any single entry. The request
+    // body stays out at both levels: it is a whole campaign.
+    // The duration only goes in when it is worth seeing. The game polls the
+    // active game and the actions queue every five seconds, so a per-call
+    // millisecond figure would make every poll a unique entry and defeat the
+    // repeat collapsing — hundreds of near-identical lines burning the size
+    // budget. Identical fast calls now fold into one `(×120)` line, and a call
+    // slow enough to matter breaks out of the fold by itself, which is exactly
+    // when you want to see it.
+    const elapsed = Date.now() - startedAt;
+    logDebugEvent("api", `${method} ${pathname} → ${response.status}`,
+      elapsed >= 1000 ? { slowMs: elapsed } : undefined,
+      { verbose: true });
+    return parsed;
+  } catch (error) {
+    // Every library call — load, save, activate, delete, every asset upload —
+    // funnels through here, so this one line puts "the save failed and here is
+    // what the server said" in the diagnostics log for all of them. Several
+    // callers swallow the throw or surface it only as a toast that is gone by
+    // the time a bug is reported.
+    //
+    // The path, not the body: a request body is a whole campaign and the log is
+    // meant to be pasteable.
+    logDebugEvent("api", `${method} ${pathname} failed`, error);
+    throw error;
+  }
 };
 
 const applyLibraryCatalog = (catalog) => {
@@ -122,6 +154,22 @@ const applyLibraryCatalog = (catalog) => {
     (activeGame
       ? scenarios.find((entry) => entry.id === activeGame.scenarioId) ?? null
       : null);
+
+  // The report header's campaign block, refreshed wherever the catalog lands:
+  // creating, saving, activating and deleting a game all pass through here, so
+  // a log pasted after switching saves names the save it is actually about.
+  if (activeGameId !== libraryState.activeGameId) {
+    logDebugEvent(
+      "game",
+      activeGame ? `Active game switched to "${activeGame.name || activeGameId}".` : "No active game.",
+      activeGameId ? { gameId: activeGameId, scenarioId: activeGame?.scenarioId || "" } : undefined,
+    );
+  }
+  setDebugLogContext({
+    gameId: activeGameId || "",
+    gameName: activeGame?.name || "",
+    scenario: runtimeScenario?.name || activeGame?.scenarioId || "",
+  });
 
   setLibraryState({
     activeGame,
@@ -351,6 +399,11 @@ export const createGame = async (payload) => {
     body: payload,
     method: "POST",
   });
+  logDebugEvent("game", `New game created: "${payload?.name || details?.id || "untitled"}".`, {
+    scenarioId: payload?.scenarioId || "",
+    country: payload?.country || "",
+    difficulty: payload?.difficulty || "",
+  });
   // Card text edits translate (and reach the server language pack) right away.
   enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
@@ -376,6 +429,10 @@ export const activateGame = async (gameId) => {
 };
 
 export const removeGame = async (gameId) => {
+  // Logged before the request, not after: "they deleted a save and then it
+  // broke" is the report this line exists for, and a delete that throws
+  // half-way is exactly the case where the after-the-fact line never runs.
+  logDebugEvent("game", "Deleting a save.", { gameId });
   const catalog = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     method: "DELETE",
   });

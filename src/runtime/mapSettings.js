@@ -5,6 +5,7 @@
 // GameUI/main.jsx, mirroring how useCountryDisplayName (polityNames.js) sits
 // beside the data it subscribes to.
 import { useEffect, useState } from "react";
+import { logDebugEvent, setDebugLogContext } from "./debugLog.js";
 
 export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
@@ -37,8 +38,25 @@ export function getMapSetting(key) {
     return localStorage.getItem(key) === "1";
 }
 
+// Storage keys are what the game persists; they are not what a maintainer wants
+// to read in a bug report. Kept beside MAP_SETTING_KEYS so a new setting that
+// forgets to add a name still logs its key rather than nothing.
+const SETTING_LABELS = {
+    [MAP_SETTING_KEYS.hideCountryLabels]: "Hide country labels",
+    [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
+    [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
+    [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
+    [MAP_SETTING_KEYS.betaUnits]: "Beta unit system",
+};
+
 export function setMapSetting(key, value) {
     localStorage.setItem(key, value ? "1" : "0");
+    // Every toggle in Settings that matters to a bug report goes through here —
+    // the beta unit system above all, which changes who moves the units and so
+    // changes what half the reports in the tracker even mean. One line here
+    // covers all of them, and it lands in the log at the moment it was flipped
+    // rather than as a state dump at the end.
+    logDebugEvent("setting", `${SETTING_LABELS[key] || key} turned ${value ? "on" : "off"}.`);
     window.dispatchEvent(new Event("mapSettings:updated"));
 }
 
@@ -57,7 +75,14 @@ export function setMapSetting(key, value) {
 // real checkbox state), while this reflects what the running session is doing.
 let betaUnitsPinned = null;
 export function isBetaUnits() {
-    if (betaUnitsPinned === null) betaUnitsPinned = getMapSetting(MAP_SETTING_KEYS.betaUnits);
+    if (betaUnitsPinned === null) {
+        betaUnitsPinned = getMapSetting(MAP_SETTING_KEYS.betaUnits);
+        // Pinned once, recorded once. Which unit system the SESSION is running
+        // is not the same as which one the toggle currently shows, and a bug
+        // report about units is unreadable without knowing the first — so the
+        // report header carries the pinned value, taken here where it is set.
+        setDebugLogContext({ unitSystem: betaUnitsPinned ? "beta (AI-driven)" : "classic" });
+    }
     return betaUnitsPinned;
 }
 
