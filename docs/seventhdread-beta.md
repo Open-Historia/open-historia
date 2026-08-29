@@ -1,24 +1,26 @@
-# The fork's beta desktop build
+# The SeventhDread beta desktop build
 
-This fork ships its own desktop build so people can test it **without giving up the
-official app**. Both are installed at once, both open the same saves, and a tester can
-switch between them mid-campaign.
+The `Seventh-Dread-Beta` branch ships its own desktop build so people can test it **without
+giving up the official app**. Both are installed at once, both open the same saves, and a
+tester can switch between them mid-campaign.
 
 Nothing here changes the stable build. A checkout with no beta stamp packages exactly
-what upstream packages.
+what `main` packages.
 
 ## What a tester gets
 
-| | Official app | This fork's beta |
+| | Official app | The SeventhDread beta |
 | --- | --- | --- |
-| Installer | `Open-Historia-Setup.exe` | `Open-Historia-Beta-Setup.exe` |
-| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia Beta` |
-| Start Menu | Open Historia | Open Historia (Beta) |
+| Installer | `Open-Historia-Setup.exe` | `Open-Historia-SeventhDread-Beta-Setup.exe` |
+| Installs to | `…\Programs\Open Historia` | `…\Programs\Open Historia SeventhDread Beta` |
+| Start Menu & uninstall entry | Open Historia | Open Historia (SeventhDread Beta) |
 | Icon & in-app logo | the compass | the compass with a purple BETA banner |
-| Window title | Open Historia | Open Historia (Beta) — fork build |
-| In-game marker | none | a `BETA · unofficial fork build` pill |
-| Updates from | Open-Historia/open-historia | SeventhDread/open-historia |
+| Window title | Open Historia | Open Historia (SeventhDread Beta) — beta build |
+| In-game marker | none | a `SEVENTHDREAD BETA · unofficial beta build` pill |
+| Released as | `desktop-stable`, marked Latest | `desktop-seventhdread-beta`, marked Pre-release |
 | Saves, scenarios, settings, world map | **shared — one library, both apps** | |
+
+Both releases live in the same repository; the **tag** is what keeps them apart.
 
 Installing the beta does not touch the official install, and uninstalling either leaves
 the other (and the saves) alone.
@@ -68,8 +70,8 @@ basemap libraries, and the ~200MB downloaded world map under `public/assets` —
 is read and written by both builds. The beta therefore needs no second map download and
 no re-entering of API keys.
 
-The beta keeps its **own** Chromium profile (`%APPDATA%\Open Historia (Beta)`): caches,
-cookies and the per-app single-instance lock. That is what lets the two apps exist as
+The beta keeps its **own** Chromium profile (`%APPDATA%\Open Historia (SeventhDread Beta)`):
+caches, cookies and the per-app single-instance lock. That is what lets the two apps exist as
 separate applications; none of it is game data.
 
 ### Where the BETA branding comes from
@@ -93,25 +95,36 @@ Structurally: fully. Saves are plain JSON per game, there is no schema version g
 them, and upstream's world-state normaliser passes unknown fields through untouched, so a
 save the beta wrote opens in the official app and vice versa.
 
-The honest caveat is **fork-only content**, not format. If a beta feature stores state the
+The honest caveat is **beta-only content**, not format. If a beta feature stores state the
 official build has no concept of, playing that save in the official build can drop it —
 the field survives a read, but not necessarily a full turn of rewrites. Anyone testing a
 campaign they care about should copy `server/data/games/<id>` somewhere safe first.
 
 ## Publishing a beta
 
-The `Desktop beta (fork)` workflow (`.github/workflows/desktop-beta.yml`) builds Windows,
-macOS and Linux and publishes them to the **`desktop-beta`** pre-release:
+The `Desktop beta (SeventhDread)` workflow
+(`.github/workflows/desktop-seventhdread-beta.yml`) builds Windows, macOS and Linux and
+publishes them to the **`desktop-seventhdread-beta`** pre-release. From the repository's
+Actions tab:
 
-```sh
-gh workflow run "Desktop beta (fork)"          # publishes to the desktop-beta tag
-gh workflow run "Desktop beta (fork)" -f tag=desktop-beta-2026-08   # or a tag of your own
-```
+> **Actions** → **Desktop beta (SeventhDread)** → **Run workflow** →
+> *Use workflow from:* `Seventh-Dread-Beta` → **Run workflow**
 
-Pushing a `desktop-beta-v*` tag does the same thing. Each run stamps its run id into the
-build and into the release's `latest.json`; a running beta compares the two and offers the
-newer build to testers. The tag must stay `desktop-beta` for that to work — it is the URL
-baked into the app (`BETA_UPDATE_MANIFEST` in `electron/main.cjs`).
+Picking the right branch matters. GitHub only lists a `workflow_dispatch` workflow if a copy
+of the file exists on the **default** branch, so `main` carries one too — but the copy on the
+branch you select is what actually runs. A guard step fails the run in seconds if it is
+dispatched from anything but `Seventh-Dread-Beta`, so a misclick cannot package official code
+as the beta. (`android-apk-beta.yml` is on `main` for the same reason.)
+
+Each run stamps its run id into the build and into the release's `latest.json`; a running beta
+compares the two and offers the newer build to testers. The tag must stay
+`desktop-seventhdread-beta` for that to work — it is the URL baked into the app
+(`BETA_UPDATE_MANIFEST` in `electron/main.cjs`). The workflow's `tag` input exists only for
+one-off builds that deliberately go somewhere else; leave it alone for a normal release.
+
+The release is created with `--prerelease` and `--target` the built commit, so it is labelled
+Pre-release, never takes the `Latest` badge from `desktop-stable`, and its tag points at the
+beta branch rather than at `main`.
 
 Locally: `npm run dist:win:beta` (or `:mac:beta`, `:linux:beta`). Close any running copy
 first — electron-builder writes into `release/` and will happily clobber a running app.
@@ -122,7 +135,7 @@ first — electron-builder writes into `release/` and will happily clobber a run
   is the only thing that makes a build "the beta". `stamp-channel.mjs stable` deletes it.
 - **`electron/main.cjs`** reads that stamp and, for the beta: renames the app (its own
   Chromium profile), points the save library at the stable app's folder, claims the
-  cross-build lock, sets the window title, and hands the fork's update + feedback URLs to
+  cross-build lock, sets the window title, and hands the beta's update + feedback URLs to
   the server.
 - **`electron-builder.beta.yml`** is the installer identity: appId, product name, artifact
   names, and the installer icon. Passing it with `--config` replaces the `build` block in
@@ -132,16 +145,19 @@ first — electron-builder writes into `release/` and will happily clobber a run
   fifth. `scripts/make-beta-icons.ps1` regenerates all three if upstream's artwork changes.
   The word is only legible from ~32px up; below that the banner's colour is what tells the
   two apps apart on a taskbar.
-- **`.github/workflows/desktop-beta.yml`** builds and publishes.
+- **`.github/workflows/desktop-seventhdread-beta.yml`** builds and publishes. A copy also
+  sits on `main` so the Actions tab lists it; that copy is inert — dispatch-only, and the
+  guard step means it refuses to build anything but this branch.
 
 `extraMetadata` would have been the obvious way to pass the channel through
 electron-builder. It is avoided on purpose: it works by rewriting the project's own
 `package.json` mid-build, and an interrupted build leaves that file stripped.
 
-## Before opening a PR upstream
+## Before merging this branch into `main`
 
-Three things are fork-only and must come out. They are marked in-place with
-`FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE`:
+This branch lives in the official repository, so the beta scaffolding is one merge away from
+every official player. Four things are beta-only and must come out. They are marked in-place
+with `FORK-ONLY — REMOVE BEFORE ANY UPSTREAM MERGE`:
 
 1. `src/runtime/ForkBuildBadge.jsx` (delete)
 2. its import + `<ForkBuildBadge />` in `src/App.jsx`
@@ -150,6 +166,13 @@ Three things are fork-only and must come out. They are marked in-place with
    `OH_BETA_ASSETS_DIR` line in `electron/main.cjs`, and the `!electron/beta-assets`
    entry in `package.json`'s `build.files`
 
-The rest is upstream-safe and arguably useful to upstream as-is: the shared-library
-resolution is a no-op for the stable build, `OH_DESKTOP_UPDATE_URL` only overrides a
-default when set, and the lock protects any two builds that share a library.
+Also out: `electron-builder.beta.yml`, the `dist:*:beta` scripts, this document, and the
+beta section of the README — unless the release is meant to continue after the merge, in
+which case they stay and only the four items above come out.
+
+Nothing on this list matters until that day. A stable build ships no `electron/channel.json`,
+so `/api/fork-build` answers `{}`, the badge never mounts and the beta artwork never loads.
+
+The rest is `main`-safe and arguably useful there as-is: the shared-library resolution is a
+no-op for the stable build, `OH_DESKTOP_UPDATE_URL` only overrides a default when set, and the
+lock protects any two builds that share a library.
