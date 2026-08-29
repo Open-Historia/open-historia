@@ -50,6 +50,35 @@ files:
 asarUnpack:
   - scripts/**
 
+# The beta's own update feed, and the reason it needs one HERE rather than
+# inheriting the stable app's. electron-builder turns this block into the
+# app-update.yml it packs inside the build, and app-update.yml is the only thing
+# electron-updater will read — so without a `publish` block the beta ships with no
+# feed at all and cannot update itself. It cannot inherit the stable one either:
+# package.json's `build` block holds that, and passing `--config` replaces that
+# block wholesale instead of extending it (see the header of this file). Nor can
+# electron-builder guess, because package.json carries no `repository` field.
+#
+# `generic` rather than `github`: the github provider resolves the newest release
+# by the GitHub API, which is the STABLE release in this repo — it would walk beta
+# testers straight onto the official app. A generic provider is a dumb URL prefix,
+# so it only ever finds what this workflow put at the beta's own tag.
+#
+# The tag is FIXED and deliberately duplicates BETA_UPDATE_MANIFEST in
+# electron/main.cjs, which hardcodes the same one. The two must agree: that URL is
+# what shows the banner, this one is what installs the update behind it. The
+# workflow's `tag` input deliberately does NOT reach either, so a one-off build
+# published to a private tag still sends its tester back to the main beta line
+# rather than stranding them on a feed nobody will update again.
+#
+# `channel: latest` matches the stable app's, which is safe because the two feeds
+# sit at different tags: this writes latest.yml, latest-linux.yml and
+# latest-mac.yml under the beta tag only, and never touches desktop-stable.
+publish:
+  - provider: generic
+    url: https://github.com/Open-Historia/open-historia/releases/download/desktop-seventhdread-beta
+    channel: latest
+
 directories:
   output: release
   buildResources: build
