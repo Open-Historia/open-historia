@@ -1,4 +1,6 @@
 /*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
+
 export const DEFAULT_PROVIDER = "gemini";
 
 export const PROVIDER_OPTIONS = [
@@ -152,6 +154,38 @@ export function setProviderField(provider, field, value) {
     const setting = getSettingConfig(provider, field);
     if (!setting?.storageKey) return;
     localStorage.setItem(setting.storageKey, value ?? "");
+    syncAiDebugContext();
+}
+
+// Which provider and model the game is pointed at, into the diagnostics log's
+// header. Read from here rather than pushed in by the settings panel, because
+// the panel is not the only writer (a model picked from the discovery list, a
+// legacy key migrated on read) and a header that disagrees with the running
+// config is worse than no header at all.
+//
+// Names only, never the key or the endpoint's credentials — see redactSecrets
+// in runtime/debugLog.js. The MODEL is the most useful line in an AI bug report
+// and is not a secret; the key that reaches it never leaves this module.
+export function syncAiDebugContext() {
+    if (typeof localStorage === "undefined") return;
+    const provider = getStoredProvider();
+    setDebugLogContext({
+        provider: getProviderMeta(provider)?.label || provider,
+        model: getProviderField(provider, "model") || "(provider default)",
+    });
+}
+
+// Called by the settings panel when the player picks a different provider — the
+// switch itself is worth a line, because "it broke when I moved off Gemini" is a
+// report the log should be able to answer on its own.
+export function logProviderSwitch(provider) {
+    const normalized = normalizeProvider(provider);
+    logDebugEvent("setting", `AI provider set to ${getProviderMeta(normalized)?.label || normalized}.`, {
+        model: getProviderField(normalized, "model") || "(provider default)",
+        hasKey: Boolean(getProviderField(normalized, "apiKey")),
+        hasEndpoint: Boolean(getProviderField(normalized, "endpoint")),
+    });
+    syncAiDebugContext();
 }
 
 export function getProviderSettings(provider) {
@@ -177,6 +211,7 @@ export function getReasoningEnabled() {
 
 export function setReasoningEnabled(enabled) {
     localStorage.setItem(REASONING_STORAGE_KEY, enabled ? "1" : "0");
+    logDebugEvent("setting", `Model reasoning turned ${enabled ? "on" : "off"}.`);
 }
 
 export function loadProviderSettingsFormState() {

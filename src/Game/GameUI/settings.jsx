@@ -21,6 +21,14 @@ import {
     isBetaUnits,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import {
+    buildDebugLogReport,
+    clearDebugLog,
+    debugLogFilename,
+    getDebugLogSize,
+    subscribeToDebugLog,
+} from "../../runtime/debugLog.js";
 
 const baseStyle = {
     position: "fixed",
@@ -883,6 +891,117 @@ const NetworkSharing = () => {
     );
 };
 
+// Settings → Diagnostics: the log a player pastes into a bug report.
+//
+// Two ways out, because the two report routes want different things. Copy is for
+// Discord, where a paste is one action and an attachment is four. Save is for a
+// GitHub issue and for the long logs — a full 400-entry buffer is tens of
+// kilobytes, past what a Discord message will take, and an attached file is also
+// the only form that survives being read a week later.
+//
+// The warning is not boilerplate. This log carries the names of the player's
+// countries, their queued orders and their in-game dates, and some of that is
+// campaign fiction they may not want in public. It never carries an API key
+// (runtime/debugLog.js redacts on the way in), and saying so explicitly is what
+// stops the more careful half of players from deciding not to send it at all.
+const DiagnosticsPanel = () => {
+    const [copyState, setCopyState] = useState("idle");
+    const [cleared, setCleared] = useState(false);
+    // The count is the whole reason this section is visible when nothing is
+    // wrong: "Entries: 0" after a crash means the log is not recording and the
+    // player should say so, rather than pasting an empty report.
+    const [count, setCount] = useState(() => getDebugLogSize());
+
+    useEffect(() => subscribeToDebugLog(() => setCount(getDebugLogSize())), []);
+
+    const handleCopy = async () => {
+        setCopyState("copying");
+        // Through the shared helper: navigator.clipboard needs a secure context
+        // and a browser reaching this game over plain http on the LAN (Settings →
+        // Network) does not have one. Same reason clipboard.js exists at all.
+        const ok = await copyToClipboard(buildDebugLogReport());
+        setCopyState(ok ? "copied" : "failed");
+        setTimeout(() => setCopyState("idle"), 2500);
+    };
+
+    const handleDownload = () => {
+        const blob = new Blob([buildDebugLogReport()], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = debugLogFilename();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Revoked on the next tick, not immediately: Firefox cancels a download
+        // whose blob URL is revoked in the same task as the click.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    const handleClear = () => {
+        clearDebugLog();
+        setCleared(true);
+        setTimeout(() => setCleared(false), 2500);
+    };
+
+    return (
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.35rem" }}>Diagnostics</div>
+        <div style={{ marginBottom: "0.55rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        The game keeps a running log of what you did — saves opened, orders queued, turns taken, and anything that went wrong. Send it with a bug report and it says what happened, in order.
+        </div>
+
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+        <button
+        type="button"
+        onClick={handleCopy}
+        disabled={copyState === "copying"}
+        style={{ ...diagnosticsButton, flex: 1 }}
+        >
+        {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy" : copyState === "copying" ? "Copying…" : "📋 Copy log"}
+        </button>
+        <button type="button" onClick={handleDownload} style={{ ...diagnosticsButton, flex: 1 }}>
+        💾 Save as file
+        </button>
+        </div>
+
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>
+        {cleared ? "Cleared." : `${count} ${count === 1 ? "entry" : "entries"} recorded`}
+        </span>
+        <button
+        type="button"
+        onClick={handleClear}
+        title="Empties the log. Do this just before reproducing a bug and the log will contain only the steps that caused it."
+        style={{ ...diagnosticsButton, padding: "0.3rem 0.55rem", fontSize: "0.7rem" }}
+        >
+        Clear
+        </button>
+        </div>
+
+        <div style={{ marginTop: "0.5rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", lineHeight: 1.4 }}>
+        Your API key is never included. Country names, your queued orders and error messages are — read it before posting it somewhere public.
+        </div>
+        </div>
+    );
+};
+
+const diagnosticsButton = {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: "8px",
+    color: "white",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "sans-serif",
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    gap: "0.35rem",
+    justifyContent: "center",
+    padding: "0.45rem 0.6rem",
+};
+
 const SettingsMenu = ({
     topOffset = "0.5rem",
     isFullscreenEnabled,
@@ -1068,6 +1187,8 @@ const SettingsMenu = ({
         </div>
 
         <NetworkSharing />
+
+        <DiagnosticsPanel />
 
         {typeof onOpenCheats === "function" && (
             <button

@@ -11,8 +11,10 @@ import { ForcesPanel } from "./forces";
 import {
   getStoredProvider,
   loadProviderSettingsFormState,
+  logProviderSwitch,
   normalizeProvider,
   persistProviderSetting,
+  syncAiDebugContext,
 } from "../AI/providerConfig.js";
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
@@ -184,7 +186,14 @@ const Main = ({
   }, [isFullscreenEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("api_provider", normalizeProvider(apiProvider));
+    const normalized = normalizeProvider(apiProvider);
+    const previous = localStorage.getItem("api_provider");
+    localStorage.setItem("api_provider", normalized);
+    // First run of this effect is the mount, not a choice, so only a real change
+    // is worth a log line; the context sync runs either way so the report header
+    // is populated from the moment the game loads.
+    if (previous !== null && previous !== normalized) logProviderSwitch(normalized);
+    else syncAiDebugContext();
   }, [apiProvider]);
 
   useEffect(() => {

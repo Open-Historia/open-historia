@@ -19,6 +19,7 @@ Related pages: [World state](world-state.md) · [Game state](game-state.md) · [
 | Country labels | `src/runtime/countryLabels.js` | map country-label GeoJSON (curved + point) | `src/Game/Map/Nations.jsx` |
 | Community flags | `src/runtime/communityFlags.js` | hub-hosted shared flags & flag packs | `src/Editor/FlagPicker.jsx` |
 | Map settings | `src/runtime/mapSettings.js` | localStorage map/AI toggles | map + settings components |
+| Diagnostics log | `src/runtime/debugLog.js` | rolling event log for bug reports, secret redaction | `src/main.jsx` (boot), Settings → Diagnostics, library/time/actions/settings hooks |
 
 ---
 
@@ -298,7 +299,75 @@ Tiny localStorage-backed boolean toggles read reactively instead of threaded as 
 | Export | Purpose |
 |---|---|
 | `getMapSetting(key)` | `localStorage.getItem(key) === "1"` |
-| `setMapSetting(key, value)` | Writes `"1"`/`"0"` and dispatches a `mapSettings:updated` window event |
+| `setMapSetting(key, value)` | Writes `"1"`/`"0"`, logs the flip to the diagnostics log, and dispatches a `mapSettings:updated` window event |
 | `useMapSetting(key)` | `useState` hook that re-reads on the `mapSettings:updated` event |
 
 Values are stored as `"1"`/`"0"` strings (absent = off). The custom `mapSettings:updated` event is the cross-component sync mechanism — any `setMapSetting` call updates every `useMapSetting(key)` subscriber in the same document.
+
+---
+
+## Diagnostics log — `src/runtime/debugLog.js`
+
+The log a player pastes into a bug report: **Settings → Diagnostics → Copy log / Save as file**. It answers the question the per-incident buttons cannot — *what sequence of things did they do?* — because the packaged desktop app binds no developer tools, so the console every failure was already being written to is unreachable to the people filing the reports.
+
+Sits beside the two older, narrower affordances rather than replacing them: the advisor's "Copy for a bug report" (`GameUI/advisor.jsx`) and the timeline's "Copy debugging message" (`GameUI/time.jsx`) still describe **one** failed AI turn in full, including the raw model response, which this log deliberately does not carry.
+
+### What is recorded
+
+Two sources:
+
+1. **Explicit `logDebugEvent()` calls** at the milestones a report needs. Every one is listed under "Hook sites" below.
+2. **Everything the game already logged.** `installDebugLogCapture()` wraps `console.warn`/`console.error` and listens for `error` / `unhandledrejection` on `window`. The originals are still called, so a developer with DevTools open sees exactly what they saw before.
+
+### What is never recorded
+
+**API keys.** `redactSecrets()` runs over the category, message and detail of every entry **on the way in**, so a key is never even held in the buffer, and again over anything pushed into the context. Two passes:
+
+* **Literal.** Every value in `localStorage` under a key ending `_api_key` / `_token` / `_secret` (i.e. everything `Game/AI/providerConfig.js` stores), matched by suffix so a provider added later is covered without anyone remembering to come back. Values under 8 characters are skipped — they are not keys, and treating them as such would redact half the log. This is the only pass that can catch a self-hosted gateway key, which may be any string at all.
+* **Pattern.** `sk-…`, `sk-ant-…`, `AIza…`, `hf_`/`gsk_`/`xai-`, `Authorization: Bearer|Basic …`, `api_key`/`token`/`password` in a dumped object or query string, URL userinfo (`http://user:pass@host` → the host survives, the credentials do not), and JWTs.
+
+Provider and model **names** are in the header on purpose — the model is the most useful line in an AI bug report and is not a secret. Campaign text is kept to titles, ids and counts: a log a player will paste in public beats a complete one they will not.
+
+### Buffer and persistence
+
+| Constant | Value | Why |
+|---|---|---|
+| `MAX_ENTRIES` | 400 | Oldest dropped; the report says so when the cap has been hit |
+| `MAX_DETAIL_CHARS` | 600 | A truncated detail keeps `… (+N chars)` |
+| `MAX_STORED_CHARS` | 192 KB | localStorage is a ~5 MB budget shared with the translator cache; on overflow the oldest half is dropped and the write retried |
+| `COALESCE_WINDOW` / `COALESCE_MS` | 25 entries / 60 s | Repeat collapsing (below) |
+| `PERSIST_DEBOUNCE_MS` | 800 | A busy turn logs a dozen entries a second; a synchronous write per entry is a jank source |
+
+**Repeat collapsing.** An entry identical (category + message + detail) to one in the last `COALESCE_WINDOW` entries and within `COALESCE_MS` bumps that entry's `repeat` counter instead of appending; the report renders `(×48, last 10:50:58)`. Without this a dead basemap host or content node evicts the whole campaign from the buffer — measured at ~100 entries in six seconds with the network down. It scans a window rather than only the previous entry because storms interleave (maplibre's `AJAXError` alternating with our own fetch rejection), which consecutive-only matching would collapse neither of.
+
+**Persistence.** Mirrored to `localStorage` under `oh_debug_log_v1`, restored on the next boot behind a `— page reloaded —` separator, and flushed on `pagehide` and from the error boundary before its Reload button. The crash that killed the page is the whole point, and an in-memory buffer dies with it. Every storage access is wrapped: quota exceeded, private mode and disabled storage all degrade to an in-memory-only log rather than breaking the game.
+
+### API
+
+| Export | Purpose |
+|---|---|
+| `installDebugLogCapture()` | Once, at boot (`src/main.jsx`), before anything else runs. Restores the previous session, wraps the console, binds the global error hooks |
+| `logDebugEvent(category, message, detail?)` | The only way in. `detail` is flattened (Errors keep name + message + throwing frame; objects are JSON; circular does not throw) and truncated |
+| `setDebugLogContext(patch)` | Merges campaign/build context for the report header. Redacted like everything else |
+| `buildDebugLogReport()` | The plain-text block the player copies — header, then entries oldest-first. Text, not JSON: it is going into a Discord message or a GitHub issue |
+| `debugLogFilename()` | `open-historia-log-<ISO stamp>.txt` |
+| `clearDebugLog({ silent })` | Empties it. The player path leaves a "cleared" note so a gap never reads as lost entries; `silent` is for the tests |
+| `flushDebugLog()` | Persist now, skipping the debounce |
+| `getDebugLogEntries()` / `getDebugLogSize()` / `getDebugLogContext()` | Reads |
+| `subscribeToDebugLog(listener)` | Returns an unsubscribe. Drives the entry count in the settings panel |
+| `redactSecrets(text)` | Exported for the tests; called internally on every entry |
+
+### Hook sites
+
+| Where | Category | Records |
+|---|---|---|
+| `src/main.jsx` | `app` | Boot, build channel, browser language |
+| `src/runtime/library.js` | `game`, `api` | Active-game switches (and the header's campaign block), game creation, deletion, and **every** failed `/api/library`, `/api/games`, `/api/scenarios` call — the path and the server's message, never the request body |
+| `src/Game/GameUI/time.jsx` | `turn` | Jump/auto-jump start, finish (with elapsed seconds, event count, source), **fallback with its reason**, cancel, undo; keeps the in-game date and round in the context |
+| `src/Game/GameUI/actions.jsx` | `action` | Orders queued (manual and from suggestions) and removed |
+| `src/runtime/mapSettings.js` | `setting` | Every map/AI/experimental toggle, by its UI label |
+| `src/Game/AI/providerConfig.js` | `setting` | Provider switches, reasoning toggle; syncs provider + model into the header |
+| `src/runtime/ErrorBoundary.jsx` | `crash` | Render crashes with the first frames of the component stack, then flushes |
+| `window` / `console` | `crash`, `error`, `warn` | Uncaught errors, unhandled rejections, and everything the game already logged |
+
+Tests: `src/runtime/debugLog.test.js` (26 cases — redaction, buffer, coalescing, report).
