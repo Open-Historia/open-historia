@@ -135,6 +135,26 @@
   .col .plinth{position:absolute;bottom:0;left:-8px;right:-8px;height:15px;border-radius:2px;border:1px solid var(--line2);
     background:linear-gradient(90deg,#b3a37e,#f7f0d8 50%,#b3a37e);box-shadow:0 -2px 6px rgba(52,36,12,.22)}
 
+  /* ---------- community bar ---------- */
+  /* Above the sticky header, so it scrolls away once someone is reading and the
+     nav keeps the top of the screen. Dark bronze against the parchment: the page
+     is otherwise all light, so a strip that matched it would not be seen. */
+  .community{position:relative;z-index:60;color:#f2e4c4;font-size:.95rem;
+    background:linear-gradient(100deg,#4a3316 0%,#6d4a1c 52%,#4a3316 100%);
+    border-bottom:1px solid rgba(255,225,160,.22)}
+  .community-in{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;
+    gap:8px 16px;min-height:46px;padding:8px 24px;text-align:center}
+  .community-in b{color:#fff3d6;font-weight:600}
+  .community-links{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:9px}
+  .community-btn{display:inline-flex;align-items:center;gap:7px;padding:6px 15px;border-radius:999px;
+    font-family:var(--display);font-size:.76rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
+    white-space:nowrap;color:#f7eccf;border:1px solid rgba(255,225,160,.34);background:rgba(255,235,190,.10);
+    transition:background .15s,border-color .15s,transform .12s}
+  .community-btn:hover{background:rgba(255,235,190,.2);border-color:rgba(255,225,160,.62);transform:translateY(-1px)}
+  /* On a narrow screen the two buttons ARE the message — the sentence is what goes. */
+  @media(max-width:560px){.community-in{gap:8px;padding:7px 12px;min-height:42px}.community-say{display:none}
+    .community-btn{font-size:.7rem;letter-spacing:.05em;padding:6px 12px}}
+
   /* ---------- header ---------- */
   header{position:sticky;top:0;z-index:50;backdrop-filter:blur(8px);
     background:color-mix(in srgb,var(--parch) 82%,transparent);border-bottom:1px solid var(--line)}
@@ -253,6 +273,16 @@
   <div class="col r"><div class="cap"><span class="abacus"></span><span class="echinus"></span></div><div class="shaft"><span class="necking"></span></div><div class="base"><span class="torus"></span><span class="plinth"></span></div></div>
 </div>
 
+<div class="community">
+  <div class="community-in">
+    <span class="community-say">Ask questions, share scenarios, and hear about updates &mdash; <b>come say hello.</b></span>
+    <span class="community-links">
+      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Join the Discord</a>
+      <a class="community-btn" href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">r/OpenHistoria</a>
+    </span>
+  </div>
+</div>
+
 <header>
   <div class="wrap nav">
     <a class="brand" href="#top"><span class="globe">🏛️</span> Open Historia</a>
@@ -275,7 +305,7 @@
     <h1>Rewrite history,<br><span class="grad">one decision at a time.</span></h1>
     <p class="sub">Open Historia is an AI-driven turn-based strategy game. Lead any nation on a living world map, act in plain language, and watch an AI simulate the consequences — wars, diplomacy, and borders that actually shift.</p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="/play/"><span>▶</span> Play in your browser</a>
+      <a class="btn btn-primary" href="/play/"><span>▶</span> Demo in your browser</a>
       <a id="primaryDownload" class="btn btn-ghost" href="#download">
         <span>⬇</span> <span id="primaryLabel">Download for Desktop</span>
       </a>
