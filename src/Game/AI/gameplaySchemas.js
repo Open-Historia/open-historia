@@ -113,6 +113,34 @@ const regionTransferSchema = {
   additionalProperties: false,
 };
 
+const regionClaimSchema = {
+  type: "object",
+  description:
+    "One polity asserting a claim over a region it does not hold and has not been "
+    + "given. The region renders as DISPUTED on the map - striped in every "
+    + "claimant's colour - without its ownership changing, and stays that way until "
+    + "the claim is settled by a regionTransfers entry (someone won or conceded it) "
+    + "or dropped.",
+  properties: {
+    regionId: textSchema(
+      "Exact map region identifier when known; otherwise the region's plain name "
+      + "(the engine resolves names to ids).",
+    ),
+    regionName: textSchema("Human-readable region name, when known."),
+    claimantCode: textSchema("Claiming polity's FULL country name (\"Spain\"), never a country code."),
+    drop: {
+      type: "boolean",
+      description:
+        "True to WITHDRAW this polity's claim - it was renounced, traded away, or "
+        + "the claimant was defeated and has given it up. Clears their stripe. Leave "
+        + "unset to assert a claim.",
+    },
+    note: textSchema("Brief reason for the claim or its withdrawal."),
+  },
+  required: ["regionId", "claimantCode"],
+  additionalProperties: false,
+};
+
 // AI-authored updates to a country's PERSISTENT stat sheet (world.countryStats[code]).
 // Only fields that CHANGED this period are sent; everything else persists. Absolute
 // values, not deltas. Kept self-contained (no percentageSchema dep, which is defined
@@ -492,6 +520,16 @@ const projectSchema = {
         + "or cancelled.",
       enum: ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"],
     },
+    priority: {
+      type: "string",
+      description:
+        "How much attention the PLAYER wants this to get. They set it themselves "
+        + "on the board - leave it out entirely unless they have told you in this "
+        + "conversation to raise or drop something's priority. It is never your own "
+        + "judgement of how important a programme is, and overwriting it discards an "
+        + "instruction they gave.",
+      enum: ["high", "normal", "low"],
+    },
     progress: {
       type: "integer",
       description: "How far along it is, 0-100. Move this whenever the narrative advances or sets it back.",
@@ -537,6 +575,40 @@ const projectSchema = {
       additionalProperties: false,
     },
     note: textSchema("Anything else worth keeping: estimated cost, blockers, who is running it."),
+    onComplete: {
+      type: "object",
+      description:
+        "What finishing this project DOES to the world, applied automatically the "
+        + "moment it is completed and never applied twice - and never at all if it "
+        + "is cancelled or fails. Use it whenever the project's whole point is a "
+        + "concrete change: a campaign to annex a province (regionTransfers), a "
+        + "unification or regime change that renames or recolours a polity "
+        + "(polityChanges), a claim the effort would drop if it collapsed "
+        + "(regionClaims with drop true). Without this a finished project is only a "
+        + "progress bar that reached 100 while the map stayed exactly as it was. "
+        + "MOST PROJECTS HAVE NO onComplete: a research programme, a construction "
+        + "project or a campaign of influence finishes narratively and takes none. "
+        + "Attach one only when completion causes a specific, nameable change of "
+        + "territory or of a polity's identity.",
+      properties: {
+        polityChanges: {
+          type: "array",
+          description: "Polity identity changes enacted on completion.",
+          items: polityChangeSchema,
+        },
+        regionTransfers: {
+          type: "array",
+          description: "Map ownership changes enacted on completion.",
+          items: regionTransferSchema,
+        },
+        regionClaims: {
+          type: "array",
+          description: "Claims asserted or dropped on completion.",
+          items: regionClaimSchema,
+        },
+      },
+      additionalProperties: false,
+    },
   },
   required: ["name", "summary"],
   additionalProperties: false,
@@ -582,6 +654,7 @@ const projectOpSchema = {
         ownerCode: projectSchema.properties.ownerCode,
         summary: textSchema("Replacement summary, only when it changes."),
         status: projectSchema.properties.status,
+        priority: projectSchema.properties.priority,
         progress: projectSchema.properties.progress,
         tags: projectSchema.properties.tags,
         secrecy: projectSchema.properties.secrecy,
@@ -593,6 +666,7 @@ const projectOpSchema = {
         linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
         focus: projectSchema.properties.focus,
         note: projectSchema.properties.note,
+        onComplete: projectSchema.properties.onComplete,
       },
       required: ["op", "name"],
       additionalProperties: false,
@@ -671,6 +745,16 @@ const impactsSchema = {
         + "constructs, or destroys a named place - a city, military base, bunker, "
         + "missile silo, embassy, port - so the map shows it.",
       items: markerOpSchema,
+    },
+    regionClaims: {
+      type: "array",
+      description:
+        "Territory CLAIMED but not held. Use whenever a polity asserts a right to "
+        + "land it does not control and has not been given it - an irredentist "
+        + "declaration, a proclaimed union, a contested border, a government-in-"
+        + "exile's title. Marks the region disputed on the map WITHOUT moving the "
+        + "border; use regionTransfers for land that actually changed hands.",
+      items: regionClaimSchema,
     },
     projectOps: {
       type: "array",

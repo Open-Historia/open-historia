@@ -213,6 +213,7 @@ export const advanceRecurringDate = (date, repeat, notBefore = "") => {
 
 export const PROJECT_SORTS = [
   { key: "updated", label: "Recently updated" },
+  { key: "priority", label: "Priority" },
   { key: "milestone", label: "Next milestone" },
   { key: "progress", label: "Progress" },
   { key: "name", label: "Name" },
@@ -237,6 +238,22 @@ const statusRank = (project) => {
   return rank === undefined ? 3 : rank;
 };
 
+// The player's own dial (world.projects[].priority). Same shape and same
+// defaulting rule as STATUS_RANK above: an entry from a save written before the
+// field existed reads as normal, so it sorts in the middle rather than being
+// swept to one end of a board the player has never touched.
+//
+// Deliberately NOT folded into the other comparators as a tiebreak. Doing that
+// would reshuffle every existing player's board under the sort they already had
+// selected, for a reason they did not ask for and cannot see; priority is its own
+// sort, chosen deliberately.
+const PRIORITY_RANK = { high: 0, normal: 1, low: 2 };
+
+const priorityRank = (project) => {
+  const rank = PRIORITY_RANK[asText(project?.priority)];
+  return rank === undefined ? 1 : rank;
+};
+
 // Undated things sort LAST under every date-driven comparator, rather than
 // first, which is what a bare string compare against "" would do — a project
 // with no milestone is not the most urgent one on the board.
@@ -259,6 +276,9 @@ export const sortProjects = (projects, key = "updated") => {
     progress: (a, b) => (Number(b.progress) || 0) - (Number(a.progress) || 0) || byName(a, b),
     name: byName,
     status: (a, b) => statusRank(a) - statusRank(b) || byName(a, b),
+    // Status second, so within one priority band the work in trouble surfaces
+    // first — that is the order the player actually wants to read down.
+    priority: (a, b) => priorityRank(a) - priorityRank(b) || statusRank(a) - statusRank(b) || byName(a, b),
   };
 
   const compare = comparators[key] || comparators.updated;

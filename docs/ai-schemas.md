@@ -86,9 +86,14 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 | `createdChats` | `createdChatSchema[]` | Diplomatic chats the event opens toward the player | no |
 | `polityChanges` | `polityChangeSchema[]` | Polity metadata changes (name/color/reputation/tags…) | no |
 | `regionTransfers` | `regionTransferSchema[]` | **Map ownership changes.** Required by prompt whenever narration says territory changed hands — one entry per region | no |
+| `regionClaims` | `regionClaimSchema[]` | **Territory claimed but not held.** Marks a region disputed (striped) *without* moving the border — an irredentist declaration, a proclaimed union, a contested frontier. `drop: true` withdraws a claim | no |
 | `unitOps` | `unitOpSchema[]` | Military unit mutations | no |
 | `markerOps` | `markerOpSchema[]` | Structures built/destroyed on the map | no |
 | `projectOps` | `projectOpSchema[]` | Changes to the Projects & Operations board | no |
+
+A project may carry **`onComplete`** (`{polityChanges[], regionTransfers[], regionClaims[]}`) — what finishing it does to the world. The engine releases those effects on the transition into `complete`, exactly once, and never on a `cancel` or a `fail`. **Only an event releases them.** The advisor's ```` ```projects ```` fence and the Projects panel share a separate door (`applyProjectOpsToWorld`) that *refuses* a completing op on a project carrying `onComplete` — it leaves the project open and reports it as deferred, so a border or a polity's identity can never be changed from a chat reply with no jump behind it. The advisor's channels have never been able to emit `polityChanges`, and `onComplete` must not become a side door around that. That is what lets a contested annexation move the border when the campaign actually succeeds, instead of a progress bar reaching 100% while the map stays as it was. `projectSchema` is `additionalProperties: false`, so an undeclared field cannot be emitted at all by a `json_schema` provider — the same trap `reputation` fell into.
+
+A project also carries **`priority`** (`high|normal|low`). The **player** sets it from the board; the model is told to leave it alone unless asked. It reaches the model through `buildProjectsSummaryText`, which prints `[HIGH PRIORITY]` / `[low priority]` and nothing for normal.
 
 ### 4.2 `regionTransferSchema` (`:90`)
 

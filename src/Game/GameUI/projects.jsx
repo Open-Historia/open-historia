@@ -3,11 +3,20 @@
 // — research and industrial programmes, construction projects, military and
 // covert operations — plus whatever their services have learned of other powers'.
 //
-// The player cannot create or edit an entry here, deliberately. Two things write
-// to the board: events, through impacts.projectOps on any jump/GM/catalyst turn,
-// and the advisor, through the ```projects block in a chat reply. A board the
-// player could hand-edit would be a wishlist; this one is a readout of what the
-// simulation actually believes is happening.
+// The player cannot author an entry's CONTENT here, deliberately. Two things
+// write what a project is: events, through impacts.projectOps on any
+// jump/GM/catalyst turn, and the advisor, through the ```projects block in a chat
+// reply. A board the player could hand-edit would be a wishlist; this one is a
+// readout of what the simulation actually believes is happening.
+//
+// Two things the player DOES own, and only these two: a project's priority — how
+// much attention they want it to get, which the jump and advisor prompts then act
+// on — and whether to abandon it outright. Neither invents or rewrites anything;
+// they are the difference between a board of thirty programmes being steerable and
+// being a wall. Both go through applyProjectOpsToWorld, the same door the advisor
+// uses, rather than hand-editing the array: the ops pipeline is what stamps
+// updatedAt/updatedRound (so an abandoned project does not immediately reappear
+// wearing a "no recent progress" badge) and what closes out dangling milestones.
 //
 // Everything date-derived (overdue, due soon, a slipped milestone, a programme
 // nobody has mentioned in three rounds) is computed here from the game clock by
@@ -16,12 +25,19 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
-import { PROJECT_BOARD_LIMIT, readEventsState, readWorldState } from "../../runtime/gameState.js";
+import {
+  PROJECT_BOARD_LIMIT,
+  applyProjectOpsToWorld,
+  readEventsState,
+  readWorldState,
+  writeWorldState,
+} from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   PROJECT_SORTS,
   collectProjectTags,
   isProjectClosed,
+  isProjectOpen,
   deriveProjectFlags,
   describeTimeline,
   filterProjects,
@@ -193,11 +209,63 @@ const CloseIcon = () => (
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, onToggleExpand, onAskAdvisor, onShowOnMap }) => {
+const PRIORITY_OPTIONS = [
+  { glyph: "▲", key: "high", label: "High priority — the advisor briefs it first and the simulation is told to keep it moving" },
+  { glyph: "●", key: "normal", label: "Normal priority" },
+  { glyph: "▼", key: "low", label: "Low priority — allowed to drift while more urgent work moves" },
+];
+
+const PRIORITY_PILL = {
+  high: { bg: "rgba(245,158,11,0.16)", color: "#fcd34d", label: "High" },
+  low: { bg: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.5)", label: "Low" },
+};
+
+// A three-segment control rather than a <select>: there are exactly three values,
+// the current one has to be readable at a glance on a card the player is scanning,
+// and a dropdown would hide the setting behind a click on every card.
+const PrioritySwitch = ({ busy, onSelect, value }) => (
+  <div style={{ display: "flex", gap: "0.15rem" }} role="group" aria-label="Priority">
+    {PRIORITY_OPTIONS.map((option) => {
+      const active = value === option.key;
+      return (
+        <button
+          key={option.key}
+          type="button"
+          disabled={busy}
+          title={option.label}
+          aria-pressed={active}
+          onClick={() => onSelect(option.key)}
+          style={{
+            ...ghostButtonStyle,
+            background: active ? "rgba(139,92,246,0.28)" : "rgba(255,255,255,0.06)",
+            border: `1px solid ${active ? "rgba(139,92,246,0.6)" : "rgba(255,255,255,0.12)"}`,
+            color: active ? "#ddd6fe" : "rgba(255,255,255,0.5)",
+            cursor: busy ? "default" : "pointer",
+            opacity: busy ? 0.5 : 1,
+            padding: "0.3rem 0.45rem",
+          }}
+        >
+          {option.glyph}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, busy, onToggleExpand, onAskAdvisor, onShowOnMap, onSetPriority, onAbandon }) => {
   // Derived here rather than passed in: a flags object built by the parent would
   // be a new reference every render and the memo above would never hold.
   const flags = deriveProjectFlags(project, gameDate, round);
   const tone = statusTone(project.status);
+  const open = isProjectOpen(project);
+  const priorityPill = PRIORITY_PILL[project.priority];
+  // Two-step confirm rather than window.confirm, which breaks this panel's visual
+  // language and is blocked outright in some embedded contexts. Reset whenever the
+  // card stops being abandonable, so a closed project cannot keep a primed button.
+  const [confirmingAbandon, setConfirmingAbandon] = useState(false);
+  useEffect(() => {
+    if (!open) setConfirmingAbandon(false);
+  }, [open]);
   const timeline = describeTimeline(project, gameDate);
   const secrecy = SECRECY_GLYPH[project.secrecy];
   const owner = String(project.ownerCode || "").trim();
@@ -221,6 +289,11 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, onT
           {secrecy && <span title={project.secrecy}>{secrecy}</span>}
         </div>
         <div style={{ alignItems: "center", display: "flex", gap: "0.25rem" }}>
+          {priorityPill && (
+            <Pill color={priorityPill.color} bg={priorityPill.bg} title="Priority the player set for this effort">
+              {priorityPill.label}
+            </Pill>
+          )}
           {flags.ongoing && (
             <Pill color="rgba(255,255,255,0.55)" bg="rgba(255,255,255,0.08)" title="A standing effort with no planned end">
               Ongoing
@@ -357,6 +430,49 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, onT
         )}
       </div>
 
+      {/* The player's own two levers, kept on their own row and only while the
+          work is still running: neither means anything on a closed entry. */}
+      {open && (
+        <div style={{
+          alignItems: "center",
+          borderTop: "1px solid rgba(255,255,255,0.07)",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.35rem",
+          justifyContent: "space-between",
+          marginTop: "0.6rem",
+          paddingTop: "0.55rem",
+        }}
+        >
+          <PrioritySwitch
+            busy={busy}
+            value={project.priority}
+            onSelect={(priority) => onSetPriority(project, priority)}
+          />
+          <button
+            type="button"
+            disabled={busy}
+            title="Close this out. It stays on the board under Closed, keeping the progress it reached."
+            onClick={() => {
+              if (!confirmingAbandon) { setConfirmingAbandon(true); return; }
+              setConfirmingAbandon(false);
+              onAbandon(project);
+            }}
+            onBlur={() => setConfirmingAbandon(false)}
+            style={{
+              ...ghostButtonStyle,
+              background: confirmingAbandon ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.06)",
+              border: `1px solid ${confirmingAbandon ? "rgba(239,68,68,0.6)" : "rgba(255,255,255,0.12)"}`,
+              color: confirmingAbandon ? "#fca5a5" : "rgba(255,255,255,0.55)",
+              cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            {confirmingAbandon ? "Confirm abandon?" : "Abandon"}
+          </button>
+        </div>
+      )}
+
       {expanded && (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", marginTop: "0.6rem", paddingTop: "0.5rem" }}>
           {activity.length === 0 ? (
@@ -391,6 +507,9 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   const [activeTags, setActiveTags] = useState([]);
   const [showClosed, setShowClosed] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  // The project a write is currently in flight for, so its own controls can be
+  // disabled without freezing the rest of the board.
+  const [pendingId, setPendingId] = useState("");
 
   const isMobile = useIsMobile();
   // The signature the 5s poll compares against, so a poll that changed nothing
@@ -535,6 +654,57 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   const askAdvisor = useCallback((prompt) => {
     onOpenAdvisor?.(prompt);
   }, [onOpenAdvisor]);
+
+  // The board's only player-authored writes. See the file header for what they
+  // are allowed to touch and why they go through the ops pipeline.
+  const writeOps = useCallback(async (ops) => {
+    const world = await readWorldState({ force: true });
+    const { world: nextWorld } = applyProjectOpsToWorld({
+      date: gameDate,
+      ops,
+      round,
+      world,
+    });
+    await writeWorldState(nextWorld);
+    setProjects(nextWorld.projects);
+    // Force the next poll to re-render from disk instead of comparing against
+    // this optimistic value: a jump may have committed while the write was in
+    // flight, and the poll is what repairs the difference.
+    signatureRef.current = "";
+  }, [gameDate, round]);
+
+  const setPriority = useCallback(async (project, priority) => {
+    if (project.priority === priority) return;
+    setPendingId(project.id);
+    try {
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, priority }]);
+    } catch {
+      // A failed write leaves the board as it was and the poll re-reads within
+      // five seconds — the same silence every other handler in this file keeps.
+    } finally {
+      setPendingId("");
+    }
+  }, [writeOps]);
+
+  // op cancel, never remove: the entry stays on the board under Closed with its
+  // REAL progress figure preserved, which is the record the player wants — "we
+  // got that to 40% and then stopped" — rather than the work vanishing as if it
+  // had never been opened.
+  const abandonProject = useCallback(async (project) => {
+    setPendingId(project.id);
+    try {
+      await writeOps([{
+        op: "cancel",
+        projectId: project.id,
+        name: project.name,
+        note: "Abandoned by the player.",
+      }]);
+    } catch {
+      // As above.
+    } finally {
+      setPendingId("");
+    }
+  }, [writeOps]);
 
   // Resolve a camera target in the order the card's button promises: an explicit
   // focus, then a linked structure, then a linked unit. Reads the live world so
@@ -788,8 +958,11 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             eventTitles={eventTitles}
             expanded={expandedId === project.id}
             onToggleExpand={toggleExpand}
+            busy={pendingId === project.id}
             onAskAdvisor={askAdvisor}
             onShowOnMap={showOnMap}
+            onSetPriority={setPriority}
+            onAbandon={abandonProject}
           />
         ))}
 

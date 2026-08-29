@@ -6,7 +6,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyEventImpactsToWorld, applyProjectOps, normalizeWorldState } from "./gameState.js";
+import {
+  applyEventImpactsToWorld,
+  applyProjectOps,
+  applyProjectOpsToWorld,
+  normalizeWorldState,
+} from "./gameState.js";
 
 const standingWatch = {
   op: "create",
@@ -276,4 +281,279 @@ test("a dated recurring milestone still keeps its own day of the year", () => {
     op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
   }], { date: "2034-06-03" })[0];
   assert.equal(after.milestones[0].date, "2035-06-01");
+});
+
+// --- onComplete: projects that actually change the world --------------------
+//
+// Issue #7. A project had no effect of its own: the close branch set a status,
+// pinned progress to 100 and wrote a note, and that was all. So a rename project
+// could reach 100% with the country still called what it always was, and an
+// annexation could finish without the border ever moving. These pin the whole
+// contract: effects fire on completion, exactly once, and never on a cancel or a
+// fail.
+
+const annexation = (onComplete) => ({
+  op: "create",
+  name: "Northern Question",
+  summary: "Obtain the northern marches.",
+  status: "active",
+  progress: 60,
+  onComplete,
+});
+
+const renameRuritania = {
+  polityChanges: [{ code: "Ruritania", name: "Federal Republic of Ruritania" }],
+};
+
+const eventWith = (projectOps, impacts = {}) => ({
+  date: "2030-06-01",
+  title: "The question is settled",
+  description: "test",
+  impacts: { projectOps, ...impacts },
+});
+
+const worldWith = (projects) => normalizeWorldState({ projects });
+
+test("onComplete survives a create and canonicalises its owners", () => {
+  const project = applyProjectOps([], [annexation({
+    polityChanges: [{ code: "ESP", name: "Spanish Republic" }],
+    regionTransfers: [{ regionId: "ESP.1_1", toCode: "ESP" }],
+  })])[0];
+
+  assert.equal(project.onComplete.polityChanges[0].code, "Spain", "a bare GADM code must fold to the country name");
+  assert.equal(project.onComplete.regionTransfers[0].toCode, "Spain");
+  assert.equal(project.onCompleteAppliedAt, "", "nothing has fired yet");
+});
+
+test("an onComplete carrying nothing usable normalizes to null, not an empty bag", () => {
+  const project = applyProjectOps([], [annexation({ polityChanges: [null, {}], regionTransfers: ["nope"] })])[0];
+  assert.equal(project.onComplete, null);
+});
+
+// The actual issue-#7 regression. Note the assertion on the KEY: polityOverrides
+// is keyed by the polity's stable identity and the new name is a display layer,
+// so a rename that moved the key would split one country into two.
+test("completing a project applies its onComplete rename under the ORIGINAL key", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "complete", name: "Northern Question", note: "Done." }])],
+    world,
+  });
+
+  assert.equal(next.polityOverrides.Ruritania.name, "Federal Republic of Ruritania");
+  assert.equal("Federal Republic of Ruritania" in next.polityOverrides, false, "the key must not move");
+  assert.equal(next.projects[0].status, "complete");
+  assert.ok(next.projects[0].onCompleteAppliedAt, "the latch must be stamped");
+});
+
+test("replaying the same completion does not apply the effects twice", () => {
+  const world = worldWith(applyProjectOps([], [annexation({
+    regionTransfers: [{ regionId: "RUR.1_1", toCode: "Ruritania" }],
+  })]));
+  const event = eventWith([{ op: "complete", name: "Northern Question" }]);
+
+  const { world: once } = applyEventImpactsToWorld({ events: [event], world });
+  const stamped = once.projects[0].onCompleteAppliedAt;
+  once.regionOwnershipOverrides["RUR.1_1"] = "Someone Else";
+
+  const { world: twice } = applyEventImpactsToWorld({ events: [event], world: once });
+  assert.equal(twice.regionOwnershipOverrides["RUR.1_1"], "Someone Else", "the transfer fired a second time");
+  assert.equal(twice.projects[0].onCompleteAppliedAt, stamped);
+});
+
+for (const op of ["cancel", "fail"]) {
+  test("op " + op + " never releases onComplete effects", () => {
+    const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+    const { world: next } = applyEventImpactsToWorld({
+      events: [eventWith([{ op, name: "Northern Question", note: "Called off." }])],
+      world,
+    });
+
+    assert.deepEqual(next.polityOverrides, {}, "a project that did not succeed must change nothing");
+    assert.equal(next.projects[0].onCompleteAppliedAt, "");
+    assert.equal(next.projects[0].progress, 60, "the real progress figure is the informative one");
+  });
+}
+
+// The shape a model actually writes at least as often as an explicit close op.
+test("an update carrying status complete releases the effects too", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "update", name: "Northern Question", status: "complete" }])],
+    world,
+  });
+
+  assert.equal(next.polityOverrides.Ruritania.name, "Federal Republic of Ruritania");
+  assert.ok(next.projects[0].onCompleteAppliedAt);
+});
+
+// Pins the fold-before-alias-rebuild ordering: released polityChanges are merged
+// into the event's own list BEFORE the owner resolver is rebuilt, so the event's
+// other impacts may already speak the name the completion introduces.
+test("an event may use the name its completed project introduces", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith(
+      [{ op: "complete", name: "Northern Question" }],
+      { regionTransfers: [{ regionId: "RUR.2_1", toCode: "Federal Republic of Ruritania" }] },
+    )],
+    world,
+  });
+
+  assert.equal(next.regionOwnershipOverrides["RUR.2_1"], "Ruritania", "the transfer minted a phantom polity");
+});
+
+test("onComplete region effects clear the dispute they settle", () => {
+  const world = normalizeWorldState({
+    projects: applyProjectOps([], [annexation({ regionTransfers: [{ regionId: "RUR.1_1", toCode: "Ruritania" }] })]),
+    regionClaimants: { "RUR.1_1": ["Ruritania"] },
+  });
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "complete", name: "Northern Question" }])],
+    world,
+  });
+
+  assert.equal(next.regionOwnershipOverrides["RUR.1_1"], "Ruritania");
+  assert.equal("RUR.1_1" in next.regionClaimants, false);
+});
+
+// The pre-scan that releases the effects and the applier that stamps the latch
+// must resolve an op to the SAME entry, or the effects fire for one project and
+// are marked spent on another.
+test("a completion matched by name alone fires and latches the same entry", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "complete", name: "northern question" }])],
+    world,
+  });
+
+  assert.equal(next.polityOverrides.Ruritania.name, "Federal Republic of Ruritania");
+  assert.ok(next.projects[0].onCompleteAppliedAt);
+});
+
+// ONLY AN EVENT MAY CHANGE THE WORLD. The advisor reports and plans; the
+// simulation enacts. Its fences (chart/actions/senddraft/deploy/projects) touch no
+// border and no polity identity, and onComplete must not become a side door around
+// that — otherwise "rename us" is answered by opening a project with a
+// polityChanges payload and closing it a reply later, renaming the country from a
+// chat window with no jump and nothing in the record to explain it.
+test("the non-event door REFUSES to complete a project that would change the world", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const result = applyProjectOpsToWorld({ ops: [{ op: "complete", name: "Northern Question" }], world });
+
+  assert.deepEqual(result.world.polityOverrides, {}, "the advisor renamed a polity from chat");
+  assert.equal(result.world.projects[0].status, "active", "the project must stay open for the simulation to close");
+  assert.deepEqual(result.deferredProjectIds, [result.world.projects[0].id]);
+});
+
+// Refusing to CLOSE it is not a reason to lose everything else the reply said.
+test("a refused completion still applies the rest of the batch", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyProjectOpsToWorld({
+    ops: [
+      { op: "update", name: "Northern Question", progress: 95, lastUpdate: "The delegation has signed." },
+      { op: "complete", name: "Northern Question" },
+    ],
+    world,
+  });
+
+  assert.equal(next.projects[0].progress, 95);
+  assert.equal(next.projects[0].lastUpdate, "The delegation has signed.");
+  assert.equal(next.projects[0].status, "active");
+});
+
+// The ordinary case is untouched: a project with no world-changing payload closes
+// from chat exactly as it always did.
+test("the non-event door still closes an ordinary project", () => {
+  const world = worldWith(open());
+  const { deferredProjectIds, world: next } = applyProjectOpsToWorld({
+    ops: [{ op: "complete", name: "Operation Standing Watch", note: "Stood down." }],
+    world,
+  });
+
+  assert.equal(next.projects[0].status, "complete");
+  assert.deepEqual(deferredProjectIds, []);
+});
+
+// The deferred project is closed by the next EVENT, and the effects land there.
+test("the simulation closes what the advisor deferred, and the effects land then", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: afterChat } = applyProjectOpsToWorld({ ops: [{ op: "complete", name: "Northern Question" }], world });
+  const { world: afterJump } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "complete", name: "Northern Question", note: "Ratified." }])],
+    world: afterChat,
+  });
+
+  assert.equal(afterJump.polityOverrides.Ruritania.name, "Federal Republic of Ruritania");
+  assert.equal(afterJump.projects[0].status, "complete");
+});
+
+// --- priority: the one field on this board the player authors ---------------
+
+test("priority defaults to normal and accepts the synonyms a model writes", () => {
+  assert.equal(applyProjectOps([], [standingWatch])[0].priority, "normal");
+
+  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "critical" }]);
+  assert.equal(raised[0].priority, "high");
+
+  const dropped = applyProjectOps(raised, [{ op: "update", name: "Operation Standing Watch", priority: "low" }]);
+  assert.equal(dropped[0].priority, "low");
+});
+
+// The player sets this; a jump that merely mentions the operation must not wipe it.
+test("a passing restatement preserves a priority the player set", () => {
+  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "high" }]);
+  const after = applyProjectOps(
+    raised,
+    [{ op: "create", name: "Operation Standing Watch", summary: "The patrol continues." }],
+    { date: "2034-01-01", round: 70 },
+  )[0];
+
+  assert.equal(after.priority, "high");
+});
+
+// Regression: no EVENT could close a project at all.
+//
+// normalizeEventImpacts rewrites {"op":"complete"} to {"op":"close","status":
+// "complete"} on the way into events.json; applyProjectOps then re-normalizes
+// defensively (it must — the advisor hands it an unnormalized block); and
+// normalizeProjectOp had no branch for "close", so it returned null and the op
+// was dropped. A jump narrating a programme finishing left it active at 60%, and
+// cancel and fail went the same way. Only the advisor path worked, because its
+// ops pass through the normalizer exactly once.
+for (const [op, status] of [["complete", "complete"], ["cancel", "cancelled"], ["fail", "failed"]]) {
+  test("an event can " + op + " a project (its op survives a second normalize)", () => {
+    const world = normalizeWorldState({ projects: open() });
+    const { world: next } = applyEventImpactsToWorld({
+      events: [{
+        date: "2034-01-01",
+        title: "It ends",
+        description: "test",
+        impacts: { projectOps: [{ op, name: "Operation Standing Watch", note: "How it ended." }] },
+      }],
+      world,
+    });
+
+    assert.equal(next.projects[0].status, status);
+    assert.equal(next.projects[0].lastUpdate, "How it ended.");
+  });
+}
+
+// Every op normalizeProjectOp EMITS must survive being passed back through it —
+// that is the invariant the bug above broke, and the one worth pinning.
+test("normalized ops are idempotent: re-applying a normalized batch is a no-op", () => {
+  const world = normalizeWorldState({ projects: open() });
+  const event = {
+    date: "2034-01-01",
+    title: "It ends",
+    description: "test",
+    impacts: { projectOps: [{ op: "complete", name: "Operation Standing Watch" }] },
+  };
+  const { world: once } = applyEventImpactsToWorld({ events: [event], world });
+  assert.equal(once.projects[0].status, "complete");
+
+  // A close aimed at an already-closed project changes nothing but must still be
+  // understood rather than dropped.
+  const { world: twice } = applyEventImpactsToWorld({ events: [event], world: once });
+  assert.equal(twice.projects[0].status, "complete");
 });
