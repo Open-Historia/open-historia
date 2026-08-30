@@ -510,7 +510,15 @@ const projectSchema = {
       description: "operation for a military, intelligence or covert undertaking; project for a programme, build or civil effort.",
       enum: ["project", "operation"],
     },
-    ownerCode: textSchema("Running polity's FULL country name (\"Spain\"), never a country code. Leave empty for the player's own."),
+    ownerCode: textSchema(
+      "Running polity's FULL country name (\"Spain\"), never a country code. Leave empty "
+      + "for the player's own - and this field decides who controls the entry, so getting "
+      + "it wrong matters: an entry with an owner other than the player's is THEIRS, the "
+      + "player can only watch it, and neither they nor you may set its priority or call it "
+      + "off. Set it for a foreign power's programme the player's services have learned of; "
+      + "leave it empty for anything the player is actually running, including an operation "
+      + "of theirs aimed AT a foreign programme.",
+    ),
     summary: nonEmptyTextSchema("One or two sentences on what this is and what it is meant to achieve."),
     status: {
       type: "string",
@@ -527,7 +535,9 @@ const projectSchema = {
         + "on the board - leave it out entirely unless they have told you in this "
         + "conversation to raise or drop something's priority. It is never your own "
         + "judgement of how important a programme is, and overwriting it discards an "
-        + "instruction they gave.",
+        + "instruction they gave. It exists only on the player's OWN work: a foreign "
+        + "power's programme has no priority, they cannot give it one, and asking for "
+        + "one on their behalf is refused.",
       enum: ["high", "normal", "low"],
     },
     progress: {

@@ -289,15 +289,47 @@ export const sortProjects = (projects, key = "updated") => {
 
 // ---- filtering -------------------------------------------------------------
 
-// Owner is compared by NAME, verbatim, because that is the namespace every
-// polity-keyed field in world state uses. A blank ownerCode means the player:
-// the model is not made to restate their own country on every entry, since a
-// field it has to repeat is a field it eventually gets wrong.
+// Case-, diacritic- and punctuation-insensitive identity for an owner name.
+//
+// A HAND-KEPT DUPLICATE of ownerIdentityKey in ownerNames.js — same reasoning as
+// OPEN_STATUSES above: importing it would cost this file its import-free promise,
+// and the two must not drift. If you change the fold there, change it here.
+//
+// A plain toLowerCase() was not enough. The model spells a country back the way
+// it remembers it, so the player's own programme arrives owned by "Cote dIvoire"
+// while game.country is "Côte d'Ivoire", the entry files itself under Foreign,
+// and the player loses the two levers they have over their own work.
+const ownerIdentity = (value) => String(value ?? "")
+  .normalize("NFD")
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "");
+
+// Owner is compared by NAME, because that is the namespace every polity-keyed
+// field in world state uses. A blank ownerCode means the player: the model is not
+// made to restate their own country on every entry, since a field it has to
+// repeat is a field it eventually gets wrong.
 export const isPlayerProject = (project, playerCountry) => {
-  const owner = asText(project?.ownerCode);
+  const owner = ownerIdentity(project?.ownerCode);
   if (!owner) return true;
-  return owner.toLowerCase() === asText(playerCountry).toLowerCase();
+  return owner === ownerIdentity(playerCountry);
 };
+
+export const isForeignProject = (project, playerCountry) => !isPlayerProject(project, playerCountry);
+
+// The gate on the player's OWN two levers — priority and abandon.
+//
+// Both mean "how much of MY attention does this get" and "call MY effort off",
+// and neither is a thing anyone can do to another government's programme. The
+// board tracks a rival's shipbuilding because the player's services have learned
+// of it; a slider on it would say they command it. So the panel hides the
+// controls, and applyProjectOpsToWorld refuses the op behind them — see the
+// `actor` argument there, which is the door that cannot be got round by a stale
+// render.
+//
+// Closed work is excluded for the reason it always was: neither lever means
+// anything on an entry that has already ended.
+export const canPlayerDirect = (project, playerCountry) =>
+  isProjectOpen(project) && isPlayerProject(project, playerCountry);
 
 export const filterProjects = (projects, {
   owner = "all",

@@ -18,16 +18,29 @@
 // updatedAt/updatedRound (so an abandoned project does not immediately reappear
 // wearing a "no recent progress" badge) and what closes out dangling milestones.
 //
+// And both belong to THEIR OWN work only. Roughly half a mature board is other
+// powers' programmes, tracked because the player's services have learned of them,
+// and a priority dial or an Abandon button on a rival's shipyard says the player
+// commands it. So a foreign card carries neither control, the ops door is called
+// with actor "player" so a stale render cannot get round that, and the advisor and
+// jump prompts are told to refuse the same request in words — with the one opening
+// that makes sense, which is opening the player's OWN counter-effort against it.
+//
+// Because of that split the board opens on Mine. A player who wants the rival
+// column asks for it; the default view is the work they can actually steer.
+//
 // Everything date-derived (overdue, due soon, a slipped milestone, a programme
 // nobody has mentioned in three rounds) is computed here from the game clock by
 // runtime/projects.js, NOT read off what the model last wrote. That is what keeps
 // the board honest between AI turns.
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags, readJson } from "../../runtime/assets.js";
+import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import {
   PROJECT_BOARD_LIMIT,
   applyProjectOpsToWorld,
+  isPolityLandless,
   readEventsState,
   readWorldState,
   writeWorldState,
@@ -38,6 +51,7 @@ import {
   collectProjectTags,
   isProjectClosed,
   isProjectOpen,
+  isPlayerProject,
   deriveProjectFlags,
   describeTimeline,
   filterProjects,
@@ -71,6 +85,29 @@ const buildBriefPrompt = (project) => {
     + "right now, what has moved since the last round, what does the next milestone need from "
     + "me, and what is most likely to go wrong? Be specific and tell me if the board is "
     + "out of date.";
+};
+
+// The same button on a foreign card, asking the questions that are actually
+// answerable about somebody else's programme. "What does the next milestone need
+// from me" is nonsense here — nothing about a rival's shipyard needs anything from
+// the player — and asking it invites the model to answer as though they ran it.
+const buildForeignBriefPrompt = (project, owner) => {
+  const label = project.kind === "operation" ? "operation" : "programme";
+  const whose = owner ? `${owner}'s ` : "the foreign ";
+  return `Brief me on ${whose}${label} "${project.name}". What do we actually know, how good `
+    + "is the sourcing, what has changed since we last looked, and what does it mean for us if "
+    + "it succeeds? Be honest about how much of this is inference rather than intelligence.";
+};
+
+// The seed behind a foreign card's second button. Deliberately asks a QUESTION
+// rather than issuing an order: the player cannot cancel another government's
+// programme, but they can decide to do something about it, and that something is a
+// project of their own the advisor may legitimately open.
+const buildCounterPrompt = (project, owner) => {
+  const whose = owner ? `${owner}'s` : "this";
+  return `What can we actually do about ${whose} "${project.name}"? Lay out the realistic `
+    + "options — diplomatic, economic, covert, or simply outpacing them — with what each would "
+    + "cost us and how it could go wrong. If we settle on one, open it as our own effort.";
 };
 
 // ---- styling ---------------------------------------------------------------
@@ -207,6 +244,81 @@ const CloseIcon = () => (
   </svg>
 );
 
+// Whose programme this is, with their flag.
+//
+// Same precedence every other flag in the game follows — copied and cited rather
+// than shared, the house pattern (see resolveEraFlagInfo in Selection/Regions.jsx
+// and resolveUnitFlagUrl in Map/unitFlagIcons.js): a flag the map-maker uploaded
+// into the scenario's flags.json wins, because it is the only one anyone chose on
+// purpose; then a scenario polity's own; then the ISO flag the owner name resolves
+// to. A custom era polity with none of the three shows its initials, exactly as
+// the country panel does.
+const resolveOwnerFlagUrl = (owner, customFlags, polities) => {
+  if (!owner) return "";
+  return customFlags?.[owner] || polities?.[owner]?.flag || flagImageUrlFromGid(owner) || "";
+};
+
+const ownerInitials = (owner) =>
+  String(owner).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
+
+// The board is half other people's work, and until this row existed the only clue
+// was a grey line of text that a player's own entries did not have at all — so
+// "Long-Range Rocket Programme" read as yours whether it was or not. Every card
+// carries it now, the player's included, and the flag is what the eye actually
+// picks up when scanning thirty of them.
+const OwnerBadge = ({ flagUrl, mine, name }) => {
+  const [flagFailed, setFlagFailed] = useState(false);
+  useEffect(() => { setFlagFailed(false); }, [flagUrl]);
+
+  return (
+    <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginTop: "0.25rem", minWidth: 0 }}>
+      <span style={{
+        alignItems: "center",
+        backgroundColor: "rgba(59,130,246,0.16)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: "3px",
+        color: "#93c5fd",
+        display: "flex",
+        flexShrink: 0,
+        fontSize: "0.5rem",
+        fontWeight: 800,
+        height: "0.85rem",
+        justifyContent: "center",
+        overflow: "hidden",
+        width: "1.3rem",
+      }}
+      >
+        {flagUrl && !flagFailed ? (
+          <img
+            alt=""
+            src={flagUrl}
+            onError={() => setFlagFailed(true)}
+            style={{ height: "100%", objectFit: "cover", width: "100%" }}
+          />
+        ) : ownerInitials(name)}
+      </span>
+      <span
+        data-no-translate
+        title={name}
+        style={{
+          color: mine ? "rgba(255,255,255,0.55)" : "rgba(253,186,116,0.85)",
+          fontSize: "0.68rem",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {name}
+      </span>
+      {!mine && (
+        <Pill color="rgba(253,186,116,0.9)" bg="rgba(249,115,22,0.16)" title="Another power's effort. You are tracking it, not running it.">
+          Foreign
+        </Pill>
+      )}
+    </div>
+  );
+};
+
 // ---- one card --------------------------------------------------------------
 
 const PRIORITY_OPTIONS = [
@@ -252,13 +364,18 @@ const PrioritySwitch = ({ busy, onSelect, value }) => (
   </div>
 );
 
-const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, busy, onToggleExpand, onAskAdvisor, onShowOnMap, onSetPriority, onAbandon }) => {
+const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, onToggleExpand, onAskAdvisor, onShowOnMap, onSetPriority, onAbandon }) => {
   // Derived here rather than passed in: a flags object built by the parent would
   // be a new reference every render and the memo above would never hold.
   const flags = deriveProjectFlags(project, gameDate, round);
   const tone = statusTone(project.status);
   const open = isProjectOpen(project);
-  const priorityPill = PRIORITY_PILL[project.priority];
+  const mine = isPlayerProject(project, playerCountry);
+  // Meaningless on somebody else's programme, and a legacy board can carry one:
+  // priority was settable on a foreign entry before this, so an old save still has
+  // "High" stamped on a rival's shipyard. Hide it rather than migrate the data —
+  // the field is harmless where it sits and the prompt suppresses it too.
+  const priorityPill = mine ? PRIORITY_PILL[project.priority] : null;
   // Two-step confirm rather than window.confirm, which breaks this panel's visual
   // language and is blocked outright in some embedded contexts. Reset whenever the
   // card stops being abandonable, so a closed project cannot keep a primed button.
@@ -268,7 +385,13 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
   }, [open]);
   const timeline = describeTimeline(project, gameDate);
   const secrecy = SECRECY_GLYPH[project.secrecy];
-  const owner = String(project.ownerCode || "").trim();
+  // A blank ownerCode means the player (see isPlayerProject) — so their own cards
+  // fall back to their own country rather than showing no owner at all, which is
+  // what made a foreign entry indistinguishable from theirs in the first place.
+  const ownerKey = String(project.ownerCode || "").trim() || String(playerCountry || "").trim();
+  // The era display name, so a renamed polity reads as the story calls it. The KEY
+  // stays the identity everything else is filed under (see ownerNames.js).
+  const ownerLabel = ownerNames?.[ownerKey] || ownerKey;
 
   // The camera target, resolved the same way the button does, so the button can
   // be hidden rather than offered and then doing nothing.
@@ -303,10 +426,14 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         </div>
       </div>
 
-      {owner && (
-        <div data-no-translate style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", marginTop: "0.15rem" }}>
-          {owner}
-        </div>
+      {ownerKey && (
+        <OwnerBadge
+          mine={mine}
+          name={ownerLabel}
+          flagUrl={mine && playerLandless
+            ? (ownerFlags?.custom?.[ownerKey] || ownerFlags?.polities?.[ownerKey]?.flag || "")
+            : resolveOwnerFlagUrl(ownerKey, ownerFlags?.custom, ownerFlags?.polities)}
+        />
       )}
 
       {project.summary && (
@@ -388,9 +515,19 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
               Milestone slipped
             </Pill>
           )}
+          {/* The same derived flag, said honestly for each side. On the player's own
+              work it means the programme has not moved; on a rival's it means
+              nothing has REACHED us about it for several rounds, which is a fact
+              about our sources and not about their shipyard. */}
           {flags.stale && (
-            <Pill color="rgba(255,255,255,0.55)" bg="rgba(255,255,255,0.07)" title="No progress reported for several rounds">
-              No recent progress
+            <Pill
+              color="rgba(255,255,255,0.55)"
+              bg="rgba(255,255,255,0.07)"
+              title={mine
+                ? "No progress reported for several rounds"
+                : "Nothing has reached us about this for several rounds"}
+            >
+              {mine ? "No recent progress" : "No fresh intelligence"}
             </Pill>
           )}
         </div>
@@ -400,12 +537,29 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         <button
           type="button"
           style={ghostButtonStyle}
-          onClick={() => onAskAdvisor(buildBriefPrompt(project))}
+          onClick={() => onAskAdvisor(mine
+            ? buildBriefPrompt(project)
+            : buildForeignBriefPrompt(project, ownerLabel))}
           onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(139,92,246,0.25)"; }}
           onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
         >
-          🧭 Ask advisor
+          🧭 {mine ? "Ask advisor" : "What do we know?"}
         </button>
+        {/* The one thing the player CAN do about a rival's programme, offered where
+            the priority dial would have been: not a lever on their work, a question
+            about ours. Whatever comes of it is a project of the player's own, opened
+            by the advisor the normal way. */}
+        {!mine && open && (
+          <button
+            type="button"
+            style={ghostButtonStyle}
+            onClick={() => onAskAdvisor(buildCounterPrompt(project, ownerLabel))}
+            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(249,115,22,0.25)"; }}
+            onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+          >
+            ⚖ Our options
+          </button>
+        )}
         {hasFocus && (
           <button
             type="button"
@@ -430,9 +584,28 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         )}
       </div>
 
+      {/* Why the controls below are missing, said once on the card rather than left
+          as an unexplained gap. Only while the work is running — a finished foreign
+          programme has no controls for anyone and needs no note about it. */}
+      {!mine && open && (
+        <div style={{
+          borderTop: "1px solid rgba(255,255,255,0.07)",
+          color: "rgba(255,255,255,0.38)",
+          fontSize: "0.66rem",
+          lineHeight: 1.45,
+          marginTop: "0.6rem",
+          paddingTop: "0.55rem",
+        }}
+        >
+          {ownerLabel ? `${ownerLabel} runs this` : "Another power runs this"} — you can watch it and act against it,
+          but its priority and its cancellation are not yours to set.
+        </div>
+      )}
+
       {/* The player's own two levers, kept on their own row and only while the
-          work is still running: neither means anything on a closed entry. */}
-      {open && (
+          work is still running and it is actually theirs: neither means anything on
+          a closed entry, and neither means anything at all on somebody else's. */}
+      {open && mine && (
         <div style={{
           alignItems: "center",
           borderTop: "1px solid rgba(255,255,255,0.07)",
@@ -500,10 +673,28 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   const [playerCountry, setPlayerCountry] = useState("");
   const [eventTitles, setEventTitles] = useState(() => new Map());
   const [hasLoaded, setHasLoaded] = useState(false);
+  // Everything the owner badge needs: the scenario's uploaded flags (a static
+  // asset, read once) and the live polity registry, which carries both a custom
+  // flag and the era display name. Held together so a card can resolve an owner
+  // without three lookups of its own.
+  const [ownerFlags, setOwnerFlags] = useState(() => ({ custom: {}, polities: {} }));
+  const [ownerNames, setOwnerNames] = useState(() => ({}));
+  // Is the PLAYER stateless? A landless player's name may still resolve to a real
+  // country, but they are not it — a government-in-exile is not the government —
+  // so their own cards must show neutral initials rather than borrow that
+  // country's flag. Same rule and same single source of truth as the Stats pane
+  // (see isPolityLandless, which exists for exactly these resolvers). Only the
+  // player's own entries: a FOREIGN owner that resolves to a country genuinely is
+  // that country as far as this board knows.
+  const [playerLandless, setPlayerLandless] = useState(false);
 
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("updated");
-  const [owner, setOwner] = useState("all");
+  // Opens on the player's own work. A mature board is roughly half other powers'
+  // programmes, and showing all of it by default buried the handful of things the
+  // player can actually steer among a column of rivals' shipyards they cannot.
+  // Foreign is one chip away and says how many are behind it.
+  const [owner, setOwner] = useState("mine");
   const [activeTags, setActiveTags] = useState([]);
   const [showClosed, setShowClosed] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -515,6 +706,23 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   // The signature the 5s poll compares against, so a poll that changed nothing
   // does not re-render the list under the player's cursor.
   const signatureRef = useRef("");
+  // The same trick for the polity registry, which rides the same read but changes
+  // far less often than the board does. Mirrors Units.jsx's polityFlagSignatureRef.
+  const polityRef = useRef("");
+
+  // Author-set flags (the scenario's flags.json), fetched once. Not in the poll:
+  // it is a static asset, and getNationFlags memoizes it anyway.
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    let cancelled = false;
+    getNationFlags()
+      .then((flags) => {
+        if (cancelled) return;
+        setOwnerFlags((current) => ({ ...current, custom: flags || {} }));
+      })
+      .catch(() => { /* the badges fall back to the ISO flag, then to initials */ });
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   // 5-second poll, the cadence every other panel uses (Chat, Actions, Stats,
   // DateWidget each run their own). Only while open: a closed panel has nothing
@@ -545,7 +753,26 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         // every project's ownerCode has been through toCountryName ("United
         // Kingdom") — so comparing them raw filed the player's own programmes
         // under Foreign.
-        setPlayerCountry(toCountryName(String(game?.country ?? "")));
+        const player = toCountryName(String(game?.country ?? ""));
+        setPlayerCountry(player);
+        setPlayerLandless(isPolityLandless(world, player));
+        // Cheap: polityOverrides is a handful of entries and world was read above
+        // anyway. Written through a signature so a poll that changed nothing does
+        // not hand every card a new object and re-run its <img>.
+        const polities = world?.polityOverrides ?? {};
+        const polityFlagSignature = Object.entries(polities)
+          .map(([code, polity]) => `${code}:${polity?.flag || ""}:${polity?.name || ""}`)
+          .sort()
+          .join("|");
+        if (polityFlagSignature !== polityRef.current) {
+          polityRef.current = polityFlagSignature;
+          setOwnerFlags((current) => ({ ...current, polities }));
+          setOwnerNames(Object.fromEntries(
+            Object.entries(polities)
+              .map(([code, polity]) => [code, String(polity?.name || "").trim()])
+              .filter(([, name]) => name),
+          ));
+        }
         setHasLoaded(true);
       } catch {
         // A failed read leaves the last good board on screen rather than
@@ -600,11 +827,14 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   // Closing the panel resets the transient view state, so reopening is a clean
   // read rather than whatever was half-filtered last time. Closed is in here
   // because it is a VIEW, not a filter: coming back to the board and being shown
-  // finished work is not what anyone opening it expects.
+  // finished work is not what anyone opening it expects. Owner is in here for the
+  // same reason — the board has a default and reopening should honour it, not
+  // strand the player in the rival column they glanced at last time.
   useEffect(() => {
     if (isOpen) return;
     setExpandedId(null);
     setShowClosed(false);
+    setOwner("mine");
   }, [isOpen]);
 
   const availableTags = useMemo(() => collectProjectTags(projects), [projects]);
@@ -631,6 +861,24 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
 
   const closedCount = useMemo(() => projects.filter(isProjectClosed).length, [projects]);
   const openCount = projects.length - closedCount;
+  // Counts for the Mine/Foreign chips, so the default view never silently hides
+  // work: a board that is all foreign opens on an empty Mine column, and the
+  // number on the chip beside it is the whole explanation.
+  const mineCount = useMemo(
+    () => projects.filter((project) => isPlayerProject(project, playerCountry)).length,
+    [projects, playerCountry],
+  );
+  const foreignCount = projects.length - mineCount;
+
+  // Same trap as the Closed chip below, and the same fix: the Foreign chip is the
+  // only way back out of the Foreign view, and it is only rendered while there is
+  // something foreign to show. A board whose last rival programme goes away — it
+  // completed, it was removed, the player's polity was renamed and its entries
+  // folded back to being theirs — left the player looking at an empty column with
+  // the way out gone. Drop the view with its chip.
+  useEffect(() => {
+    if (foreignCount === 0) setOwner((current) => (current === "foreign" ? "mine" : current));
+  }, [foreignCount]);
 
   // The Closed chip is the only way back out of the Closed view, and it is only
   // rendered while there is something closed to show — so a board whose last
@@ -657,21 +905,41 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
 
   // The board's only player-authored writes. See the file header for what they
   // are allowed to touch and why they go through the ops pipeline.
+  //
+  // actor "player" is the door's own guard: it drops any op aimed at a project the
+  // player does not own. The buttons behind these are already hidden on a foreign
+  // card, so this is belt and braces — but the card renders off a 5s poll, and a
+  // project that changes hands (or a player polity that gets renamed) between the
+  // render and the click must not slip an Abandon through on a rival's programme.
   const writeOps = useCallback(async (ops) => {
     const world = await readWorldState({ force: true });
-    const { world: nextWorld } = applyProjectOpsToWorld({
+    const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
+      actor: "player",
       date: gameDate,
       ops,
+      playerCountry,
       round,
       world,
     });
+    // Nothing landed, so nothing is written: a refused write would still bump
+    // world.json and set every other panel's poll re-rendering for no change.
+    //
+    // Asked of the RESULT rather than by counting refusals against ops, because a
+    // batch can be part-refused — refusedProjectIds counts projects, not ops — and
+    // the applied half of such a batch must still be saved. readWorldState
+    // normalizes, and so does the door, so the two sides compare exactly.
+    if (refusedProjectIds.length > 0
+      && JSON.stringify(nextWorld.projects) === JSON.stringify(world.projects)) {
+      signatureRef.current = "";
+      return;
+    }
     await writeWorldState(nextWorld);
     setProjects(nextWorld.projects);
     // Force the next poll to re-render from disk instead of comparing against
     // this optimistic value: a jump may have committed while the write was in
     // flight, and the poll is what repairs the difference.
     signatureRef.current = "";
-  }, [gameDate, round]);
+  }, [gameDate, playerCountry, round]);
 
   const setPriority = useCallback(async (project, priority) => {
     if (project.priority === priority) return;
@@ -843,9 +1111,20 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
                 </option>
               ))}
             </select>
-            <Chip active={owner === "all"} onClick={() => setOwner("all")}>All</Chip>
-            <Chip active={owner === "mine"} onClick={() => setOwner("mine")}>Mine</Chip>
-            <Chip active={owner === "foreign"} onClick={() => setOwner("foreign")}>Foreign</Chip>
+            <Chip active={owner === "all"} onClick={() => setOwner("all")} title={`Everything on the board (${projects.length})`}>
+              All
+            </Chip>
+            <Chip active={owner === "mine"} onClick={() => setOwner("mine")} title="Your own projects and operations — the ones you can set a priority on or call off">
+              Mine{mineCount > 0 ? ` (${mineCount})` : ""}
+            </Chip>
+            {/* Only when there is something to show. A chip reading "Foreign (0)"
+                on a board with no rival programmes on it is a dead control that
+                tells the player the filter is broken. */}
+            {foreignCount > 0 && (
+              <Chip active={owner === "foreign"} onClick={() => setOwner("foreign")} title="Other powers' efforts your services have learned of. You track these; you do not run them.">
+                Foreign ({foreignCount})
+              </Chip>
+            )}
             {closedCount > 0 && (
               <Chip
                 active={showClosed}
@@ -946,6 +1225,30 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
           }}
           >
             {showClosed ? "No closed entries match those filters." : "Nothing matches those filters."}
+            {/* The one case where the empty board is the DEFAULT's doing rather
+                than the player's: they opened the panel, it opened on Mine, and
+                every entry they have is somebody else's. Point at the chip. */}
+            {!showClosed && owner === "mine" && foreignCount > 0 && (
+              <div style={{ fontStyle: "normal", marginTop: "0.4rem" }}>
+                {foreignCount === 1 ? "One entry belongs" : `${foreignCount} entries belong`} to another power —
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => setOwner("foreign")}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#c4b5fd",
+                    cursor: "pointer",
+                    font: "inherit",
+                    padding: 0,
+                    textDecoration: "underline",
+                  }}
+                >
+                  show Foreign
+                </button>.
+              </div>
+            )}
           </div>
         )}
 
@@ -959,6 +1262,10 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             expanded={expandedId === project.id}
             onToggleExpand={toggleExpand}
             busy={pendingId === project.id}
+            playerCountry={playerCountry}
+            playerLandless={playerLandless}
+            ownerFlags={ownerFlags}
+            ownerNames={ownerNames}
             onAskAdvisor={askAdvisor}
             onShowOnMap={showOnMap}
             onSetPriority={setPriority}

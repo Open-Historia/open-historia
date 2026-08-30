@@ -3,7 +3,7 @@ import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { getBetaUnitsToStamp } from "./mapSettings.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
-import { advanceRecurringDate, normalizeMilestoneRepeat } from "./projects.js";
+import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
 import {
@@ -1408,6 +1408,34 @@ const findProjectIndexForOp = (list, op) => {
   return list.findIndex((project) => project.name.toLowerCase() === wanted);
 };
 
+// Fold a project op's owner name onto the polity it actually names, before the op
+// is matched or applied.
+//
+// A foreign power's programme must land on the SAME identity as its territory, its
+// units and its colour. The model reads the story it just wrote, so the turn after
+// Germany becomes the Third Reich it opens "the Third Reich's rocket programme" —
+// and stored verbatim that is a second power sitting beside the first, with no
+// flag and no colour, filed under Foreign on the board even when it is the
+// player's own renamed country wearing its new name.
+//
+// Handles both op shapes (payload nested under `project`, or inlined on the op)
+// and every alias PROJECT_FIELD_ALIASES accepts for the field, because an update
+// carrying {"owner":"Third Reich"} splits the polity exactly as a create does.
+// Returns the op untouched when there is nothing to fold, so an op that has been
+// through here is safe to pass through again.
+const resolveProjectOpOwner = (raw, resolveOwner) => {
+  if (!raw || typeof raw !== "object") return raw;
+  const nested = raw.project && typeof raw.project === "object";
+  const source = nested ? raw.project : raw;
+  const alias = PROJECT_FIELD_ALIASES.ownerCode.find((key) => normalizeOptionalString(source[key]));
+  if (!alias) return raw;
+  const owner = resolveOwner(source[alias]);
+  if (!owner || owner === source[alias]) return raw;
+  return nested
+    ? { ...raw, project: { ...raw.project, [alias]: owner } }
+    : { ...raw, [alias]: owner };
+};
+
 // The effects a batch of ops is about to release, worked out BEFORE anything is
 // applied. Pure.
 //
@@ -2479,7 +2507,19 @@ export const normalizeWorldState = (world) => {
     markers: normalizeMarkers(nextWorld.markers),
     // Explicit (not via the ...WORLD_DEFAULTS spread) so these new fields survive every
     // write path — the documented new-world-field trap.
-    projects: normalizeProjects(nextWorld.projects),
+    //
+    // Owners folded on READ, exactly as regionOwnershipOverrides and regionClaimants
+    // above are, and for the same reason: a board written before the ops door began
+    // folding them can still carry a foreign programme filed under a polity's era
+    // display name ("the Third Reich") rather than the token everything else keys off
+    // ("Germany"). Left alone that is a second power beside the first, with no flag
+    // and no colour — and where the renamed polity is the PLAYER'S, it is their own
+    // programme sitting in the Foreign column with both of its controls gone. Idempotent,
+    // so a board already correct reads back unchanged.
+    projects: normalizeProjects(nextWorld.projects).map((project) => {
+      const owner = resolveOwner(project.ownerCode);
+      return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
+    }),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -2942,14 +2982,11 @@ export const applyEventImpactsToWorld = ({
     // activity feed and dates a project the event has just started, without the
     // model having to restate either.
     if (event.impacts.projectOps?.length) {
-      nextWorld.projects = applyProjectOps(nextWorld.projects, event.impacts.projectOps.map((op) =>
-        (op.op === "create" && op.project?.ownerCode
-          ? { ...op, project: { ...op.project, ownerCode: resolveOwner(op.project.ownerCode) } }
-          : op)), {
-        date: event.date,
-        eventId: event.id,
-        round,
-      });
+      nextWorld.projects = applyProjectOps(
+        nextWorld.projects,
+        event.impacts.projectOps.map((op) => resolveProjectOpOwner(op, resolveOwner)),
+        { date: event.date, eventId: event.id, round },
+      );
     }
   }
 
@@ -2981,22 +3018,56 @@ export const applyEventImpactsToWorld = ({
 // world change is made and where the narration sits beside it.
 //
 // Effects are never applied here, so this deliberately returns no colors change.
-export const applyProjectOpsToWorld = ({ date = "", eventId = "", ops, round = 0, world }) => {
+//
+// `actor` says WHO is writing, and only two values exist. "ai" (the default) is
+// the advisor's ```projects fence, which may touch any entry on the board: half of
+// what it does is report what the player's services have learned about somebody
+// else's shipyard. "player" is the Projects panel's own buttons, which may only
+// touch the player's own work — see canPlayerDirect. Anything refused for that
+// reason comes back in refusedProjectIds rather than being applied and rather than
+// throwing; the panel re-reads within five seconds either way.
+export const applyProjectOpsToWorld = ({
+  actor = "ai",
+  date = "",
+  eventId = "",
+  ops,
+  playerCountry = "",
+  round = 0,
+  world,
+}) => {
   const nextWorld = normalizeWorldState(world);
+  // Same resolver, same reason, as the event path below and as
+  // normalizeWorldState's territory fields — see resolveProjectOpOwner.
+  const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
+
   // The same pre-scan the event path runs, used here purely as a PREDICATE: what
   // would this batch release? Anything it names is an op this door may not apply.
-  const released = releaseProjectCompletionEffects(nextWorld.projects, ops);
+  const released = releaseProjectCompletionEffects(nextWorld.projects, resolved);
   const deferred = new Set(released.projectIds);
+  const refused = new Set();
 
-  const allowed = deferred.size === 0 ? normalizeArray(ops) : normalizeArray(ops).filter((raw) => {
+  const allowed = resolved.filter((raw) => {
     const op = normalizeProjectOp(raw);
     if (!op) return true;
     const index = findProjectIndexForOp(nextWorld.projects, op);
+    // A create names nothing on the board yet, so there is no owner to check and
+    // no completion to defer. The panel never sends one; the advisor legitimately
+    // opens a rival's programme.
     if (index === -1) return true;
+    const target = nextWorld.projects[index];
+
+    // The player's door. Priority and abandon are the only two ops it drives, and
+    // neither is a thing one government does to another's programme.
+    if (actor === "player" && !canPlayerDirect(target, playerCountry)) {
+      refused.add(target.id);
+      return false;
+    }
+
     // Only the completing op is dropped. An update to the same project in the same
     // batch — progress, a note, a milestone — still lands: refusing to close it is
     // not a reason to lose everything else the reply said about it.
-    if (!deferred.has(nextWorld.projects[index].id)) return true;
+    if (!deferred.has(target.id)) return true;
     if (op.op === "close" && op.status === "complete") return false;
     if (op.op === "update") {
       const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
@@ -3008,5 +3079,5 @@ export const applyProjectOpsToWorld = ({ date = "", eventId = "", ops, round = 0
 
   nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, { date, eventId, round });
 
-  return { deferredProjectIds: [...deferred], world: nextWorld };
+  return { deferredProjectIds: [...deferred], refusedProjectIds: [...refused], world: nextWorld };
 };

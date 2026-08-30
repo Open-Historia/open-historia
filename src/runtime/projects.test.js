@@ -16,8 +16,10 @@ import {
   deriveProjectFlags,
   describeTimeline,
   filterProjects,
+  canPlayerDirect,
   isProjectClosed,
   isProjectOpen,
+  isForeignProject,
   isPlayerProject,
   signedDaysBetween,
   sortProjects,
@@ -404,4 +406,56 @@ test("PROJECT_SORTS offers every comparator, priority included", () => {
   for (const entry of PROJECT_SORTS) {
     assert.ok(entry.label, "every sort needs a label for the menu");
   }
+});
+
+// --- whose project it is ----------------------------------------------------
+
+// A plain toLowerCase() compare was not enough. The model spells a country back
+// the way it remembers it, so the player's own programme arrives owned by
+// "Cote dIvoire" while game.country is "Côte d'Ivoire" — the entry files itself
+// under Foreign and the player loses both levers over their own work.
+test("owner identity ignores case, accents and punctuation", () => {
+  const own = project({ ownerCode: "Cote dIvoire" });
+  assert.equal(isPlayerProject(own, "Côte d'Ivoire"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "  SPAIN  " }), "Spain"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "Ruritania" }), "Spain"), false);
+});
+
+// A blank owner has always meant the player: the model is not made to restate
+// their own country on every entry, since a field it has to repeat is a field it
+// eventually gets wrong.
+test("an unowned entry is the player's own", () => {
+  assert.equal(isPlayerProject(project({ ownerCode: "" }), "Spain"), true);
+  assert.equal(isForeignProject(project({ ownerCode: "" }), "Spain"), false);
+  assert.equal(isForeignProject(project({ ownerCode: "Ruritania" }), "Spain"), true);
+});
+
+// The gate on the panel's two controls, and on the ops door behind them.
+test("canPlayerDirect: their own running work, and nothing else", () => {
+  assert.equal(canPlayerDirect(project({ ownerCode: "", status: "active" }), "Spain"), true);
+  assert.equal(canPlayerDirect(project({ ownerCode: "Spain", status: "stalled" }), "Spain"), true);
+  assert.equal(
+    canPlayerDirect(project({ ownerCode: "Ruritania", status: "active" }), "Spain"),
+    false,
+    "a rival's running programme is not the player's to steer",
+  );
+  assert.equal(
+    canPlayerDirect(project({ ownerCode: "", status: "complete" }), "Spain"),
+    false,
+    "neither lever means anything on work that has already ended",
+  );
+});
+
+test("the Mine and Foreign filters partition the board exactly", () => {
+  const board = [
+    project({ id: "a", name: "Ours, unowned", ownerCode: "" }),
+    project({ id: "b", name: "Ours, named", ownerCode: "Spain" }),
+    project({ id: "c", name: "Theirs", ownerCode: "Ruritania" }),
+  ];
+  const mine = filterProjects(board, { owner: "mine", playerCountry: "Spain" });
+  const foreign = filterProjects(board, { owner: "foreign", playerCountry: "Spain" });
+
+  assert.deepEqual(mine.map((entry) => entry.id), ["a", "b"]);
+  assert.deepEqual(foreign.map((entry) => entry.id), ["c"]);
+  assert.equal(mine.length + foreign.length, board.length, "every entry belongs to exactly one column");
 });

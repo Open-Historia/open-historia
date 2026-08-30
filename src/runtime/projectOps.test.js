@@ -557,3 +557,135 @@ test("normalized ops are idempotent: re-applying a normalized batch is a no-op",
   const { world: twice } = applyEventImpactsToWorld({ events: [event], world: once });
   assert.equal(twice.projects[0].status, "complete");
 });
+
+// --- whose project it is ----------------------------------------------------
+//
+// The board tracks other powers' programmes because the player's services have
+// learned of them. The player's two levers — priority and abandon — are things a
+// government does to its OWN work, so the panel hides them on a foreign card and
+// this door refuses the op behind them. Both matter: the card renders off a 5s
+// poll, and a project that changes hands between the render and the click must not
+// slip an Abandon through on somebody else's shipyard.
+
+const rivalProgramme = {
+  op: "create",
+  name: "Kestrel Rocket Programme",
+  summary: "Their long-range rocket effort.",
+  ownerCode: "Ruritania",
+  status: "active",
+  progress: 40,
+};
+
+const ownProgramme = {
+  op: "create",
+  name: "Project Leviathan",
+  summary: "Our own ship programme.",
+  status: "active",
+  progress: 20,
+};
+
+test("the player's door refuses to abandon another power's programme", () => {
+  const world = worldWith(applyProjectOps([], [rivalProgramme]));
+  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
+    actor: "player",
+    ops: [{ op: "cancel", name: "Kestrel Rocket Programme", note: "Abandoned by the player." }],
+    playerCountry: "Spain",
+    world,
+  });
+
+  assert.equal(next.projects[0].status, "active", "a rival's programme was called off from the panel");
+  assert.deepEqual(refusedProjectIds, [next.projects[0].id]);
+});
+
+test("the player's door refuses to set a priority on another power's programme", () => {
+  const world = worldWith(applyProjectOps([], [rivalProgramme]));
+  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
+    actor: "player",
+    ops: [{ op: "update", name: "Kestrel Rocket Programme", priority: "high" }],
+    playerCountry: "Spain",
+    world,
+  });
+
+  assert.equal(next.projects[0].priority, "normal");
+  assert.equal(refusedProjectIds.length, 1);
+});
+
+// The levers still work on their own work — both when the entry names the player
+// and when it carries no owner at all, which is how the model writes theirs.
+test("the player's door still steers their own work, named or unnamed", () => {
+  const world = worldWith(applyProjectOps([], [
+    ownProgramme,
+    { ...ownProgramme, name: "Project Titan", ownerCode: "Spain" },
+  ]));
+  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
+    actor: "player",
+    ops: [
+      { op: "update", name: "Project Leviathan", priority: "high" },
+      { op: "cancel", name: "Project Titan", note: "Abandoned by the player." },
+    ],
+    playerCountry: "Spain",
+    world,
+  });
+
+  assert.deepEqual(refusedProjectIds, []);
+  assert.equal(next.projects[0].priority, "high");
+  assert.equal(next.projects[1].status, "cancelled");
+  assert.equal(next.projects[1].progress, 20, "an abandoned project keeps the progress it reached");
+});
+
+// A renamed polity is the case that would have hurt most: the model writes the
+// name the story now uses, and without the fold the player's OWN programme files
+// itself under a country that does not exist and loses both levers.
+test("an owner written as a polity's display name folds back to the polity", () => {
+  const world = normalizeWorldState({
+    polityOverrides: { Ruritania: { code: "Ruritania", name: "Federal Republic of Ruritania" } },
+  });
+  const { world: next } = applyProjectOpsToWorld({
+    ops: [{ ...rivalProgramme, ownerCode: "Federal Republic of Ruritania" }],
+    world,
+  });
+
+  assert.equal(next.projects[0].ownerCode, "Ruritania", "the display name minted a second power");
+});
+
+test("an update that re-owns a project folds the new owner too", () => {
+  const world = normalizeWorldState({
+    polityOverrides: { Ruritania: { code: "Ruritania", name: "Federal Republic of Ruritania" } },
+    projects: applyProjectOps([], [ownProgramme]),
+  });
+  const { world: next } = applyProjectOpsToWorld({
+    ops: [{ op: "update", name: "Project Leviathan", owner: "Federal Republic of Ruritania" }],
+    world,
+  });
+
+  assert.equal(next.projects[0].ownerCode, "Ruritania");
+});
+
+// Reporting on a rival's programme is the whole reason foreign entries exist, and
+// the advisor's door is not the player's.
+test("the advisor's door updates a foreign programme freely", () => {
+  const world = worldWith(applyProjectOps([], [rivalProgramme]));
+  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
+    ops: [{ op: "update", name: "Kestrel Rocket Programme", progress: 65, lastUpdate: "Static firing observed." }],
+    playerCountry: "Spain",
+    world,
+  });
+
+  assert.deepEqual(refusedProjectIds, []);
+  assert.equal(next.projects[0].progress, 65);
+});
+
+// Closed work has no levers for anyone, which canPlayerDirect already said — but
+// the door must agree, or a stale card could re-cancel a finished project and
+// restamp its updatedAt for nothing.
+test("the player's door refuses a lever on their own CLOSED project", () => {
+  const world = worldWith(applyProjectOps([], [{ ...ownProgramme, status: "complete" }]));
+  const { refusedProjectIds } = applyProjectOpsToWorld({
+    actor: "player",
+    ops: [{ op: "update", name: "Project Leviathan", priority: "high" }],
+    playerCountry: "Spain",
+    world,
+  });
+
+  assert.equal(refusedProjectIds.length, 1);
+});
