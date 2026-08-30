@@ -563,6 +563,20 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <Toggle
+            label="Strict tool schema"
+            enabled={settings.openaiCompatibleToolStrict === "1"}
+            onToggle={() => onSettingChange(
+                "openaiCompatibleToolStrict",
+                settings.openaiCompatibleToolStrict === "1" ? "" : "1",
+            )}
+            />
+            <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+            Sends strict:true with the tool call so a self-hosted backend constrains
+            generation to the schema (SGLang/xgrammar, vLLM). Stops malformed or
+            mistyped tool arguments. Leave off for OpenAI and Azure: they reject a
+            schema that does not list every property as required.
+            </div>
             </>
         )}
 

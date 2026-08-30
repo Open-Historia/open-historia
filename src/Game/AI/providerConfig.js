@@ -79,6 +79,7 @@ const PROVIDER_SETTINGS = {
             defaultValue: "",
         },
         customParams: { storageKey: "openai_compatible_custom_params", defaultValue: "" },
+        toolStrict: { storageKey: "openai_compatible_tool_strict", defaultValue: "" },
     },
 };
 
@@ -100,6 +101,7 @@ const FORM_FIELD_MAP = {
     openaiCompatibleEndpoint: { provider: "openai-compatible", field: "endpoint" },
     openaiCompatibleModel: { provider: "openai-compatible", field: "model" },
     openaiCompatibleCustomParams: { provider: "openai-compatible", field: "customParams" },
+    openaiCompatibleToolStrict: { provider: "openai-compatible", field: "toolStrict" },
 };
 
 function isSupportedProvider(value) {
@@ -162,6 +164,8 @@ export function getProviderSettings(provider) {
         endpoint: getProviderField(normalized, "endpoint"),
         model: getProviderField(normalized, "model"),
         customParams: getProviderField(normalized, "customParams"),
+        // Opt-in, so anything other than an explicit "1" leaves it off.
+        toolStrict: getProviderField(normalized, "toolStrict") === "1",
     };
 }
 
