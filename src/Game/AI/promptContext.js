@@ -15,7 +15,7 @@ import {
 import { buildRegionOwnershipText } from "./regionVocab.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { buildForcePostureText } from "./forcePosture.js";
-import { STALE_ROUNDS, describeTimeline, deriveProjectFlags } from "../../runtime/projects.js";
+import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -428,18 +428,31 @@ export const buildProjectsSummaryText = (world, game) => {
       : `${label} "${project.name}"`;
   };
 
+  // The board's own predicate, not a second comparison that agrees with it today.
+  // It used to be an inline lowercase compare here and a different one in
+  // projects.js, which is exactly how the panel's Mine/Foreign filter and what the
+  // model is told about the same project come to disagree.
+  const isOurs = (project) => isPlayerProject(project, player);
+
   const ownerOf = (project) => {
     const owner = normalizeString(project.ownerCode);
-    // Case-insensitively, the same way projects.js's isPlayerProject compares —
-    // the two must agree or the board's Mine/Foreign filter and what the model is
-    // told about the same project disagree.
-    return owner && owner.toLowerCase() !== player.toLowerCase() ? `run by ${owner}` : "ours";
+    // Said in words the directive can point at, because "run by Germany" was being
+    // read as a label rather than a limit: the model would cheerfully mark a rival's
+    // programme high priority or close it because the player asked it to.
+    return isOurs(project) ? "ours" : `run by ${owner} — THEIRS, not ours`;
   };
 
-  // Printed ONLY when it is not normal. Putting "priority: normal" on twenty
-  // entries spends the model's attention teaching it that the field means
-  // nothing; the two exceptional values are the whole signal.
+  // Printed ONLY when it is not normal, and only on the player's OWN work.
+  //
+  // "priority: normal" on twenty entries spends the model's attention teaching it
+  // that the field means nothing; the two exceptional values are the whole signal.
+  // And priority means "how much of MY attention does this get", which nobody has
+  // over another government's programme — while a board written before the panel
+  // enforced that can still carry a High stamped on a rival's shipyard. Printing
+  // that would tell the model to chase a foreign programme on the player's behalf,
+  // which is the confusion this whole pass exists to end.
   const priorityNote = (project) => {
+    if (!isOurs(project)) return "";
     if (project.priority === "high") return " [HIGH PRIORITY]";
     if (project.priority === "low") return " [low priority]";
     return "";
@@ -529,7 +542,12 @@ export const buildProjectsSummaryText = (world, game) => {
           ? `nothing reported for ${Math.max(round - project.updatedRound, STALE_ROUNDS)} rounds`
           : "",
       ].filter(Boolean).join(", ");
-      return `- [id ${project.id}] ${project.name}${priorityNote(project)} — ${why}.`;
+      // A foreign entry on this list is not a decision the player makes — it is a
+      // question about what the OTHER power has been doing while nobody looked, and
+      // the answer is a report, not an order. Marked so the directive's four
+      // answers are read in that register.
+      const whose = isOurs(project) ? "" : " (THEIRS — report what has become of it; it is not the player's to decide)";
+      return `- [id ${project.id}] ${project.name}${priorityNote(project)}${whose} — ${why}.`;
     });
     sections.push(`Needs a decision this jump:\n${rows.join("\n")}`);
   }
