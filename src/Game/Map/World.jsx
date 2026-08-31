@@ -162,7 +162,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     });
   }
 
-  return style
+  return style;
 };
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
@@ -196,7 +196,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
             exaggeration: 15,
           }
         : null,
-    [terrainEnabled, isGlobe, customBg, bgDeclared],
+    [terrainEnabled, customBg, bgDeclared],
   );
   // Render at reduced pixel density when zoomed far out: the whole-world view
   // draws every region, border and label at once, and full native resolution
