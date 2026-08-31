@@ -54,7 +54,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -103,7 +103,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       sky: { "atmosphere-blend": 0 },
     };
   }
-  return {
+  const style = {
   version: 8,
   sources: {
     "satellite-lowres": {
@@ -119,15 +119,6 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       tileSize: 256,
       maxzoom: basemapMaxZoom(basemapId),
     },
-    "terrain-source": {
-      type: "raster-dem",
-      tiles: [
-        TERRAIN_TILE_TEMPLATE,
-      ],
-      encoding: "terrarium",
-      maxzoom: 5,
-      tileSize: 256,
-    },
   },
   layers: [
     {
@@ -142,15 +133,6 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       source: "satellite",
       paint: SATELLITE_PAINT,
     },
-    {
-      id: "hills",
-      type: "hillshade",
-      source: "terrain-source",
-      paint: {
-        "hillshade-exaggeration": 0.1,
-        "hillshade-shadow-color": "#000",
-      },
-    },
   ],
   // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
   // surface light instead. Transparent space lets the stars and sun show.
@@ -158,6 +140,29 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
     "atmosphere-blend": 0,
   },
   };
+
+  // Only include DEM source and hillshade layer if terrain is enabled
+  if (terrainEnabled) {
+    style.sources["terrain-source"] = {
+      type: "raster-dem",
+      tiles: [TERRAIN_TILE_TEMPLATE],
+      encoding: "terrarium",
+      maxzoom: 5,
+      tileSize: 256,
+    };
+
+    style.layers.push({
+      id: "hills",
+      type: "hillshade",
+      source: "terrain-source",
+      paint: {
+        "hillshade-exaggeration": 0.1,
+        "hillshade-shadow-color": "#000",
+      },
+    });
+  }
+
+  return style
 };
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
@@ -180,14 +185,12 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = customBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
-    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords),
-    [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap],
+    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords, terrainEnabled),
+                             [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap, terrainEnabled],
   );
-  // Globe terrain is unsupported by MapLibre and can leave its shader cache invalid
-  // when projections change. Keep the setting enabled and restore it on flat maps.
   const terrain = useMemo(
     () =>
-      terrainEnabled && !isGlobe && !customBg && !bgDeclared
+      terrainEnabled && !customBg && !bgDeclared
         ? {
             source: "terrain-source",
             exaggeration: 15,
