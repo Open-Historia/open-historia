@@ -12,7 +12,16 @@ import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js"
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
-import { busyProviderMessage, errorPayloadText, isBusyErrorPayload, providerErrorReplyMessage } from "./providerErrors.js";
+import {
+    busyProviderMessage,
+    errorPayloadText,
+    isBusyErrorPayload,
+    isStreamingRefusal,
+    isStreamingRequired,
+    providerErrorReplyMessage,
+} from "./providerErrors.js";
+import { toGeminiSchema } from "./geminiSchema.js";
+import { readAnthropicStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
 import {
     buildPromptContext,
     renderTemplate,
@@ -224,16 +233,6 @@ function extractAnthropicToolInput(data, tool) {
     return block?.input && typeof block.input === "object" ? block.input : null;
 }
 
-function toGeminiSchema(value) {
-    if (Array.isArray(value)) return value.map(toGeminiSchema);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(
-        Object.entries(value)
-        .filter(([key]) => key !== "additionalProperties" && key !== "$schema")
-        .map(([key, entry]) => [key, toGeminiSchema(entry)]),
-    );
-}
-
 function getGeminiUrl(model, apiKey) {
     return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${apiKey}`;
 }
@@ -345,68 +344,6 @@ async function providerFetch(url, options = {}) {
         }
         throw error;
     }
-}
-
-// Local inference servers (llama.cpp, LM Studio, Ollama) only notice a dead
-// connection when they next WRITE. A non-streaming request therefore keeps
-// generating after Cancel: the socket closes, but the server burns through the
-// entire completion before discovering nobody is listening — the reported
-// "cancel doesn't actually stop my local model". Streaming fixes it physically:
-// the very next token write fails and inference stops within a token or two.
-// Assembles the SSE deltas back into a normal chat-completions response object
-// so the existing extractors work unchanged. Cloud providers keep the simpler
-// buffered path — their compute is not the player's GPU.
-export async function readOpenAIStreamedResponse(response) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let content = "";
-    let reasoning = "";
-    let toolName = "";
-    let toolArguments = "";
-    let finishReason = null;
-    try {
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-                const data = line.slice(5).trim();
-                if (!data || data === "[DONE]") continue;
-                let chunk;
-                try { chunk = JSON.parse(data); } catch { continue; }
-                const choice = chunk?.choices?.[0];
-                if (!choice) continue;
-                const delta = choice.delta ?? choice.message ?? {};
-                if (typeof delta.content === "string") content += delta.content;
-                // Thinking-mode models (Qwen3, DeepSeek-R1) stream their chain of thought in a
-                // separate reasoning field; keep it so an all-reasoning delta isn't lost (#540).
-                if (typeof delta.reasoning === "string") reasoning += delta.reasoning;
-                else if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
-                const call = Array.isArray(delta.tool_calls) ? delta.tool_calls[0] : null;
-                if (call?.function?.name) toolName = call.function.name;
-                if (typeof call?.function?.arguments === "string") toolArguments += call.function.arguments;
-                if (choice.finish_reason) finishReason = choice.finish_reason;
-            }
-        }
-    } finally {
-        try { reader.releaseLock(); } catch { /* stream already closed */ }
-    }
-    return {
-        choices: [{
-            finish_reason: finishReason,
-            message: {
-                content,
-                ...(reasoning ? { reasoning } : {}),
-                ...(toolName || toolArguments
-                    ? { tool_calls: [{ type: "function", function: { name: toolName, arguments: toolArguments } }] }
-                    : {}),
-            },
-        }],
-    };
 }
 
 // Generic SSE text streamer for the CHAT path (the advisor). Reads `data:` lines,
@@ -812,6 +749,11 @@ async function callOpenAIStyleChatCompletions({
     // Same one-shot discipline as liftedCapForReasoning: it drives a retry that
     // does not consume an attempt, so it must only ever be able to flip once.
     let retriedAfterOverload = false;
+    // Set when a gateway refuses stream+tools together (a 400/422 naming the
+    // stream parameter). One-shot, and tried BEFORE the structuredMode ladder
+    // below: giving up streaming costs a keep-alive, while giving up tool mode
+    // costs structured output, so the cheaper concession goes first.
+    let streamingDisabled = false;
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -824,15 +766,20 @@ async function callOpenAIStyleChatCompletions({
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
             : systemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
+        // Every call streams unless a gateway has refused to. Three things need it:
+        // Cancel is only PHYSICAL on a local server while tokens are being written
+        // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
+        // they arrive; and a buffered TOOL call sends nothing for the length of the
+        // generation, which is what let a hosted gateway close a timeline jump with
+        // a 502 at 301.7s. Reassembled by readOpenAIStreamedResponse below, so
+        // everything downstream still sees one buffered envelope.
+        const streamThisRequest = (streamLocalEndpoint || onChunk || Boolean(tool)) && !streamingDisabled;
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
             payload: {
                 model,
-                // Streaming is what makes Cancel PHYSICAL on a local server —
-                // see readOpenAIStreamedResponse. Local endpoints, and the
-                // advisor/chat path (onChunk) which streams tokens to the UI.
-                ...(streamLocalEndpoint || (onChunk && !tool) ? { stream: true } : {}),
+                ...(streamThisRequest ? { stream: true } : {}),
                 messages: toOpenAIMessages(requestSystemPrompt, history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways. Sent in EVERY mode, tool calls
@@ -891,32 +838,53 @@ async function callOpenAIStyleChatCompletions({
             },
         });
 
-        if ([400, 422].includes(response.status) && structuredMode === "tool") {
+        // One read of the body serves every concession below — a Response can only
+        // be read once, and the streaming retry has to look at the message before
+        // the structured-output ladder gets its turn.
+        if ([400, 422].includes(response.status)) {
             const payload = await readErrorPayload(response);
             const errorMessage = extractErrorMessage(payload, `${providerLabel} request failed (${response.status})`);
-            const reasoningConflict = /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
 
-            if (!disableToolReasoning && reasoningConflict) {
-                disableToolReasoning = true;
+            // Cheapest concession first. A gateway that refuses stream+tools still
+            // does tools, it just stops keeping the connection warm — whereas
+            // dropping out of tool mode costs structured output, which is the
+            // difference between a real turn and canned events.
+            if (streamThisRequest && isStreamingRefusal(errorMessage)) {
+                streamingDisabled = true;
+                console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
                 continue;
             }
 
-            if (allowJsonSchemaFallback) {
-                structuredMode = "json_schema";
+            if (structuredMode === "tool") {
+                const reasoningConflict = /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
+
+                if (!disableToolReasoning && reasoningConflict) {
+                    disableToolReasoning = true;
+                    continue;
+                }
+
+                if (allowJsonSchemaFallback) {
+                    structuredMode = "json_schema";
+                    continue;
+                }
+
+                throw new Error(errorMessage);
+            }
+
+            if (structuredMode === "json_schema" && allowJsonSchemaFallback) {
+                structuredMode = "json_object";
                 continue;
             }
 
+            if (structuredMode === "json_object" && allowJsonSchemaFallback) {
+                structuredMode = "text_json";
+                continue;
+            }
+
+            // Nothing left to concede. Throw the message we already read rather
+            // than falling through to the generic handler below, which would try
+            // to read this same body a second time and get nothing.
             throw new Error(errorMessage);
-        }
-
-        if ([400, 422].includes(response.status) && structuredMode === "json_schema" && allowJsonSchemaFallback) {
-            structuredMode = "json_object";
-            continue;
-        }
-
-        if ([400, 422].includes(response.status) && structuredMode === "json_object" && allowJsonSchemaFallback) {
-            structuredMode = "text_json";
-            continue;
         }
 
         if (response.status === 429 || response.status === 503) {
@@ -983,11 +951,12 @@ async function callOpenAIStyleChatCompletions({
             });
         }
 
-        // Local servers that honor stream:true answer as an event stream; ones
-        // that ignore it still answer plain JSON — branch on what actually came
-        // back, not on what was asked for.
+        // Servers that honor stream:true answer as an event stream; ones that
+        // ignore it still answer plain JSON — branch on what actually came back,
+        // not on what was asked for. That guard is why asking every tool call to
+        // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
-        const data = streamLocalEndpoint && responseType.includes("text/event-stream")
+        const data = responseType.includes("text/event-stream")
             ? await readOpenAIStreamedResponse(response)
             : await response.json();
         const text = extractOpenAIMessageText(data);
@@ -995,6 +964,22 @@ async function callOpenAIStyleChatCompletions({
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
             if (toolInput) return { rawText: text, toolInput };
+
+            // Now that tool calls stream, an overloaded provider can refuse INSIDE
+            // the stream — HTTP 200, an error frame, no tool call — where the same
+            // refusal used to arrive as a 429/503 and be retried by status code
+            // above. Without this, a provider hiccup would cost the player a whole
+            // turn to the canned fallback, which is exactly what the buffered path
+            // protected them from.
+            const streamedError = data?.error;
+            if (!text && isBusyErrorPayload(streamedError) && !retriedAfterOverload
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] ${providerLabel} reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+
             if (structuredMode === "tool") return { rawText: extractOpenAIToolRaw(data, tool) || text, toolInput: null };
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
@@ -1121,6 +1106,9 @@ async function callAnthropic(systemPrompt, history, {
     tool,
 } = {}) {
     let retriedAfterOverload = false;
+    // Anthropic tool calls stream (see the request body below); this flips if the
+    // endpoint refuses to, so the call retries buffered instead of failing.
+    let streamingDisabled = false;
     const settings = getProviderSettings("anthropic");
     const apiKey = settings.apiKey.trim();
 
@@ -1153,13 +1141,21 @@ async function callAnthropic(systemPrompt, history, {
     delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
+        // The advisor (tokens to the UI) and tool calls (keep-alive, and the
+        // long-request refusal above). A plain buffered call stays buffered.
+        const streamThisRequest = Boolean(onChunk || tool) && !streamingDisabled;
         const body = {
             model,
             system: systemPrompt,
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            // Advisor/chat streaming: SSE tokens to the UI.
-            ...(onChunk && !tool ? { stream: true } : {}),
+            // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
+            // calls. A tool call must stream because the Messages API refuses a
+            // non-streaming request whose max_tokens implies a long generation —
+            // and max_tokens above is the model's own maximum, uncapped on
+            // purpose — so a timeline jump could be rejected before generating a
+            // single token. readAnthropicStreamedResponse rebuilds the envelope.
+            ...(streamThisRequest ? { stream: true } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
@@ -1197,6 +1193,23 @@ async function callAnthropic(systemPrompt, history, {
                 requestedMaxTokens = Number(capMatch[1]);
                 continue;
             }
+            // The OTHER max_tokens complaint, and the one that used to cost a
+            // whole turn: the API refuses a non-streaming request this long
+            // instead of naming a ceiling, so capMatch above never fires and the
+            // error fell straight through to the canned fallback. Only reachable
+            // if streaming was turned off below.
+            if (response.status === 400 && streamingDisabled && isStreamingRequired(message) && attempt < retries) {
+                streamingDisabled = false;
+                console.warn("[ai] Anthropic requires streaming for a request this long; re-enabling it.");
+                continue;
+            }
+            // The reverse: an endpoint that will not stream at all. Give up the
+            // keep-alive rather than the request.
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+                streamingDisabled = true;
+                console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
+                continue;
+            }
             throw new Error(message);
         }
 
@@ -1218,10 +1231,35 @@ async function callAnthropic(systemPrompt, history, {
             });
         }
 
-        const data = await response.json();
+        // A streamed tool call comes back as SSE; readAnthropicStreamedResponse
+        // rebuilds the Messages envelope the extractors below already read, so
+        // nothing downstream can tell the difference. Branch on what actually
+        // arrived, so an endpoint that ignored stream:true still works.
+        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
+            ? await readAnthropicStreamedResponse(response)
+            : await response.json();
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+
+            // Streaming moved the overload refusal from an HTTP status into an
+            // error EVENT on a 200, which the status-code retry above cannot see.
+            // Without this a provider hiccup costs the player the whole turn.
+            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic reported "${errorPayloadText(data.error)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            // A tool call the stream was cut off partway through: the fragment is
+            // logged, never returned as content. Half a turn presented as a whole
+            // one is worse than falling back (see jsonSalvage.js).
+            if (data?.partialToolJson) {
+                logDebugEvent("warn", `[ai] Anthropic tool call was cut off mid-argument.`, {
+                    partialChars: data.partialToolJson.length,
+                }, { verbose: true });
+            }
             return { rawText: extractAnthropicText(data), toolInput: null };
         }
         const text = extractAnthropicText(data);
@@ -1244,6 +1282,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
     tool,
 } = {}) {
     let retriedAfterOverload = false;
+    // Same as the native path: tool calls stream, and this flips if the proxy
+    // refuses to so the call retries buffered.
+    let streamingDisabled = false;
     const settings = getProviderSettings("anthropic-compatible");
     const endpoint = normalizeEndpoint(settings.endpoint);
 
@@ -1277,12 +1318,21 @@ async function callAnthropicCompatible(systemPrompt, history, {
     delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
+        // The advisor (tokens to the UI) and tool calls (keep-alive, and the
+        // long-request refusal above). A plain buffered call stays buffered.
+        const streamThisRequest = Boolean(onChunk || tool) && !streamingDisabled;
         const body = {
             model,
             system: systemPrompt,
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            ...(onChunk && !tool ? { stream: true } : {}),
+            // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
+            // calls. A tool call must stream because the Messages API refuses a
+            // non-streaming request whose max_tokens implies a long generation —
+            // and max_tokens above is the model's own maximum, uncapped on
+            // purpose — so a timeline jump could be rejected before generating a
+            // single token. readAnthropicStreamedResponse rebuilds the envelope.
+            ...(streamThisRequest ? { stream: true } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
@@ -1314,6 +1364,23 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 requestedMaxTokens = Number(capMatch[1]);
                 continue;
             }
+            // The OTHER max_tokens complaint, and the one that used to cost a
+            // whole turn: the API refuses a non-streaming request this long
+            // instead of naming a ceiling, so capMatch above never fires and the
+            // error fell straight through to the canned fallback. Only reachable
+            // if streaming was turned off below.
+            if (response.status === 400 && streamingDisabled && isStreamingRequired(message) && attempt < retries) {
+                streamingDisabled = false;
+                console.warn("[ai] Anthropic-compatible requires streaming for a request this long; re-enabling it.");
+                continue;
+            }
+            // The reverse: an endpoint that will not stream at all. Give up the
+            // keep-alive rather than the request.
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+                streamingDisabled = true;
+                console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");
+                continue;
+            }
             throw new Error(message);
         }
 
@@ -1335,10 +1402,35 @@ async function callAnthropicCompatible(systemPrompt, history, {
             });
         }
 
-        const data = await response.json();
+        // A streamed tool call comes back as SSE; readAnthropicStreamedResponse
+        // rebuilds the Messages envelope the extractors below already read, so
+        // nothing downstream can tell the difference. Branch on what actually
+        // arrived, so an endpoint that ignored stream:true still works.
+        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
+            ? await readAnthropicStreamedResponse(response)
+            : await response.json();
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+
+            // Streaming moved the overload refusal from an HTTP status into an
+            // error EVENT on a 200, which the status-code retry above cannot see.
+            // Without this a provider hiccup costs the player the whole turn.
+            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Anthropic-compatible reported "${errorPayloadText(data.error)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+            // A tool call the stream was cut off partway through: the fragment is
+            // logged, never returned as content. Half a turn presented as a whole
+            // one is worse than falling back (see jsonSalvage.js).
+            if (data?.partialToolJson) {
+                logDebugEvent("warn", `[ai] Anthropic-compatible tool call was cut off mid-argument.`, {
+                    partialChars: data.partialToolJson.length,
+                }, { verbose: true });
+            }
             return { rawText: extractAnthropicText(data), toolInput: null };
         }
         const text = extractAnthropicText(data);

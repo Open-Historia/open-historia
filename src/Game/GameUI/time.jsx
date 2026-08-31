@@ -778,6 +778,7 @@ const TimelineSkipPanel = ({
     onClose,
     onJump,
     onUndo,
+    progressLabel,
     topOffset,
     undoCount,
 }) => {
@@ -986,7 +987,7 @@ const TimelineSkipPanel = ({
             }}
             >
             <SpinnerRing size={15} />
-            <span>Simulating…</span>
+            <span>{progressLabel || "Simulating…"}</span>
             {onCancel && (
                 <button
                 type="button"
@@ -1235,6 +1236,10 @@ const DateWidget = ({
     const [regionCatalog, setRegionCatalog] = useState([]);
     const [localOpenPanel, setLocalOpenPanel] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    // What the spinner says while a jump runs. Empty for a single-request jump —
+    // the notice falls back to its own wording — and set per segment when a long
+    // skip is generated in pieces (AI/jumpSegments.js).
+    const [jumpProgress, setJumpProgress] = useState("");
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
@@ -1415,6 +1420,7 @@ const DateWidget = ({
 
         setPanel("skip");
         setIsLoading(true);
+        setJumpProgress("");
         setError("");
         setFallbackWarning("");
 
@@ -1433,7 +1439,15 @@ const DateWidget = ({
         try {
             const result = mode === "auto"
             ? await simulateAutoJump({ days, signal: controller.signal })
-            : await simulateTimelineJump({ days, signal: controller.signal });
+            : await simulateTimelineJump({
+                days,
+                signal: controller.signal,
+                // A long skip is generated in segments (AI/jumpSegments.js) and can
+                // run for many minutes. Without this the spinner says the same
+                // thing throughout and a working turn reads as a frozen one.
+                onProgress: ({ segment, segmentCount }) =>
+                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+            });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -1494,6 +1508,7 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsLoading(false);
+            setJumpProgress("");
         }
     };
 
@@ -1868,6 +1883,7 @@ const DateWidget = ({
         onClose={() => setPanel(null)}
         onJump={(days) => runJump(days, "jump")}
         onUndo={runUndo}
+        progressLabel={jumpProgress}
         topOffset={topOffset}
         undoCount={undoCount}
         />

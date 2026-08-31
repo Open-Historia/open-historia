@@ -6,6 +6,8 @@ import {
   busyProviderMessage,
   errorPayloadText,
   isBusyErrorPayload,
+  isStreamingRefusal,
+  isStreamingRequired,
   providerErrorReplyMessage,
 } from "./providerErrors.js";
 
@@ -65,4 +67,51 @@ test("a non-busy error is quoted rather than diagnosed", () => {
     "Gemini returned an error instead of a reply: Invalid API key provided.",
   );
   assert.equal(providerErrorReplyMessage("Gemini", ""), "Gemini returned an error instead of a reply.");
+});
+
+// Tool calls stream so a long timeline jump keeps the connection warm. A gateway
+// that refuses that must cost us the keep-alive only — never tool mode, which is
+// the difference between a real turn and canned events.
+test("a gateway refusing to stream is recognised, in the shapes they say it", () => {
+  for (const message of [
+    "streaming is not supported for this model",
+    "Streaming is not supported with tools.",
+    "Unsupported value: 'stream' does not support true with this model",
+    "Invalid parameter: stream",
+    "'stream' is not allowed when using function calling",
+    "This deployment cannot stream responses",
+  ]) {
+    assert.equal(isStreamingRefusal(message), true, message);
+  }
+});
+
+test("an unrelated rejection is left to the structured-output ladder", () => {
+  for (const message of [
+    "This model does not support tools.",
+    "max_tokens: 64000 > 8192, which is the maximum for this model",
+    "Invalid API key provided",
+    "",
+  ]) {
+    assert.equal(isStreamingRefusal(message), false, message);
+  }
+});
+
+// The opposite complaint, and why Anthropic tool calls stream at all: the
+// Messages API refuses a long non-streaming request outright, before generating.
+test("a provider demanding streaming is recognised and kept apart from a refusal", () => {
+  for (const message of [
+    "Streaming is strongly recommended for operations that may take longer than 10 minutes.",
+    "Streaming is required for this request.",
+    "Expected stream=true for a request of this size",
+  ]) {
+    assert.equal(isStreamingRequired(message), true, message);
+    assert.equal(isStreamingRefusal(message), false, message);
+  }
+});
+
+test("a payload object is read the same way as a bare string", () => {
+  assert.equal(isStreamingRefusal({ message: "streaming is not supported" }), true);
+  assert.equal(isStreamingRequired({ message: "Streaming is required for this request." }), true);
+  assert.equal(isStreamingRefusal(null), false);
+  assert.equal(isStreamingRequired(null), false);
 });
