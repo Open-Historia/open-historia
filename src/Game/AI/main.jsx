@@ -647,6 +647,7 @@ async function callOpenAIStyleChatCompletions({
     history,
     providerLabel,
     customParams = {},
+    toolStrict = false,
     retries = 3,
     retryDelay = 15000,
     deadline,
@@ -707,6 +708,12 @@ async function callOpenAIStyleChatCompletions({
                         name: tool.name,
                         description: tool.description,
                         parameters: tool.schema,
+                    // Opt-in only. OpenAI rejects strict:true unless every property
+                    // is named in required, which these schemas deliberately do not
+                    // do; self-hosted grammar backends (SGLang/xgrammar, vLLM) take
+                    // the schema as-is and constrain generation with it, which is
+                    // what stops a model emitting an unbalanced or mistyped argument.
+                    ...(toolStrict ? { strict: true } : {}),
                     } }],
                     // The string form, NOT OpenAI's {type:"function",function:{name}}
                     // object: llama.cpp-based servers (LM Studio, Jan, local Qwen et
@@ -870,6 +877,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         history,
         providerLabel: "OpenAI Compatible",
         customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
+        toolStrict: settings.toolStrict === true,
         allowJsonSchemaFallback: true,
         tokenLimitField: "max_tokens",
         ...opts,
