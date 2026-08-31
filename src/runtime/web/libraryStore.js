@@ -6,6 +6,7 @@
 // Web build only.
 
 import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPut, idbPutPair, idbDelete, kvGet, kvPut } from "./idb.js";
+import { serializeWrite } from "./writeQueue.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
   parseJsonValue, serializeJsonValue,
@@ -537,7 +538,15 @@ const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
 const coerceRuntimeValue = (assetKey, value) =>
   (assetKey === "colors" || assetKey === "flags" ? parseJsonValue(value, {}) : value);
 
-const writeRuntimeJsonAsset = async (assetKey, value) => {
+// Serialized: this is a read-modify-write of the WHOLE game record (every runtime
+// JSON asset lives in one), and the end of a turn fires six of these at once. Run
+// concurrently they each read the record before any has written, and the last to
+// finish restores its stale copy of the other five — which is how the new game
+// date got reverted on the website but never in the app. See writeQueue.js.
+const writeRuntimeJsonAsset = (assetKey, value) =>
+  serializeWrite(() => writeRuntimeJsonAssetLocked(assetKey, value));
+
+const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
   if (!JSON_ASSET_KEYS.includes(assetKey) && !OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) && !RUNTIME_ONLY_JSON_ASSET_KEYS.includes(assetKey)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }
