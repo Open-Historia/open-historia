@@ -1,6 +1,12 @@
 /*! Open Historia — native persistent country statistics and economic aggregation. */
 
 export const COUNTRY_STATS_SCHEMA_VERSION = 1;
+export const COUNTRY_STATS_POPULATION_CALIBRATION_VERSION = 2;
+export const COUNTRY_STATS_HISTORY_VERSION = 1;
+export const COUNTRY_STATS_HISTORY_MAX_SAMPLES = 1200;
+export const COUNTRY_STATS_TRACKING_VERSION = 1;
+export const COUNTRY_STATS_TRACKING_MAX_POLITIES = 8;
+export const COUNTRY_STATS_TRACKING_INTERVALS = Object.freeze([0, 3, 6, 12, 24]);
 
 export const COUNTRY_STATS_COMPONENT_GROUPS = Object.freeze([
   "core",
@@ -32,6 +38,92 @@ const ECONOMY_NUMERIC_KEYS = Object.freeze([
 const clean = (value) => String(value ?? "").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const finite = (value) => Number.isFinite(Number(value));
+
+export const countryStatsTrackingIntervalLabel = (months) => {
+  const numeric = Math.max(0, Math.trunc(Number(months) || 0));
+  if (!numeric) return "Manual only";
+  return numeric === 1 ? "Every month" : `Every ${numeric} months`;
+};
+
+const uniqueTrackingPolities = (values, playerCountry = "", intervalMonths = 0) => {
+  const out = [];
+  const seen = new Set();
+  const add = (value) => {
+    const key = clean(value);
+    const token = key.toLocaleLowerCase();
+    if (!key || seen.has(token)) return;
+    seen.add(token);
+    out.push(key);
+  };
+
+  if (Number(intervalMonths) > 0) add(playerCountry);
+  if (Array.isArray(values)) values.forEach(add);
+  return out.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES);
+};
+
+export const normalizeCountryStatsTracking = (
+  value,
+  { playerCountry = "" } = {},
+) => {
+  const input = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const rawInterval = Math.max(0, Math.trunc(Number(input.intervalMonths) || 0));
+  const intervalMonths = COUNTRY_STATS_TRACKING_INTERVALS.includes(rawInterval)
+    ? rawInterval
+    : 0;
+  const trackedPolities = uniqueTrackingPolities(
+    input.trackedPolities,
+    playerCountry,
+    intervalMonths,
+  );
+  const trackedKeys = new Set(trackedPolities.map((item) => item.toLocaleLowerCase()));
+  const lastAutoRefreshByPolity = {};
+  if (input.lastAutoRefreshByPolity && typeof input.lastAutoRefreshByPolity === "object" && !Array.isArray(input.lastAutoRefreshByPolity)) {
+    for (const [polity, date] of Object.entries(input.lastAutoRefreshByPolity)) {
+      const key = clean(polity);
+      const when = clean(date);
+      if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(when)) continue;
+      if (!trackedKeys.has(key.toLocaleLowerCase())) continue;
+      lastAutoRefreshByPolity[key] = when;
+    }
+  }
+
+  const pendingBaselinePolities = uniqueTrackingPolities(
+    input.pendingBaselinePolities,
+    "",
+    0,
+  ).filter((item) => trackedKeys.has(item.toLocaleLowerCase()));
+
+  return {
+    trackingVersion: COUNTRY_STATS_TRACKING_VERSION,
+    intervalMonths,
+    trackedPolities,
+    lastAutoRefreshByPolity,
+    pendingBaselinePolities,
+    lastBatchDate: /^\d{4}-\d{2}-\d{2}$/.test(clean(input.lastBatchDate))
+      ? clean(input.lastBatchDate)
+      : "",
+  };
+};
+
+export const countryStatsTrackingMonthsElapsed = (fromDate, toDate) => {
+  const parse = (value) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean(value));
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  };
+  const from = parse(fromDate);
+  const to = parse(toDate);
+  if (!from || !to) return 0;
+  let months = (to.year - from.year) * 12 + (to.month - from.month);
+  if (to.day < from.day) months -= 1;
+  return Math.max(0, months);
+};
 
 export const parseStatNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -108,7 +200,10 @@ export const normalizeTerritorialComponents = (value) => {
     byKey.set(componentKey(geography), normalized);
   }
 
-  return [...byKey.values()].slice(0, 64);
+  // The live map is authoritative and can legitimately assign hundreds of
+  // provinces/components to one polity. Never truncate this ledger: doing so
+  // silently deletes population/GDP from every component beyond the cap.
+  return [...byKey.values()];
 };
 
 export const aggregateTerritorialEconomy = (componentsInput) => {
@@ -231,6 +326,7 @@ export const normalizeCountryStatContinuity = (value) => {
   const stateFingerprint = clean(value.stateFingerprint);
   const territorialFingerprint = clean(value.territorialFingerprint);
   const assessedRound = Number(value.assessedRound);
+  const populationCalibrationVersion = Number(value.populationCalibrationVersion);
 
   if (assessedDate) out.assessedDate = assessedDate;
   if (Number.isFinite(assessedRound) && assessedRound >= 0) {
@@ -238,6 +334,9 @@ export const normalizeCountryStatContinuity = (value) => {
   }
   if (stateFingerprint) out.stateFingerprint = stateFingerprint;
   if (territorialFingerprint) out.territorialFingerprint = territorialFingerprint;
+  if (Number.isInteger(populationCalibrationVersion) && populationCalibrationVersion > 0) {
+    out.populationCalibrationVersion = populationCalibrationVersion;
+  }
 
   const accountedEventIds = [...new Set(
     (Array.isArray(value.accountedEventIds) ? value.accountedEventIds : [])
@@ -386,6 +485,252 @@ const scaleComponentPopulation = (components, predicate, targetPopulation) => {
   ));
 };
 
+// Population calibration is a bootstrap/reconstruction tool, not a second ledger.
+// The model still estimates the relative distribution across every live-map component;
+// native code then rescales those rows to ONE scenario-canonical population anchor so
+// map granularity cannot make a 300-province empire randomly gain/lose tens of millions.
+// The exact integer target is conserved with largest-remainder rounding.
+const scaleComponentPopulationExact = (components, predicate, targetPopulation) => {
+  const target = Math.max(0, Math.round(Number(targetPopulation) || 0));
+  const selected = components
+    .map((component, index) => ({ component, index }))
+    .filter(({ component }) => predicate(component));
+
+  if (!selected.length) {
+    return target === 0
+      ? { components, error: "" }
+      : { components, error: `population calibration target ${target} has no matching territorial component rows.` };
+  }
+
+  const current = selected.reduce((sum, { component }) => sum + component.population, 0);
+  if (!(current > 0)) {
+    return target === 0
+      ? {
+          components: components.map((component) => (predicate(component) ? { ...component, population: 0 } : component)),
+          error: "",
+        }
+      : { components, error: `population calibration cannot allocate target ${target} because the matching component estimates sum to zero.` };
+  }
+
+  const ratio = target / current;
+  const scaled = selected.map(({ component, index }) => {
+    const exact = component.population * ratio;
+    const floor = Math.max(0, Math.floor(exact));
+    return { index, floor, fraction: exact - floor };
+  });
+
+  let remainder = target - scaled.reduce((sum, entry) => sum + entry.floor, 0);
+  if (remainder > 0) {
+    scaled.sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    for (let cursor = 0; cursor < scaled.length && remainder > 0; cursor += 1, remainder -= 1) {
+      scaled[cursor].floor += 1;
+    }
+  } else if (remainder < 0) {
+    // Floating-point edge case: remove units from the smallest fractional rows
+    // without allowing any component population to go negative.
+    scaled.sort((a, b) => a.fraction - b.fraction || b.index - a.index);
+    for (let cursor = 0; cursor < scaled.length && remainder < 0; cursor += 1) {
+      if (scaled[cursor].floor <= 0) continue;
+      scaled[cursor].floor -= 1;
+      remainder += 1;
+    }
+  }
+
+  const populations = new Map(scaled.map((entry) => [entry.index, entry.floor]));
+  return {
+    components: components.map((component, index) => (
+      populations.has(index)
+        ? { ...component, population: populations.get(index) }
+        : component
+    )),
+    error: "",
+  };
+};
+
+export const calibrateTerritorialComponentPopulations = (componentsInput, calibration) => {
+  const components = normalizeTerritorialComponents(componentsInput);
+  if (!components.length) {
+    return { components: [], error: "population calibration requires at least one valid territorial component." };
+  }
+  if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)) {
+    return { components, error: "populationCalibration is required for this native Stats bootstrap/reconstruction." };
+  }
+
+  const total = parseStatNumber(calibration.totalPopulation);
+  const core = parseStatNumber(calibration.coreIntegratedPopulation);
+  const other = parseStatNumber(calibration.otherTerritoriesPopulation);
+  if (![total, core, other].every((value) => Number.isFinite(value) && value >= 0)) {
+    return { components, error: "populationCalibration must provide non-negative numeric totalPopulation, coreIntegratedPopulation, and otherTerritoriesPopulation." };
+  }
+
+  const targetTotal = Math.round(total);
+  const targetCore = Math.round(core);
+  const targetOther = Math.round(other);
+  if (!(targetTotal > 0)) {
+    return { components, error: "populationCalibration.totalPopulation must be greater than zero." };
+  }
+  if (targetCore + targetOther !== targetTotal) {
+    return {
+      components,
+      error: `populationCalibration group targets must sum exactly to totalPopulation (${targetCore} + ${targetOther} != ${targetTotal}).`,
+    };
+  }
+
+  const corePredicate = (component) => component.group !== "overseas/dependent";
+  const otherPredicate = (component) => component.group === "overseas/dependent";
+  const before = aggregateTerritorialEconomy(components);
+
+  let next = components;
+  const coreScaled = scaleComponentPopulationExact(next, corePredicate, targetCore);
+  if (coreScaled.error) return { components, error: coreScaled.error };
+  next = coreScaled.components;
+
+  const otherScaled = scaleComponentPopulationExact(next, otherPredicate, targetOther);
+  if (otherScaled.error) return { components, error: otherScaled.error };
+  next = otherScaled.components;
+
+  const after = aggregateTerritorialEconomy(next);
+  if (!after || after.population !== targetTotal || after.corePopulation !== targetCore || after.otherPopulation !== targetOther) {
+    return {
+      components,
+      error: `population calibration invariant failed after scaling (expected ${targetTotal}/${targetCore}/${targetOther}; got ${after?.population ?? "none"}/${after?.corePopulation ?? "none"}/${after?.otherPopulation ?? "none"}).`,
+    };
+  }
+
+  return {
+    components: next,
+    error: "",
+    diagnostics: {
+      beforeTotal: before?.population ?? null,
+      afterTotal: after.population,
+      coreTarget: targetCore,
+      otherTarget: targetOther,
+      totalTarget: targetTotal,
+    },
+  };
+};
+
+
+// 8B.2.18: the model now estimates a bounded set of regional macro buckets,
+// never one row per map province. Native code expands those macro estimates back
+// into the complete live-map component ledger so territorial transfers remain
+// precise without making AI latency scale with map granularity.
+export const expandTerritorialMacroEstimates = (
+  macroPlanInput,
+  macroEstimatesInput,
+  { previousComponents: previousComponentsInput = [] } = {},
+) => {
+  const macroPlan = Array.isArray(macroPlanInput) ? macroPlanInput : [];
+  const estimates = Array.isArray(macroEstimatesInput) ? macroEstimatesInput : [];
+  if (!macroPlan.length) {
+    return { components: [], error: "regional Stats expansion requires at least one native macro bucket." };
+  }
+
+  const estimateByIndex = new Map();
+  for (const estimate of estimates) {
+    const index = Math.trunc(Number(estimate?.index));
+    const group = clean(estimate?.group).toLowerCase();
+    const population = parseStatNumber(estimate?.population);
+    const gdpPerCapita = parseStatNumber(estimate?.gdpPerCapita);
+    if (!Number.isInteger(index) || index < 1 || estimateByIndex.has(index)) continue;
+    if (!COMPONENT_GROUP_SET.has(group)) continue;
+    if (!Number.isFinite(population) || population < 0) continue;
+    if (!Number.isFinite(gdpPerCapita) || gdpPerCapita <= 0) continue;
+    estimateByIndex.set(index, {
+      index,
+      group,
+      population: Math.round(population),
+      gdpPerCapita: Math.round(gdpPerCapita * 100) / 100,
+    });
+  }
+
+  const previousByGeography = new Map(
+    normalizeTerritorialComponents(previousComponentsInput)
+      .map((component) => [componentKey(component.geography), component]),
+  );
+  const output = [];
+  const diagnostics = [];
+  const seen = new Set();
+
+  for (const bucket of macroPlan) {
+    const index = Math.trunc(Number(bucket?.index));
+    const estimate = estimateByIndex.get(index);
+    const members = Array.isArray(bucket?.members) ? bucket.members : [];
+    if (!estimate) {
+      return { components: [], error: `regional Stats estimate is missing macro bucket ${index || "?"}.` };
+    }
+    if (!members.length) {
+      return { components: [], error: `native macro bucket ${index || "?"} has no territorial members.` };
+    }
+
+    const memberRows = [];
+    let priorProxyNumerator = 0;
+    let priorProxyDenominator = 0;
+    for (const member of members) {
+      const geography = clean(member?.geography);
+      const key = componentKey(geography);
+      if (!geography || seen.has(key)) {
+        return { components: [], error: `native macro plan contains a blank or duplicate geography in bucket ${index}.` };
+      }
+      seen.add(key);
+      const prior = previousByGeography.get(key);
+      const heuristicWeight = Math.max(0.05, Number(member?.weight) || 1);
+      if (prior && Number(prior.population) > 0) {
+        priorProxyNumerator += Number(prior.population);
+        priorProxyDenominator += heuristicWeight;
+      }
+      memberRows.push({ geography, prior, heuristicWeight });
+    }
+
+    const proxyScale = priorProxyNumerator > 0 && priorProxyDenominator > 0
+      ? priorProxyNumerator / priorProxyDenominator
+      : 1;
+    const provisional = memberRows.map(({ geography, prior, heuristicWeight }) => ({
+      geography,
+      group: estimate.group,
+      population: Math.max(1, Math.round(
+        prior && Number(prior.population) > 0
+          ? Number(prior.population)
+          : heuristicWeight * proxyScale,
+      )),
+      gdpPerCapita: prior && Number(prior.gdpPerCapita) > 0
+        ? Number(prior.gdpPerCapita)
+        : estimate.gdpPerCapita,
+    }));
+
+    const scaled = scaleComponentPopulationExact(provisional, () => true, estimate.population);
+    if (scaled.error) return { components: [], error: `macro bucket ${index}: ${scaled.error}` };
+
+    // Preserve local productivity differences from an existing campaign ledger,
+    // but move the bucket's weighted mean toward the newly assessed macro value.
+    const beforeEconomy = aggregateTerritorialEconomy(scaled.components);
+    const currentPc = Number(beforeEconomy?.gdpPerCapita);
+    const pcRatio = Number.isFinite(currentPc) && currentPc > 0
+      ? estimate.gdpPerCapita / currentPc
+      : 1;
+    const finalBucket = scaled.components.map((component) => ({
+      ...component,
+      group: estimate.group,
+      gdpPerCapita: Math.max(1, Math.round(component.gdpPerCapita * pcRatio * 100) / 100),
+    }));
+
+    output.push(...finalBucket);
+    diagnostics.push({
+      index,
+      memberCount: finalBucket.length,
+      population: estimate.population,
+      gdpPerCapita: estimate.gdpPerCapita,
+      group: estimate.group,
+    });
+  }
+
+  return {
+    components: normalizeTerritorialComponents(output),
+    error: "",
+    diagnostics,
+  };
+};
+
 const scaleComponentProductivity = (components, predicate, ratio) => {
   if (!Number.isFinite(ratio) || !(ratio > 0)) return components;
   return components.map((component) => (
@@ -400,7 +745,9 @@ const mergeComponentsByGeography = (base, patch) => {
   for (const component of normalizeTerritorialComponents(patch)) {
     out.set(componentKey(component.geography), component);
   }
-  return [...out.values()].slice(0, 64);
+  // Preserve the complete live territorial ledger. A fixed component cap makes
+  // aggregate population/GDP depend on map granularity rather than ownership.
+  return [...out.values()];
 };
 
 // SINGLE MUTATION BOUNDARY for normal simulation, the future expanded GM,
@@ -531,6 +878,181 @@ export const mergeCountryStatPatch = (
   if (components.length) merged.territorialComponents = components;
 
   return finalizeCountryStatSheet(merged);
+};
+
+// ---------------------------------------------------------------------------
+// Compact persistent Stats history
+// ---------------------------------------------------------------------------
+// countryStats is the canonical CURRENT sheet. countryStatsHistory is a compact
+// numeric time series for charts only: no territorial component ledgers, no prose,
+// no duplicated economic logic. One sample is cheap enough to keep for long games.
+const HISTORY_INDEX_KEYS = Object.freeze([
+  "sovereignty",
+  "foodAutonomy",
+  "energyAutonomy",
+  "economicIndependence",
+  "internalSecurity",
+  "internationalReputation",
+]);
+
+const HISTORY_ECONOMY_KEYS = Object.freeze([
+  "gdp",
+  "gdpPerCapita",
+  "gdpGrowth",
+  "inflation",
+  "unemployment",
+  "publicDebt",
+  "budgetBalance",
+]);
+
+const HISTORY_BREAKDOWN_KEYS = Object.freeze([
+  "agriculture",
+  "industry",
+  "services",
+]);
+
+const normalizeHistoryDate = (value) => {
+  const text = clean(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+};
+
+const historyNumber = (value) => {
+  const number = parseStatNumber(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+export const normalizeCountryStatHistorySample = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const date = normalizeHistoryDate(value.date);
+  if (!date) return null;
+
+  const out = {
+    date,
+    historyVersion: COUNTRY_STATS_HISTORY_VERSION,
+  };
+  const round = Number(value.round);
+  if (Number.isFinite(round) && round >= 0) out.round = Math.trunc(round);
+
+  const copyNumber = (key, source = value) => {
+    const number = historyNumber(source?.[key]);
+    if (number != null) out[key] = number;
+  };
+
+  copyNumber("stability");
+  for (const key of HISTORY_INDEX_KEYS) copyNumber(key);
+  copyNumber("population");
+  copyNumber("corePopulation");
+  copyNumber("otherPopulation");
+  for (const key of HISTORY_ECONOMY_KEYS) copyNumber(key);
+  for (const key of HISTORY_BREAKDOWN_KEYS) copyNumber(key);
+
+  return Object.keys(out).length > 3 ? out : null;
+};
+
+export const buildCountryStatHistorySample = (sheetInput, { date = "", round = 0 } = {}) => {
+  const sheet = finalizeCountryStatSheet(sheetInput);
+  if (!sheet || typeof sheet !== "object" || Array.isArray(sheet)) return null;
+
+  const sampleDate = normalizeHistoryDate(date || sheet?.continuity?.assessedDate);
+  if (!sampleDate) return null;
+
+  return normalizeCountryStatHistorySample({
+    date: sampleDate,
+    round,
+    stability: sheet.stability,
+    sovereignty: sheet.indices?.sovereignty,
+    foodAutonomy: sheet.indices?.foodAutonomy,
+    energyAutonomy: sheet.indices?.energyAutonomy,
+    economicIndependence: sheet.indices?.economicIndependence,
+    internalSecurity: sheet.indices?.internalSecurity,
+    internationalReputation: sheet.indices?.internationalReputation,
+    population: sheet.population?.total,
+    corePopulation: sheet.population?.coreIntegrated,
+    otherPopulation: sheet.population?.otherTerritories,
+    gdp: sheet.economy?.gdp,
+    gdpPerCapita: sheet.economy?.gdpPerCapita,
+    gdpGrowth: sheet.economy?.gdpGrowth,
+    inflation: sheet.economy?.inflation,
+    unemployment: sheet.economy?.unemployment,
+    publicDebt: sheet.economy?.publicDebt,
+    budgetBalance: sheet.economy?.budgetBalance,
+    agriculture: sheet.gdpBreakdown?.agriculture,
+    industry: sheet.gdpBreakdown?.industry,
+    services: sheet.gdpBreakdown?.services,
+  });
+};
+
+const normalizeHistorySeries = (value) => {
+  if (!Array.isArray(value)) return [];
+  const byDate = new Map();
+  for (const item of value) {
+    const sample = normalizeCountryStatHistorySample(item);
+    if (sample) byDate.set(sample.date, sample); // latest source wins deterministically
+  }
+  return [...byDate.values()]
+    .sort((a, b) => a.date.localeCompare(b.date) || Number(a.round || 0) - Number(b.round || 0))
+    .slice(-COUNTRY_STATS_HISTORY_MAX_SAMPLES);
+};
+
+export const normalizeCountryStatsHistory = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out = {};
+  for (const [polity, samples] of Object.entries(value)) {
+    const key = clean(polity);
+    if (!key) continue;
+    const normalized = normalizeHistorySeries(samples);
+    if (normalized.length) out[key] = normalized;
+  }
+  return out;
+};
+
+export const appendCountryStatHistorySample = (
+  historyInput,
+  polity,
+  sheetOrSample,
+  { date = "", round = 0 } = {},
+) => {
+  const key = clean(polity);
+  if (!key) return normalizeCountryStatsHistory(historyInput);
+
+  const history = normalizeCountryStatsHistory(historyInput);
+  const sample = normalizeCountryStatHistorySample(sheetOrSample) ||
+    buildCountryStatHistorySample(sheetOrSample, { date, round });
+  if (!sample) return history;
+
+  history[key] = normalizeHistorySeries([...(history[key] || []), sample]);
+  return history;
+};
+
+export const mergeCountryStatsHistory = (...values) => {
+  let out = {};
+  for (const value of values) {
+    const normalized = normalizeCountryStatsHistory(value);
+    for (const [polity, samples] of Object.entries(normalized)) {
+      out[polity] = normalizeHistorySeries([...(out[polity] || []), ...samples]);
+    }
+  }
+  return out;
+};
+
+// Capture every sheet that CURRENTLY exists. This does not generate missing Stats
+// and therefore adds no AI work to a turn. Repeated dates replace the prior sample,
+// which makes same-day refreshes and GM edits deterministic rather than duplicative.
+export const captureCountryStatsHistory = (worldInput, { date = "", round = 0 } = {}) => {
+  if (!worldInput || typeof worldInput !== "object" || Array.isArray(worldInput)) return worldInput;
+  const countryStats = worldInput.countryStats && typeof worldInput.countryStats === "object"
+    ? worldInput.countryStats
+    : {};
+  let history = normalizeCountryStatsHistory(worldInput.countryStatsHistory);
+
+  for (const [polity, sheet] of Object.entries(countryStats)) {
+    history = appendCountryStatHistorySample(history, polity, sheet, { date, round });
+  }
+
+  return {
+    ...worldInput,
+    countryStatsHistory: history,
+  };
 };
 
 export const isCompleteCountryStatSheet = (value) => {

@@ -1,5 +1,5 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
@@ -105,6 +105,18 @@ const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
 const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
+export const MARKER_STATUSES = [
+  "planned",
+  "under_construction",
+  "active",
+  "damaged",
+  "inactive",
+  "abandoned",
+  "destroyed",
+];
+const MARKER_STATUS_SET = new Set(MARKER_STATUSES);
+const MAX_MARKER_ALIASES = 12;
+const MAX_MARKER_SOURCE_EVENT_IDS = 24;
 const POLITY_OPERATION_SET = new Set(["update", "create", "rename", "restore", "dissolve"]);
 const POLITY_STATUS_SET = new Set(["active", "dormant"]);
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
@@ -521,6 +533,70 @@ export const normalizeChats = (chats) =>
     .map((entry, index) => normalizeChatEntry(entry, index))
     .filter(Boolean);
 
+const yieldChatRead = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const createChatReadBudget = (milliseconds = 5) => {
+  let startedAt =
+    typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+
+  return async () => {
+    const now =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
+    if (now - startedAt < milliseconds) return;
+    await yieldChatRead();
+    startedAt =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
+  };
+};
+
+const normalizeChatEntryCooperatively = async (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  const countries = normalizeArray(entry.countries || entry.participants)
+    .map((country) => normalizeChatCountry(country))
+    .filter(Boolean);
+  if (countries.length === 0) return null;
+
+  const rawMessages = normalizeArray(entry.messages);
+  const messages = [];
+  const yieldBudget = createChatReadBudget(5);
+  for (let messageIndex = 0; messageIndex < rawMessages.length; messageIndex += 1) {
+    const message = normalizeChatMessage(rawMessages[messageIndex], messageIndex);
+    if (message) messages.push(message);
+
+    // Yield by elapsed CPU time, not message count. One diplomatic novel can cost
+    // much more than two dozen one-line messages.
+    await yieldBudget();
+  }
+
+  return {
+    countries,
+    id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
+    linkedEventId: normalizeOptionalString(entry.linkedEventId || entry.eventId),
+    messages,
+    source: normalizeOptionalString(entry.source) || "manual",
+    status: normalizeOptionalString(entry.status) || "open",
+    title: normalizeOptionalString(entry.title),
+  };
+};
+
+const normalizeChatsCooperatively = async (chats) => {
+  const raw = normalizeArray(chats);
+  const out = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const chat = await normalizeChatEntryCooperatively(raw[index], index);
+    if (chat) out.push(chat);
+    if ((index + 1) % 4 === 0) await yieldChatRead();
+  }
+  return out;
+};
+
 // ---- Save-aware diplomatic identity -----------------------------------------
 //
 // Chat JSON is deliberately allowed to stay a simple transport/storage shape.
@@ -864,6 +940,65 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   return reconcileChatsForWorld(stripped, world);
 };
 
+
+// R2.33 — fast current-save path.
+//
+// Modern Continuum threads already carry stable polityKey on every participant.
+// The full legacy reconciler resolves every participant/message repeatedly and may
+// merge the archive multiple times. On mature saves that can take seconds.
+//
+// Prove the archive is safe for the cheap path. Any legacy/ambiguous/duplicate case
+// falls straight back to the old semantic reconciler.
+export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "") => {
+  const rows = normalizeArray(chats);
+  const playerIdentity = resolveChatParticipantIdentity(
+    typeof playerCountry === "object" ? playerCountry : { name: playerCountry },
+    world,
+  );
+
+  if (!playerIdentity.safe || !playerIdentity.polityKey) {
+    return reconcileChatsForPlayer(rows, world, playerCountry);
+  }
+
+  const playerKey = normalizeString(playerIdentity.polityKey).toLowerCase();
+  const output = [];
+  const openThreadKeys = new Set();
+
+  for (const chat of rows) {
+    const rawCountries = normalizeArray(chat?.countries);
+    if (!rawCountries.length) continue;
+
+    const countries = [];
+    const localKeys = new Set();
+
+    for (const country of rawCountries) {
+      const key = normalizeString(country?.polityKey).toLowerCase();
+      if (!key) return reconcileChatsForPlayer(rows, world, playerCountry);
+      if (key === playerKey || localKeys.has(key)) continue;
+      localKeys.add(key);
+      countries.push(country);
+    }
+
+    if (!countries.length) continue;
+
+    if (normalizeString(chat?.status).toLowerCase() !== "closed") {
+      const threadKey = [...localKeys].sort().join("\\u001f");
+      if (!threadKey || openThreadKeys.has(threadKey)) {
+        return reconcileChatsForPlayer(rows, world, playerCountry);
+      }
+      openThreadKeys.add(threadKey);
+    }
+
+    output.push(
+      countries.length === rawCountries.length
+        ? chat
+        : { ...chat, countries },
+    );
+  }
+
+  return output;
+};
+
 // Merge newly generated/outreach chats onto the LIVE stored list. Existing storage
 // wins identity/id/order; a new unmatched thread is prepended. This is intentionally
 // separate from normalizeChats so structural parsing never starts making historical
@@ -1066,9 +1201,37 @@ export const normalizeUnits = (units) =>
     .map((entry, index) => normalizeUnitEntry(entry, index))
     .filter(Boolean);
 
-// A structure built during play: any named point on the map — city, military
-// base, bunker, missile silo, embassy, port. `kind` is deliberately free-form
-// (lowercased for stable styling/grouping); unknown kinds are first-class.
+// A persistent physical world feature: any named, geographically concrete place or
+// structure that can participate in later history — city, factory, military base,
+// bunker, missile silo, embassy, port, laboratory, logistics hub, and so on.
+// `kind` remains deliberately free-form; lifecycle/identity is native and stable.
+const normalizeMarkerNameList = (values, { exclude = "", limit = MAX_MARKER_ALIASES } = {}) => {
+  const excluded = normalizeOptionalString(exclude).toLowerCase();
+  const seen = new Set();
+  const output = [];
+  for (const raw of normalizeArray(values)) {
+    const value = normalizeOptionalString(raw);
+    const key = value.toLowerCase();
+    if (!value || key === excluded || seen.has(key)) continue;
+    seen.add(key);
+    output.push(value);
+    if (output.length >= limit) break;
+  }
+  return output;
+};
+
+const normalizeMarkerSourceEventIds = (values) => {
+  const seen = new Set();
+  const output = [];
+  for (const raw of normalizeArray(values)) {
+    const value = normalizeOptionalString(raw);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    output.push(value);
+  }
+  return output.slice(-MAX_MARKER_SOURCE_EVENT_IDS);
+};
+
 export const normalizeMarkerEntry = (entry, index = 0) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -1081,6 +1244,11 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     return null;
   }
 
+  const timestamp = new Date().toISOString();
+  const createdAt = normalizeOptionalString(entry.createdAt) || timestamp;
+  const status = normalizeOptionalString(entry.status).toLowerCase();
+  const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
+
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
     name,
@@ -1089,8 +1257,13 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     lng,
     lat,
     note: normalizeOptionalString(entry.note || entry.description),
-    foundedAt: normalizeOptionalString(entry.foundedAt || entry.date),
-    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+    status: MARKER_STATUS_SET.has(status) ? status : "active",
+    aliases: normalizeMarkerNameList(entry.aliases, { exclude: name }),
+    foundedAt,
+    createdAt,
+    updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
+    updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
+    sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
   };
 };
 
@@ -1163,7 +1336,51 @@ export const normalizeGameMasterAudit = (entries) =>
     .filter(Boolean)
     .slice(0, MAX_GM_AUDIT);
 
-// One AI-authored mutation to the built-structure list: build | remove.
+const hasOwn = (value, key) => Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+
+const normalizeMarkerPatch = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+  const patch = {};
+
+  if (hasOwn(entry, "kind") || hasOwn(entry, "type")) {
+    const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
+    if (kind) patch.kind = kind;
+  }
+  if (hasOwn(entry, "ownerCode") || hasOwn(entry, "owner") || hasOwn(entry, "code")) {
+    patch.ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode ?? entry.owner ?? entry.code));
+  }
+  if (hasOwn(entry, "status")) {
+    const status = normalizeOptionalString(entry.status).toLowerCase();
+    if (MARKER_STATUS_SET.has(status)) patch.status = status;
+  }
+  if (hasOwn(entry, "note") || hasOwn(entry, "description")) {
+    patch.note = normalizeOptionalString(entry.note ?? entry.description);
+  }
+  // Administrative Map Feature Editor corrections may explicitly repair the
+  // establishment date without deleting/rebuilding the object. Normal AI
+  // lifecycle updates do not emit foundedAt, so historical continuity remains
+  // stable unless an authorized caller deliberately supplies it.
+  if (hasOwn(entry, "foundedAt") || hasOwn(entry, "date")) {
+    patch.foundedAt = normalizeOptionalString(entry.foundedAt ?? entry.date);
+  }
+
+  const hasLng = hasOwn(entry, "lng") || hasOwn(entry, "lon") || hasOwn(entry, "longitude");
+  const hasLat = hasOwn(entry, "lat") || hasOwn(entry, "latitude");
+  if (hasLng && hasLat) {
+    const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+    const lat = finiteOrNull(entry.lat ?? entry.latitude);
+    if (lng !== null && lat !== null && !(lng === 0 && lat === 0)) {
+      patch.lng = lng;
+      patch.lat = lat;
+    }
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+};
+
+// One AI-authored mutation to persistent physical world features. Destruction is
+// lifecycle state, not deletion: legacy `destroy` is migrated to update/destroyed.
+// `remove` is reserved for true canonical cleanup/admin deletion.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -1177,7 +1394,24 @@ const normalizeMarkerOp = (entry) => {
     return { op: "build", marker };
   }
 
-  if (op === "remove" || op === "destroy") {
+  if (op === "update" || op === "modify" || op === "destroy") {
+    const markerId = normalizeOptionalString(entry.markerId || entry.id);
+    const name = normalizeOptionalString(entry.name);
+    if (!markerId && !name) return null;
+    // normalizeEventImpacts stores normalized update fields under `changes`;
+    // applyMarkerOps may later normalize that already-normalized op again. Accept
+    // both shapes so update survives the full event -> world application pipeline.
+    const patchSource = entry.changes && typeof entry.changes === "object" && !Array.isArray(entry.changes)
+      ? entry.changes
+      : entry;
+    const changes = op === "destroy"
+      ? { ...(normalizeMarkerPatch(patchSource) || {}), status: "destroyed" }
+      : normalizeMarkerPatch(patchSource);
+    if (!changes) return null;
+    return { op: "update", markerId, name, changes };
+  }
+
+  if (op === "remove") {
     const markerId = normalizeOptionalString(entry.markerId || entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!markerId && !name) return null;
@@ -1195,28 +1429,77 @@ const normalizeMarkerOp = (entry) => {
   return null;
 };
 
-// Apply a batch of marker ops (pure). Rebuilding under an existing name
-// replaces it rather than stacking duplicates; removal matches id first, then
-// exact name — the AI usually knows the name, rarely the id.
-export const applyMarkerOps = (markers, ops) => {
+const markerNameMatches = (marker, name) => {
+  const target = normalizeOptionalString(name).toLowerCase();
+  if (!target) return false;
+  if (normalizeOptionalString(marker?.name).toLowerCase() === target) return true;
+  return normalizeArray(marker?.aliases)
+    .some((alias) => normalizeOptionalString(alias).toLowerCase() === target);
+};
+
+const markerMatchesOp = (marker, op) =>
+  op?.markerId ? marker?.id === op.markerId : markerNameMatches(marker, op?.name);
+
+const touchMarker = (marker, context = {}) => {
+  const eventId = normalizeOptionalString(context.eventId);
+  const gameDate = normalizeOptionalString(context.gameDate);
+  const timestamp = normalizeOptionalString(context.updatedAt) || new Date().toISOString();
+  const sourceEventIds = normalizeMarkerSourceEventIds([
+    ...normalizeArray(marker.sourceEventIds),
+    ...(eventId ? [eventId] : []),
+  ]);
+  return {
+    ...marker,
+    updatedAt: timestamp,
+    updatedDate: gameDate || marker.updatedDate || marker.foundedAt || "",
+    sourceEventIds,
+  };
+};
+
+// Apply a batch of marker ops while preserving object identity. An accidental
+// duplicate build of an existing current/alias name never respawns or resurrects
+// the object; it only records that the event touched the existing canonical feature.
+export const applyMarkerOps = (markers, ops, context = {}) => {
   let next = normalizeMarkers(markers);
-  for (const op of normalizeArray(ops)) {
+  for (const rawOp of normalizeArray(ops)) {
+    const op = normalizeMarkerOp(rawOp);
+    if (!op) continue;
+
     if (op.op === "build") {
-      next = [
-        ...next.filter((marker) => marker.name.toLowerCase() !== op.marker.name.toLowerCase()),
-        op.marker,
-      ];
-    } else if (op.op === "remove") {
-      next = next.filter((marker) =>
-        op.markerId ? marker.id !== op.markerId : marker.name.toLowerCase() !== op.name.toLowerCase());
-    } else if (op.op === "rename") {
-      next = next.map((marker) =>
-        (op.markerId ? marker.id === op.markerId : marker.name.toLowerCase() === (op.name || "").toLowerCase())
-          ? { ...marker, name: op.newName }
-          : marker);
+      const existingIndex = next.findIndex((marker) => markerNameMatches(marker, op.marker.name));
+      if (existingIndex >= 0) {
+        next = next.map((marker, index) => index === existingIndex ? touchMarker(marker, context) : marker);
+        continue;
+      }
+      next = [...next, touchMarker(op.marker, context)];
+      continue;
+    }
+
+    if (op.op === "update") {
+      next = next.map((marker) => {
+        if (!markerMatchesOp(marker, op)) return marker;
+        return touchMarker({ ...marker, ...op.changes }, context);
+      });
+      continue;
+    }
+
+    if (op.op === "remove") {
+      next = next.filter((marker) => !markerMatchesOp(marker, op));
+      continue;
+    }
+
+    if (op.op === "rename") {
+      next = next.map((marker) => {
+        if (!markerMatchesOp(marker, op)) return marker;
+        const aliases = normalizeMarkerNameList(
+          [...normalizeArray(marker.aliases), marker.name],
+          { exclude: op.newName },
+        );
+        return touchMarker({ ...marker, name: op.newName, aliases }, context);
+      });
     }
   }
-  return next;
+  return normalizeMarkers(next);
 };
 
 // One AI-authored mutation to the unit list: spawn | move | attack | strength | remove.
@@ -1305,7 +1588,7 @@ const normalizeUnitOp = (entry) => {
 
 // Apply a batch of unit ops to a unit list (pure). Ops referencing unknown ids
 // are silently ignored; units reduced to <=0 strength are dropped.
-export const applyUnitOps = (units, ops, { gameDate = "", combatSeed = "event" } = {}) => {
+export const applyUnitOps = (units, ops, { gameDate = "", combatSeed = "event", logCombat = true } = {}) => {
   let next = normalizeUnits(units);
   let attackSequence = 0;
 
@@ -1339,21 +1622,23 @@ export const applyUnitOps = (units, ops, { gameDate = "", combatSeed = "event" }
       const defender = next.find((unit) => unit.id === op.targetUnitId);
 
       if (!attacker || !defender || attacker.id === defender.id) {
-        console.warn("[unit combat] attack ignored because attacker/defender could not be resolved.", op);
+        if (logCombat) console.warn("[unit combat] attack ignored because attacker/defender could not be resolved.", op);
         continue;
       }
       if (attacker.ownerCode === defender.ownerCode) {
-        console.warn("[unit combat] friendly-fire attack ignored.", op);
+        if (logCombat) console.warn("[unit combat] friendly-fire attack ignored.", op);
         continue;
       }
 
       const distance = distanceKm(attacker, defender);
       const range = engagementRangeKm(attacker.type, gameDate);
       if (distance > range) {
-        console.warn(
-          `[unit combat] ${attacker.name} cannot engage ${defender.name}: ${Math.round(distance)} km away, ` +
-          `beyond ~${range} km ${attacker.type} engagement range.`,
-        );
+        if (logCombat) {
+          console.warn(
+            `[unit combat] ${attacker.name} cannot engage ${defender.name}: ${Math.round(distance)} km away, ` +
+            `beyond ~${range} km ${attacker.type} engagement range.`,
+          );
+        }
         continue;
       }
 
@@ -1391,11 +1676,13 @@ export const applyUnitOps = (units, ops, { gameDate = "", combatSeed = "event" }
         })
         .filter((unit) => unit.strength > 0 && unit.status !== "defeated");
 
-      console.info(
-        `[unit combat] ${attacker.name} vs ${defender.name}: ` +
-        `${attacker.strength}->${result.attackerStrength}, ${defender.strength}->${result.defenderStrength}` +
-        `${result.captured ? "; attacker holds the field" : ""}.`,
-      );
+      if (logCombat) {
+        console.info(
+          `[unit combat] ${attacker.name} vs ${defender.name}: ` +
+          `${attacker.strength}->${result.attackerStrength}, ${defender.strength}->${result.defenderStrength}` +
+          `${result.captured ? "; attacker holds the field" : ""}.`,
+        );
+      }
       continue;
     }
 
@@ -2104,15 +2391,35 @@ export const normalizeWorldState = (world) => {
 export const isPolityLandless = (world, code) => {
   const polityCode = normalizeString(code);
   if (!polityCode) return false;
-  const normalized = normalizeWorldState(world);
-  const entries = Object.entries(normalized.regionOwnershipOverrides);
-  const owns = entries.some(
-    ([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === polityCode.toLowerCase(),
+
+  // This predicate is used heavily by UI country pickers. It only needs two
+  // ledgers; normalizing the ENTIRE world here used to rebuild Stats, diplomacy,
+  // histories, storylines, units, markers, etc. once per candidate country.
+  const ownership =
+    world?.regionOwnershipOverrides &&
+    typeof world.regionOwnershipOverrides === "object" &&
+    !Array.isArray(world.regionOwnershipOverrides)
+      ? world.regionOwnershipOverrides
+      : {};
+  const target = polityCode.toLowerCase();
+  const owns = Object.values(ownership).some((ownerCode) =>
+    toCountryName(normalizeString(ownerCode)).toLowerCase() === target
   );
   if (owns) return false;
-  const isKnownPolity = Boolean(normalized.polityOverrides?.[polityCode]);
+
+  const registry =
+    world?.polityOverrides &&
+    typeof world.polityOverrides === "object" &&
+    !Array.isArray(world.polityOverrides)
+      ? world.polityOverrides
+      : {};
+  const isKnownPolity = Boolean(
+    registry[polityCode] ||
+    Object.keys(registry).some((key) => normalizeString(key).toLowerCase() === target)
+  );
+
   // No override list AND not a declared polity = stock map, owns via base tiles.
-  if (entries.length === 0 && !isKnownPolity) return false;
+  if (Object.keys(ownership).length === 0 && !isKnownPolity) return false;
   return true;
 };
 
@@ -2169,29 +2476,164 @@ export const buildActionDisplayText = (action) => {
     : normalized.text;
 };
 
-export const readWorldState = async ({ force = false } = {}) =>
-  normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force }));
+// R2.32 read-only runtime views
+// -----------------------------
+// Legacy readWorldState() intentionally returns a fresh working object because many
+// canonical writers mutate it before writeWorldState(). UI/read-only pipelines do
+// not need that ownership boundary. Giving them a stable normalized VIEW avoids
+// rebuilding/allocating the entire campaign on every panel click — a major source
+// of garbage-collection frame stalls in large Continuum saves.
+let worldViewRaw = null;
+let worldViewNormalized = null;
+
+export const readWorldStateView = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.world, {
+    defaultValue: WORLD_DEFAULTS,
+    force,
+    clone: false,
+  });
+
+  if (!force && raw === worldViewRaw && worldViewNormalized) {
+    return worldViewNormalized;
+  }
+
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const normalized = normalizeWorldState(raw);
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("normalize world read-only view", elapsed, { warnAt: 40 });
+
+  worldViewRaw = raw;
+  worldViewNormalized = normalized;
+  return normalized;
+};
+
+export const readWorldState = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.world, {
+    defaultValue: WORLD_DEFAULTS,
+    force,
+    clone: false,
+  });
+
+  // IMPORTANT: return a fresh canonical working object to the caller. Existing OH
+  // code often mutates the object it read before writeWorldState(); sharing one
+  // normalized object between callers would let uncommitted mutations leak.
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const normalized = normalizeWorldState(raw);
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("normalize world state", elapsed, { warnAt: 40 });
+  return normalized;
+};
+
+// R2.40 — adopt a Stats-only world commit that has already been persisted by
+// the country Stats worker.
+//
+// This is intentionally NOT a second ledger. The worker has written canonical
+// world.json. This helper only makes the same-tab in-memory cache agree with those
+// persisted countryStats/history fields without re-reading, re-normalizing,
+// re-stringifying or re-broadcasting the whole world document.
+export const primeCountryStatsWorkerCommit = async ({
+  country,
+  sheet,
+  historySeries,
+} = {}) => {
+  const key = normalizeOptionalString(country);
+  if (!key || !sheet || typeof sheet !== "object") return null;
+
+  const raw = await readJson(JSON_URLS.world, {
+    defaultValue: WORLD_DEFAULTS,
+    force: false,
+    clone: false,
+  });
+
+  if (!raw || typeof raw !== "object") return null;
+  if (!raw.countryStats || typeof raw.countryStats !== "object") raw.countryStats = {};
+  raw.countryStats[key] = sheet;
+
+  if (Array.isArray(historySeries)) {
+    if (!raw.countryStatsHistory || typeof raw.countryStatsHistory !== "object") {
+      raw.countryStatsHistory = {};
+    }
+    raw.countryStatsHistory[key] = historySeries;
+  }
+
+  // Keep the raw asset cache pointed at the authoritative same-tab object.
+  primeJson(JSON_URLS.world, raw, { clone: false });
+
+  // Keep the explicit read-only normalized view coherent too. Only the Stats
+  // domain is patched; map-facing identity/ownership objects retain their stable
+  // references and therefore do not wake React/MapLibre consumers.
+  if (worldViewRaw && typeof worldViewRaw === "object") {
+    if (!worldViewRaw.countryStats || typeof worldViewRaw.countryStats !== "object") {
+      worldViewRaw.countryStats = {};
+    }
+    worldViewRaw.countryStats[key] = sheet;
+    if (Array.isArray(historySeries)) {
+      if (!worldViewRaw.countryStatsHistory || typeof worldViewRaw.countryStatsHistory !== "object") {
+        worldViewRaw.countryStatsHistory = {};
+      }
+      worldViewRaw.countryStatsHistory[key] = historySeries;
+    }
+  }
+
+  if (worldViewNormalized && typeof worldViewNormalized === "object") {
+    if (!worldViewNormalized.countryStats || typeof worldViewNormalized.countryStats !== "object") {
+      worldViewNormalized.countryStats = {};
+    }
+    worldViewNormalized.countryStats[key] = sheet;
+    if (Array.isArray(historySeries)) {
+      if (!worldViewNormalized.countryStatsHistory || typeof worldViewNormalized.countryStatsHistory !== "object") {
+        worldViewNormalized.countryStatsHistory = {};
+      }
+      worldViewNormalized.countryStatsHistory[key] = historySeries;
+    }
+  }
+
+  return sheet;
+};
 
 export const writeWorldState = async (world, options = {}) => {
+  // `emitEvents:false` is reserved for domain-specific canonical writes whose
+  // caller emits a narrower event (for example country Stats). The full world is
+  // still normalized, persisted and installed into the canonical runtime caches;
+  // only the expensive generic "everything changed" UI broadcast is suppressed.
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const normalized = normalizeWorldState(world);
-  // Edited/AI-written polity names, aliases and notes get translated (and
-  // saved to the server language pack) the moment they're written, not when
-  // they first happen to be rendered somewhere.
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("normalize world before write", elapsed, { warnAt: 40 });
+
   enqueueContentStrings(normalized.polityOverrides);
-  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options });
+  const saved = await writeJson(JSON_URLS.world, normalized, {
+    pretty: false,
+    cloneResult: false,
+    ...options,
+  });
+
+  // `normalized` is a fresh canonical object owned by this function, not the
+  // caller's mutable working object. It is safe to retain as the read-only view.
+  worldViewRaw = saved;
+  worldViewNormalized = normalized;
+  return saved;
 };
 
 export const readGameData = async ({ force = false } = {}) =>
-  normalizeGameData(await readJson(JSON_URLS.game, { defaultValue: GAME_DEFAULTS, force }));
+  normalizeGameData(await readJson(JSON_URLS.game, {
+    defaultValue: GAME_DEFAULTS,
+    force,
+    clone: false,
+  }));
 
 export const writeGameData = async (game, options = {}) =>
-  writeJson(JSON_URLS.game, normalizeGameData(game), { pretty: true, ...options });
+  writeJson(JSON_URLS.game, normalizeGameData(game), {
+    pretty: false,
+    ...options,
+  });
+
 
 export const readActionsState = async ({ force = false } = {}) =>
   normalizeActions(await readJson(JSON_URLS.actions, { defaultValue: [], force }));
 
 export const writeActionsState = async (actions, options = {}) =>
-  writeJson(JSON_URLS.actions, normalizeActions(actions), { pretty: true, ...options });
+  writeJson(JSON_URLS.actions, normalizeActions(actions), { pretty: false, ...options });
 
 export const readEventsState = async ({ force = false } = {}) =>
   normalizeEvents(await readJson(JSON_URLS.events, { defaultValue: [], force }));
@@ -2202,11 +2644,49 @@ export const writeEventsState = async (events, options = {}) => {
   const normalized = dedupeEventLog(normalizeEvents(events));
   // New/edited event text follows the UI language immediately (see above).
   enqueueContentStrings(normalized);
-  return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
+  return writeJson(JSON_URLS.events, normalized, { pretty: false, ...options });
+};
+
+let chatViewRaw = null;
+let chatViewNormalized = null;
+let chatViewPromise = null;
+
+export const readChatsStateView = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.chat, {
+    defaultValue: [],
+    force,
+    clone: false,
+  });
+
+  if (!force && raw === chatViewRaw && chatViewNormalized) {
+    return chatViewNormalized;
+  }
+  if (!force && raw === chatViewRaw && chatViewPromise) {
+    return chatViewPromise;
+  }
+
+  chatViewRaw = raw;
+  chatViewPromise = normalizeChatsCooperatively(raw)
+    .then((normalized) => {
+      if (chatViewRaw === raw) chatViewNormalized = normalized;
+      return normalized;
+    })
+    .finally(() => {
+      if (chatViewRaw === raw) chatViewPromise = null;
+    });
+
+  return chatViewPromise;
 };
 
 export const readChatsState = async ({ force = false, world = null, playerCountry = "" } = {}) => {
-  const chats = normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
+  // normalizeChatEntry already creates fresh transport objects, so cloning the
+  // entire archive before normalization only doubles synchronous work/memory.
+  const raw = await readJson(JSON_URLS.chat, {
+    defaultValue: [],
+    force,
+    clone: false,
+  });
+  const chats = await normalizeChatsCooperatively(raw);
   if (!world) return chats;
   return playerCountry
     ? reconcileChatsForPlayer(chats, world, playerCountry)
@@ -2227,16 +2707,43 @@ export const writeChatsState = (chats, { world = null, playerCountry = "", ...op
     : normalizeChats(chats);
   const snapshot = cloneValue(normalized);
 
-  const write = () => writeJson(JSON_URLS.chat, snapshot, { pretty: true, ...options });
+  const write = async () => {
+    const saved = await writeJson(JSON_URLS.chat, snapshot, { pretty: false, ...options });
+    chatViewRaw = saved;
+    chatViewNormalized = normalized;
+    chatViewPromise = null;
+    return saved;
+  };
   const pending = chatWriteQueue.then(write, write);
   chatWriteQueue = pending.then(() => undefined, () => undefined);
   return pending;
 };
 
+export const readCountryStatsBundle = async ({ force = false } = {}) => {
+  const [actions, events, game, world] = await Promise.all([
+    readActionsState({ force }),
+    readEventsState({ force }),
+    readGameData({ force }),
+    readWorldStateView({ force }),
+  ]);
+
+  // Country Stats is grounded in canonical world/events/actions. It does not need
+  // to normalize/reconcile the entire diplomatic archive merely to display GDP.
+  return {
+    actions,
+    chats: [],
+    events,
+    game,
+    world,
+  };
+};
+
 export const readGameStateBundle = async ({ force = false } = {}) => {
   const [actions, chats, events, game, world] = await Promise.all([
     readActionsState({ force }),
-    readChatsState({ force }),
+    // The local canonical write seam keeps chat current in memory. Do not re-fetch
+    // and rebuild the full diplomatic archive merely because a turn starts.
+    readChatsState({ force: false }),
     readEventsState({ force }),
     readGameData({ force }),
     readWorldState({ force }),
@@ -2244,7 +2751,7 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
 
   return {
     actions,
-    chats: reconcileChatsForPlayer(chats, world, game.country),
+    chats: reconcileStableChatsForPlayer(chats, world, game.country),
     events,
     game,
     world,
@@ -2796,7 +3303,7 @@ const applyRegionControlOpToWorld = (world, rawOp) => {
   }
 };
 
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, world }) => {
+export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, logUnitCombat = true, world }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
 
@@ -2840,12 +3347,16 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, 
       nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps, {
         gameDate: event.date || game.gameDate || game.startDate || "",
         combatSeed: event.id || event.title || event.date || "event",
+        logCombat: logUnitCombat,
       });
     }
 
     if (event.impacts.markerOps?.length) {
       const before = normalizeMarkers(nextWorld.markers);
-      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps);
+      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps, {
+        eventId: event.id,
+        gameDate: event.date || game.gameDate || game.startDate || "",
+      });
       // A rename that matched no existing structure is a STOCK-map city rename (stock
       // cities live in PMTiles, not world.markers) — record it as an override layer so
       // the label layer can show the new name (see Cities.jsx / cityRenames).

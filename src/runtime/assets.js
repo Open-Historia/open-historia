@@ -191,6 +191,8 @@ let countryNamesPromise = null;
 let countryNamesPromiseKey = "";
 let regionCatalogPromise = null;
 let regionCatalogPromiseKey = "";
+let primedCustomRegionCatalog = null;
+let primedCustomRegionCatalogKey = "";
 
 // getNationColors and loadCountryNames memoize on the scenario token, which only
 // changes on a scenario/library switch — never on a runtime write. So after the
@@ -225,6 +227,12 @@ const invalidateDerivedCachesForWrite = (url) => {
   if (url && url === JSON_URLS.world) {
     countryNamesPromise = null;
     countryNamesPromiseKey = "";
+  }
+  if (url && url === JSON_URLS.regionsGeojson) {
+    regionCatalogPromise = null;
+    regionCatalogPromiseKey = "";
+    primedCustomRegionCatalog = null;
+    primedCustomRegionCatalogKey = "";
   }
 };
 let mapRuntimeConfigured = false;
@@ -318,6 +326,127 @@ export const resolveCountryDisplayName = (name, code) => countryNameResolver(nam
 
 setRuntimeAssetEndpoints();
 
+const PERF_WARN_MS = 50;
+const PERF_STALL_MS = 120;
+const perfNow = () => (typeof performance !== "undefined" && performance?.now ? performance.now() : Date.now());
+const runtimeAssetLabel = (url = "") => {
+  const raw = String(url || "");
+  const match = /\/api\/runtime\/json\/([^?]+)/.exec(raw);
+  return match?.[1] || raw.split("/").pop()?.split("?")[0] || "json";
+};
+
+export const reportPerfOperation = (
+  operation,
+  elapsed,
+  { extra = "", warnAt = PERF_WARN_MS } = {},
+) => {
+  const numeric = Number(elapsed);
+  if (!Number.isFinite(numeric)) return numeric;
+  if (typeof window !== "undefined") {
+    window.__OH_LAST_PERF_OPERATION__ = {
+      operation: String(operation || "unknown"),
+      elapsed: numeric,
+      at: perfNow(),
+      wallTime: Date.now(),
+      extra: String(extra || ""),
+    };
+  }
+  if (numeric >= warnAt) {
+    console.warn(
+      `[OH PERF] ${operation} took ${numeric.toFixed(1)}ms${extra ? ` · ${extra}` : ""}`,
+    );
+  }
+  return numeric;
+};
+
+const warnSlowJson = (operation, url, startedAt, extra = "") =>
+  reportPerfOperation(
+    `${operation} ${runtimeAssetLabel(url)}`,
+    perfNow() - startedAt,
+    { extra },
+  );
+
+// Temporary stabilization watchdog. Named timers cannot see GC, browser layout,
+// React commits, MapLibre rendering, compositor stalls, etc. This catches any
+// visible frame gap and correlates it with recent input/map motion/named OH work.
+export const installPerformanceWatchdog = () => {
+  if (typeof window === "undefined" || typeof document === "undefined") return () => {};
+  if (window.__OH_PERF_WATCHDOG_INSTALLED__) return () => {};
+  window.__OH_PERF_WATCHDOG_INSTALLED__ = true;
+
+  let rafId = 0;
+  let lastFrame = perfNow();
+  let mapMoving = Boolean(window.__OH_MAP_MOVING__);
+  let lastInput = { type: "none", at: 0 };
+  let longTaskObserver = null;
+
+  const noteInput = (event) => {
+    lastInput = { type: event?.type || "input", at: perfNow() };
+  };
+  const onMapMotion = (event) => {
+    mapMoving = Boolean(event?.detail?.active);
+    window.__OH_MAP_MOVING__ = mapMoving;
+  };
+
+  const inputEvents = ["pointerdown", "pointermove", "wheel", "keydown", "click"];
+  for (const type of inputEvents) {
+    window.addEventListener(type, noteInput, { capture: true, passive: true });
+  }
+  window.addEventListener("oh:map-motion", onMapMotion);
+
+  try {
+    if (typeof PerformanceObserver !== "undefined") {
+      longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration < PERF_STALL_MS) continue;
+          const last = window.__OH_LAST_PERF_OPERATION__;
+          const recentNamed = last && Math.abs(perfNow() - Number(last.at || 0)) < 1800;
+          console.warn(
+            `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
+            `${mapMoving ? " · map moving" : ""}` +
+            `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
+          );
+        }
+      });
+      longTaskObserver.observe({ entryTypes: ["longtask"] });
+    }
+  } catch {
+    longTaskObserver = null;
+  }
+
+  const frame = (now) => {
+    const gap = now - lastFrame;
+    if (gap >= PERF_STALL_MS && document.visibilityState === "visible") {
+      const inputAge = now - Number(lastInput.at || 0);
+      const last = window.__OH_LAST_PERF_OPERATION__;
+      const opAge = last ? now - Number(last.at || 0) : Infinity;
+      console.warn(
+        `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
+        ` · map moving: ${mapMoving ? "yes" : "no"}` +
+        ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
+        ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
+      );
+    }
+    lastFrame = now;
+    rafId = window.requestAnimationFrame(frame);
+  };
+
+  rafId = window.requestAnimationFrame((now) => {
+    lastFrame = now;
+    rafId = window.requestAnimationFrame(frame);
+  });
+
+  return () => {
+    if (rafId) window.cancelAnimationFrame(rafId);
+    longTaskObserver?.disconnect?.();
+    for (const type of inputEvents) {
+      window.removeEventListener(type, noteInput, true);
+    }
+    window.removeEventListener("oh:map-motion", onMapMotion);
+    window.__OH_PERF_WATCHDOG_INSTALLED__ = false;
+  };
+};
+
 const cloneJson = (value) => {
   if (value == null) return value;
   if (typeof structuredClone === "function") {
@@ -325,6 +454,13 @@ const cloneJson = (value) => {
   }
 
   return JSON.parse(JSON.stringify(value));
+};
+
+const cloneJsonFor = (url, value) => {
+  const startedAt = perfNow();
+  const cloned = cloneJson(value);
+  warnSlowJson("clone", url, startedAt);
+  return cloned;
 };
 
 const getPersistentCache = async () => {
@@ -581,7 +717,7 @@ export const ensureBasemapProtocol = () => {
   }
 };
 
-export const readJson = async (url, { cache, defaultValue, force = false, signal } = {}) => {
+export const readJson = async (url, { cache, defaultValue, force = false, signal, clone = true } = {}) => {
   // Snapshot the decision NOW, never inside the request closure — see
   // isNoStoreJsonUrl for why an post-await evaluation strands an entry.
   const store = cache === undefined ? !isNoStoreJsonUrl(url) : cache !== false;
@@ -591,22 +727,43 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
   if (!store) jsonValueCache.delete(url);
 
   if (!force && jsonValueCache.has(url)) {
-    return cloneJson(jsonValueCache.get(url));
+    const cached = jsonValueCache.get(url);
+    return clone ? cloneJsonFor(url, cached) : cached;
   }
 
   // Even with force: true, batch concurrent requests to the same URL so
   // multiple independent 5s pollers (Nations, Cities, background, units)
   // don't each fire their own network fetch.
   if (jsonRequestCache.has(url)) {
-    return cloneJson(await jsonRequestCache.get(url));
+    const pending = await jsonRequestCache.get(url);
+    return clone ? cloneJsonFor(url, pending) : pending;
   }
 
   const request = (async () => {
+    const fetchStartedAt = perfNow();
     const { response } = await fetchWithPersistence(url, {
       bypassPersistentCache: isMutableRuntimeJsonUrl(url),
       signal,
     });
-    const data = await response.json();
+    const fetchElapsed = perfNow() - fetchStartedAt;
+    if (fetchElapsed >= PERF_WARN_MS) {
+      reportPerfOperation(`fetch wait ${runtimeAssetLabel(url)}`, fetchElapsed);
+    }
+
+    const bodyStartedAt = perfNow();
+    const text = await response.text();
+    const bodyElapsed = perfNow() - bodyStartedAt;
+    if (bodyElapsed >= PERF_WARN_MS) {
+      reportPerfOperation(
+        `body read ${runtimeAssetLabel(url)}`,
+        bodyElapsed,
+        { extra: `${Math.round(text.length / 1024)} KiB` },
+      );
+    }
+
+    const parseStartedAt = perfNow();
+    const data = text ? JSON.parse(text) : null;
+    warnSlowJson("JSON.parse", url, parseStartedAt, `${Math.round(text.length / 1024)} KiB`);
     // Recorded INSIDE the try, before the catch below: a failed read must leave
     // this false so loadRegionCatalog retries instead of pinning a stock-only
     // catalog. "Did we get a value?" is not a usable substitute — an originator
@@ -620,7 +777,7 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
       if (defaultValue !== undefined) {
         // Serve the fallback but do NOT cache it — a transient failure must not
         // pin the default for the rest of the session; the next read retries.
-        return cloneJson(defaultValue);
+        return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
       }
 
       throw error;
@@ -630,7 +787,8 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
     });
 
   jsonRequestCache.set(url, request);
-  return cloneJson(await request);
+  const value = await request;
+  return clone ? cloneJsonFor(url, value) : value;
 };
 
 export const warmJson = async (url, options = {}) => {
@@ -642,7 +800,7 @@ export const warmJson = async (url, options = {}) => {
   };
 };
 
-export const primeJson = (url, data, { cache } = {}) => {
+export const primeJson = (url, data, { cache, clone = true } = {}) => {
   const store = cache === undefined ? !isNoStoreJsonUrl(url) : cache !== false;
   jsonLoadedUrls.add(url);
   jsonRequestCache.delete(url);
@@ -653,13 +811,25 @@ export const primeJson = (url, data, { cache } = {}) => {
     jsonValueCache.delete(url);
     return data;
   }
-  const snapshot = cloneJson(data);
+  // Mutable runtime PUT responses are fresh objects already owned by this asset
+  // store. Cloning a giant world twice merely to cache it caused invisible stalls.
+  const snapshot = clone ? cloneJson(data) : data;
   jsonValueCache.set(url, snapshot);
-  return cloneJson(snapshot);
+  return clone ? cloneJson(snapshot) : snapshot;
 };
 
-export const writeJson = async (url, data, { pretty = false } = {}) => {
+export const writeJson = async (
+  url,
+  data,
+  {
+    pretty = false,
+    cloneResult = true,
+    emitEvents = true,
+  } = {},
+) => {
+  const stringifyStartedAt = perfNow();
   const payload = JSON.stringify(data, null, pretty ? 2 : 0);
+  warnSlowJson("stringify", url, stringifyStartedAt, `${Math.round(payload.length / 1024)} KiB`);
   const response = await fetch(url, {
     body: payload,
     headers: JSON_HEADERS,
@@ -683,16 +853,18 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
   let saved = data;
   let savedPayload = payload;
   try {
+    const echoedStartedAt = perfNow();
     const echoed = await response.text();
     if (echoed) {
       saved = JSON.parse(echoed);
       savedPayload = echoed;
     }
+    warnSlowJson("echo parse", url, echoedStartedAt, echoed ? `${Math.round(echoed.length / 1024)} KiB` : "");
   } catch {
     /* no body, or not JSON — keep what we sent */
   }
 
-  primeJson(url, saved);
+  primeJson(url, saved, { clone: url !== JSON_URLS.world });
   invalidateDerivedCachesForWrite(url);
   if (!isMutableRuntimeJsonUrl(url)) {
     persistResponse(
@@ -705,7 +877,21 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
     );
   }
 
-  return cloneJson(saved);
+  // Local runtime writes are authoritative immediately. Map consumers can update
+  // from this in-memory object instead of waiting for another full world.json poll.
+  if (emitEvents && typeof window !== "undefined" && url === JSON_URLS.world) {
+    window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: saved } }));
+  }
+  if (emitEvents && typeof window !== "undefined" && url === JSON_URLS.game) {
+    window.dispatchEvent(new CustomEvent("oh:game-updated", { detail: { game: saved } }));
+  }
+  if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
+    window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+      detail: { key: runtimeAssetLabel(url), url, value: saved },
+    }));
+  }
+
+  return cloneResult ? cloneJsonFor(url, saved) : saved;
 };
 
 export const readRuntimeJson = async (
@@ -1108,6 +1294,85 @@ export const loadCountryNames = async ({ force = false } = {}) => {
   return promise;
 };
 
+// The map already pays the unavoidable parse cost of regions.geojson once.
+// Project a tiny metadata-only catalog while that geometry is in memory so
+// country panels/AI/cheats never reparse it just to learn province names.
+export const primeCustomRegionCatalog = (
+  geojson,
+  {
+    url = JSON_URLS.regionsGeojson,
+    invalidateCatalog = true,
+  } = {},
+) => {
+  const startedAt = perfNow();
+  const entries = [];
+  for (const feature of geojson?.features ?? []) {
+    const props = feature?.properties ?? {};
+    const id = props.id != null
+      ? String(props.id)
+      : props.GID_1 != null
+        ? String(props.GID_1)
+        : "";
+    if (!id) continue;
+    const name = resolveRegionName(id, props.name ?? props.NAME_1 ?? props.name_1);
+    const centroid = props?.centroid?.coordinates;
+    const lng = Number(Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude);
+    const lat = Number(Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude);
+    entries.push({
+      country: props.country ? String(props.country) : "",
+      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
+      id,
+      name: name || id,
+      lng: Number.isFinite(lng) ? lng : null,
+      lat: Number.isFinite(lat) ? lat : null,
+      tags: Array.isArray(props?.tags) ? props.tags.map((value) => String(value)) : [],
+      type: props?.type ? String(props.type) : "",
+      adjacencies: Array.isArray(props?.adjacencies)
+        ? props.adjacencies.map((value) => String(value)).filter(Boolean)
+        : [],
+    });
+  }
+  primedCustomRegionCatalog = entries;
+  primedCustomRegionCatalogKey = String(url || "");
+  if (invalidateCatalog) {
+    regionCatalogPromise = null;
+    regionCatalogPromiseKey = "";
+  }
+  reportPerfOperation(
+    "prime compact custom region catalog",
+    perfNow() - startedAt,
+    { extra: `${entries.length} regions`, warnAt: 25 },
+  );
+  return entries;
+};
+
+export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
+  if (
+    !force &&
+    primedCustomRegionCatalog &&
+    primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
+  ) {
+    return primedCustomRegionCatalog;
+  }
+
+  // Cold-start compatibility only. In normal gameplay Nations has already loaded
+  // and primed this projection before the player can inspect Stats.
+  const custom = await readJson(JSON_URLS.regionsGeojson, {
+    defaultValue: null,
+    force,
+    clone: false,
+  }).catch(() => null);
+
+  if (!custom || !Array.isArray(custom?.features) || custom.features.length === 0) {
+    return [];
+  }
+
+  return primeCustomRegionCatalog(custom, {
+    url: JSON_URLS.regionsGeojson,
+    invalidateCatalog: false,
+  });
+};
+
 export const loadRegionCatalog = async ({ force = false } = {}) => {
   // Keyed on BOTH sources: switching games/scenarios (new runtime token) must
   // refresh the custom-region names merged in below.
@@ -1164,45 +1429,41 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       // of raw ids.
       let customRegionsResolved = true;
       try {
-        const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null });
-        // readJson RECORDS a genuine parse (it deliberately does not retain this
-        // document — see isNoStoreJsonUrl) and records nothing on a transient
-        // failure. That lets us tell a dropped fetch (retry) apart from a
-        // scenario that simply has no custom regions (stock names are correct),
-        // so one failed request on a custom map can't pin a blank political map
-        // for the whole session.
-        //
-        // Do NOT "simplify" this to a test on `custom` itself: the server
-        // answers a geometry-less scenario with a 200 empty FeatureCollection,
-        // and dropping `defaultValue` above doesn't work either — when a
-        // concurrent forced reader is the batched originator, its own default
-        // resolves this promise too, so a failure arrives as a value with no throw.
-        customRegionsResolved = jsonLoadedUrls.has(JSON_URLS.regionsGeojson);
-        for (const feature of custom?.features ?? []) {
-          const props = feature?.properties ?? {};
-          const id = props.id != null ? String(props.id) : "";
+        let customEntries = null;
+        if (
+          primedCustomRegionCatalog &&
+          primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
+        ) {
+          customEntries = primedCustomRegionCatalog;
+        } else {
+          // Cold-start fallback only. Once Nations loads the custom map, the
+          // compact primer makes this giant geometry read disappear thereafter.
+          const custom = await readJson(JSON_URLS.regionsGeojson, {
+            defaultValue: null,
+            clone: false,
+          });
+          customRegionsResolved = jsonLoadedUrls.has(JSON_URLS.regionsGeojson);
+          customEntries = primeCustomRegionCatalog(custom, {
+            url: JSON_URLS.regionsGeojson,
+            invalidateCatalog: false,
+          });
+        }
+
+        for (const entry of customEntries ?? []) {
+          const id = String(entry?.id ?? "");
           if (!id) continue;
-          // Same placeholder correction as the stock pass above — and it must happen
-          // HERE too: a scenario's geometry is seeded from the same GADM export, so
-          // without this the scenario's own "NA" wins on the next line and puts the
-          // placeholder back over the corrected stock name.
-          const name = resolveRegionName(id, props.name);
           const existing = seen.get(id);
           if (existing) {
-            // The scenario's own name for a stock region WINS. A world that
-            // renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about
-            // South Konisburg everywhere — the AI's region transfers can only
-            // resolve against the name the world actually uses.
-            if (name) existing.name = name;
-            if (props.country) existing.country = String(props.country);
+            if (entry.name) existing.name = String(entry.name);
+            if (entry.country) existing.country = String(entry.country);
+            if (entry.countryCode) existing.countryCode = String(entry.countryCode);
             continue;
           }
-          const countryCode = props.gid0 ? String(props.gid0) : "";
           seen.set(id, {
-            country: props.country ? String(props.country) : "",
-            countryCode,
+            country: entry.country ? String(entry.country) : "",
+            countryCode: entry.countryCode ? String(entry.countryCode) : "",
             id,
-            name: name || id,
+            name: entry.name ? String(entry.name) : id,
           });
         }
       } catch {
