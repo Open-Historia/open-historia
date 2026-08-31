@@ -225,21 +225,29 @@ See the [Node network](node-network.md) notes for the swarm/registry architectur
 
 ## 8. Startup preload + the ~162 MB prime
 
-`src/runtime/preload.js` warms the map before React fully mounts, inside a **30 s time budget** (`STARTUP_TIME_BUDGET_MS`, `:16`). Tasks run serially, each with an `AbortController` wired to the remaining budget; the budget expiring aborts the current task and leaves the rest to load lazily in-game.
+`src/runtime/preload.js` warms the map while React mounts, inside a **30 s time budget** (`STARTUP_TIME_BUDGET_MS`). Tasks form a **dependency graph**, not a queue: `deps` names the ids a task waits on and everything else runs concurrently, under **one** `AbortController` armed for the whole budget. The map itself is mounted by `App.jsx` in parallel with all of this, so every warm is a prefetch racing MapLibre's own lazy loads — nothing here is a prerequisite for the map rendering.
 
-| # | id | Label | Weight | Warms | Skipped on custom map? |
-|---|---|---|---|---|---|
-| 1 | `state` | Syncing saves and runtime state | 12 | `game`,`prompts`,`colors`,`actions`,`chat`,`advisor`,`events`,`world` JSON | no |
-| 2 | `textures` | Warming world textures | 20 | ESRI basemap + AWS terrain raster tiles (global z0–2 + initial viewport) | **yes** — a custom `world.background` replaces the basemap entirely |
-| 3 | `countries` | Caching country geometry | 26 | `countries.pmtiles` (~62.7 MB) | **no** — needed for names + labels on every map |
-| 4 | `country-index` | Building country index | 8 | `loadCountryNames()` | no |
-| 5 | `country-labels` | Building country labels | 14 | `warmCountryLabelCollections()` | no |
-| 6 | `cities` | Caching city layer | 10 | `cities.pmtiles` (~1.5 MB) | no |
-| 7 | `regions` | Caching regional borders | 24 | `regions.pmtiles` (~105.8 MB) | **no** — paints owners above z6.5 even on custom maps |
+| id | Label | Weight | Deps | Gates the startup screen? | Warms | Skipped on custom map? |
+|---|---|---|---|---|---|---|
+| `state` | Syncing saves and runtime state | 12 | — | yes | `game`,`prompts`,`colors`,`actions`,`chat`,`advisor`,`events`,`world` JSON | no |
+| `textures` | Warming world textures | 20 | `state` | yes | ESRI basemap + AWS terrain raster tiles (global z0–2 + initial viewport), at concurrency 12 | **yes** — a custom `world.background` replaces the basemap entirely |
+| `countries` | Caching country geometry | 26 | — | **no — background** | `countries.pmtiles` (~60 MB) | **no** — needed for names + labels on every map |
+| `country-index` | Building country index | 8 | — | yes | `loadCountryNames()` — z0 tile only (~40 KB) | no |
+| `country-labels` | Building country labels | 14 | — | yes | `warmCountryLabelCollections()` — z0 tile only (~40 KB) | no |
+| `cities` | Caching city layer | 10 | — | yes | `cities.pmtiles` (~1.5 MB) | no |
+| `regions` | Caching regional borders | 24 | — | **no — background** | `regions.pmtiles` (~101 MB) | **no** — paints owners above z6.5 even on custom maps |
 
-**The ~162 MB prime:** warming tasks 3+6+7 pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — the code cites regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js:231`; on-disk manifest sizes total ~170 MB). This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further network I/O. The cost is that this ~162 MB must be **freed on scenario switch** — which is exactly what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does. See the [RAM & paint audit](performance.md) notes for the broader memory backlog (the geojson double-store, pinned PMTiles).
+`textures` depends on `state` only for `world.json`. `readJson` dedupes a concurrent read anyway, so the edge costs nothing; it exists so "a custom map fires zero ESRI requests" is a guarantee rather than a race.
 
-Task results feed a weighted progress bar: `normalizeTaskResult` (`preload.js:165`) sums the `.size` of each warmed asset into `loadedBytes`, and `progress = completedWeight / TOTAL_WEIGHT`.
+**Background tasks** (`background: true`) start with the rest and keep running after the game is playable. They are excluded from `GATING_TASKS`, from `TOTAL_WEIGHT`, and from the `steps` list the startup screen draws — a background row could only ever be drawn mid-flight and would read as a step that never completed. They also carry **no abort signal**: the budget is a ceiling on the wait, and must not cancel work nothing is waiting on. `whenBackgroundWarmsSettle()` awaits them for the rare caller that needs a whole archive resident.
+
+`countries` and `regions` are both background. Neither is read whole by anything the opening screen draws: the two derived catalogs (`loadCountryNames`, `warmCountryLabelCollections`) read exactly one tile out of `countries.pmtiles` — z0, ~40 KB of a 60 MB archive — so they are gating tasks with **no** dep on the warm, and range-read that tile in a couple of round trips instead.
+
+`regions` is background because nothing on the opening screen reads it at all. The camera starts at z3.5, where `TILE_FILL_FADE` still holds `regions-fill` at zero opacity, and the archive's non-rendering consumers (`loadRegionCatalog`, the region click handler) each read a single z0 tile. Until the full buffer lands, `getPmtilesArchive` answers from the same archive over **HTTP range reads** — correct, just a round trip per tile — and `primePmtilesArchive` swaps the `MemorySource` in underneath by URL key when it does (`Protocol.add` keys on `source.getKey()`, which is the URL for both source types, so the replacement is transparent to MapLibre and to the shared `pmtilesCache`).
+
+**The ~162 MB prime:** warming `countries` + `cities` + `regions` still pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js`; on-disk manifest sizes total ~170 MB). This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further I/O. Moving `regions` to the background changes *when the player waits for it*, not whether it is warmed. The ~162 MB must still be **freed on scenario switch** — which is what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does.
+
+Task results feed a weighted progress bar: `normalizeTaskResult` sums the `.size` of each warmed asset into `loadedBytes`, and `progress = completedWeight / TOTAL_WEIGHT` over the gating set only. With several tasks in flight, the published `activeId` is the **heaviest** active task — the one the wait is actually made of — rather than "the current step". Per-task durations are logged to the `startup` debug channel (detailed mode), with a `Startup preload complete` summary at normal verbosity.
 
 ---
 
