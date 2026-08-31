@@ -46,6 +46,15 @@ const ISO3_TO_ISO2 = {
     YEM: "YE", ZAF: "ZA", ZMB: "ZM", ZWE: "ZW",
 };
 
+// Reverse lookup used when an imported/custom map knows a country by its
+// human-readable identity but needs to restore the stock GID_0/ISO3 bridge.
+// This is derived from ISO3_TO_ISO2 rather than maintained as a second table.
+const ISO2_TO_ISO3 = Object.freeze(
+    Object.fromEntries(
+        Object.entries(ISO3_TO_ISO2).map(([iso3, iso2]) => [String(iso2).toUpperCase(), iso3]),
+    ),
+);
+
 // GADM assigns placeholder codes (Z01..Z09) to disputed border areas; show the
 // flag of the administering / claiming country instead.
 const DISPUTED_TERRITORY_PARENT = {
@@ -56,6 +65,34 @@ const DISPUTED_TERRITORY_PARENT = {
 const SPECIAL_TERRITORY_PARENT = {
     XAD: "GBR",
     ZNC: "TUR",
+};
+
+// Resolve a normal stock country identity to its canonical ISO3/GID_0 code.
+//
+// Accepts:
+//   - a GID_0 / ISO3 code ("POL")
+//   - an alpha-2 code ("PL")
+//   - any country-name alias already known by NAME_TO_ALPHA2
+//     ("Poland", "Republic of Poland", "Russian Federation", ...)
+//
+// Returns null for historical/fictional identities that do not have a safe stock
+// country match. Scenario-specific identity remains authoritative; this helper
+// only restores the optional standard-country bridge used by built-in flags.
+export const countryGidFromIdentity = (owner) => {
+    if (!owner) return null;
+    const raw = String(owner).trim();
+    if (!raw) return null;
+
+    const upper = raw.toUpperCase();
+    const directIso3 = DISPUTED_TERRITORY_PARENT[upper] ?? SPECIAL_TERRITORY_PARENT[upper] ?? upper;
+    if (ISO3_TO_ISO2[directIso3]) return directIso3;
+
+    const alpha2Code = ISO2_TO_ISO3[upper];
+    if (alpha2Code) return alpha2Code;
+
+    const alpha2 = NAME_TO_ALPHA2[raw.toLowerCase()];
+    if (!alpha2) return null;
+    return ISO2_TO_ISO3[String(alpha2).toUpperCase()] ?? null;
 };
 
 // Resolve an owner to a lowercase ISO 3166-1 alpha-2 code, or null.

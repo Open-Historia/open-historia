@@ -18,6 +18,7 @@ import {
   basemapProtocolTemplate,
   ensureBasemapProtocol,
   esriTileTemplate,
+  reportPerfOperation,
 } from "../../runtime/assets.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -27,12 +28,22 @@ ensureBasemapProtocol();
 // Grading applied to whichever ESRI basemap is picked: cap brightness so it
 // sits against the dark UI, with a little desaturation/contrast that suits both
 // the satellite imagery and the paler cartographic styles.
+const reportMapReactRender = (id, phase, actualDuration) => {
+  reportPerfOperation(
+    `React ${id} ${phase}`,
+    Number(actualDuration) || 0,
+    { warnAt: 40 },
+  );
+};
+
 const SATELLITE_PAINT = {
   "raster-resampling": "linear",
-  "raster-saturation": -0.15,
-  "raster-contrast": 0.08,
-  "raster-brightness-min": 0.02,
-  "raster-brightness-max": 0.78,
+  // Keep the basemap as subdued geographic context. Political colour, borders,
+  // cities and labels should read first at normal strategy-map zooms.
+  "raster-saturation": -0.08,
+  "raster-contrast": 0.02,
+  "raster-brightness-min": 0.04,
+  "raster-brightness-max": 0.72,
 };
 
 // Full-map image corners (TL, TR, BR, BL). The flat mercator map only reaches
@@ -147,8 +158,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       type: "hillshade",
       source: "terrain-source",
       paint: {
-        "hillshade-exaggeration": 0.1,
-        "hillshade-shadow-color": "#000",
+        "hillshade-exaggeration": 0.035,
+        "hillshade-shadow-color": "rgba(0, 0, 0, 0.55)",
+        "hillshade-highlight-color": "rgba(255, 255, 255, 0.035)",
+        "hillshade-accent-color": "rgba(12, 16, 20, 0.08)",
       },
     },
   ],
@@ -196,9 +209,10 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     [terrainEnabled, isGlobe, customBg, bgDeclared],
   );
   // Render at reduced pixel density when zoomed far out: the whole-world view
-  // draws every region, border and label at once, and full native resolution
-  // there spends frames on detail nobody can see at that scale. Hysteresis
-  // (re-sharpen at 5, soften below 4.5) prevents flapping at the boundary.
+  // draws every region, border and label at once. Never go below 1x, though —
+  // sub-native rendering visibly blurred borders and labels. HiDPI screens still
+  // get a substantial cap at 1.25x. Hysteresis (re-sharpen at 5, soften below
+  // 4.5) prevents flapping at the boundary.
   const pixelRatioModeRef = useRef(null);
   const applyDynamicPixelRatio = useCallback((zoom) => {
     const map = mapRef?.current?.getMap?.();
@@ -207,27 +221,80 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     if (!mode || mode === pixelRatioModeRef.current) return;
     pixelRatioModeRef.current = mode;
     const native = window.devicePixelRatio || 1;
-    map.setPixelRatio(mode === "low" ? Math.min(native, 1) * 0.75 : native);
+    map.setPixelRatio(mode === "low" ? Math.max(1, Math.min(native, 1.25)) : native);
   }, [mapRef]);
 
+  const emitMapMotion = useCallback((active) => {
+    if (typeof window === "undefined") return;
+    window.__OH_MAP_MOVING__ = Boolean(active);
+    window.dispatchEvent(new CustomEvent("oh:map-motion", {
+      detail: { active: Boolean(active) },
+    }));
+  }, []);
+  const handleMoveStart = useCallback(() => emitMapMotion(true), [emitMapMotion]);
   const handleMove = useCallback(({ viewState }) => {
     viewStateRef.current = viewState;
-    applyDynamicPixelRatio(viewState.zoom);
-  }, [applyDynamicPixelRatio]);
+  }, []);
+  const handleMoveEnd = useCallback(() => emitMapMotion(false), [emitMapMotion]);
   const handleIdle = useCallback(() => {
-    // The soft ratio applies from the very first frame settled at world zoom —
-    // not only after the player first moves the camera.
+    emitMapMotion(false);
+    // Change render density only after camera motion has settled. setPixelRatio
+    // rebuilds render targets, so doing it mid-zoom can turn one threshold
+    // crossing into a visible hitch.
     applyDynamicPixelRatio(viewStateRef.current?.zoom ?? 0);
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
     setLoading(false);
-  }, [applyDynamicPixelRatio, onInitialIdle]);
+  }, [applyDynamicPixelRatio, emitMapMotion, onInitialIdle]);
   const handleLoading = useCallback(() => {
     setLoading(true);
     clearTimeout(loadTimerRef.current);
     loadTimerRef.current = setTimeout(() => setLoading(false), 8000);
   }, []);
+
+  React.useEffect(() => () => emitMapMotion(false), [emitMapMotion]);
+
+  React.useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    let canvas = null;
+
+    const attach = () => {
+      if (disposed) return;
+      const map = mapRef?.current?.getMap?.();
+      canvas = map?.getCanvas?.() || null;
+      if (!canvas) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+
+      const onLost = (event) => {
+        console.warn(
+          `[OH PERF GPU] WebGL context lost${event?.statusMessage ? ` · ${event.statusMessage}` : ""}`,
+        );
+      };
+      const onRestored = () => {
+        console.warn("[OH PERF GPU] WebGL context restored");
+      };
+
+      canvas.addEventListener("webglcontextlost", onLost);
+      canvas.addEventListener("webglcontextrestored", onRestored);
+
+      canvas.__ohPerfGpuCleanup = () => {
+        canvas.removeEventListener("webglcontextlost", onLost);
+        canvas.removeEventListener("webglcontextrestored", onRestored);
+      };
+    };
+
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      canvas?.__ohPerfGpuCleanup?.();
+      if (canvas) delete canvas.__ohPerfGpuCleanup;
+    };
+  }, [mapRef, projection]);
 
   return (
     // Stars and the single projected sun sit behind the transparent MapLibre
@@ -237,7 +304,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       style={{
         height: "100vh",
         width: "100vw",
-        backgroundColor: "#000",
+        backgroundColor: isGlobe ? "#000" : "#10213d",
         position: "relative",
         overflow: "hidden",
       }}
@@ -274,6 +341,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
           }}
         />
       )}
+      <React.Profiler id="MapTree" onRender={reportMapReactRender}>
       <Map
         key={projection}
         ref={mapRef}
@@ -310,7 +378,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         mapStyle={worldStyle}
         onIdle={handleIdle}
         onLoading={handleLoading}
+        onMoveStart={handleMoveStart}
         onMove={handleMove}
+        onMoveEnd={handleMoveEnd}
       >
         <Nations isGlobe={isGlobe} />
         <Cities />
@@ -322,6 +392,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         <UnitPopup />
         <FeaturePopup />
       </Map>
+      </React.Profiler>
       {isGlobe && (
         <canvas
           id="oh-globe-lighting"

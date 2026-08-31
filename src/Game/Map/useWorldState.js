@@ -1,127 +1,235 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { useEffect, useState } from "react";
+import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
 
-// Singleton: all consumers share one poll interval and one set of results,
-// eliminating the 4 redundant world.json requests the app used to fire.
+// Map-facing world store.
+//
+// R2.27: local world writes push updates immediately through "oh:world-updated".
+// The network poll is now only a safety net for external/device writes, rather
+// than reparsing the entire campaign every five seconds while the player is idle.
 
-const POLL_MS = 5000;
+const POLL_MS = 90000;
+const RETRY_BUSY_MS = 2500;
+const IDLE_TIMEOUT_MS = 4000;
+const EMPTY_OBJECT = Object.freeze({});
+const EMPTY_MARKERS = Object.freeze([]);
+
 let sharedState = null;
+let publishedState = null;
 let pollTimer = null;
+let idleHandle = null;
+let listenersInstalled = false;
+let pollInFlight = false;
+let mapMoving = false;
+let lastPollAt = 0;
 const subscribers = new Set();
 
-// Visual override for the staged event reveal (see time.jsx): while a turn's
-// events are revealed one by one, the map renders the world as of the last
-// revealed event instead of the final post-jump state. The poll keeps running
-// underneath — world.json stays authoritative — and clearing the override
-// (null) snaps consumers back to the live state.
 let overrideState = null;
 
 const effectiveState = () => overrideState ?? sharedState;
-
-// The state the map is currently rendering (override during a staged reveal,
-// else the live polled world). Read-only peer of unitsController.getUnits.
-export const getWorldStateSnapshot = () => effectiveState();
-
-export const setWorldStateOverride = (next) => {
-  overrideState = next && typeof next === "object" ? next : null;
-  const state = effectiveState();
-  if (state) for (const fn of subscribers) fn(state);
-};
-
-const poll = async () => {
-  try {
-    sharedState = await readJson(JSON_URLS.world, { defaultValue: {}, force: true });
-  } catch {
-    sharedState = {};
-  }
-  for (const fn of subscribers) fn(effectiveState());
-};
-
-const startPolling = () => {
-  if (pollTimer) return;
-  poll();
-  pollTimer = setInterval(poll, POLL_MS);
-};
-
-const stopPolling = () => {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-};
-
-// Stable [] so a world with no markers doesn't churn the memo every poll.
-const EMPTY_MARKERS = [];
 
 const areEqualShallow = (a, b) => {
   if (a === b) return true;
   if (!a || !b) return false;
   const keysA = Object.keys(a);
-  const keysB = Object.keys(b);
-  if (keysA.length !== keysB.length) return false;
-  for (let i = 0; i < keysA.length; i++) {
-    if (a[keysA[i]] !== b[keysA[i]]) return false;
+  if (keysA.length !== Object.keys(b).length) return false;
+  for (let i = 0; i < keysA.length; i += 1) {
+    const key = keysA[i];
+    if (a[key] !== b[key]) return false;
   }
   return true;
 };
 
+const areEqualStructured = (a, b) => {
+  if (a === b) return true;
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+};
+
+const deriveMapState = (state) => ({
+  // Kept for compatibility with existing consumers. As before, this is a
+  // map-facing snapshot: non-map-only changes do not force a publication.
+  worldState: state,
+  worldKnown: Boolean(state && Object.keys(state).length > 0),
+  customRegions: Boolean(state?.customRegions),
+  customCities: Boolean(state?.customCities),
+  basemap: state?.basemap || null,
+  background: state?.background ?? null,
+  regionOwnershipOverrides: state?.regionOwnershipOverrides ?? EMPTY_OBJECT,
+  regionClaimants: state?.regionClaimants ?? EMPTY_OBJECT,
+  polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
+  markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+  cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
+  labelFont: state?.labelFont ?? "",
+  labelHaloColor: state?.labelHaloColor ?? "",
+  labelTextColor: state?.labelTextColor ?? "",
+});
+
+const sameMapState = (prev, next) =>
+  Boolean(prev) &&
+  prev.worldKnown === next.worldKnown &&
+  prev.customRegions === next.customRegions &&
+  prev.customCities === next.customCities &&
+  prev.basemap === next.basemap &&
+  areEqualStructured(prev.background, next.background) &&
+  prev.labelFont === next.labelFont &&
+  prev.labelHaloColor === next.labelHaloColor &&
+  prev.labelTextColor === next.labelTextColor &&
+  areEqualShallow(prev.regionOwnershipOverrides, next.regionOwnershipOverrides) &&
+  areEqualStructured(prev.regionClaimants, next.regionClaimants) &&
+  areEqualStructured(prev.markers, next.markers) &&
+  areEqualStructured(prev.cityRenames, next.cityRenames) &&
+  areEqualStructured(prev.polityOverrides, next.polityOverrides);
+
+const publish = ({ force = false } = {}) => {
+  const state = effectiveState();
+  if (!state) return;
+  const next = deriveMapState(state);
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const unchanged = !force && sameMapState(publishedState, next);
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("compare map-facing world slices", elapsed, { warnAt: 25 });
+  if (unchanged) return;
+  publishedState = next;
+  for (const fn of subscribers) fn(next);
+};
+
+// The raw world the map runtime most recently received. Use this for click-time
+// identity lookups instead of issuing a new world.json fetch.
+export const getWorldStateSnapshot = () => effectiveState();
+
+export const setWorldStateOverride = (next) => {
+  overrideState = next && typeof next === "object" ? next : null;
+  publish({ force: true });
+};
+
+const poll = async () => {
+  if (pollInFlight || mapMoving || document.visibilityState === "hidden") return;
+  pollInFlight = true;
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  try {
+    sharedState = await readJson(JSON_URLS.world, {
+      defaultValue: {},
+      force: true,
+      clone: false,
+    });
+    lastPollAt = Date.now();
+  } catch {
+    if (!sharedState) sharedState = {};
+  } finally {
+    pollInFlight = false;
+  }
+
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("world external safety poll", elapsed, { warnAt: 75 });
+  publish();
+};
+
+const cancelScheduledPoll = () => {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  if (idleHandle != null && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(idleHandle);
+  }
+  idleHandle = null;
+};
+
+const scheduleIdlePoll = (delay = POLL_MS) => {
+  if (typeof window === "undefined" || subscribers.size === 0) return;
+  cancelScheduledPoll();
+
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null;
+    if (subscribers.size === 0) return;
+    if (document.visibilityState !== "visible" || mapMoving) {
+      scheduleIdlePoll(RETRY_BUSY_MS);
+      return;
+    }
+
+    const run = () => {
+      idleHandle = null;
+      if (document.visibilityState !== "visible" || mapMoving) {
+        scheduleIdlePoll(RETRY_BUSY_MS);
+        return;
+      }
+      poll().finally(() => scheduleIdlePoll(POLL_MS));
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      idleHandle = window.requestIdleCallback(run, { timeout: IDLE_TIMEOUT_MS });
+    } else {
+      pollTimer = window.setTimeout(() => {
+        pollTimer = null;
+        run();
+      }, 250);
+    }
+  }, Math.max(0, delay));
+};
+
+const onWorldUpdated = (event) => {
+  const next = event?.detail?.world;
+  if (!next || typeof next !== "object") return;
+  sharedState = next;
+  if (!overrideState) publish();
+};
+
+const onMapMotion = (event) => {
+  mapMoving = Boolean(event?.detail?.active);
+  if (!mapMoving && subscribers.size > 0 && !pollInFlight) {
+    scheduleIdlePoll(POLL_MS);
+  }
+};
+
+const onVisibilityChange = () => {
+  if (document.visibilityState !== "visible" || subscribers.size === 0) return;
+  const staleFor = Date.now() - lastPollAt;
+  scheduleIdlePoll(staleFor >= 15000 ? 800 : POLL_MS);
+};
+
+const installListeners = () => {
+  if (listenersInstalled || typeof window === "undefined") return;
+  listenersInstalled = true;
+  window.addEventListener("oh:world-updated", onWorldUpdated);
+  window.addEventListener("oh:map-motion", onMapMotion);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+};
+
+const startPolling = () => {
+  installListeners();
+  if (!sharedState && !pollInFlight) {
+    poll().finally(() => scheduleIdlePoll(POLL_MS));
+    return;
+  }
+  scheduleIdlePoll(POLL_MS);
+};
+
+const stopPolling = () => {
+  cancelScheduledPoll();
+};
+
 export function useWorldState() {
-  const [state, setState] = useState(() => effectiveState() || {});
-  const prevRef = useRef(null);
+  const [state, setState] = useState(() => {
+    if (publishedState) return publishedState;
+    const current = effectiveState();
+    return current ? deriveMapState(current) : deriveMapState({});
+  });
 
   useEffect(() => {
     startPolling();
     const handler = (data) => setState(data);
     subscribers.add(handler);
-    if (effectiveState()) setState(effectiveState());
+
+    if (publishedState) {
+      setState(publishedState);
+    } else if (effectiveState()) {
+      publish({ force: true });
+    }
+
     return () => {
       subscribers.delete(handler);
       if (subscribers.size === 0) stopPolling();
     };
   }, []);
 
-  const derived = {
-    worldState: state,
-    worldKnown: Boolean(state && Object.keys(state).length > 0),
-    customRegions: Boolean(state?.customRegions),
-    customCities: Boolean(state?.customCities),
-    basemap: state?.basemap || null,
-    background: state?.background ?? null,
-    regionOwnershipOverrides: state?.regionOwnershipOverrides ?? {},
-    regionClaimants: state?.regionClaimants ?? {},
-    polityOverrides: state?.polityOverrides ?? {},
-    markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
-    cityRenames: state?.cityRenames ?? {},
-    labelFont: state?.labelFont ?? "",
-    labelHaloColor: state?.labelHaloColor ?? "",
-    labelTextColor: state?.labelTextColor ?? "",
-  };
-
-  const prev = prevRef.current;
-  const output =
-    prev &&
-    prev.worldKnown === derived.worldKnown &&
-    prev.customRegions === derived.customRegions &&
-    prev.customCities === derived.customCities &&
-    prev.basemap === derived.basemap &&
-    prev.background === derived.background &&
-    prev.labelFont === derived.labelFont &&
-    prev.labelHaloColor === derived.labelHaloColor &&
-    prev.labelTextColor === derived.labelTextColor &&
-    areEqualShallow(prev.regionOwnershipOverrides, derived.regionOwnershipOverrides) &&
-    // Claimant values are ARRAYS (fresh objects every poll), so reference
-    // equality would churn every 5s — compare content. The map is tiny.
-    JSON.stringify(prev.regionClaimants) === JSON.stringify(derived.regionClaimants) &&
-    // Markers are an array of small objects; same content-compare reasoning.
-    JSON.stringify(prev.markers) === JSON.stringify(derived.markers) &&
-    JSON.stringify(prev.cityRenames) === JSON.stringify(derived.cityRenames) &&
-    areEqualShallow(prev.polityOverrides, derived.polityOverrides)
-      ? prev
-      : derived;
-
-  useLayoutEffect(() => {
-    prevRef.current = output;
-  }, [output]);
-
-  return output;
+  return state;
 }

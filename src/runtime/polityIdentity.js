@@ -12,6 +12,7 @@
  */
 
 import COUNTRY_NAMES from "./generated/countryNames.js";
+import OFFICIAL_COUNTRY_CODES_BY_NAME from "./generated/officialCountryAliases.js";
 import { toCountryName } from "./ownerNames.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -34,14 +35,32 @@ const STOCK_COUNTRY_NAMES = new Set(
 
 const STOCK_CODES_BY_NAME = (() => {
   const out = new Map();
-  for (const [code, name] of Object.entries(COUNTRY_NAMES)) {
-    const normalizedName = normalizeIdentityText(name);
-    const normalizedCode = normalizeString(code).toUpperCase();
-    if (!normalizedName || !normalizedCode) continue;
+
+  const add = (normalizedName, normalizedCode) => {
+    if (!normalizedName || !normalizedCode) return;
     const list = out.get(normalizedName) || [];
-    list.push(normalizedCode);
+    if (!list.includes(normalizedCode)) list.push(normalizedCode);
     out.set(normalizedName, list);
+  };
+
+  for (const [code, name] of Object.entries(COUNTRY_NAMES)) {
+    add(
+      normalizeIdentityText(name),
+      normalizeString(code).toUpperCase(),
+    );
   }
+
+  // Formal ISO names are asset/provenance aliases, not new polity identities.
+  // This closes the gap between GADM's short names ("Belarus") and imported
+  // official names ("Republic of Belarus") without teaching every UI its own
+  // country-name hacks.
+  for (const [normalizedName, code] of Object.entries(OFFICIAL_COUNTRY_CODES_BY_NAME)) {
+    add(
+      normalizeIdentityText(normalizedName),
+      normalizeString(code).toUpperCase(),
+    );
+  }
+
   return out;
 })();
 
@@ -68,6 +87,19 @@ export const isStockPolityName = (value) =>
   STOCK_COUNTRY_NAMES.has(
     normalizeIdentityText(toCountryName(value)),
   );
+
+// Resolve one human-readable stock-country identity to its canonical GADM/ISO3
+// code. This is deliberately asset/provenance resolution only: callers may use
+// the result to find a standard flag or map reference, but it does NOT rename,
+// merge, or replace the campaign polity's stable identity.
+export const resolveStockCountryCode = (value) => {
+  const raw = normalizeString(value);
+  if (!raw) return null;
+
+  const stockName = toCountryName(raw);
+  const codes = stockCodesForToken(raw, stockName);
+  return codes.length === 1 ? codes[0] : null;
+};
 
 // strip regime wrappers only. do NOT try to turn "german" into "germany",
 // "ottoman" into "turkey", etc. that way lies a whole new pile of bullshit.

@@ -4,8 +4,10 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 
@@ -55,14 +57,15 @@ const resolveLiveSelectionProps = async (props) => {
     const regionId = currentRegionId(props);
     if (!regionId) return props;
 
-    let world;
-    try {
-        // Region ownership may have changed seconds ago through cheats, GM/editor,
-        // war control, or normal simulation. Force a fresh read for click identity
-        // rather than trusting stale tile metadata or a long-lived UI cache.
-        world = await readWorldState({ force: true });
-    } catch {
-        return props;
+    let world = getWorldStateSnapshot();
+    if (!world) {
+        try {
+            // Cold-start fallback only. Normal clicks use the map's live singleton
+            // world snapshot and never fetch/parse the whole campaign.
+            world = await readWorldState({ force: false });
+        } catch {
+            return props;
+        }
     }
 
     const overrides =
@@ -238,19 +241,29 @@ const RegionPopup = () => {
     useEffect(() => {
         if (!selection) return;
         let cancelled = false;
-        readWorldState({ force: true })
-            .then((world) => {
-                if (cancelled) return;
-                setWorldState(world);
-                setPolities(world?.polityOverrides ?? {});
-                setTerritoryState({
-                    regionClaimants: world?.regionClaimants ?? {},
-                    regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
-                    regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
-                });
-            })
-            .catch(() => {});
-        getNationFlags({ force: true })
+        const applyWorld = (world) => {
+            if (cancelled || !world) return;
+            setWorldState(world);
+            setPolities(world?.polityOverrides ?? {});
+            setTerritoryState({
+                regionClaimants: world?.regionClaimants ?? {},
+                regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
+                regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+            });
+        };
+
+        const snapshot = getWorldStateSnapshot();
+        if (snapshot) {
+            applyWorld(snapshot);
+        } else {
+            readWorldState({ force: false })
+                .then(applyWorld)
+                .catch(() => {});
+        }
+
+        // flags.json is invalidated + announced by the asset writer. Reuse the
+        // memoized catalog instead of forcing another network fetch on each click.
+        getNationFlags()
             .then((flags) => {
                 if (!cancelled) setCustomFlags(flags || {});
             })
@@ -262,10 +275,27 @@ const RegionPopup = () => {
     }, [selection?.GID_0, selection?.GID_1, selection?.NAME_1]);
 
     useEffect(() => {
+        if (!selection || typeof window === "undefined") return undefined;
+        const onWorldUpdated = (event) => {
+            const world = event?.detail?.world;
+            if (!world || typeof world !== "object") return;
+            setWorldState(world);
+            setPolities(world?.polityOverrides ?? {});
+            setTerritoryState({
+                regionClaimants: world?.regionClaimants ?? {},
+                regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
+                regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+            });
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
+    }, [selection]);
+
+    useEffect(() => {
         if (!selection) return;
         let cancelled = false;
         const refresh = () => {
-            getNationFlags({ force: true })
+            getNationFlags()
                 .then((flags) => {
                     if (!cancelled) {
                         setCustomFlags(flags || {});
@@ -307,10 +337,25 @@ const RegionPopup = () => {
         });
         const polityKey = identity.resolved || controller || sel?.GID_0 || "";
         const record = worldState?.polityOverrides?.[polityKey];
+        // Current polity identity and stock geographic identity are separate.
+        // A custom map may have no tile-baked GID_0 at all; the Workshop/importer
+        // can still preserve the polity's standard-country bridge in record.code.
+        // Prefer that stable record metadata, then the resolver's own code, then
+        // baked geographic provenance, and only finally the legacy GID_0 field.
+        const stockCode = cleanSelectionValue(
+            record?.code ||
+            identity?.code ||
+            sel?.gid0 ||
+            // Backward-compatible repair for already-imported custom maps whose
+            // polity records predate importer code preservation.
+            countryGidFromIdentity(record?.name || polityKey || controller) ||
+            sel?.GID_0 ||
+            "",
+        );
         return {
             polityKey,
-            code: sel?.GID_0 || "",
-            name: record?.name || polityKey || resolveCountryDisplayName(sel?.COUNTRY, sel?.GID_0),
+            code: stockCode,
+            name: record?.name || polityKey || resolveCountryDisplayName(sel?.COUNTRY, stockCode || sel?.GID_0),
         };
     };
 
@@ -363,20 +408,6 @@ const RegionPopup = () => {
                 : createFlagState("error"),
         );
     }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
-
-    useEffect(() => {
-        if (!map) return;
-
-        const handleMapClick = (e) => {
-            const features = map.queryRenderedFeatures(e.point);
-            if ((!features || features.length === 0) && _currentSelection) {
-                _dismiss?.();
-            }
-        };
-
-        map.on("click", handleMapClick);
-        return () => map.off("click", handleMapClick);
-    }, [map]);
 
     useEffect(() => {
         if (!map || !selection) {

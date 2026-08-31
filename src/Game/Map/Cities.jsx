@@ -36,12 +36,19 @@ const populationFilter = [
 // prominence tier instead: 4 = capital, 3 = major city, 2 = city, 1 = town.
 const customTierFilter = [
     "any",
-    [">=", ["get", "tier"], 3],
-    ["all", [">=", ["get", "tier"], 2], [">=", ["zoom"], 4.3]],
+    ["==", ["get", "capital"], "primary"],
+    [">=", ["coalesce", ["get", "tier"], 0], 3],
+    ["all", [">=", ["coalesce", ["get", "tier"], 0], 2], [">=", ["zoom"], 4.3]],
     [">=", ["zoom"], 5.8],
 ];
 
-const customSortKey = ["-", ["+", ["*", ["get", "tier"], 1000000000], ["get", "population"]]];
+const customSortKey = [
+    "-",
+    ["+",
+        ["*", ["coalesce", ["get", "tier"], 0], 1000000000],
+        ["coalesce", ["get", "population"], 0],
+    ],
+];
 
 // Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
 // AI renames (world.cityRenames) are applied as a client-side match override so a
@@ -79,23 +86,24 @@ const StockCities = ({ label }) => (
                 "*",
                 [
                     "interpolate", ["linear"], ["get", "population"],
-                    100000, 6,
-                    1000000, 10,
+                    100000, 5.5,
+                    1000000, 8,
                 ],
                 [
                     "case",
-                    ["==", ["get", "capital"], "primary"], 2.5,
-                    [">=", ["get", "population"], 2500000], 2,
+                    ["==", ["get", "capital"], "primary"], 1.7,
+                    [">=", ["get", "population"], 2500000], 1.35,
                     1,
                 ],
             ],
-            10, 22,
+            10, 14,
         ],
     }}
     paint={{
-        "text-color": "rgba(0,0,0,0)",
-        "text-halo-color": "#ffffff",
-        "text-halo-width": 0.5,
+        "text-color": "rgba(247,246,240,0.96)",
+        "text-halo-color": "rgba(8,12,18,0.9)",
+        "text-halo-width": 1.1,
+        "text-halo-blur": 0.3,
     }}
     />
 
@@ -109,19 +117,22 @@ const StockCities = ({ label }) => (
         "symbol-sort-key": ["-", ["get", "population"]],
         "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-        "text-padding": 5,
-        "text-radial-offset": 0.7,
+        "text-padding": 3,
+        "text-radial-offset": 0.82,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, 8,
-            10, 10,
+            3, 8.5,
+            10, 11.2,
         ],
         "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-letter-spacing": 0.015,
+        "text-optional": true,
     }}
     paint={{
-        "text-color": "#ffffff",
-        "text-halo-color": "#333333",
-        "text-halo-width": 2,
+        "text-color": "rgba(247,246,240,0.96)",
+        "text-halo-color": "rgba(8,12,18,0.88)",
+        "text-halo-width": 1.15,
+        "text-halo-blur": 0.45,
     }}
     />
     </Source>
@@ -134,7 +145,7 @@ const CustomCities = ({ data, label }) => (
     <Layer
     id="cities-shapes"
     type="symbol"
-    minzoom={3.4}
+    minzoom={3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
@@ -148,39 +159,51 @@ const CustomCities = ({ data, label }) => (
         "text-padding": 0,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, ["match", ["get", "tier"], 4, 15, 3, 12, 2, 8, 6],
-            10, 22,
+            3, [
+                "case",
+                ["==", ["get", "capital"], "primary"], 13.5,
+                ["match", ["coalesce", ["get", "tier"], 0], 4, 12.5, 3, 10.3, 2, 8.2, 6.0],
+            ],
+            10, 14.5,
         ],
     }}
     paint={{
-        "text-color": "rgba(0,0,0,0)",
-        "text-halo-color": "#ffffff",
-        "text-halo-width": 0.5,
+        "text-color": "rgba(250,249,244,0.99)",
+        "text-halo-color": "rgba(7,10,14,0.94)",
+        "text-halo-width": 1.3,
+        "text-halo-blur": 0.25,
     }}
     />
 
     <Layer
     id="cities-labels"
     type="symbol"
-    minzoom={3.4}
+    minzoom={3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
         "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-        "text-padding": 5,
-        "text-radial-offset": 0.7,
+        "text-padding": 3,
+        "text-radial-offset": 0.82,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, ["match", ["get", "tier"], 4, 9.5, 3, 9, 8],
-            10, 10,
+            3, [
+                "case",
+                ["==", ["get", "capital"], "primary"], 11.4,
+                ["match", ["coalesce", ["get", "tier"], 0], 4, 10.8, 3, 10.0, 9.0],
+            ],
+            10, 11.8,
         ],
         "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-letter-spacing": 0.015,
+        "text-optional": true,
     }}
     paint={{
-        "text-color": "#ffffff",
-        "text-halo-color": "#333333",
-        "text-halo-width": 2,
+        "text-color": "rgba(250,249,244,0.99)",
+        "text-halo-color": "rgba(7,10,14,0.94)",
+        "text-halo-width": 1.3,
+        "text-halo-blur": 0.32,
     }}
     />
     </Source>

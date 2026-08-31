@@ -14,6 +14,32 @@ const MILITARY_KIND = /\b(base|fort|fortress|bunker|silo|garrison|missile|radar|
 
 const glyphForKind = (kind) => (MILITARY_KIND.test(kind) ? "▲" : "■");
 
+const MARKER_STATUS_LABEL = {
+  planned: "Planned",
+  under_construction: "Under construction",
+  active: "Active",
+  damaged: "Damaged",
+  inactive: "Inactive",
+  abandoned: "Abandoned",
+  destroyed: "Destroyed",
+};
+
+const normalizeMarkerStatus = (status) => {
+  const key = String(status || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MARKER_STATUS_LABEL, key) ? key : "active";
+};
+
+const markerStatusOpacity = (status) => ({
+  planned: 0.76,
+  under_construction: 0.86,
+  active: 1,
+  damaged: 0.95,
+  inactive: 0.68,
+  abandoned: 0.64,
+  destroyed: 0.62,
+}[normalizeMarkerStatus(status)]);
+
+
 const ownerColorString = (colorMap, code) => {
   const rgb = colorMap[String(code ?? "").trim()];
   if (Array.isArray(rgb)) return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
@@ -41,19 +67,27 @@ const MarkersLayer = () => {
       type: "FeatureCollection",
       features: markers
         .filter((marker) => Number.isFinite(marker.lng) && Number.isFinite(marker.lat) && marker.name)
-        .map((marker) => ({
-          type: "Feature",
-          id: marker.id,
-          geometry: { type: "Point", coordinates: [marker.lng, marker.lat] },
-          properties: {
+        .map((marker) => {
+          const status = normalizeMarkerStatus(marker.status);
+          const statusLabel = MARKER_STATUS_LABEL[status];
+          return {
+            type: "Feature",
             id: marker.id,
-            name: marker.name,
-            kind: marker.kind || "landmark",
-            ownerCode: marker.ownerCode || "",
-            glyph: glyphForKind(String(marker.kind || "")),
-            rgb: ownerColorString(colorMap, marker.ownerCode),
-          },
-        })),
+            geometry: { type: "Point", coordinates: [marker.lng, marker.lat] },
+            properties: {
+              id: marker.id,
+              name: marker.name,
+              displayName: status === "active" ? marker.name : `${marker.name} · ${statusLabel}`,
+              kind: marker.kind || "landmark",
+              ownerCode: marker.ownerCode || "",
+              status,
+              statusLabel,
+              statusOpacity: markerStatusOpacity(status),
+              glyph: glyphForKind(String(marker.kind || "")),
+              rgb: ownerColorString(colorMap, marker.ownerCode),
+            },
+          };
+        }),
     };
   }, [markers, colorMap]);
 
@@ -73,6 +107,7 @@ const MarkersLayer = () => {
           "text-color": ["get", "rgb"],
           "text-halo-color": "#ffffff",
           "text-halo-width": 1,
+          "text-opacity": ["get", "statusOpacity"],
         }}
       />
       <Layer
@@ -80,7 +115,7 @@ const MarkersLayer = () => {
         type="symbol"
         minzoom={2.6}
         layout={{
-          "text-field": ["get", "name"],
+          "text-field": ["get", "displayName"],
           "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
           "text-padding": 5,
           "text-radial-offset": 0.7,
@@ -91,6 +126,7 @@ const MarkersLayer = () => {
           "text-color": "#ffffff",
           "text-halo-color": "#333333",
           "text-halo-width": 2,
+          "text-opacity": ["get", "statusOpacity"],
         }}
       />
     </Source>

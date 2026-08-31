@@ -64,6 +64,20 @@ const titleCase = (value) =>
 
 const TIER_LABEL = { 1: "Town", 2: "City", 3: "Major city", 4: "Capital" };
 
+const MARKER_STATUS_META = {
+  planned: { label: "Planned", color: "#c4b5fd" },
+  under_construction: { label: "Under construction", color: "#fcd34d" },
+  active: { label: "Active", color: "#86efac" },
+  damaged: { label: "Damaged", color: "#fca5a5" },
+  inactive: { label: "Inactive", color: "#cbd5e1" },
+  abandoned: { label: "Abandoned", color: "#fdba74" },
+  destroyed: { label: "Destroyed", color: "#f87171" },
+};
+
+const markerStatusMeta = (status) =>
+  MARKER_STATUS_META[String(status || "").trim().toLowerCase()] || MARKER_STATUS_META.active;
+
+
 const ANIM_ID = "feature-popup-anims";
 if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
   const style = document.createElement("style");
@@ -104,8 +118,9 @@ const FeaturePopup = () => {
 
   _dismiss = () => setDismissing(true);
 
-  // A selected structure tracks live world state: rebuilt-in-place markers
-  // refresh the popup, a destroyed one closes it. Cities are static.
+  // A selected structure tracks live world state: identity-preserving updates
+  // refresh the popup, while only true canonical removal closes it. Lifecycle
+  // states such as damaged/abandoned/destroyed remain inspectable historical canon.
   const liveMarker = selection?.source === "marker"
     ? markers.find((marker) => marker.id === selection.id) ?? null
     : null;
@@ -183,6 +198,7 @@ const FeaturePopup = () => {
     ? (feature.capital === "primary" ? "Capital city" : TIER_LABEL[feature.tier] || "City")
     : titleCase(feature.kind || "Landmark");
   const population = Number(feature.population);
+  const statusMeta = markerStatusMeta(feature.status);
 
   const POPUP_WIDTH = 220;
 
@@ -221,8 +237,24 @@ const FeaturePopup = () => {
           </span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: "13px", wordBreak: "break-word" }}>{feature.name}</div>
-            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
-              Map Feature · {kind}
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "5px", marginTop: "1px" }}>
+              <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
+                Map Feature · {kind}
+              </span>
+              {!isCity ? (
+                <span style={{
+                  border: `1px solid ${statusMeta.color}55`,
+                  borderRadius: "999px",
+                  color: statusMeta.color,
+                  fontSize: "9px",
+                  fontWeight: 800,
+                  letterSpacing: "0.04em",
+                  padding: "1px 5px",
+                  textTransform: "uppercase",
+                }}>
+                  {statusMeta.label}
+                </span>
+              ) : null}
             </div>
           </div>
           <button
@@ -249,7 +281,11 @@ const FeaturePopup = () => {
           {Number.isFinite(population) && population > 0 ? (
             <DetailRow label="Population" value={population.toLocaleString()} />
           ) : null}
+          {!isCity ? <DetailRow label="Status" value={statusMeta.label} /> : null}
           {feature.foundedAt ? <DetailRow label="Founded" value={feature.foundedAt} /> : null}
+          {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
+            <DetailRow label="Last changed" value={feature.updatedDate} />
+          ) : null}
           <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
           {feature.note ? (
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,255,255,0.75)" }}>

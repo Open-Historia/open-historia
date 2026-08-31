@@ -1,7 +1,7 @@
 /*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
-import { onRegionSelected, dismissRegionPopup } from "../Selection/Regions";
+import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
 import {
@@ -18,7 +18,9 @@ import {
   PMTILES_PROTOCOL_URLS,
   ensurePmtilesProtocol,
   getNationColors,
+  primeCustomRegionCatalog,
   readJson,
+  reportPerfOperation,
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
@@ -120,6 +122,39 @@ const parseColorToRgb = (value) => {
   return [Number(match[1]), Number(match[2]), Number(match[3])].map((c) => Math.max(0, Math.min(255, c)));
 };
 
+// Display-only palette shaping. Scenario/save colours remain canonical; the map
+// merely reins in extreme saturation/lightness so neighbouring polities read as
+// one designed atlas rather than unrelated UI swatches.
+const normalizePoliticalRgb = (rgb) => {
+  if (!Array.isArray(rgb) || rgb.length !== 3) return rgb;
+  let [r, g, b] = rgb.map((value) => Math.max(0, Math.min(255, Number(value) || 0)));
+
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+  const desaturate = chroma > 20 ? 0.08 : 0.03;
+  r = r * (1 - desaturate) + luminance * desaturate;
+  g = g * (1 - desaturate) + luminance * desaturate;
+  b = b * (1 - desaturate) + luminance * desaturate;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const lightness = (max + min) / 510;
+
+  if (lightness < 0.30) {
+    const mix = Math.min(0.22, (0.30 - lightness) * 0.7);
+    r += (255 - r) * mix;
+    g += (255 - g) * mix;
+    b += (255 - b) * mix;
+  } else if (lightness > 0.64) {
+    const mix = Math.min(0.18, (lightness - 0.64) * 0.75);
+    r *= 1 - mix;
+    g *= 1 - mix;
+    b *= 1 - mix;
+  }
+
+  return [r, g, b].map((value) => Math.round(Math.max(0, Math.min(255, value))));
+};
+
 // Palettes are owner -> [r,g,b]. Re-reading colors.json hands back a fresh object
 // every time; swapping identity for identical contents would rebuild every
 // MapLibre match expression on the map, so compare contents before accepting it.
@@ -193,6 +228,11 @@ const NEUTRAL_LAND_COLOR = "rgb(88, 98, 110)";
 // Constant GL expression — the colour data is baked into each feature's
 // _fillColor property by enrichedCustomRegionData above.
 const CUSTOM_FILL_COLOR = ["get", "_fillColor"];
+const DETAIL_FILL_COLOR = [
+  "coalesce",
+  ["feature-state", "fillColor"],
+  "rgba(0, 0, 0, 0)",
+];
 
 // GADM region ids contain a dot ("DEU.2_1"); author-drawn regions ("reg_...")
 // don't. On custom maps, GADM regions crossfade between two sources: the seed
@@ -205,19 +245,25 @@ const GADM_GEOMETRY_FILTER = [">=", ["index-of", ".", ["get", "id"]], 0];
 // A feature whose geometry lives ONLY in the GeoJSON: author-drawn ("reg_...", no
 // dot) OR a GADM region the editor reshaped (dotted id, but `edited`). Both must
 // render from the GeoJSON at every zoom AND be kept out of the stock tiles, whose
-// geometry is the ORIGINAL shape — painting both stacks two 0.72 fills and darkens
+// geometry is the ORIGINAL shape — painting both stacks twice darkens
 // the reshaped area. A plain unedited GADM region carries no `edited`, so
 // ["==", ["get","edited"], true] is false for it and these fall back exactly to the
 // dot test — stock and author-only maps render identically to before.
 const AUTHORED_GEOMETRY_FILTER = ["any", CUSTOM_GEOMETRY_FILTER, ["==", ["get", "edited"], true]];
 const STOCK_GEOMETRY_FILTER = ["all", GADM_GEOMETRY_FILTER, ["!=", ["get", "edited"], true]];
-// Crossfade bands. Detail now steps UP twice on the way in, and each step is a
-// crossfade so no border ever pops: the grid-snapped tier (coarseGeometry.js) holds
-// world view, the seed geometry takes over through the middle, and the stock vector
-// tiles take the close range. Seed geometry was extracted at tile-zoom 5, so it hands
-// off to the tiles just past that.
-const FAR_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.72, 6.5, 0];
-const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.72];
+// keep the seed fill under the close-up tiles instead of crossfading it away.
+// if a vector tile is late (or gets evicted while panning), the coarse geometry is
+// still there rather than briefly revealing the basemap. the tile layer becomes
+// fully opaque once it takes over, so the fallback does not soften its borders.
+// Keep the low-zoom political wash slightly translucent, then make the seed
+// fully opaque before detailed tiles begin fading in. Once the handoff starts,
+// a late/missing tile and a loaded tile therefore resolve to the same colour
+// instead of randomly shifting whole regions between two shades.
+const BASE_FILL_OPACITY = ["interpolate", ["linear"], ["zoom"], 5, 0.90, 5.5, 1];
+const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 1];
+// Dispute stripes are an overlay, so unlike the solid seed fallback they still
+// hand off to the tile-native stripe layer instead of stacking at close zoom.
+const FAR_OVERLAY_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.90, 6.5, 0];
 
 // ---- Owner labels for custom maps -----------------------------------------
 // The stock label pipeline labels modern countries from countries.pmtiles, which
@@ -455,6 +501,15 @@ const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameRe
 };
 
 
+const PERF_MAP_WARN_MS = 40;
+const measureMapWork = (label, fn) => {
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const value = fn();
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation(`map ${label}`, elapsed, { warnAt: PERF_MAP_WARN_MS });
+  return value;
+};
+
 const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
@@ -541,19 +596,21 @@ const WorldMap = ({ isGlobe = false }) => {
   // Geometry-only, so it survives ownership polls — rebuilt only when the
   // world's region geometry itself changes.
   const regionAdjacency = useMemo(
-    () => (customActive ? buildRegionAdjacency(customRegionData) : null),
+    () => (customActive
+      ? measureMapWork("region adjacency", () => buildRegionAdjacency(customRegionData))
+      : null),
     [customActive, customRegionData],
   );
 
   const ownerLabelData = useMemo(() => {
     if (!customActive) return EMPTY_FEATURE_COLLECTION;
-    return buildOwnerLabelCollection(
+    return measureMapWork("owner labels", () => buildOwnerLabelCollection(
       customRegionData,
       regionOwnershipOverrides,
       polityOverrides,
       (raw, owner) => translateLabel(resolveCountryDisplayName(raw, owner)),
       regionAdjacency,
-    );
+    ));
     // labelEpoch: rebuild once new translations land.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customActive, customRegionData, regionOwnershipOverrides, polityOverrides, regionAdjacency, labelEpoch]);
@@ -662,14 +719,18 @@ const WorldMap = ({ isGlobe = false }) => {
     // Custom (editor) regions render on top of the stock regions. On a map with its
     // OWN drawn/generated geometry, query only the custom layers — a click on empty
     // sea must resolve to nothing, not the leftover Earth country underneath. On a
-    // re-ownership map (stock GADM geometry), keep querying regions-fill: it IS the
-    // map, and its high-zoom hit-testing has no custom-layer equivalent.
+    // re-ownership map (stock GADM geometry), prefer regions-fill but keep the
+    // seed layer queryable too. a visible fallback should not become an unclickable
+    // patch just because its detail tile is still loading.
     const queryLayers = (hasDrawnGeometry
       ? ["custom-regions-fill", "custom-regions-fill-far"]
-      : ["custom-regions-fill", "regions-fill"]
+      : ["custom-regions-fill", "regions-fill", "custom-regions-fill-far"]
     ).filter((id) => map.getLayer(id));
     const features = map.queryRenderedFeatures(event.point, { layers: queryLayers });
-    if (!features.length) return;
+    if (!features.length) {
+      onOceanClicked();
+      return;
+    }
 
     const props = features[0].properties ?? {};
     const regionId = props.GID_1 ?? props.id ?? "";
@@ -775,7 +836,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
   const ownerColorCss = useCallback(
     (owner) => {
-      const rgb = resolveOwnerRgb(owner);
+      const rgb = normalizePoliticalRgb(resolveOwnerRgb(owner));
       return rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : NEUTRAL_LAND_COLOR;
     },
     [resolveOwnerRgb],
@@ -793,10 +854,16 @@ const WorldMap = ({ isGlobe = false }) => {
       return undefined;
     }
 
-    readJson(regionsGeojsonUrl, { defaultValue: EMPTY_FEATURE_COLLECTION, force: true })
+    readJson(regionsGeojsonUrl, {
+      defaultValue: EMPTY_FEATURE_COLLECTION,
+      force: true,
+      clone: false,
+    })
       .then((data) => {
         if (cancelled) return;
-        setCustomRegionData(data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION);
+        const resolved = data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION;
+        primeCustomRegionCatalog(resolved, { url: regionsGeojsonUrl });
+        setCustomRegionData(resolved);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -843,9 +910,10 @@ const WorldMap = ({ isGlobe = false }) => {
   // The layer that DOES paint the political map (stockRegionsFillPaint) matches
   // GID_1 — a region id, not a country — and needs no bridge at all.
   const fillStyle = useMemo(() => {
-    const stops = Object.entries(colorMap).flatMap(([owner, rgb]) => [
-      owner, `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
-    ]);
+    const stops = Object.entries(colorMap).flatMap(([owner, rgb]) => {
+      const displayRgb = normalizePoliticalRgb(rgb);
+      return [owner, `rgb(${displayRgb[0]}, ${displayRgb[1]}, ${displayRgb[2]})`];
+    });
     const fallback = buildFallbackColorExpression();
     const regionOverrideStops = Object.entries(regionOwnershipOverrides).flatMap(([regionId, ownerCode]) => [
       regionId,
@@ -863,7 +931,7 @@ const WorldMap = ({ isGlobe = false }) => {
         : stops.length > 0
         ? ["match", ["get", "GID_0"], ...stops, fallback]
         : fallback,
-      "fill-opacity": 0.66,
+      "fill-opacity": 0.90,
     };
   }, [colorMap, regionOwnershipOverrides, ownerColorCss]);
 
@@ -874,7 +942,7 @@ const WorldMap = ({ isGlobe = false }) => {
   // fast JS and baked into the GeoJSON data itself.
   const enrichedCustomRegionData = useMemo(() => {
     if (!customRegionData?.features) return customRegionData;
-
+    return measureMapWork("custom region enrichment", () => {
     const overrideColor = {};
     for (const [regionId, ownerCode] of Object.entries(regionOwnershipOverrides)) {
       overrideColor[regionId] = ownerColorCss(ownerCode);
@@ -928,6 +996,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }),
     };
+    });
   }, [customRegionData, colorMap, regionOwnershipOverrides, regionClaimants, ownerColorCss, resolveOwnerRgb]);
 
   // GADM disputed regions also paint the stock tiles (the crisp z>6.5 layer):
@@ -979,25 +1048,73 @@ const WorldMap = ({ isGlobe = false }) => {
     return ids;
   }, [customActive, customRegionData]);
 
-  const stockRegionsFillPaint = useMemo(() => {
-    if (!customActive) return { "fill-opacity": 0 };
-    const stops = [];
-    for (const [regionId, owner] of ownerByRegionId) {
-      if (!regionId.includes(".")) continue; // drawn regions aren't in the tiles
-      if (editedStockIds.includes(regionId)) continue; // reshaped — the GeoJSON owns it
-      stops.push(regionId, owner ? ownerColorCss(owner) : NEUTRAL_LAND_COLOR);
-    }
-    if (!stops.length) return { "fill-opacity": 0 };
-    return {
-      "fill-color": ["match", ["get", "GID_1"], ...stops, NEUTRAL_LAND_COLOR],
-      // Fades in as the seed-geometry far layer fades out — but never for a reshaped
-      // region: its tile still holds the original shape, so painting it here would
-      // double-fill the edited area over the GeoJSON that now owns it.
-      "fill-opacity": editedStockIds.length
-        ? ["case", ["in", ["get", "GID_1"], ["literal", editedStockIds]], 0, TILE_FILL_FADE]
-        : TILE_FILL_FADE,
+  // Detailed PMTiles previously evaluated a region-id match table containing
+  // thousands of entries on every rendered frame. Store the resolved colour on
+  // each promoted GID_1 feature instead, and only touch feature-state when the
+  // canonical ownership colour actually changes.
+  const appliedTileFillStateRef = useRef(new Map());
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.setFeatureState) return undefined;
+
+    let cancelled = false;
+    let retryFrame = 0;
+
+    const apply = () => {
+      if (cancelled) return;
+      if (!mapInstance.getSource?.("regions-source")) {
+        retryFrame = requestAnimationFrame(apply);
+        return;
+      }
+
+      const applyStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const edited = new Set(editedStockIds);
+      const next = new Map();
+
+      for (const [regionId, owner] of ownerByRegionId) {
+        if (!regionId.includes(".") || edited.has(regionId)) continue;
+        next.set(regionId, owner ? ownerColorCss(owner) : NEUTRAL_LAND_COLOR);
+      }
+
+      const applied = appliedTileFillStateRef.current;
+      for (const [regionId, fillColor] of next) {
+        if (applied.get(regionId) === fillColor) continue;
+        mapInstance.setFeatureState(
+          { source: "regions-source", sourceLayer: "regions", id: regionId },
+          { fillColor },
+        );
+      }
+
+      for (const regionId of applied.keys()) {
+        if (next.has(regionId)) continue;
+        mapInstance.removeFeatureState?.(
+          { source: "regions-source", sourceLayer: "regions", id: regionId },
+          "fillColor",
+        );
+      }
+
+      appliedTileFillStateRef.current = next;
+      const applyElapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - applyStartedAt;
+      reportPerfOperation("map feature-state ownership sync", applyElapsed, { warnAt: PERF_MAP_WARN_MS });
     };
-  }, [customActive, ownerByRegionId, colorMap, ownerColorCss, editedStockIds]);
+
+    apply();
+
+    return () => {
+      cancelled = true;
+      if (retryFrame) cancelAnimationFrame(retryFrame);
+    };
+  }, [map, ownerByRegionId, editedStockIds, ownerColorCss]);
+
+  const stockRegionsFillPaint = useMemo(
+    () => customActive
+      ? {
+          "fill-color": DETAIL_FILL_COLOR,
+          "fill-opacity": TILE_FILL_FADE,
+        }
+      : { "fill-opacity": 0 },
+    [customActive],
+  );
 
   // Stock country fills/borders render ONLY once the world is known to be a
   // stock world. Gating on the customRegions FLAG (not customActive, which
@@ -1006,20 +1123,19 @@ const WorldMap = ({ isGlobe = false }) => {
   const showStockCountries = worldKnown && !customFlag;
   const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
   const countriesOutlinePaint = {
-    "line-color": "#000",
-    "line-width": 1,
-    "line-opacity": showStockCountries ? 1 : 0,
+    "line-color": "rgba(7, 10, 14, 0.90)",
+    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.62, 8, 0.96, 12, 1.25],
+    "line-opacity": showStockCountries ? 0.82 : 0,
   };
   // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
-  // Tile hairlines only fade in alongside the tile FILLS (z5.5-6.5): below
-  // that the fills come from the seed geometry, and hairlines from the
-  // simplified low-zoom tiles sit visibly off those fills — disconnected
-  // borders. The far hairlines come from the seed geometry itself instead.
+  // Tile hairlines fade in alongside the tile fills. The seed hairlines stay
+  // underneath for a little longer as a safety net: if a vector tile is late,
+  // the fallback fill should not turn into one borderless slab while panning.
   const regionsOutlinePaint = {
-    "line-color": "#000",
-    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
+    "line-color": "rgba(7, 10, 14, 0.88)",
+    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.22, 6, 0.32, 8, 0.48, 12, 0.78],
     "line-opacity": worldKnown
-      ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.6, 8, 0.7]
+      ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.34, 8, 0.44, 12, 0.56]
       : 0,
   };
 
@@ -1029,17 +1145,19 @@ const WorldMap = ({ isGlobe = false }) => {
   // PLAYER's machine works, with the trailing names as fallbacks where the
   // first is not installed.
   const labelFontStack = useMemo(
-    () => [labelFont || "Impact", "Arial Black", "sans-serif"],
+    () => [labelFont || "Georgia", "Times New Roman", "serif"],
     [labelFont],
   );
 
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(1, isGlobe),
+    "text-size": buildCountryTextSize(0.86, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
-    "text-allow-overlap": true,
+    "text-allow-overlap": false,
+    "text-letter-spacing": 0.10,
+    "text-padding": 8,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
@@ -1049,7 +1167,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(1, isGlobe),
+    "text-size": buildCountryTextSize(0.86, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": true,
@@ -1060,13 +1178,16 @@ const WorldMap = ({ isGlobe = false }) => {
   }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
   const labelLayerPaint = useMemo(() => ({
-    "text-color": labelTextColor || "#FFFFFF",
-    "text-halo-color": labelHaloColor || "rgba(0, 0, 0, 0.5)",
-    "text-halo-width": 1,
+    "text-color": labelTextColor || "rgba(247, 246, 240, 0.98)",
+    "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.92)",
+    "text-halo-width": 1.1,
+    "text-halo-blur": 0.32,
     "text-opacity": [
       "interpolate", ["linear"], ["zoom"],
-      5, 0.75,
-      8, 0,
+      4, 0.98,
+      6, 0.92,
+      8, 0.28,
+      9, 0,
     ],
   }), [labelHaloColor, labelTextColor]);
 
@@ -1099,20 +1220,17 @@ const WorldMap = ({ isGlobe = false }) => {
       )}
 
       {/* Deliberately NOT gated on customFlag, unlike countries-source above —
-          this source is not decoration on a custom map, it IS the map. On a
-          re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry,
-          nothing hand-drawn) regions-fill is the ONLY thing painting owners
-          above z6.5, because custom-regions-fill-far stops at maxzoom 7 and
-          FAR_FILL_FADE has already faded it to 0 by 6.5 — the crossfade hands
-          off to these tiles by design. Unmounting it here left every such map
-          blank past 6.5 and, via the getLayer() filter at the click handler,
-          unclickable too. The hairlines are needed on stock maps as well:
-          regionsOutlinePaint is gated on worldKnown, not on customActive. */}
-      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
+          this source is not decoration on a custom map, it is the close-detail
+          political layer for re-ownership scenarios. The seed GeoJSON now stays
+          underneath as a fallback if a vector tile is late, while regions-fill
+          sharpens the map once the tile is present. Keeping this source mounted
+          also preserves high-zoom hit-testing and the stock-region hairlines. */}
+      <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8} promoteId="GID_1">
         <Layer
           id="regions-fill"
           type="fill"
           source-layer="regions"
+          filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
           paint={stockRegionsFillPaint}
         />
         {/* Striped fill for disputed GADM regions on the crisp tile geometry —
@@ -1150,30 +1268,34 @@ const WorldMap = ({ isGlobe = false }) => {
           apart at low zoom. Full resolution keeps them connected everywhere;
           the seed geometry is coarse enough that this stays cheap. */}
       <Source id="custom-regions-source" type="geojson" data={enrichedCustomRegionData} tolerance={0.6}>
-        {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
-            tiles are too simplified at low zoom and show sliver gaps there. */}
+        {/* coarse seed geometry sits underneath the tile layer as a safety net.
+            black holes are a worse fallback than slightly soft borders. */}
         <Layer
           id="custom-regions-fill-far"
           type="fill"
-          maxzoom={7}
+          beforeId="regions-fill"
           filter={STOCK_GEOMETRY_FILTER}
-          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
         />
-        {/* Far hairlines from the SAME seed geometry as the far fills, so
-            zoomed-out region borders sit exactly on the colored areas. They
-            hand off to the stock-tile hairlines with the fill crossfade. */}
+        {/* Seed hairlines stay beneath the detailed tile outlines through the
+            handoff window. A late tile can then lose detail, not the border
+            itself; once close-detail tiles are established this fades away. */}
         <Layer
           id="custom-regions-hairline-far"
           type="line"
-          maxzoom={7}
+          beforeId="regions-outline"
+          maxzoom={9}
           filter={STOCK_GEOMETRY_FILTER}
           paint={{
-            "line-color": "#000",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
-            // Fades in over the same 3->4 band as the fill above, handing off from the
-            // ultra tier's hairlines so borders never double up or blink.
+            "line-color": "rgba(7, 10, 14, 0.88)",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.26, 6.5, 0.42, 9, 0.58],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              ? ["interpolate", ["linear"], ["zoom"],
+                  3, 0.32,
+                  5.5, 0.42,
+                  6.5, 0.30,
+                  8, 0.18,
+                  9, 0]
               : 0,
           }}
         />
@@ -1186,34 +1308,34 @@ const WorldMap = ({ isGlobe = false }) => {
           type="fill"
           maxzoom={7}
           filter={["all", STOCK_GEOMETRY_FILTER, ["has", "_stripes"]]}
-          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_OVERLAY_FADE : 0 }}
         />
         <Layer
           id="custom-regions-fill"
           type="fill"
           filter={AUTHORED_GEOMETRY_FILTER}
-          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": 0.72 }}
+          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
         />
         <Layer
           id="custom-regions-disputed"
           type="fill"
           filter={["all", AUTHORED_GEOMETRY_FILTER, ["has", "_stripes"]]}
-          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? 0.72 : 0 }}
+          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? 0.90 : 0 }}
         />
         <Layer
           id="custom-regions-outline"
           type="line"
           filter={AUTHORED_GEOMETRY_FILTER}
           paint={{
-            "line-color": "#000",
+            "line-color": "rgba(7, 10, 14, 0.88)",
             "line-width": [
               "interpolate", ["linear"], ["zoom"],
-              3, 0.2,
-              8, 0.6,
-              12, 1.0,
+              3, 0.22,
+              8, 0.46,
+              12, 0.78,
             ],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"], 3, 0, 4, 0.35, 8, 0.6]
+              ? ["interpolate", ["linear"], ["zoom"], 3, 0.26, 4, 0.34, 8, 0.46, 12, 0.56]
               : 0,
           }}
         />

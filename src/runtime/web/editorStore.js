@@ -59,8 +59,11 @@ const createDocument = async (body = {}) => {
     // Mirrors server/mapEditorStore.js:105-118 — the map-maker's palette and flags.
     // Both stores build the record field by field, so a field added to one and not
     // the other silently survives on desktop and vanishes on the website.
+    ownerSchema: Number(body.ownerSchema || 1),
     colorOverrides: body.colorOverrides && typeof body.colorOverrides === "object" ? cloneJson(body.colorOverrides) : {},
     flags: body.flags && typeof body.flags === "object" ? cloneJson(body.flags) : {},
+    tags: body.tags && typeof body.tags === "object" ? cloneJson(body.tags) : {},
+    polities: body.polities && typeof body.polities === "object" ? cloneJson(body.polities) : {},
     createdAt: timestamp,
     updatedAt: timestamp,
   };

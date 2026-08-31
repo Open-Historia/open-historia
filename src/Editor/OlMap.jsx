@@ -25,6 +25,7 @@ import Text from "ol/style/Text";
 import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
 import RegularShape from "ol/style/RegularShape";
+import CircleStyle from "ol/style/Circle";
 import Point from "ol/geom/Point";
 import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
@@ -43,7 +44,15 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
-import { unionGeoms, translatedClone, subtractFrom, overlaps } from "./geometry.js";
+import {
+  unionGeoms,
+  translatedClone,
+  subtractFrom,
+  overlaps,
+  planarGeometryArea,
+  enclosedGapGeoms,
+  overlapGeoms,
+} from "./geometry.js";
 
 const BASEMAP_BG = {
   dark: "#0b1020",
@@ -71,6 +80,187 @@ const markerShape = (radius) =>
     stroke: new Stroke({ color: "#000", width: 1 }),
   });
 const SHAPES = { large: markerShape(6), mid: markerShape(4.5), small: markerShape(3.5) };
+
+
+// Manual-override handles are intentionally larger than OpenLayers' defaults.
+// The old editor exposed every microscopic vertex on the map and made accurate
+// surgery harder than the geometry itself. R2 edits selected regions only and
+// gives the handles enough hit area to be usable at human zoom levels.
+const manualVertexStyle = new Style({
+  image: new CircleStyle({
+    radius: 7,
+    fill: new Fill({ color: "rgba(59,130,246,0.95)" }),
+    stroke: new Stroke({ color: "rgba(255,255,255,0.95)", width: 2 }),
+  }),
+});
+
+// Shared-border precision aid. The cyan halo is preview-only and never exported.
+const sharedBorderAssistStyle = new Style({
+  image: new CircleStyle({
+    radius: 9,
+    fill: new Fill({ color: "rgba(34,211,238,0.20)" }),
+    stroke: new Stroke({ color: "rgba(34,211,238,1)", width: 2.5 }),
+  }),
+});
+
+// R2.7 drag-paint preview. Recolouring the 4k+ region VectorImage layer on
+// every pointer event is expensive, so the stroke is previewed in this tiny
+// overlay and committed to the real features only when the pointer is released.
+const paintPreviewStyleCache = new globalThis.Map();
+const paintPreviewStyleFor = (owner, colors) => {
+  const rgb = owner ? colors?.[owner] : null;
+  const key = rgb ? `rgb:${rgb.join(",")}` : owner ? `owner:${owner}` : "erase";
+  if (!paintPreviewStyleCache.has(key)) {
+    const fill = rgb
+      ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.70)`
+      : owner
+        ? "rgba(96,165,250,0.68)"
+        : "rgba(15,23,42,0.72)";
+    paintPreviewStyleCache.set(
+      key,
+      new Style({
+        fill: new Fill({ color: fill }),
+        stroke: new Stroke({ color: "rgba(255,255,255,0.88)", width: 1.25 }),
+      }),
+    );
+  }
+  return paintPreviewStyleCache.get(key);
+};
+
+const cloneCoords = (value) => (Array.isArray(value) ? value.map(cloneCoords) : value);
+
+const closestPointOnSegment = (p, a, b) => {
+  const vx = b[0] - a[0];
+  const vy = b[1] - a[1];
+  const wx = p[0] - a[0];
+  const wy = p[1] - a[1];
+  const vv = vx * vx + vy * vy;
+  const t = vv > 0 ? Math.max(0, Math.min(1, (wx * vx + wy * vy) / vv)) : 0;
+  const point = [a[0] + t * vx, a[1] + t * vy];
+  return { point, distance: Math.hypot(p[0] - point[0], p[1] - point[1]), t };
+};
+
+const ringRefs = (geom) => {
+  if (!geom) return [];
+  const type = geom.getType?.();
+  const coords = geom.getCoordinates?.() || [];
+  if (type === "Polygon") return coords.map((ring, ringIndex) => ({ path: [ringIndex], ring }));
+  if (type === "MultiPolygon") {
+    const rows = [];
+    coords.forEach((poly, polygonIndex) =>
+      poly.forEach((ring, ringIndex) => rows.push({ path: [polygonIndex, ringIndex], ring })),
+    );
+    return rows;
+  }
+  return [];
+};
+
+const getRingAtPath = (coords, type, path) =>
+  type === "Polygon" ? coords[path[0]] : coords[path[0]]?.[path[1]];
+
+const nearestBoundarySegment = (geom, point) => {
+  let best = null;
+  for (const row of ringRefs(geom)) {
+    const ring = row.ring || [];
+    for (let i = 0; i < ring.length - 1; i += 1) {
+      const hit = closestPointOnSegment(point, ring[i], ring[i + 1]);
+      if (!best || hit.distance < best.distance) {
+        best = { ...hit, path: row.path, index: i, a: ring[i], b: ring[i + 1] };
+      }
+    }
+  }
+  return best;
+};
+
+const sharedBorderPoint = (features, point, tolerance) => {
+  if (!Array.isArray(features) || features.length !== 2 || !point) return null;
+  const a = nearestBoundarySegment(features[0]?.getGeometry?.(), point);
+  const b = nearestBoundarySegment(features[1]?.getGeometry?.(), point);
+  if (!a || !b || a.distance > tolerance || b.distance > tolerance) return null;
+  return {
+    point: [(a.point[0] + b.point[0]) / 2, (a.point[1] + b.point[1]) / 2],
+    a,
+    b,
+  };
+};
+
+const nearestBoundaryVertex = (geom, point) => {
+  let best = null;
+  for (const row of ringRefs(geom)) {
+    const ring = row.ring || [];
+    for (let i = 0; i < Math.max(0, ring.length - 1); i += 1) {
+      const coord = ring[i];
+      const distance = Math.hypot(point[0] - coord[0], point[1] - coord[1]);
+      if (!best || distance < best.distance) best = { distance, path: row.path, index: i, coord };
+    }
+  }
+  return best;
+};
+
+const setRingVertex = (ring, index, coord) => {
+  if (!ring?.length || index < 0 || index >= ring.length) return false;
+  ring[index] = coord.slice();
+  // Polygon rings repeat vertex 0 as their final coordinate. Keep closure exact.
+  if (index === 0) ring[ring.length - 1] = coord.slice();
+  if (index === ring.length - 1) ring[0] = coord.slice();
+  return true;
+};
+
+const weldPointIntoFeature = (feature, point, tolerance) => {
+  const geom = feature?.getGeometry?.();
+  if (!geom || !point) return false;
+  const type = geom.getType?.();
+  if (type !== "Polygon" && type !== "MultiPolygon") return false;
+
+  const coords = cloneCoords(geom.getCoordinates());
+  const vertex = nearestBoundaryVertex(geom, point);
+  if (vertex && vertex.distance <= tolerance * 0.38) {
+    const ring = getRingAtPath(coords, type, vertex.path);
+    if (!setRingVertex(ring, vertex.index, point)) return false;
+    geom.setCoordinates(coords);
+    feature.set("edited", true);
+    return true;
+  }
+
+  const segment = nearestBoundarySegment(geom, point);
+  if (!segment || segment.distance > tolerance) return false;
+  const ring = getRingAtPath(coords, type, segment.path);
+  if (!ring) return false;
+  ring.splice(segment.index + 1, 0, point.slice());
+  geom.setCoordinates(coords);
+  feature.set("edited", true);
+  return true;
+};
+
+const removeSharedVertexNear = (feature, point, tolerance) => {
+  const geom = feature?.getGeometry?.();
+  if (!geom || !point) return false;
+  const type = geom.getType?.();
+  if (type !== "Polygon" && type !== "MultiPolygon") return false;
+  const vertex = nearestBoundaryVertex(geom, point);
+  if (!vertex || vertex.distance > tolerance) return false;
+
+  const coords = cloneCoords(geom.getCoordinates());
+  const ring = getRingAtPath(coords, type, vertex.path);
+  if (!ring || ring.length <= 4) return false;
+  let index = vertex.index;
+  // Removing the closure duplicate means removing vertex zero instead.
+  if (index === ring.length - 1) index = 0;
+  ring.splice(index, 1);
+  if (index === 0) ring[ring.length - 1] = ring[0].slice();
+  geom.setCoordinates(coords);
+  feature.set("edited", true);
+  return true;
+};
+
+const topologyDiagnosticStyle = (feature) => {
+  const kind = feature.get("kind");
+  const gap = kind === "gap";
+  return new Style({
+    fill: new Fill({ color: gap ? "rgba(245,158,11,0.42)" : "rgba(239,68,68,0.42)" }),
+    stroke: new Stroke({ color: gap ? "rgba(251,191,36,1)" : "rgba(248,113,113,1)", width: 2 }),
+  });
+};
 
 // One Style per (size, label text) instead of a fresh Style + Text + Fill +
 // Stroke for every city on every frame. SHAPES was already shared for exactly
@@ -149,6 +339,7 @@ const OlMap = ({
   seedKind = "import-world",
   defaultTypeId = "land",
   paintOwner = "",
+  paintOnlyOwner = "*",
   features = [],
   onSelectionChange,
   onRegionCount,
@@ -174,6 +365,15 @@ const OlMap = ({
   const labelLayerRef = useRef(null);
   const pointSourceRef = useRef(null);
   const pointLayerRef = useRef(null);
+  const topologySourceRef = useRef(null);
+  const topologyLayerRef = useRef(null);
+  const importPreviewLayerRef = useRef(null);
+  const paintPreviewSourceRef = useRef(null);
+  const paintPreviewLayerRef = useRef(null);
+  const topologyAnalysisRef = useRef(null);
+  const analyzeTopologyRef = useRef(null);
+  const borderAssistSourceRef = useRef(null);
+  const borderAssistLayerRef = useRef(null);
   const baseLayerRef = useRef(null);
   const onCustomBackgroundSaveRef = useRef(onCustomBackgroundSave);
   onCustomBackgroundSaveRef.current = onCustomBackgroundSave;
@@ -200,14 +400,17 @@ const OlMap = ({
   const activeToolRef = useRef(activeTool);
   const defaultTypeIdRef = useRef(defaultTypeId);
   const paintOwnerRef = useRef(paintOwner);
+  const paintOnlyOwnerRef = useRef(paintOnlyOwner);
   const onSelectionRef = useRef(onSelectionChange);
   const onRegionsChangedRef = useRef(onRegionsChanged);
+  const selectionKey = (selectionIds || []).join("|");
 
   typesByIdRef.current = toTypesById(types);
   colorsRef.current = colors || {};
   activeToolRef.current = activeTool;
   defaultTypeIdRef.current = defaultTypeId;
   paintOwnerRef.current = paintOwner;
+  paintOnlyOwnerRef.current = paintOnlyOwner;
   onSelectionRef.current = onSelectionChange;
   onRegionsChangedRef.current = onRegionsChanged;
 
@@ -324,10 +527,50 @@ const OlMap = ({
     });
     pointLayer.setZIndex(30);
 
+    // Province-raster alignment preview. It is display-only and never becomes
+    // part of the document. The importer swaps the source as the geographic
+    // bounds change, then hides it before the vector regions are committed.
+    const importPreviewLayer = new ImageLayer({ visible: false, opacity: 0.46 });
+    importPreviewLayer.setZIndex(55);
+
+    // Drag-paint preview. Only the regions touched by the current stroke are
+    // rendered here, so painting a 4,500-region imported map stays responsive.
+    const paintPreviewSource = new VectorSource({ wrapX: false });
+    const paintPreviewLayer = new VectorLayer({
+      source: paintPreviewSource,
+      wrapX: false,
+      style: (feature) => paintPreviewStyleFor(feature.get("__paintOwner") || null, colorsRef.current),
+      updateWhileInteracting: true,
+      updateWhileAnimating: false,
+    });
+    paintPreviewLayer.setZIndex(58);
+
+    // Selection-scoped topology diagnostics. Nothing here participates in save
+    // or export: yellow/red geometry is a preview overlay only.
+    const topologySource = new VectorSource({ wrapX: false });
+    const topologyLayer = new VectorLayer({
+      source: topologySource,
+      wrapX: false,
+      style: topologyDiagnosticStyle,
+      updateWhileInteracting: false,
+      updateWhileAnimating: false,
+    });
+    topologyLayer.setZIndex(60);
+
+    const borderAssistSource = new VectorSource({ wrapX: false });
+    const borderAssistLayer = new VectorLayer({
+      source: borderAssistSource,
+      wrapX: false,
+      style: sharedBorderAssistStyle,
+      updateWhileInteracting: true,
+      updateWhileAnimating: false,
+    });
+    borderAssistLayer.setZIndex(70);
+
     const map = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false }),
-      layers: [regionLayer, labelLayer, pointLayer],
+      layers: [regionLayer, labelLayer, pointLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
       view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
     });
 
@@ -336,6 +579,13 @@ const OlMap = ({
     labelLayerRef.current = labelLayer;
     pointSourceRef.current = pointSource;
     pointLayerRef.current = pointLayer;
+    topologySourceRef.current = topologySource;
+    topologyLayerRef.current = topologyLayer;
+    importPreviewLayerRef.current = importPreviewLayer;
+    paintPreviewSourceRef.current = paintPreviewSource;
+    paintPreviewLayerRef.current = paintPreviewLayer;
+    borderAssistSourceRef.current = borderAssistSource;
+    borderAssistLayerRef.current = borderAssistLayer;
     mapRef.current = map;
     requestAnimationFrame(() => map.updateSize());
     if (typeof window !== "undefined") window.__editorMap = map;
@@ -392,19 +642,8 @@ const OlMap = ({
         return;
       }
       if (tool === "paint") {
-        if (hit) {
-          const before = hit.get("owner") || null;
-          // Trim, never case-fold: the owner IS the country's display name. This
-          // line is why the six uppercasers had to go together — it re-folded
-          // whatever the input handed it, so fixing the field alone looked fixed
-          // and wasn't.
-          const after = (paintOwnerRef.current || "").trim() || null;
-          hit.set("owner", after);
-          regionLayer.changed();
-          labelLayer.changed();
-          notifyRegions();
-          pushCmd({ undo: () => hit.set("owner", before), redo: () => hit.set("owner", after) });
-        }
+        // R2.7 paint is handled by a PointerInteraction so a click and a whole
+        // drag stroke use the same one-operation Undo/Redo transaction.
         return;
       }
       if (tool === "feature") {
@@ -505,7 +744,7 @@ const OlMap = ({
         layerFilter: (l) => l === regionLayerRef.current,
       });
       const tool = activeToolRef.current;
-      if (tool === "lasso" || tool === "draw") {
+      if (tool === "lasso" || tool === "draw" || tool === "modify" || tool === "paint") {
         map.getTargetElement().style.cursor = "crosshair";
       } else if (tool === "feature" || tool === "delete") {
         // City-aware tools: pointer over an existing city (edit/remove target).
@@ -589,6 +828,270 @@ const OlMap = ({
     } else {
       onRegionCount?.(0);
     }
+
+
+    const nameOf = (f) => String(f?.get("name") || f?.getId?.() || "region");
+    const expandExtent = (extent, pad) => [extent[0] - pad, extent[1] - pad, extent[2] + pad, extent[3] + pad];
+
+    const pointSegmentDistance = (p, a, b) => {
+      const vx = b[0] - a[0];
+      const vy = b[1] - a[1];
+      const wx = p[0] - a[0];
+      const wy = p[1] - a[1];
+      const vv = vx * vx + vy * vy;
+      const t = vv > 0 ? Math.max(0, Math.min(1, (wx * vx + wy * vy) / vv)) : 0;
+      const x = a[0] + t * vx;
+      const y = a[1] + t * vy;
+      return Math.hypot(p[0] - x, p[1] - y);
+    };
+
+    const geometryRings = (geom) => {
+      if (!geom) return [];
+      const type = geom.getType?.();
+      const coords = geom.getCoordinates?.() || [];
+      if (type === "Polygon") return coords;
+      if (type === "MultiPolygon") return coords.flat();
+      return [];
+    };
+
+    const boundaryTouchScore = (gapGeom, regionGeom, epsilon) => {
+      const gapRing = geometryRings(gapGeom)[0] || [];
+      const rings = geometryRings(regionGeom);
+      if (!gapRing.length || !rings.length) return 0;
+      const step = Math.max(1, Math.floor(gapRing.length / 80));
+      let score = 0;
+      for (let i = 0; i < gapRing.length; i += step) {
+        const p = gapRing[i];
+        let best = Infinity;
+        for (const ring of rings) {
+          for (let j = 1; j < ring.length; j += 1) {
+            best = Math.min(best, pointSegmentDistance(p, ring[j - 1], ring[j]));
+            if (best <= epsilon) break;
+          }
+          if (best <= epsilon) break;
+        }
+        if (best <= epsilon) score += 1;
+      }
+      return score;
+    };
+
+    const clearTopologyDiagnostics = () => {
+      topologySource.clear();
+      topologyAnalysisRef.current = null;
+    };
+
+    const analyzeTopology = (ids, { maxWidth = 500 } = {}) => {
+      const width = Math.max(1, Number(maxWidth) || 500);
+      const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
+      topologySource.clear();
+      if (feats.length < 2) {
+        const empty = { maxWidth: width, gaps: [], overlaps: [], selectionCount: feats.length };
+        topologyAnalysisRef.current = empty;
+        return empty;
+      }
+
+      const gaps = [];
+      const overlapsFound = [];
+      let serial = 0;
+
+      // R2.4 large-area acceleration. OpenLayers VectorSource already maintains
+      // a spatial index, so do not compare every selected region with every other
+      // selected region. This keeps the SAME conservative topology rules while
+      // allowing much larger country / empire / continental selections.
+      const selectedSet = new Set(feats);
+      const featureOrder = new globalThis.Map(feats.map((feature, index) => [feature, index]));
+      const areaCache = new globalThis.Map();
+      const areaOf = (feature) => {
+        if (!feature) return -1;
+        if (!areaCache.has(feature)) areaCache.set(feature, planarGeometryArea(feature.getGeometry()));
+        return areaCache.get(feature);
+      };
+      let spatialPairs = 0;
+
+      // Fully enclosed holes in the selection union are the only gap class R2
+      // auto-fills. Open coastline defects are preview/manual territory for now.
+      for (const row of enclosedGapGeoms(feats.map((f) => f.getGeometry()), { maxWidth: width })) {
+        const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
+        const neighbors = regionSource
+          .getFeaturesInExtent(ext)
+          .filter((feature) => selectedSet.has(feature))
+          .sort((a, b) => featureOrder.get(a) - featureOrder.get(b));
+        let target = null;
+        let bestScore = -1;
+        const epsilon = Math.max(4, width * 0.08);
+        for (const f of neighbors) {
+          const score = boundaryTouchScore(row.geom, f.getGeometry(), epsilon);
+          if (score > bestScore || (score === bestScore && areaOf(f) > areaOf(target))) {
+            target = f;
+            bestScore = score;
+          }
+        }
+        if (!target || bestScore <= 0) continue;
+        const id = `gap-${++serial}`;
+        const item = {
+          id,
+          kind: "gap",
+          geom: row.geom.clone(),
+          area: row.area,
+          width: row.width,
+          targetId: target.getId(),
+          targetName: nameOf(target),
+        };
+        gaps.push(item);
+        const overlay = new Feature({ geometry: row.geom.clone(), kind: "gap" });
+        overlay.setId(`topology-${id}`);
+        topologySource.addFeature(overlay);
+      }
+
+      // Pairwise narrow overlaps. R2.4 asks the VectorSource spatial index only
+      // for selected features whose extents can actually meet A. Sorting by the
+      // original selection order keeps repair proposals deterministic.
+      for (let i = 0; i < feats.length; i += 1) {
+        const a = feats[i];
+        const aExtent = a.getGeometry().getExtent();
+        const nearby = regionSource
+          .getFeaturesInExtent(aExtent)
+          .map((feature) => ({ feature, index: featureOrder.get(feature) }))
+          .filter((row) => Number.isInteger(row.index) && row.index > i)
+          .sort((x, y) => x.index - y.index);
+
+        for (const { feature: b } of nearby) {
+          spatialPairs += 1;
+          let pieces = [];
+          try {
+            pieces = overlapGeoms(a.getGeometry(), b.getGeometry(), { maxWidth: width });
+          } catch (e) {
+            console.warn("[editor] topology overlap analysis failed:", e);
+            continue;
+          }
+          if (!pieces.length) continue;
+          const aArea = areaOf(a);
+          const bArea = areaOf(b);
+          // Deterministic conservative rule: the larger region keeps the tiny
+          // overlap; the smaller one is trimmed to its exact boundary. This is
+          // only proposed for narrow overlap candidates and always previews first.
+          const winner = aArea >= bArea ? a : b;
+          const loser = winner === a ? b : a;
+          for (const row of pieces) {
+            const id = `overlap-${++serial}`;
+            const item = {
+              id,
+              kind: "overlap",
+              geom: row.geom.clone(),
+              area: row.area,
+              width: row.width,
+              aId: a.getId(),
+              bId: b.getId(),
+              aName: nameOf(a),
+              bName: nameOf(b),
+              winnerId: winner.getId(),
+              loserId: loser.getId(),
+            };
+            overlapsFound.push(item);
+            const overlay = new Feature({ geometry: row.geom.clone(), kind: "overlap" });
+            overlay.setId(`topology-${id}`);
+            topologySource.addFeature(overlay);
+          }
+        }
+      }
+
+      const report = {
+        maxWidth: width,
+        selectionCount: feats.length,
+        spatialPairs,
+        gaps,
+        overlaps: overlapsFound,
+      };
+      topologyAnalysisRef.current = report;
+      topologyLayer.changed();
+      return {
+        ...report,
+        // React only needs summaries; keep heavyweight OL geometries private.
+        gaps: gaps.map(({ geom, ...item }) => item),
+        overlaps: overlapsFound.map(({ geom, ...item }) => item),
+      };
+    };
+
+    analyzeTopologyRef.current = analyzeTopology;
+
+    const repairTopology = (ids, { maxWidth = 500 } = {}) => {
+      // Re-analyze at apply-time. The user may have edited a vertex after preview;
+      // stale geometry must never be committed blindly.
+      analyzeTopology(ids, { maxWidth });
+      const report = topologyAnalysisRef.current;
+      if (!report) return { changed: false, gaps: 0, overlaps: 0 };
+
+      const before = new globalThis.Map();
+      const remember = (f) => {
+        if (!f || before.has(f.getId())) return;
+        before.set(f.getId(), { feature: f, geometry: f.getGeometry().clone(), edited: f.get("edited") });
+      };
+
+      let overlapRepairs = 0;
+      for (const item of report.overlaps || []) {
+        const winner = regionSource.getFeatureById(item.winnerId);
+        const loser = regionSource.getFeatureById(item.loserId);
+        if (!winner || !loser) continue;
+        remember(loser);
+        let after;
+        try {
+          after = subtractFrom(loser.getGeometry(), winner.getGeometry());
+        } catch (e) {
+          console.warn("[editor] topology overlap repair failed:", e);
+          continue;
+        }
+        if (!after) continue;
+        loser.setGeometry(after);
+        loser.set("edited", true);
+        overlapRepairs += 1;
+      }
+
+      let gapRepairs = 0;
+      for (const item of report.gaps || []) {
+        const target = regionSource.getFeatureById(item.targetId);
+        if (!target) continue;
+        remember(target);
+        try {
+          const merged = unionGeoms([target.getGeometry(), item.geom]);
+          target.setGeometry(merged);
+          target.set("edited", true);
+          gapRepairs += 1;
+        } catch (e) {
+          console.warn("[editor] topology gap repair failed:", e);
+        }
+      }
+
+      if (!before.size) {
+        clearTopologyDiagnostics();
+        return { changed: false, gaps: 0, overlaps: 0 };
+      }
+
+      const after = new globalThis.Map();
+      for (const [id, row] of before.entries()) {
+        const f = regionSource.getFeatureById(id);
+        if (f) after.set(id, { feature: f, geometry: f.getGeometry().clone(), edited: f.get("edited") });
+      }
+
+      const restore = (snapshot) => {
+        for (const row of snapshot.values()) {
+          row.feature.setGeometry(row.geometry.clone());
+          if (row.edited === undefined) row.feature.unset("edited", true);
+          else row.feature.set("edited", row.edited);
+        }
+        regionLayer.changed();
+        labelLayer.changed();
+      };
+
+      pushCmd({
+        undo: () => restore(before),
+        redo: () => restore(after),
+      });
+      clearTopologyDiagnostics();
+      regionLayer.changed();
+      labelLayer.changed();
+      notifyRegions();
+      return { changed: true, gaps: gapRepairs, overlaps: overlapRepairs, affectedRegions: before.size };
+    };
 
     const summarize = (f) => ({
       id: f.getId(),
@@ -743,6 +1246,44 @@ const OlMap = ({
         }
         return [...owners].sort((a, b) => a.localeCompare(b));
       },
+      // Stable-polity inventory for the Scenario Workshop. Regions store the
+      // stable polity KEY; presentation names live in doc.polities/world.polityOverrides.
+      listPolityUsage: () => {
+        const rows = new globalThis.Map();
+        const ensure = (key) => {
+          const stableKey = String(key || "").trim();
+          if (!stableKey) return null;
+          if (!rows.has(stableKey)) rows.set(stableKey, { key: stableKey, regionCount: 0, claimantCount: 0 });
+          return rows.get(stableKey);
+        };
+        for (const f of regionSource.getFeatures()) {
+          const owner = ensure(f.get("owner"));
+          if (owner) owner.regionCount += 1;
+          for (const claimant of Array.isArray(f.get("claimants")) ? f.get("claimants") : []) {
+            const row = ensure(claimant);
+            if (row) row.claimantCount += 1;
+          }
+        }
+        return [...rows.values()].sort((a, b) => a.key.localeCompare(b.key));
+      },
+      selectOwner: (ownerKey, { zoom = false } = {}) => {
+        const key = String(ownerKey || "").trim();
+        if (!key) return [];
+        const ids = regionSource.getFeatures()
+          .filter((f) => String(f.get("owner") || "").trim() === key)
+          .map((f) => f.getId());
+        onSelectionRef.current?.(ids);
+        if (zoom && ids.length) {
+          const feats = ids.map((id) => regionSource.getFeatureById(id)).filter(Boolean);
+          let ext = feats[0].getGeometry().getExtent().slice();
+          for (const f of feats.slice(1)) {
+            const e = f.getGeometry().getExtent();
+            ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
+          }
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+        }
+        return ids;
+      },
       queryRegions: (text, limit = 200) => {
         const q = (text || "").trim().toLowerCase();
         const out = [];
@@ -773,6 +1314,125 @@ const OlMap = ({
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
+      analyzeTopology,
+      repairTopology,
+      clearTopologyDiagnostics,
+
+      // Province Map Importer preview. Bounds arrive as WGS84 lon/lat and are
+      // projected here so the source image can be checked against the live map
+      // BEFORE any region geometry is replaced.
+      showProvinceImportPreview: ({ url, bounds, opacity = 0.46 } = {}) => {
+        if (!url || !bounds || !importPreviewLayerRef.current) return false;
+        const west = Number(bounds.west);
+        const east = Number(bounds.east);
+        const north = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.north)));
+        const south = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.south)));
+        if (![west, east, north, south].every(Number.isFinite) || east <= west || north <= south) return false;
+        const sw = fromLonLat([west, south]);
+        const ne = fromLonLat([east, north]);
+        const layer = importPreviewLayerRef.current;
+        layer.setSource(new ImageStatic({
+          url,
+          imageExtent: [sw[0], sw[1], ne[0], ne[1]],
+          projection: "EPSG:3857",
+        }));
+        layer.setOpacity(Math.max(0.05, Math.min(0.95, Number(opacity) || 0.46)));
+        layer.setVisible(true);
+        return true;
+      },
+      clearProvinceImportPreview: () => {
+        const layer = importPreviewLayerRef.current;
+        if (!layer) return;
+        layer.setVisible(false);
+        layer.setSource(null);
+      },
+
+      // Whole-map geometry replacement used by the Province Map Importer.
+      // This intentionally does NOT retain the old world in the in-memory Undo
+      // stack: a 10k+ province import can already be large, and keeping two
+      // complete worlds alive at once is an avoidable tab-killer. The panel
+      // downloads the old FeatureCollection before calling this method.
+      replaceRegionsFromImport: (fc, { inheritOwners = true } = {}) => {
+        if (!fc || !Array.isArray(fc.features)) return { count: 0, inheritedOwners: 0 };
+        const fmt = new GeoJSON();
+        let feats;
+        try {
+          feats = fmt.readFeatures(fc, {
+            dataProjection: "EPSG:4326",
+            featureProjection: "EPSG:3857",
+          });
+        } catch (e) {
+          console.warn("[editor] province import GeoJSON parse failed:", e);
+          return { count: 0, inheritedOwners: 0 };
+        }
+        feats = feats.filter((f) => {
+          const type = f.getGeometry?.()?.getType?.();
+          return type === "Polygon" || type === "MultiPolygon";
+        });
+        if (!feats.length) return { count: 0, inheritedOwners: 0 };
+
+        const usedIds = new Set();
+        let inheritedOwners = 0;
+        for (let i = 0; i < feats.length; i += 1) {
+          const f = feats[i];
+          const p = f.getProperties();
+          let id = f.getId() ?? p.id ?? `imp-${i + 1}`;
+          id = String(id);
+          let unique = id;
+          let suffix = 2;
+          while (usedIds.has(unique)) unique = `${id}-${suffix++}`;
+          usedIds.add(unique);
+          f.setId(unique);
+          if (f.get("typeId") == null) f.set("typeId", "land");
+
+          // Preserve an explicit owner carried by imported GeoJSON. Raster
+          // imports intentionally arrive ownerless; for those, inherit the old
+          // stable polity key from whichever current region contains the new
+          // province's interior point.
+          if (inheritOwners && !f.get("owner") && (f.get("typeId") || "land") !== "water") {
+            const coord = interiorPoint(f.getGeometry());
+            if (coord) {
+              const epsilon = 0.01;
+              const candidates = regionSource.getFeaturesInExtent([
+                coord[0] - epsilon,
+                coord[1] - epsilon,
+                coord[0] + epsilon,
+                coord[1] + epsilon,
+              ]);
+              const hit = candidates.find((old) => old.getGeometry?.()?.intersectsCoordinate?.(coord));
+              if (hit) {
+                const owner = hit.get("owner") || null;
+                if (owner) {
+                  f.set("owner", owner);
+                  inheritedOwners += 1;
+                }
+                const claimants = hit.get("claimants");
+                if (Array.isArray(claimants) && claimants.length) f.set("claimants", claimants.slice());
+              }
+            }
+          }
+        }
+
+        clearTopologyDiagnostics();
+        const preview = importPreviewLayerRef.current;
+        if (preview) {
+          preview.setVisible(false);
+          preview.setSource(null);
+        }
+        onSelectionRef.current?.([]);
+        selectedIdsRef.current = new Set();
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        emitHistory();
+
+        regionSource.clear();
+        regionSource.addFeatures(feats);
+        regionLayer.changed();
+        labelLayer.changed();
+        notifyRegions();
+        return { count: feats.length, inheritedOwners };
+      },
+
       // Serialize all region geometry to a GeoJSON FeatureCollection (WGS84) for
       // saving/exporting; load one back into the source.
       // writeFeaturesObject, NOT JSON.parse(writeFeatures(...)). OL's writeFeatures
@@ -788,7 +1448,7 @@ const OlMap = ({
           featureProjection: "EPSG:3857",
           decimals: 5,
         }),
-      loadRegions: (fc) => {
+      loadRegions: (fc, ownershipOverrides = null) => {
         const fmt = new GeoJSON();
         regionSource.clear();
         if (fc && Array.isArray(fc.features)) {
@@ -800,6 +1460,14 @@ const OlMap = ({
             const p = f.getProperties();
             if (f.getId() == null && p.id != null) f.setId(String(p.id));
             if (f.get("typeId") == null) f.set("typeId", "land");
+            // Runtime ownership is authoritative. A custom regions.geojson may
+            // carry an older display-name owner while ownerSchema 4 world state
+            // points the same region at a stable polity key. Stamp that key into
+            // the editor so authoring cannot fork the polity on the next save.
+            const id = f.getId();
+            if (ownershipOverrides && id != null && Object.prototype.hasOwnProperty.call(ownershipOverrides, id)) {
+              f.set("owner", ownershipOverrides[id] || null);
+            }
           }
           regionSource.addFeatures(feats);
         }
@@ -845,6 +1513,10 @@ const OlMap = ({
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       map.setTarget(null);
+      analyzeTopologyRef.current = null;
+      importPreviewLayerRef.current = null;
+      paintPreviewSourceRef.current = null;
+      paintPreviewLayerRef.current = null;
       mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -875,7 +1547,141 @@ const OlMap = ({
     };
 
     const added = [];
-    if (activeTool === "draw") {
+    if (activeTool === "paint") {
+      // High-speed polity authoring. One pointer stroke may cross hundreds of
+      // imported provinces, but it is committed as ONE history command.
+      //
+      // We deliberately do not recolour the full VectorImage layer per mouse
+      // move. Touched regions are shown in a lightweight overlay; actual owner
+      // attributes are set silently on pointer-up, followed by one redraw.
+      const previewSource = paintPreviewSourceRef.current;
+      previewSource?.clear();
+
+      let stroke = null;
+
+      const ownerAllowed = (feature) => {
+        const filter = paintOnlyOwnerRef.current || "*";
+        const owner = feature?.get?.("owner") || null;
+        if (filter === "*") return true;
+        if (filter === "__unowned__") return !owner;
+        return owner === filter;
+      };
+
+      const featureAtCoordinate = (coordinate) => {
+        const hits = source.getFeaturesAtCoordinate(coordinate) || [];
+        if (!hits.length) return null;
+        // Match the usual "topmost" editing expectation when malformed source
+        // geometry overlaps: later source features are generally rendered last.
+        return hits[hits.length - 1] || null;
+      };
+
+      const previewFeature = (feature, after) => {
+        if (!previewSource || !feature?.getGeometry?.()) return;
+        const ghost = new Feature({ geometry: feature.getGeometry() });
+        ghost.set("__paintOwner", after, true);
+        previewSource.addFeature(ghost);
+      };
+
+      const touchCoordinate = (coordinate) => {
+        if (!stroke) return;
+        const feature = featureAtCoordinate(coordinate);
+        if (!feature) return;
+        const id = feature.getId();
+        const key = id == null ? feature : id;
+        if (stroke.visited.has(key)) return;
+        stroke.visited.add(key);
+
+        const before = feature.get("owner") || null;
+        if (!ownerAllowed(feature) || before === stroke.after) return;
+
+        stroke.rows.push({ feature, before });
+        previewFeature(feature, stroke.after);
+      };
+
+      const touchSegment = (fromPixel, toPixel) => {
+        const dx = toPixel[0] - fromPixel[0];
+        const dy = toPixel[1] - fromPixel[1];
+        const distance = Math.hypot(dx, dy);
+        // Sampling every ~5 screen pixels prevents thin provinces from being
+        // skipped when the pointer moves quickly across a dense imported map.
+        const steps = Math.max(1, Math.ceil(distance / 5));
+        for (let i = 1; i <= steps; i += 1) {
+          const pixel = [
+            fromPixel[0] + (dx * i) / steps,
+            fromPixel[1] + (dy * i) / steps,
+          ];
+          touchCoordinate(map.getCoordinateFromPixel(pixel));
+        }
+      };
+
+      const finishStroke = () => {
+        if (!stroke) return;
+        const finished = stroke;
+        stroke = null;
+        previewSource?.clear();
+
+        if (!finished.rows.length) return;
+
+        // Commit every touched region without firing thousands of feature
+        // change events; one layer redraw follows.
+        for (const row of finished.rows) row.feature.set("owner", finished.after, true);
+
+        const restore = (useAfter) => {
+          for (const row of finished.rows) {
+            row.feature.set("owner", useAfter ? finished.after : row.before, true);
+          }
+        };
+
+        pushCmd({
+          undo: () => restore(false),
+          redo: () => restore(true),
+        });
+        layer.changed();
+        labelLayerRef.current?.changed();
+        notifyRegions();
+      };
+
+      const paintInteraction = new PointerInteraction({
+        handleDownEvent: (event) => {
+          const original = event.originalEvent;
+          if (original && typeof original.button === "number" && original.button !== 0) return false;
+
+          const after = (paintOwnerRef.current || "").trim() || null;
+          stroke = {
+            after,
+            rows: [],
+            visited: new Set(),
+            lastPixel: [...event.pixel],
+          };
+          touchCoordinate(event.coordinate);
+          // Capture the pointer sequence so DragPan does not move the map while
+          // the author is painting. Switch to the Pan tool when navigation is
+          // desired.
+          return true;
+        },
+        handleDragEvent: (event) => {
+          if (!stroke) return;
+          touchSegment(stroke.lastPixel, event.pixel);
+          stroke.lastPixel = [...event.pixel];
+        },
+        handleUpEvent: (event) => {
+          if (stroke) {
+            touchSegment(stroke.lastPixel, event.pixel);
+            finishStroke();
+          }
+          return false;
+        },
+        stopDown: () => true,
+      });
+
+      added.push(paintInteraction);
+      added.push({
+        __continuumCleanup: () => {
+          stroke = null;
+          previewSource?.clear();
+        },
+      });
+    } else if (activeTool === "draw") {
       // trace: click a point on an existing border and the sketch FOLLOWS that
       // border as the cursor moves, instead of making the map-maker click every
       // vertex along a coastline. Click again to leave the border. Moving back
@@ -959,16 +1765,181 @@ const OlMap = ({
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
     } else if (activeTool === "modify") {
-      const modify = new Modify({ source });
+      // Manual override mode. If the author selected regions first, expose ONLY
+      // those vertices instead of the entire 3,500-region world. Snapping still
+      // sees every region, so a human can deliberately align a corrected border
+      // to its neighbour without being buried in unrelated handles.
+      const selectedFeatures = (selectionIds || [])
+        .map((id) => source.getFeatureById(id))
+        .filter(Boolean);
+      const selectedCollection = selectedFeatures.length ? new Collection(selectedFeatures) : null;
+      const modify = new Modify({
+        ...(selectedCollection ? { features: selectedCollection } : { source }),
+        pixelTolerance: 18,
+        style: manualVertexStyle,
+      });
+      let beforeModify = null;
+      modify.on("modifystart", (e) => {
+        beforeModify = new globalThis.Map();
+        for (const f of e.features?.getArray?.() ?? []) {
+          beforeModify.set(f.getId(), {
+            feature: f,
+            geometry: f.getGeometry().clone(),
+            edited: f.get("edited"),
+          });
+        }
+      });
       modify.on("modifyend", (e) => {
-        // Dragging a vertex changes the region's geometry, so the stock GADM tile
-        // no longer describes it: mark it edited so the exporter ships this shape
-        // and the game renders it from the GeoJSON instead of the original tile
-        // (which would otherwise paint the old shape over it — a darker seam).
-        for (const f of e.features?.getArray?.() ?? []) f.set("edited", true);
+        const afterModify = new globalThis.Map();
+        for (const f of e.features?.getArray?.() ?? []) {
+          // Dragging a vertex changes the region's geometry, so the stock GADM
+          // tile no longer describes it. Export the authored geometry instead.
+          f.set("edited", true);
+          afterModify.set(f.getId(), {
+            feature: f,
+            geometry: f.getGeometry().clone(),
+            edited: true,
+          });
+        }
+        if (beforeModify?.size && afterModify.size) {
+          const beforeSnapshot = beforeModify;
+          const afterSnapshot = afterModify;
+          const restore = (snapshot) => {
+            for (const row of snapshot.values()) {
+              row.feature.setGeometry(row.geometry.clone());
+              if (row.edited === undefined) row.feature.unset("edited", true);
+              else row.feature.set("edited", row.edited);
+            }
+          };
+          pushCmd({
+            undo: () => restore(beforeSnapshot),
+            redo: () => restore(afterSnapshot),
+          });
+        }
         notifyRegions();
       });
-      added.push(modify, new Snap({ source }));
+      // High-tolerance magnet against the complete region source. The selected
+      // polygon is what moves; its neighbour is the reference target.
+      added.push(modify, new Snap({ source, pixelTolerance: 18 }));
+    } else if (activeTool === "border") {
+      // Shared-border precision mode is deliberately pair-scoped. A human picks
+      // the two neighbouring regions that define the border; every released
+      // vertex/edge edit is then mirrored as an EXACT shared anchor in both.
+      const pair = (selectionIds || [])
+        .map((id) => source.getFeatureById(id))
+        .filter(Boolean);
+      const assistSource = borderAssistSourceRef.current;
+      assistSource?.clear();
+
+      if (pair.length === 2) {
+        const selectedCollection = new Collection(pair);
+        const modify = new Modify({
+          features: selectedCollection,
+          pixelTolerance: 24,
+          style: manualVertexStyle,
+        });
+        let beforePair = null;
+
+        const snapshotPair = () => new globalThis.Map(
+          pair.map((f) => [
+            f.getId(),
+            { feature: f, geometry: f.getGeometry().clone(), edited: f.get("edited") },
+          ]),
+        );
+        const restorePair = (snapshot) => {
+          for (const row of snapshot.values()) {
+            row.feature.setGeometry(row.geometry.clone());
+            if (row.edited === undefined) row.feature.unset("edited", true);
+            else row.feature.set("edited", row.edited);
+          }
+          layer.changed();
+          labelLayerRef.current?.changed();
+        };
+
+        modify.on("modifystart", () => {
+          beforePair = snapshotPair();
+          assistSource?.clear();
+        });
+
+        modify.on("modifyend", (e) => {
+          const mapEvent = e.mapBrowserEvent;
+          const point = mapEvent?.coordinate;
+          const resolution = map.getView().getResolution() || 1;
+          const tolerance = Math.max(8, resolution * 24);
+          const altRemove = Boolean(mapEvent?.originalEvent?.altKey);
+          const modifiedIds = new Set((e.features?.getArray?.() ?? []).map((f) => f.getId()));
+
+          if (point) {
+            if (altRemove) {
+              // OpenLayers already removed the clicked vertex from whichever
+              // feature(s) it modified. Mirror that removal only into the OTHER
+              // selected polygon, avoiding a second accidental deletion.
+              pair.forEach((f) => {
+                if (!modifiedIds.has(f.getId())) removeSharedVertexNear(f, point, tolerance);
+              });
+            } else {
+              const shared = sharedBorderPoint(pair, point, tolerance);
+              if (shared) {
+                // Use the midpoint between the two nearest boundary projections,
+                // which is exactly what the cyan halo previews. Both polygons
+                // receive the same coordinate, creating a canonical shared anchor.
+                pair.forEach((f) => weldPointIntoFeature(f, shared.point, tolerance));
+              }
+            }
+          }
+
+          pair.forEach((f) => f.set("edited", true));
+          const afterPair = snapshotPair();
+          if (beforePair?.size && afterPair.size) {
+            const beforeSnapshot = beforePair;
+            const afterSnapshot = afterPair;
+            pushCmd({
+              undo: () => restorePair(beforeSnapshot),
+              redo: () => restorePair(afterSnapshot),
+            });
+          }
+
+          layer.changed();
+          labelLayerRef.current?.changed();
+          notifyRegions();
+          assistSource?.clear();
+
+          // Immediate preview-only sanity check: yellow/red diagnostics appear
+          // after every shared-border edit if a <=100 m crack/overlap remains.
+          // Nothing is auto-repaired here.
+          try {
+            analyzeTopologyRef.current?.(pair.map((f) => f.getId()), { maxWidth: 100 });
+          } catch (error) {
+            console.warn("[editor] shared-border local topology check failed:", error);
+          }
+        });
+
+        // Cyan magnet preview: shown only when BOTH selected boundaries are
+        // within the tool's hit radius. This is the release point that will be
+        // welded into both polygons.
+        const onPointerMove = (evt) => {
+          assistSource?.clear();
+          const resolution = map.getView().getResolution() || 1;
+          const tolerance = Math.max(8, resolution * 24);
+          const shared = sharedBorderPoint(pair, evt.coordinate, tolerance);
+          if (!shared) return;
+          const marker = new Feature({ geometry: new Point(shared.point) });
+          marker.set("kind", "shared-border-assist");
+          assistSource?.addFeature(marker);
+        };
+        map.on("pointermove", onPointerMove);
+
+        const snap = new Snap({ source, pixelTolerance: 24 });
+        added.push(modify, snap);
+        // Store a tiny pseudo-interaction cleanup hook alongside real OL
+        // interactions; the cleanup below recognises it.
+        added.push({
+          __continuumCleanup: () => {
+            map.un("pointermove", onPointerMove);
+            assistSource?.clear();
+          },
+        });
+      }
     } else if (activeTool === "move") {
       const translate = new Translate({ layers: [layer], hitTolerance: 2 });
       translate.on("translateend", notifyRegions);
@@ -981,14 +1952,21 @@ const OlMap = ({
       added.push(draw);
     }
 
-    added.forEach((i) => map.addInteraction(i));
-    interactionsRef.current = added;
+    added.forEach((i) => {
+      if (i?.__continuumCleanup) return;
+      map.addInteraction(i);
+    });
+    interactionsRef.current = added.filter((i) => !i?.__continuumCleanup);
     return () => {
-      added.forEach((i) => map.removeInteraction(i));
+      added.forEach((i) => {
+        if (i?.__continuumCleanup) i.__continuumCleanup();
+        else map.removeInteraction(i);
+      });
+      borderAssistSourceRef.current?.clear();
       interactionsRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTool]);
+  }, [activeTool, selectionKey]);
 
   useEffect(() => {
     selectedIdsRef.current = new Set(selectionIds || []);

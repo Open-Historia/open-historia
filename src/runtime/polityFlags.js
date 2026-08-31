@@ -9,7 +9,7 @@
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { getNationFlags, JSON_URLS, writeJson } from "./assets.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
-import { resolvePolityIdentity } from "./polityIdentity.js";
+import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLowerCase();
@@ -63,10 +63,47 @@ const uniqueResolvedIdentity = (polity, world) => {
 
 const stockCodesFor = (polity) => {
   const input = typeof polity === "string" ? { name: polity } : (polity || {});
-  const code = str(input.code).toUpperCase();
-  const direct = code && COUNTRY_NAMES[code] ? [code] : [];
-  const byName = STOCK_CODES_BY_NAME.get(norm(input.name)) || [];
-  return [...new Set([...direct, ...byName])];
+  const codes = new Set();
+  for (const candidate of [input.code, input.name]) {
+    const code = resolveStockCountryCode(candidate);
+    if (code) codes.add(code);
+  }
+  return [...codes];
+};
+
+// Resolve a standard built-in flag from polity-record metadata without
+// confusing that presentation fallback with political identity.
+//
+// record.code is the strongest bridge because the Workshop/importer can preserve
+// an explicit stock country code there. Older imported maps may predate that
+// field, so name/alias fallback is allowed only when every resolvable candidate
+// points to the SAME built-in flag. Ambiguous historical/composite identities
+// therefore still require an authored flag or mapRef.
+const stockFlagForRecord = (record) => {
+  if (!record || typeof record !== "object") return null;
+
+  const candidates = [
+    record.code,
+    record.name,
+    ...(Array.isArray(record.aliases) ? record.aliases : []),
+  ].map(str).filter(Boolean);
+
+  const codes = new Set();
+  for (const candidate of candidates) {
+    const code = resolveStockCountryCode(candidate);
+    if (code) codes.add(code);
+  }
+
+  if (codes.size !== 1) return null;
+  const mapCode = [...codes][0];
+  const imageUrl = flagImageUrlFromGid(mapCode);
+  return imageUrl
+    ? {
+        imageUrl,
+        mapCode,
+        source: "stock-record-identity",
+      }
+    : null;
 };
 
 const customFlagForCandidates = (flags, candidates) => {
@@ -125,10 +162,24 @@ export const resolvePolityFlag = ({ polity, world, flags = {} } = {}) => {
     }
   }
 
-  // Ordinary stock scenarios have no declared polity record at all. Preserve the
-  // native built-in flag path for those actors without turning a modern code into
-  // the political identity of historical/custom polities.
-  if (!record) {
+  // A declared polity record does not mean "no standard flag". Modern/custom
+  // maps legitimately create stable polity records for names, aliases, colours,
+  // tags and ownership while still using OpenHistoria's built-in national flag.
+  //
+  // Custom/legacy flags and explicit mapRefs already won above. At this point an
+  // unambiguous stock bridge is only a presentation fallback; it never changes
+  // the polity's stable identity.
+  if (record) {
+    const stock = stockFlagForRecord(record);
+    if (stock?.imageUrl) {
+      return {
+        ...stock,
+        polityKey,
+      };
+    }
+  } else {
+    // Ordinary stock scenarios have no declared polity record at all. Preserve
+    // their existing native built-in flag path unchanged.
     const stockCodes = stockCodesFor(input);
     if (stockCodes.length === 1) {
       const imageUrl = flagImageUrlFromGid(stockCodes[0]);

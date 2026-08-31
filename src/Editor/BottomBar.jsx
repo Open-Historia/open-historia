@@ -43,12 +43,14 @@ const Chip = ({ icon, label, active, onClick }) => (
 
 const BottomBar = ({
   counts,
+  polityCount = 0,
   basemap,
   hasCustomBackground,
   onOpenBasemaps,
   name,
   onNameChange,
   saveStatus,
+  scenarioDirty = false,
   openPanel,
   onOpenPanel,
   search,
@@ -73,6 +75,9 @@ const BottomBar = ({
     >
       {search}
       <Chip icon="list" label={`Regions: ${counts.regions}`} active={openPanel === "regions"} onClick={() => onOpenPanel("regions")} />
+      <Chip icon="list" label={`Polities: ${polityCount}`} active={openPanel === "polities"} onClick={() => onOpenPanel("polities")} />
+      <Chip icon="layers" label="Topology" active={openPanel === "topology"} onClick={() => onOpenPanel("topology")} />
+      <Chip icon="image" label="Import Map" active={openPanel === "province-import"} onClick={() => onOpenPanel("province-import")} />
       <Chip icon="pin" label={`Features: ${counts.features}`} active={openPanel === "features"} onClick={() => onOpenPanel("features")} />
       <Chip icon="types" label={`Types: ${counts.types}`} active={openPanel === "types"} onClick={() => onOpenPanel("types")} />
       <Chip icon="layers" label="Layers" active={openPanel === "layers"} onClick={() => onOpenPanel("layers")} />
@@ -109,6 +114,22 @@ const BottomBar = ({
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
         {save.label}
       </span>
+      {scenarioDirty && (
+        <span
+          title="The editor document may be autosaved, but these changes have not yet been written into the scenario."
+          style={{
+            padding: "4px 8px",
+            borderRadius: 999,
+            border: "1px solid rgba(245,158,11,0.35)",
+            background: "rgba(245,158,11,0.12)",
+            color: "#fbbf24",
+            fontSize: 11,
+            fontWeight: 700,
+          }}
+        >
+          Scenario unsaved
+        </span>
+      )}
     </div>
   );
 };

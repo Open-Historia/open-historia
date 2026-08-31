@@ -7,9 +7,9 @@
 // owning country for one or many selected regions. Writes straight to the OL
 // features via the map API, which live-restyles the map.
 //
-// The Country field is free text holding the country's NAME. Typing a name that
-// doesn't exist yet is how a new country is created — there is no separate "add
-// country" step, because a country exists precisely when a region says it owns it.
+// Continuum Phase 12.5: regions store a STABLE polity key. Display names and
+// polity metadata live in the polity registry, so editing one region can no longer
+// accidentally create a one-province country by typing a new display name.
 
 import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
@@ -25,10 +25,10 @@ const commonOr = (arr, blank = "") => {
   return arr.every((v) => v === first) ? first ?? blank : blank;
 };
 
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, regionEpoch = 0, onOpenPolities }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
-    [api, selection],
+    [api, selection, regionEpoch],
   );
   const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [] });
   // Recomputed per selection rather than memoised on the region set: the map has
@@ -37,8 +37,14 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
   const countryNames = useMemo(
     () => (api?.listOwners ? api.listOwners() : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [api, selection.join(",")],
+    [api, selection.join(","), regionEpoch],
   );
+  const polityOptions = useMemo(() => {
+    const keys = new Set([...countryNames, ...Object.keys(polities || {})]);
+    return [...keys]
+      .map((key) => ({ key, name: String(polities?.[key]?.name || key) }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  }, [countryNames, polities]);
 
   useEffect(() => {
     // Claimants are an array, so "common value" compares serialized lists.
@@ -50,7 +56,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
       claimants: JSON.parse(commonOr(claimantKeys, "[]") || "[]"),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection.join(",")]);
+  }, [selection.join(","), regionEpoch]);
 
   if (!selection.length) return null;
   const single = selection.length === 1;
@@ -101,34 +107,38 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           width={160}
         />
       </Row>
-      <Row label="Country" title="The country that owns this region — type its full name. A name that doesn't exist yet becomes a new country.">
-        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <Row label="Polity" title="The stable polity identity that owns these regions. Create/rename polities in the Polities panel; changing a display name there keeps all territory attached.">
+        <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
           {ownerRgb && (
             <span style={{ width: 18, height: 18, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: rgbToHex(ownerRgb) }} />
           )}
-          {/* Every country already on the map, so an author picks "United Arab
-              Emirates" rather than retyping it and forking a near-miss. Free-text
-              still wins — typing a new name is how a new country is created. */}
-          <datalist id="oh-country-names">
-            {countryNames.map((name) => <option key={name} value={name} />)}
-          </datalist>
-          <TextField
-            list="oh-country-names"
+          <select
             value={form.owner}
-            onChange={(v) => {
-              // No case-folding: the owner IS the country's display name, so
-              // "Russia" must stay "Russia".
-              //
-              // The field keeps v RAW and only what's applied is trimmed. Trimming
-              // the state would make multi-word names untypeable: "United " trims
-              // back to "United", so the next keystroke yields "UnitedS". Trimming
-              // on apply still matters — a trailing space forks a second polity
-              // that looks identical to a human.
+            onChange={(e) => {
+              const v = e.target.value;
               setForm((f) => ({ ...f, owner: v }));
-              apply({ owner: v.trim() || null });
+              apply({ owner: v || null });
             }}
-            width={180}
-          />
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: "0.45rem 0.5rem",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(0,0,0,0.28)",
+              color: "white",
+            }}
+          >
+            <option value="">{form.owner ? "Unowned" : (selection.length > 1 ? "— mixed / unowned —" : "Unowned")}</option>
+            {polityOptions.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={onOpenPolities} style={pillButton(false)} title="Create, rename and manage polities">
+            Polities…
+          </button>
         </span>
       </Row>
       <Row
@@ -137,7 +147,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
       >
         <TagField
           value={form.claimants}
-          suggestions={countryNames}
+          suggestions={polityOptions.map((row) => row.key)}
           onChange={(next) => {
             const claimants = next.map((v) => String(v).trim()).filter(Boolean);
             setForm((f) => ({ ...f, claimants }));

@@ -17,12 +17,13 @@ const TOOLS = [
   { id: "pan", icon: "pan", label: "Pan", enabled: true },
   { sep: true },
   { id: "draw", icon: "split", label: "Draw region (click a border to trace along it)", enabled: true },
-  { id: "modify", icon: "modify", label: "Edit vertices", enabled: true },
+  { id: "modify", icon: "modify", label: "Edit vertices (select regions first; snap + undo enabled)", enabled: true },
+  { id: "border", icon: "merge", label: "Shared border precision (select exactly 2 neighbouring regions)", enabled: true },
   { id: "move", icon: "move", label: "Move", enabled: true },
   { id: "delete", icon: "trash", label: "Delete (click a region)", enabled: true },
   { sep: true },
   { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)", enabled: true },
-  { id: "paint", icon: "paint", label: "Paint owner (click regions)", enabled: true },
+  { id: "paint", icon: "paint", label: "Paint polity (click or drag across regions; one stroke = one undo)", enabled: true },
   { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)", enabled: true },
 ];
 
