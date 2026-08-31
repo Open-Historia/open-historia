@@ -19,6 +19,7 @@ import {
     MAP_SETTING_KEYS,
     applySaveBetaUnits,
     getMapSetting,
+    getMapSettingDefaultOn,
     isBetaUnits,
     resolveBetaUnits,
     setMapSetting,
@@ -1107,6 +1108,9 @@ const SettingsMenu = ({
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+        // Not getMapSetting: this one ships ON, and an absent key must read as
+        // on rather than off (see mapSettings.js).
+        chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
         // Not getMapSetting: this one belongs to the save, not the browser
         // profile (see mapSettings.js). resolveBetaUnits falls back to the
         // localStorage key for a save that has never chosen.
@@ -1263,6 +1267,14 @@ const SettingsMenu = ({
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On: time skips give the model 5 minutes, then fall back to canned events. Off (default): generation waits as long as the model needs. Cancel works either way.
+        </div>
+        <Toggle
+        label="Generate long time skips in segments"
+        enabled={mapSettings.chunkLongJumps}
+        onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
         </div>
         </div>
 

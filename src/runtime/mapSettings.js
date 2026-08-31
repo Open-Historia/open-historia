@@ -17,6 +17,18 @@ export const MAP_SETTING_KEYS = {
     // needs — the fallback is only reachable through a real error, never a
     // slow model (Cancel still works either way).
     limitAiGeneration: "ai_limit_generation",
+    // Long time skips are generated in SEGMENTS — several shorter model calls
+    // merged into the one round the player asked for — rather than as a single
+    // request. A nine-month skip asks for 30-odd events at once, which on a
+    // hosted provider is tens of minutes of generation in one HTTP request; the
+    // field report behind this was a gateway closing exactly that with a 502 at
+    // 301.7s, costing the player a turn with fourteen queued orders in it.
+    //
+    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
+    // an absent key here means "on", not "off". Off restores the single-request
+    // behaviour for players who would rather have one long wait than several
+    // short ones (it re-sends the prompt per segment, so it costs more tokens).
+    chunkLongJumps: "ai_chunk_long_jumps",
     // The work-in-progress unit system: the AI owns movement and combat, units
     // carry a posture, and the engine advances standing orders every turn
     // (runtime/unitMotion.js). OFF — the default, and what an absent key means —
@@ -47,6 +59,17 @@ export function getMapSetting(key) {
     return localStorage.getItem(key) === "1";
 }
 
+// The same read for a setting that ships ON: only an explicit "0" (the player
+// turned it off) disables it, so a fresh install or cleared storage gets the
+// feature without opting in. Mirrors getReasoningEnabled() in AI/providerConfig.js.
+//
+// A default-on setting CANNOT use getMapSetting above — an absent key reads as
+// "1" !== null, i.e. off — so every consumer of such a key must come through here.
+export function getMapSettingDefaultOn(key) {
+    if (typeof localStorage === "undefined") return true;
+    return localStorage.getItem(key) !== "0";
+}
+
 // Storage keys are what the game persists; they are not what a maintainer wants
 // to read in a bug report. Kept beside MAP_SETTING_KEYS so a new setting that
 // forgets to add a name still logs its key rather than nothing.
@@ -55,6 +78,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
+    [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.betaUnits]: "Beta unit system",
 };
 

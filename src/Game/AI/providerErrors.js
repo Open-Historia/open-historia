@@ -65,3 +65,42 @@ export const busyProviderMessage = (providerLabel, detail, retried) =>
 // guessing at a cause.
 export const providerErrorReplyMessage = (providerLabel, detail) =>
     `${providerLabel} returned an error instead of a reply${detail ? `: ${detail}` : ""}.`;
+
+// Did the provider reject the request because it was STREAMED (rather than for
+// anything about its content)? Tool calls stream so a long timeline jump keeps
+// the connection warm, but a few gateways refuse stream and tools together, and
+// some self-hosted backends refuse streaming outright. Recognising that lets the
+// call retry buffered instead of degrading out of tool mode — losing a keep-alive
+// is much cheaper than losing structured output.
+//
+// Anchored on the word "stream" so an unrelated "not supported" (a model that
+// cannot do tools at all) still falls through to the structured-output ladder.
+const STREAM_REFUSAL_TEXT =
+    /stream\w*[^.]{0,80}(?:not\s+support|unsupported|not\s+allowed|not\s+enabled|not\s+available|must\s+be|cannot|can't)/i;
+const STREAM_REFUSAL_PARAM =
+    /(?:not\s+support|unsupported|invalid|unknown|unrecognized)[^.]{0,80}\bstream\w*/i;
+// "This deployment cannot stream responses" — the negation leads, and `stream` is
+// the verb rather than the parameter name.
+const STREAM_REFUSAL_VERB =
+    /(?:cannot|can't|can not|does\s+not|doesn't|will\s+not|won't|unable\s+to)[^.]{0,40}\bstream/i;
+
+export const isStreamingRefusal = (message) => {
+    const text = errorPayloadText(message);
+    if (!text || !/stream/i.test(text)) return false;
+    return STREAM_REFUSAL_TEXT.test(text) || STREAM_REFUSAL_PARAM.test(text) || STREAM_REFUSAL_VERB.test(text);
+};
+
+// The opposite complaint, and the reason Anthropic tool calls stream at all: the
+// Messages API REFUSES a non-streaming request whose max_tokens implies a long
+// generation, and the game sends max_tokens 64000 uncapped. That 400 arrives
+// before any tokens are generated, and the existing max_tokens recovery in
+// main.jsx only matches ceiling errors ("max_tokens: X > Y"), so without this the
+// whole turn fell through to canned events.
+const STREAM_REQUIRED_TEXT =
+    /streaming\s+is\s+(?:strongly\s+)?(?:required|recommended)|(?:must|should)\s+(?:be\s+)?use\s+streaming|use\s+streaming|stream\w*\s*[:=]\s*true|long[- ]running[^.]{0,60}stream/i;
+
+export const isStreamingRequired = (message) => {
+    const text = errorPayloadText(message);
+    if (!text || !/stream/i.test(text)) return false;
+    return STREAM_REQUIRED_TEXT.test(text);
+};

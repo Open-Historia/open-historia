@@ -10,6 +10,7 @@ import {
   buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildPromptContext,
+  formatDateReadable,
   getUnconsolidatedEvents,
   renderTemplate,
   resolveHelperValues,
@@ -47,7 +48,16 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
+import {
+  SEGMENTED_JUMP_MIN_DAYS,
+  buildSegmentInstruction,
+  eventCountRangeForDays,
+  formatDurationLabel,
+  mergeSegmentPayloads,
+  planJumpSegments,
+  segmentEventRange,
+} from "./jumpSegments.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -2479,33 +2489,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
   }
 };
 
-// Event density per skip length (player-tuned): longer skips must return
-// proportionally more events, and short ones must stay brief.
-const eventCountRangeForDays = (days) => {
-  if (days < 1) return [1, 1];   // sub-day skip (e.g. 6 hours)
-  if (days <= 7) return [1, 2];
-  if (days <= 31) return [5, 7];
-  if (days <= 92) return [10, 13];
-  if (days <= 184) return [19, 27];
-  return [29, 37];
-};
-
-// Human-readable label for the skipped span, used in the AI prompt. Collapses
-// whole-day counts into weeks/months/years where they divide evenly.
-const formatDurationLabel = (days) => {
-  if (days < 1) {
-    const hours = Math.max(1, Math.round(days * 24));
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
-  }
-  const whole = Math.round(days);
-  const pluralize = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"}`;
-  if (whole % 365 === 0) return pluralize(whole / 365, "year");
-  if (whole % 30 === 0) return pluralize(whole / 30, "month");
-  if (whole % 7 === 0) return pluralize(whole / 7, "week");
-  return pluralize(whole, "day");
-};
-
-export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
+export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, signal } = {}) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -2523,65 +2507,175 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     throw new Error("The requested jump exceeds the supported date range.");
   }
   const variables = await buildTemplateVariables(bundle, { targetDate });
-  const durationLabel = formatDurationLabel(safeDays);
-  let [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;
-  if (plannedActionCount > minEvents) {
-    minEvents = Math.min(plannedActionCount, 37);
-    maxEvents = Math.max(maxEvents, minEvents + 3);
-  }
-  const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
-    fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
-    signal,
-    // The jump IS the game — by default generation waits as long as the model
-    // needs (0 disables the deadline in runJsonTask), so the canned fallback is
-    // only reachable through a real error, never a slow local/reasoning model.
-    // The "Limit AI generation" toggle opts back into a 5-minute bound for
-    // players who prefer a guaranteed turn over a guaranteed answer (Cancel
-    // works either way).
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
-    userMessage:
-      mode === "auto"
-        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
-          "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
-          "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
-        : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
-          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
-           `spread across the skipped period.`,
-    validatePayload: async (candidate, { finalAttempt } = {}) => {
-      // Shape-of-story problems (event count, stray dates) are STRICT while a
-      // retry remains — the model gets the exact error and usually fixes its
-      // own answer — and SALVAGED on the final attempt: a finished generation
-      // must never lose to the canned fallback over its date stamps, an extra
-      // event, or an invented region name. finalAttempt comes from runJsonTask
-      // itself (never from counting our own invocations — a schema failure on
-      // attempt 1 skips this validator entirely, which used to make attempt 2
-      // look "first" and leak strict feedback out as the fallback reason).
-      const strict = !finalAttempt;
-      const eventCount = normalizeArray(candidate?.events).length;
-      if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
-        return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
-      }
-      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate, requireAdvance: dateStep >= 1 });
-      if (dateError) {
-        if (strict) return dateError;
-        clampTimelineDates(candidate, { mode, originDate, targetDate });
-      }
-      return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
-    },
-    variables,
-  });
 
+  // Long skips are generated in SEGMENTS and merged into the one round the player
+  // asked for — see jumpSegments.js for why, and for the merge rules. Auto jumps
+  // never split: they stop at the next notable moment, so there is no span to
+  // divide up front. Short enough, or the setting off, is a single call worded and
+  // validated exactly as it always was.
+  const segmentDays = (getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps)
+    && mode !== "auto"
+    && dateStep >= SEGMENTED_JUMP_MIN_DAYS)
+    ? planJumpSegments(dateStep)
+    : [dateStep];
+  const segmentCount = segmentDays.length;
+  const plannedActionShare = Math.ceil(plannedActionCount / segmentCount);
+  // The deadline is PER REQUEST, and always was — five minutes bounds one model
+  // call, so a segmented jump gives each segment its own bound.
+  const jumpTimeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0;
+
+  if (segmentCount > 1) {
+    logDebugEvent("turn", `Timeline jump split into ${segmentCount} segments.`, {
+      dateStep,
+      segmentDays,
+      round: bundle.game.round,
+    });
+  }
+
+  const segmentPayloads = [];
+  const generatedSoFar = [];
+  let generation = { source: "ai", fallbackReason: "" };
+  let segmentOrigin = originDate;
+
+  // A segmented jump takes as long as the segments put together, so the spinner
+  // has to say which one is running or a correct turn looks like a hung one.
+  // Wrapped because a throwing UI callback must never cost the player a turn —
+  // the same rule the streaming onChunk callbacks follow.
+  const reportProgress = (segmentIndex) => {
+    if (segmentCount <= 1 || typeof onProgress !== "function") return;
+    try {
+      onProgress({ segment: segmentIndex + 1, segmentCount });
+    } catch (error) {
+      console.warn("[ai] a jump progress callback threw; continuing.", error);
+    }
+  };
+
+  try {
+  for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+    const isFinalSegment = segmentIndex === segmentCount - 1;
+    const spanDays = segmentDays[segmentIndex];
+    // The final segment always lands exactly on the requested date, so rounding
+    // across segments can never leave the round short of where it was asked to go.
+    const segmentTarget = isFinalSegment
+      ? targetDate
+      : (addIsoDays(segmentOrigin, spanDays) || targetDate);
+    const [minEvents, maxEvents] = segmentCount > 1
+      ? segmentEventRange(spanDays, plannedActionShare)
+      : segmentEventRange(safeDays, plannedActionCount);
+    // targetDate reaches only these two variables (promptContext.js), so the
+    // expensive context — region catalog, city seed, territory index — is built
+    // once for the whole jump and only the dates move per segment.
+    const segmentVariables = segmentCount > 1
+      ? { ...variables, targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) }
+      : variables;
+    reportProgress(segmentIndex);
+
+    const { generation: segmentGeneration, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+      // Only a single-call jump falls back on its own. A failing SEGMENT throws
+      // instead, so the catch below can fall back once for the whole period: half
+      // a round of real events followed by half a round of canned ones would be a
+      // turn that half-landed, which is worse than one that plainly did not (see
+      // jsonSalvage.js).
+      ...(segmentCount > 1
+        ? {}
+        : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
+      signal,
+      // The jump IS the game — by default generation waits as long as the model
+      // needs (0 disables the deadline in runJsonTask), so the canned fallback is
+      // only reachable through a real error, never a slow local/reasoning model.
+      // The "Limit AI generation" toggle opts back into a 5-minute bound for
+      // players who prefer a guaranteed turn over a guaranteed answer (Cancel
+      // works either way).
+      timeoutMs: jumpTimeoutMs,
+      userMessage: buildSegmentInstruction({
+        mode,
+        segmentIndex,
+        segmentCount,
+        minEvents,
+        maxEvents,
+        durationLabel: formatDurationLabel(safeDays),
+        segmentDurationLabel: formatDurationLabel(spanDays),
+        originDate,
+        targetDate,
+        segmentTargetDate: segmentTarget,
+        priorEvents: generatedSoFar,
+      }),
+      validatePayload: async (candidate, { finalAttempt } = {}) => {
+        // Shape-of-story problems (event count, stray dates) are STRICT while a
+        // retry remains — the model gets the exact error and usually fixes its
+        // own answer — and SALVAGED on the final attempt: a finished generation
+        // must never lose to the canned fallback over its date stamps, an extra
+        // event, or an invented region name. finalAttempt comes from runJsonTask
+        // itself (never from counting our own invocations — a schema failure on
+        // attempt 1 skips this validator entirely, which used to make attempt 2
+        // look "first" and leak strict feedback out as the fallback reason).
+        const strict = !finalAttempt;
+        const eventCount = normalizeArray(candidate?.events).length;
+        if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+          return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
+        }
+        // Each segment is checked against ITS OWN span, so an event dated outside
+        // the segment is caught while the model can still fix it rather than at the
+        // end of the whole round.
+        const dateError = validateTimelineDates({
+          candidate,
+          mode,
+          originDate: segmentOrigin,
+          targetDate: segmentTarget,
+          requireAdvance: dateStep >= 1,
+        });
+        if (dateError) {
+          if (strict) return dateError;
+          clampTimelineDates(candidate, { mode, originDate: segmentOrigin, targetDate: segmentTarget });
+        }
+        return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
+      },
+      variables: segmentVariables,
+    });
+
+    segmentPayloads.push(payload);
+    generatedSoFar.push(...normalizeArray(payload?.events));
+    generation = segmentGeneration;
+    // Where the next segment picks up. An auto jump can stop short of its span on
+    // purpose, so follow the payload rather than the calendar.
+    segmentOrigin = normalizeString(payload?.stopDate) || segmentTarget;
+  }
+  } catch (error) {
+    // Only a SEGMENTED jump reaches here — a single call falls back inside
+    // runJsonTask and never throws. A deliberate cancel must still cancel.
+    if (signal?.aborted || error?.name === "AbortError") throw error;
+    const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
+    console.warn(`[ai] a jump segment failed (${reason}) — falling back for the whole period.`);
+    logDebugEvent("warn", "[turn] A jump segment failed; the whole jump falls back.", {
+      completedSegments: segmentPayloads.length,
+      segmentCount,
+      reason,
+    });
+    segmentPayloads.length = 0;
+    segmentPayloads.push(await fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }));
+    generation = {
+      source: "fallback",
+      fallbackReason: reason,
+      taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
+    };
+  }
+
+  // One round out of every segment. applySimulationResult advances the round
+  // exactly once, and the dedupeGeneratedEvents pass inside it already collapses
+  // repeats WITHIN the batch as well as against the existing log, so a later
+  // segment restating an earlier one cannot reach the timeline.
+  const merged = mergeSegmentPayloads(segmentPayloads, { targetDate });
   const result = {
-    catalyst: payload?.catalyst ?? null,
-    clearActions: payload?.clearActions !== false,
-    events: normalizeArray(payload?.events),
+    catalyst: merged.catalyst,
+    clearActions: merged.clearActions,
+    events: merged.events,
     mode,
-    outreach: normalizeArray(payload?.diplomaticOutreach),
-    stopDate: normalizeString(payload?.stopDate) || targetDate,
-    summary: normalizeString(payload?.summary),
+    outreach: merged.diplomaticOutreach,
+    stopDate: merged.stopDate,
+    summary: merged.summary,
     generation,
   };
 
