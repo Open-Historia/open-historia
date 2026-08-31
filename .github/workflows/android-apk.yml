@@ -1,10 +1,15 @@
 # Open Historia — Android APK build & release workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
 name: Build Android APK
 
-# Builds the thin Android client (mobile/) and attaches the APK to the
-# rolling "android" release, so players just download and install — no
-# Android SDK needed on anyone's machine. Run it from the Actions tab
-# (workflow_dispatch) after changing mobile/, or push an android-v* tag.
+# Builds the Android app and attaches the APK to the rolling "android" release,
+# so players just download and install — no Android SDK needed on anyone's
+# machine. Run it from the Actions tab (workflow_dispatch) after changing mobile/
+# or the client, or push an android-v* tag.
+#
+# The app IS the web build: it packages the same bundle openhistoria.com serves
+# and connects to a community content node on its own. It used to be a thin
+# WebView pointed at a server the player had to run themselves (Termux on the
+# phone, or a host on their network), which is why this now builds the client.
 
 on:
   workflow_dispatch:
@@ -29,15 +34,23 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Stamp the build number
-        # The connect screen compares this against "Build: N" in the release
-        # notes on every launch — that's the APK self-update check.
-        run: sed -i "s/__APP_BUILD__/${{ github.run_number }}/" mobile/www/index.html
+      # VITE_APP_BUILD is what makes the in-app update banner take its APK path:
+      # it compares this number against the one in the release manifest and offers
+      # the new APK. The web router answers /api/app-update for it, since this
+      # build has no on-device server to proxy the manifest any more.
+      - name: Build the web client
+        env:
+          VITE_APP_BUILD: ${{ github.run_number }}
+          VITE_APP_TRACK: stable
+        run: |
+          npm ci
+          npm run build:web
 
       - name: Build the APK
         run: |
           cd mobile
           npm ci
+          npm run www
           npx cap sync android
           cd android
           chmod +x gradlew
@@ -55,7 +68,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Thin Android client — connects to your Open Historia server (Termux on the same phone, or any host on your network). Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). On first launch it finds a Termux server on the same phone automatically, and the app updates itself when a newer build is published here.
+          NOTES="Open Historia for Android. Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). Nothing else to set up: the app connects to a community content node on its own, the same way openhistoria.com does, and streams the world map from it. No server on your phone, no Termux. It updates itself when a newer build is published here.
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
