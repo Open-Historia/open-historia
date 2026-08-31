@@ -187,7 +187,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     });
   }
 
-  return style
+  return style;
 };
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
@@ -223,7 +223,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
             exaggeration: terrainExaggerationForZoom(viewStateRef.current?.zoom ?? 3.5),
           }
         : null,
-    [terrainEnabled, isGlobe, customBg, bgDeclared],
+    [terrainEnabled, customBg, bgDeclared],
   );
   // Retune the exaggeration as the camera comes in. A fixed 15x is what the
   // whole-world view wants — at 12,000 km across, real relief is invisible —
