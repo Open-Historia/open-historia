@@ -71,12 +71,29 @@ export const renderTemplate = (template, variables) =>
     return value == null ? "" : String(value);
   });
 
-export const resolveHelperValues = (helperTemplates, variables) => {
+export const resolveHelperValues = (
+  helperTemplates,
+  variables,
+  { includeKeys = null } = {},
+) => {
+  const requested = includeKeys == null
+    ? null
+    : new Set(
+        (includeKeys instanceof Set ? [...includeKeys] : normalizeArray(includeKeys))
+          .map(normalizeString)
+          .filter(Boolean),
+      );
+  const entries = Object.entries(
+    helperTemplates && typeof helperTemplates === "object" ? helperTemplates : {},
+  ).filter(([key]) => !requested || requested.has(key));
+
   let resolved = {};
 
+  // Preserve the existing two-pass helper semantics exactly. Phase 9.5B only
+  // avoids rendering helper templates that the actual loaded task cannot reach.
   for (let pass = 0; pass < 2; pass += 1) {
     resolved = Object.fromEntries(
-      Object.entries(helperTemplates).map(([key, template]) => [
+      entries.map(([key, template]) => [
         key,
         renderTemplate(template, { ...variables, ...resolved }),
       ]),
@@ -780,20 +797,176 @@ export const buildUnitsSummaryText = (world) => {
   }).join("\n");
 };
 
-// Structures founded during play (world.markers): cities, military bases,
-// bunkers, missile silos, embassies. Listed with coordinates so the model can
-// reference, defend, target, or expand them — and knows their names are taken.
-export const buildMarkersSummaryText = (world) => {
-  const markers = normalizeArray(world?.markers);
-  if (markers.length === 0) return "No structures have been built during play yet.";
-  return markers.slice(0, 60).map((marker) => {
+// Phase 10.1: persistent physical world, bounded object attention. The save keeps
+// every marker; an individual AI task sees only a compact, deterministic subset that
+// is causally/recently relevant plus a rotating background sample. No extra AI call.
+const MARKER_ATTENTION_OPEN_STATUSES = new Set(["planned", "under_construction", "damaged"]);
+const MARKER_ATTENTION_STOP_WORDS = new Set([
+  "about", "after", "again", "against", "along", "another", "because", "before", "being",
+  "between", "current", "during", "event", "forces", "from", "government", "have", "into",
+  "major", "marker", "military", "more", "over", "polity", "should", "state", "their",
+  "there", "these", "they", "this", "through", "under", "with", "world",
+]);
+
+const markerAttentionKey = (value) => normalizeString(value)
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase();
+
+const markerAttentionTokens = (value) => new Set(
+  markerAttentionKey(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
+);
+
+const markerStableHash = (value) => {
+  let hash = 2166136261;
+  const text = String(value ?? "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const compactMarkerNote = (value, maxChars = 180) => {
+  const text = normalizeString(value).replace(/\s+/g, " ");
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(1, maxChars - 1)).trim()}…`;
+};
+
+const markerAttentionLimitForTask = (taskKey) => {
+  const key = normalizeString(taskKey);
+  if (["jumpForward", "autoJumpForward"].includes(key)) return 28;
+  if (key === "gameMaster") return 40;
+  if (key === "actions") return 20;
+  if (["catalystCreation", "catalystExecutor"].includes(key)) return 20;
+  return 16;
+};
+
+const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
+  // readGameStateBundle already gives us canonical world state; avoid a second full
+  // world normalization just to score a bounded marker view.
+  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
+  const recentEvents = normalizeEvents(bundle.events).slice(-12);
+  const recentEventIds = new Set(recentEvents.map((event) => normalizeString(event.id)).filter(Boolean));
+  const pieces = [];
+
+  for (const event of recentEvents) {
+    pieces.push(normalizeString(event.title), compactMarkerNote(event.description, 420));
+  }
+  for (const storyline of normalizeArray(world.storylines).filter((entry) =>
+    ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 20)) {
+    pieces.push(
+      normalizeString(storyline.title),
+      compactMarkerNote(storyline.state || storyline.summary || storyline.note, 260),
+      ...normalizeArray(storyline.participants).slice(0, 8).map(normalizeString),
+    );
+  }
+  for (const war of normalizeArray(world.wars).filter((entry) =>
+    ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 12)) {
+    pieces.push(
+      normalizeString(war.title || war.name || war.id),
+      compactMarkerNote(war.note || war.summary, 220),
+      ...normalizeArray(war.sideA).slice(0, 8).map(normalizeString),
+      ...normalizeArray(war.sideB).slice(0, 8).map(normalizeString),
+    );
+  }
+  for (const action of normalizeActions(bundle.actions).filter((entry) => !entry?.resolved).slice(-10)) {
+    pieces.push(
+      normalizeString(action.title),
+      compactMarkerNote(action.description || action.rawInput || action.text, 320),
+    );
+  }
+
+  const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
+  if (normalizedChat) {
+    pieces.push(...normalizeArray(normalizedChat.countries).slice(0, 8)
+      .map((country) => normalizeString(country?.name || country?.polityKey || country?.code)));
+    for (const message of normalizeArray(normalizedChat.messages).slice(-6)) {
+      pieces.push(normalizeString(message?.speaker), compactMarkerNote(message?.message || message?.text, 320));
+    }
+  }
+
+  const focusText = pieces.filter(Boolean).join("\n");
+  return {
+    focusKey: markerAttentionKey(focusText),
+    focusTokens: markerAttentionTokens(focusText),
+    recentEventIds,
+  };
+};
+
+export const buildMarkersSummaryText = (
+  worldLike,
+  {
+    focusKey = "",
+    focusTokens = new Set(),
+    limit = 16,
+    recentEventIds = new Set(),
+    seed = "",
+  } = {},
+) => {
+  const markers = normalizeArray(worldLike?.markers);
+  if (markers.length === 0) return "No persistent physical world features have been established yet.";
+
+  const boundedLimit = Math.max(1, Math.min(60, Math.trunc(Number(limit) || 16)));
+  const scored = markers.map((marker, index) => {
+    const names = [marker.name, ...normalizeArray(marker.aliases)].map(normalizeString).filter(Boolean);
+    const nameKeys = names.map(markerAttentionKey).filter(Boolean);
+    const blob = [marker.name, ...normalizeArray(marker.aliases), marker.kind, marker.ownerCode, marker.note]
+      .map(normalizeString).filter(Boolean).join(" ");
+    const markerTokens = markerAttentionTokens(blob);
+    let score = 0;
+
+    if (MARKER_ATTENTION_OPEN_STATUSES.has(normalizeString(marker.status).toLowerCase())) score += 260;
+    if (normalizeArray(marker.sourceEventIds).some((eventId) => recentEventIds.has(normalizeString(eventId)))) score += 300;
+    if (focusKey && nameKeys.some((nameKey) => nameKey.length >= 4 && focusKey.includes(nameKey))) score += 520;
+    if (focusKey && normalizeString(marker.ownerCode) && focusKey.includes(markerAttentionKey(marker.ownerCode))) score += 55;
+
+    let overlaps = 0;
+    for (const token of markerTokens) {
+      if (focusTokens.has(token)) overlaps += 1;
+      if (overlaps >= 6) break;
+    }
+    score += overlaps * 34;
+
+    // This changes with the simulation round/task seed, creating a tiny rotating
+    // awareness lane for stable objects that are not currently in the foreground.
+    const rotation = markerStableHash(`${seed}|${marker.id || marker.name}`) % 1000;
+    const touched = normalizeString(marker.updatedDate || marker.foundedAt || marker.updatedAt || marker.createdAt);
+    return { marker, index, rotation, score, touched };
+  });
+
+  scored.sort((a, b) =>
+    b.score - a.score
+    || String(b.touched).localeCompare(String(a.touched))
+    || a.rotation - b.rotation
+    || a.index - b.index);
+
+  const selected = scored.slice(0, boundedLimit).map(({ marker }) => marker);
+  const rows = selected.map((marker) => {
     const lat = Number(marker.lat);
     const lng = Number(marker.lng);
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
       ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
       : "unknown location";
-    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}) at ${coords}${marker.note ? ` — ${marker.note}` : ""}`;
-  }).join("\n");
+    const status = normalizeString(marker.status) || "active";
+    const aliases = normalizeArray(marker.aliases).slice(-3).map(normalizeString).filter(Boolean);
+    const founded = normalizeString(marker.foundedAt);
+    const changed = normalizeString(marker.updatedDate);
+    const dates = [
+      founded ? `founded ${founded}` : "",
+      changed && changed !== founded ? `last changed ${changed}` : "",
+    ].filter(Boolean).join(", ");
+    const note = compactMarkerNote(marker.note, 180);
+    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
+  });
+
+  const omitted = Math.max(0, markers.length - selected.length);
+  if (omitted > 0) {
+    rows.push(`[${omitted} additional persistent world feature${omitted === 1 ? "" : "s"} omitted from this task context; they remain canonical in the save.]`);
+  }
+  return rows.join("\n");
 };
 
 // City coordinates for the model, so troop deployments and events land on the
@@ -994,6 +1167,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
 
 export const buildPromptContext = async (bundle, {
   actionInput = "",
+  actionsToConsolidate = "",
   advisorLimit = 18,
   catalystChoice = "",
   catalystHistory = "",
@@ -1014,140 +1188,302 @@ export const buildPromptContext = async (bundle, {
   gameMasterRequest = "",
   longEventHistoryMaxChars = 0,
   longEventLimit = 24,
+  requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
+  taskKey = "",
 } = {}) => {
-  const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
-  const regionCatalog = await loadRegions();
+  // Phase 9.5B: the save still remembers everything, but each task should only pay
+  // to CONSTRUCT context it can actually see. A null requiredKeys set is the
+  // compatibility path and preserves the legacy "build everything" behavior.
+  const required = requiredKeys == null
+    ? null
+    : new Set(
+        (requiredKeys instanceof Set ? [...requiredKeys] : normalizeArray(requiredKeys))
+          .map(normalizeString)
+          .filter(Boolean),
+      );
+  const wants = (...keys) => !required || keys.some((key) => required.has(key));
+  const result = {};
+  const put = (key, value) => {
+    if (wants(key)) result[key] = value;
+  };
+
   const date = bundle.game.gameDate || "";
   const target = targetDate || date;
-  const worldSummary = await buildWorldSummary(bundle, regionCatalog);
-  const citiesSummary = await buildCityCatalogText(bundle.world);
-  const recentEvents = buildEventHistoryText(bundle.events, {
-    limit: eventLimit,
-    maxChars: eventHistoryMaxChars,
-    world: bundle.world,
-  });
-  const fullConsolidatedHistory = buildConsolidatedHistoryText(bundle.world);
-  const historicalAnchorThreshold = Math.max(0, Math.trunc(Number(historicalAnchorActivationChars) || 0));
-  const historicalAnchorBudget = Math.max(0, Math.trunc(Number(historicalAnchorMaxChars) || 0));
-  const historicalAnchorThresholdReached = Boolean(
-    historicalAnchorThreshold &&
-    historicalAnchorBudget &&
-    fullConsolidatedHistory.length > historicalAnchorThreshold
-  );
-  const candidateHistoricalAnchors = historicalAnchorThresholdReached
-    ? buildHistoricalAnchorText(bundle.events, bundle.world, {
-        maxAnchors: historicalAnchorMaxItems,
-        maxChars: historicalAnchorBudget,
-      })
-    : "";
-  // Do not reserve space for an anchor tier that could not be built (for example,
-  // an older imported save whose consolidation boundary id cannot be resolved). In
-  // that compatibility case, keep the full 24k summary allowance instead of silently
-  // throwing away 6k of useful history.
-  const historicalAttentionActive = Boolean(candidateHistoricalAnchors);
-  const effectiveConsolidatedHistoryMaxChars = historicalAttentionActive && consolidatedHistoryMaxChars
-    ? Math.max(1, Math.max(0, Math.trunc(Number(consolidatedHistoryMaxChars) || 0)) - historicalAnchorBudget)
-    : consolidatedHistoryMaxChars;
-  const consolidatedHistory = effectiveConsolidatedHistoryMaxChars
-    ? buildConsolidatedHistoryText(bundle.world, {
-        maxChars: effectiveConsolidatedHistoryMaxChars,
-        selection: consolidatedHistorySelection,
-      })
-    : fullConsolidatedHistory;
-  const historicalAnchors = historicalAttentionActive ? candidateHistoricalAnchors : "";
-  const campaignRecentEvents = buildEventHistoryText(bundle.events, {
-    limit: longEventLimit,
-    maxChars: longEventHistoryMaxChars,
-    world: bundle.world,
-  });
-  const campaignHistory = [
-    "STORY SO FAR:",
-    consolidatedHistory,
-    ...(historicalAnchors
-      ? [
-          "",
-          "PERMANENT HISTORICAL ANCHORS:",
-          "Selected directly from older canonical event records to preserve major divergences and origins across long campaigns. Current hard-state ledgers and newer canon override any superseded old wording.",
-          historicalAnchors,
-        ]
-      : []),
-    "",
-    "RECENT EVENTS:",
-    campaignRecentEvents,
-  ].join("\n");
-  const allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
-  const actionText = formatActionsForPrompt(bundle.actions);
-  const consolidatedChatIds = new Set(
-    normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
-  );
-  const unconsolidatedChats = normalizeChats(bundle.chats)
-    .filter((entry) => !consolidatedChatIds.has(entry.id));
-  const promptChats = sortDiplomaticChatsByRecentActivity(unconsolidatedChats);
-  const currentChat = normalizedChat ?? promptChats[0] ?? null;
 
-  return {
-    actionInput,
-    actions: actionText,
-    advisorMessages: buildAdvisorHistoryText(bundle.advisor || [], { limit: advisorLimit }),
-    allActions,
-    catalystChoice,
-    catalystDate: date,
-    catalystHistory,
-    catalystOpening,
-    catalystPercent: normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
-      ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
-      : "0%",
-    catalystPremise,
-    citiesSummary,
-    chat: JSON.stringify(promptChats),
-    chatHistory: currentChat
-      ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
-      : "No chat history.",
-    chatHistoryLong: buildDetailedChatHistoryText(promptChats, { limit: chatLimit, maxChars: chatHistoryLongMaxChars }),
-    chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
-    chatSummary: buildChatSummaryText(promptChats),
-    diplomaticContinuity: buildDiplomaticContinuityText(promptChats),
-    chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 }),
-    consolidatedHistory,
-    date,
-    dateReadable: formatDateReadable(date),
-    difficulty: bundle.game.difficulty || "standard",
-    difficultyGuidanceChats: buildDifficultyGuidance(bundle.game.difficulty, "chats"),
-    difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
-    eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),
-    gameMasterRequest,
-    historicalAnchors,
-    historicalAttentionStatus: historicalAttentionActive
+  // Geography is one of the most expensive shared inputs. Load the region catalog
+  // only when a demanded variable actually needs it.
+  const needsRegionCatalog = wants(
+    "worldSummary",
+    "worldSummaryNoCity",
+    "playerPolityRegions",
+    "numberOfRegions",
+  );
+  const regionCatalog = needsRegionCatalog ? await loadRegions() : [];
+
+  let worldSummary = "";
+  if (wants("worldSummary", "worldSummaryNoCity")) {
+    worldSummary = await buildWorldSummary(bundle, regionCatalog);
+  }
+
+  if (wants("citiesSummary")) {
+    result.citiesSummary = await buildCityCatalogText(bundle.world);
+  }
+
+  if (wants("recentEvents")) {
+    result.recentEvents = buildEventHistoryText(bundle.events, {
+      limit: eventLimit,
+      maxChars: eventHistoryMaxChars,
+      world: bundle.world,
+    });
+  }
+
+  // Long-history attention is computed only for tasks that actually render one of
+  // its outputs. The selection/budget semantics are unchanged from 9.4A.
+  const needsLongHistory = wants(
+    "consolidatedHistory",
+    "historicalAnchors",
+    "historicalAttentionStatus",
+    "recentEventsLong",
+  );
+  let consolidatedHistory = "";
+  let historicalAnchors = "";
+  let historicalAttentionStatus = "";
+  if (needsLongHistory) {
+    const fullConsolidatedHistory = buildConsolidatedHistoryText(bundle.world);
+    const historicalAnchorThreshold = Math.max(
+      0,
+      Math.trunc(Number(historicalAnchorActivationChars) || 0),
+    );
+    const historicalAnchorBudget = Math.max(
+      0,
+      Math.trunc(Number(historicalAnchorMaxChars) || 0),
+    );
+    const historicalAnchorThresholdReached = Boolean(
+      historicalAnchorThreshold &&
+      historicalAnchorBudget &&
+      fullConsolidatedHistory.length > historicalAnchorThreshold
+    );
+    const candidateHistoricalAnchors = historicalAnchorThresholdReached
+      ? buildHistoricalAnchorText(bundle.events, bundle.world, {
+          maxAnchors: historicalAnchorMaxItems,
+          maxChars: historicalAnchorBudget,
+        })
+      : "";
+    const historicalAttentionActive = Boolean(candidateHistoricalAnchors);
+    const effectiveConsolidatedHistoryMaxChars =
+      historicalAttentionActive && consolidatedHistoryMaxChars
+        ? Math.max(
+            1,
+            Math.max(0, Math.trunc(Number(consolidatedHistoryMaxChars) || 0))
+              - historicalAnchorBudget,
+          )
+        : consolidatedHistoryMaxChars;
+
+    consolidatedHistory = effectiveConsolidatedHistoryMaxChars
+      ? buildConsolidatedHistoryText(bundle.world, {
+          maxChars: effectiveConsolidatedHistoryMaxChars,
+          selection: consolidatedHistorySelection,
+        })
+      : fullConsolidatedHistory;
+    historicalAnchors = historicalAttentionActive ? candidateHistoricalAnchors : "";
+    historicalAttentionStatus = historicalAttentionActive
       ? `active: ${effectiveConsolidatedHistoryMaxChars || 0} consolidated chars + up to ${historicalAnchorBudget} canonical-anchor chars`
       : historicalAnchorThresholdReached
         ? `fallback: long history detected (${fullConsolidatedHistory.length} chars) but no canonical anchor set was resolvable; retaining ${consolidatedHistoryMaxChars || 0}-char summary allowance`
-        : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`,
-    language: bundle.world.language || bundle.game.language || "English",
-    lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
-    markersSummary: buildMarkersSummaryText(bundle.world),
-    numberOfRegions: String(regionCatalog.length),
-    plannedActions: buildActionHistoryText(bundle.actions),
-    playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
-    playerPolity: bundle.game.country || "Unknown polity",
-    playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),
-    recentEvents,
-    recentEventsLong: campaignHistory,
-    recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
-    respondingPolityName: respondingPolityName || currentChat?.countries.find((country) => country.name !== bundle.game.country)?.name || "",
-    round: String(bundle.game.round || 1),
-    simulationRules: normalizeString(bundle.world.simulationRules) || "No extra simulation rules were provided.",
-    startDate: bundle.game.startDate || "",
-    targetDate: target,
-    targetDateReadable: formatDateReadable(target),
-    unitsSummary: buildUnitsSummaryText(bundle.world),
-    worldBeforeRoundOne: normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
-    // Compatibility alias for older/frozen prompt packs that referenced the pre-game
-    // briefing by its former variable name. Keep both names pointed at the same
-    // canonical save field so legacy campaigns do not silently lose their starting lore.
-    worldBeforeRoundOneText: normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
-    worldSummary,
-    worldSummaryNoCity: worldSummary,
-  };
+        : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`;
+
+    put("consolidatedHistory", consolidatedHistory);
+    put("historicalAnchors", historicalAnchors);
+    put("historicalAttentionStatus", historicalAttentionStatus);
+
+    if (wants("recentEventsLong")) {
+      const campaignRecentEvents = buildEventHistoryText(bundle.events, {
+        limit: longEventLimit,
+        maxChars: longEventHistoryMaxChars,
+        world: bundle.world,
+      });
+      result.recentEventsLong = [
+        "STORY SO FAR:",
+        consolidatedHistory,
+        ...(historicalAnchors
+          ? [
+              "",
+              "PERMANENT HISTORICAL ANCHORS:",
+              "Selected directly from older canonical event records to preserve major divergences and origins across long campaigns. Current hard-state ledgers and newer canon override any superseded old wording.",
+              historicalAnchors,
+            ]
+          : []),
+        "",
+        "RECENT EVENTS:",
+        campaignRecentEvents,
+      ].join("\n");
+    }
+  }
+
+  if (wants("actions")) {
+    result.actions = formatActionsForPrompt(bundle.actions);
+  }
+  if (wants("allActions")) {
+    result.allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
+  }
+  if (wants("plannedActions")) {
+    result.plannedActions = buildActionHistoryText(bundle.actions);
+  }
+
+  // Chat normalization/sorting can become substantial in long campaigns. Do it
+  // only for variables that expose chat continuity, or when a consolidation fallback
+  // actually needs to build its own chat batch.
+  const needsChatState = wants(
+    "chat",
+    "chatHistory",
+    "chatHistoryLong",
+    "chatParticipants",
+    "chatSummary",
+    "diplomaticContinuity",
+    "lastSpeaker",
+    "respondingPolityName",
+  ) || (wants("chatsToConsolidate") && !chatsToConsolidate);
+
+  let promptChats = [];
+  let currentChat = null;
+  if (needsChatState) {
+    const normalizedChat =
+      chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
+    const consolidatedChatIds = new Set(
+      normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
+    );
+    const unconsolidatedChats = normalizeChats(bundle.chats)
+      .filter((entry) => !consolidatedChatIds.has(entry.id));
+    promptChats = sortDiplomaticChatsByRecentActivity(unconsolidatedChats);
+    currentChat = normalizedChat ?? promptChats[0] ?? null;
+  }
+
+  if (wants("chat")) result.chat = JSON.stringify(promptChats);
+  if (wants("chatHistory")) {
+    result.chatHistory = currentChat
+      ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
+      : "No chat history.";
+  }
+  if (wants("chatHistoryLong")) {
+    result.chatHistoryLong = buildDetailedChatHistoryText(promptChats, {
+      limit: chatLimit,
+      maxChars: chatHistoryLongMaxChars,
+    });
+  }
+  if (wants("chatParticipants")) {
+    result.chatParticipants =
+      currentChat?.countries?.map((country) => country.name).join(", ") || "";
+  }
+  if (wants("chatSummary")) result.chatSummary = buildChatSummaryText(promptChats);
+  if (wants("diplomaticContinuity")) {
+    result.diplomaticContinuity = buildDiplomaticContinuityText(promptChats);
+  }
+  if (wants("lastSpeaker")) {
+    result.lastSpeaker = currentChat?.messages?.at(-1)?.speaker || "";
+  }
+  if (wants("respondingPolityName")) {
+    result.respondingPolityName =
+      respondingPolityName ||
+      currentChat?.countries.find((country) => country.name !== bundle.game.country)?.name ||
+      "";
+  }
+  if (wants("chatsToConsolidate")) {
+    result.chatsToConsolidate =
+      chatsToConsolidate ||
+      buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 });
+  }
+
+  if (wants("eventsToConsolidate")) {
+    result.eventsToConsolidate =
+      eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 });
+  }
+
+  if (wants("advisorMessages")) {
+    result.advisorMessages = buildAdvisorHistoryText(bundle.advisor || [], {
+      limit: advisorLimit,
+    });
+  }
+
+  // Cheap scalars are still demand-gated so diagnostics can verify that 9.5B did
+  // not merely skip the obvious expensive builders while materializing every alias.
+  put("actionInput", actionInput);
+  put("actionsToConsolidate", actionsToConsolidate);
+  put("catalystChoice", catalystChoice);
+  put("catalystDate", date);
+  put("catalystHistory", catalystHistory);
+  put("catalystOpening", catalystOpening);
+  if (wants("catalystPercent")) {
+    result.catalystPercent =
+      normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
+        ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
+        : "0%";
+  }
+  put("catalystPremise", catalystPremise);
+  put("date", date);
+  if (wants("dateReadable")) result.dateReadable = formatDateReadable(date);
+  put("difficulty", bundle.game.difficulty || "standard");
+  if (wants("difficultyGuidanceChats")) {
+    result.difficultyGuidanceChats = buildDifficultyGuidance(
+      bundle.game.difficulty,
+      "chats",
+    );
+  }
+  if (wants("difficultyGuidanceJumpForward")) {
+    result.difficultyGuidanceJumpForward = buildDifficultyGuidance(
+      bundle.game.difficulty,
+      "jump",
+    );
+  }
+  put("gameMasterRequest", gameMasterRequest);
+  put("language", bundle.world.language || bundle.game.language || "English");
+  if (wants("markersSummary")) {
+    const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
+    result.markersSummary = buildMarkersSummaryText(bundle.world, {
+      ...markerAttention,
+      limit: markerAttentionLimitForTask(taskKey),
+      seed: `${taskKey || "compatibility"}|${target}|${bundle.game.round || 1}|${bundle.game.country || ""}`,
+    });
+  }
+  if (wants("numberOfRegions")) {
+    result.numberOfRegions = String(regionCatalog.length);
+  }
+  put("playerPolity", bundle.game.country || "Unknown polity");
+  if (wants("playerPolityRegions")) {
+    result.playerPolityRegions = await buildPlayerPolityRegionsText(
+      bundle,
+      regionCatalog,
+    );
+  }
+  if (wants("recentRoundsWithDates")) {
+    result.recentRoundsWithDates = buildRecentRoundsWithDates(bundle);
+  }
+  put("round", String(bundle.game.round || 1));
+  put(
+    "simulationRules",
+    normalizeString(bundle.world.simulationRules) ||
+      "No extra simulation rules were provided.",
+  );
+  put("startDate", bundle.game.startDate || "");
+  put("targetDate", target);
+  if (wants("targetDateReadable")) {
+    result.targetDateReadable = formatDateReadable(target);
+  }
+
+  if (wants("playerBattalionSummaries", "unitsSummary")) {
+    const unitsText = buildUnitsSummaryText(bundle.world);
+    put("playerBattalionSummaries", unitsText);
+    put("unitsSummary", unitsText);
+  }
+
+  const worldBeforeRoundOne =
+    normalizeString(bundle.world.startingTimelineText) ||
+    "No pre-game world briefing was provided.";
+  put("worldBeforeRoundOne", worldBeforeRoundOne);
+  put("worldBeforeRoundOneText", worldBeforeRoundOne);
+  put("worldSummary", worldSummary);
+  put("worldSummaryNoCity", worldSummary);
+
+  return result;
 };

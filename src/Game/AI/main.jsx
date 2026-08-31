@@ -79,6 +79,28 @@ function normalizeGeminiModel(model) {
     return (model ?? "").replace(/^models\//, "").trim();
 }
 
+function buildGeminiThinkingConfig(model, reasoningEnabled) {
+    if (!reasoningEnabled) return null;
+
+    const normalized = normalizeGeminiModel(model).toLowerCase();
+
+    // Gemini 3.x uses thinkingLevel. The previous numeric thinkingBudget transport
+    // is a Gemini 2.5-era control and can be rejected / behave unpredictably on 3.x.
+    // "medium" is the closest intent match to the old fixed 8192-token budget.
+    if (/^gemini-3(?:\.|$)/.test(normalized)) {
+        return { thinkingLevel: "medium" };
+    }
+
+    // Gemini 2.5 still uses the numeric budget API.
+    if (/^gemini-2\.5(?:-|$)/.test(normalized)) {
+        return { thinkingBudget: 8192 };
+    }
+
+    // Unknown/future Gemini models: do not guess a provider-specific control.
+    // Let the model's default reasoning policy apply.
+    return null;
+}
+
 async function readErrorPayload(response) {
     const text = await response.text();
 
@@ -98,6 +120,121 @@ function extractErrorMessage(payload, fallback) {
     if (payload.message) return payload.message;
     if (typeof payload.rawText === "string" && payload.rawText.trim()) return payload.rawText.trim();
     return fallback;
+}
+
+function stringifyDiagnostic(value, maxChars = 24000) {
+    let text = "";
+    try {
+        text = JSON.stringify(value, null, 2);
+    } catch {
+        text = String(value ?? "");
+    }
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}\n...[diagnostic truncated after ${maxChars} chars]`;
+}
+
+function geminiProviderDetailText(payload) {
+    const details =
+        payload?.error?.details ??
+        payload?.details ??
+        payload?.error?.status ??
+        "";
+    if (!details || (Array.isArray(details) && !details.length)) return "";
+    return stringifyDiagnostic(details, 12000);
+}
+
+function summarizeSchemaShape(schema) {
+    const stats = {
+        nodes: 0,
+        objects: 0,
+        arrays: 0,
+        properties: 0,
+        requiredEntries: 0,
+        maxDepth: 0,
+        keywords: new Set(),
+    };
+
+    const walk = (value, depth = 0) => {
+        if (!value || typeof value !== "object") return;
+        stats.nodes += 1;
+        stats.maxDepth = Math.max(stats.maxDepth, depth);
+
+        if (Array.isArray(value)) {
+            for (const entry of value) walk(entry, depth + 1);
+            return;
+        }
+
+        const type = String(value.type ?? "").toLowerCase();
+        if (type === "object") stats.objects += 1;
+        if (type === "array") stats.arrays += 1;
+
+        if (value.properties && typeof value.properties === "object") {
+            stats.properties += Object.keys(value.properties).length;
+        }
+        if (Array.isArray(value.required)) {
+            stats.requiredEntries += value.required.length;
+        }
+
+        for (const key of Object.keys(value)) stats.keywords.add(key);
+        for (const child of Object.values(value)) walk(child, depth + 1);
+    };
+
+    walk(schema, 0);
+    return {
+        nodes: stats.nodes,
+        objects: stats.objects,
+        arrays: stats.arrays,
+        properties: stats.properties,
+        requiredEntries: stats.requiredEntries,
+        maxDepth: stats.maxDepth,
+        keywords: [...stats.keywords].sort(),
+        serializedChars: (() => {
+            try { return JSON.stringify(schema).length; } catch { return -1; }
+        })(),
+    };
+}
+
+function logGeminiRejectedRequest({
+    response,
+    payload,
+    model,
+    tool,
+    geminiSchema,
+    generationConfig,
+    customParams,
+}) {
+    const providerMessage = extractErrorMessage(
+        payload,
+        `Gemini API request failed (${response?.status ?? "unknown"})`,
+    );
+
+    const diagnostic = {
+        httpStatus: response?.status ?? null,
+        httpStatusText: response?.statusText ?? "",
+        model,
+        providerMessage,
+        providerStatus: payload?.error?.status ?? payload?.status ?? "",
+        providerDetails: payload?.error?.details ?? payload?.details ?? [],
+        transport: tool
+            ? (tool.name === "submit_pregame_history" ? "structured-output" : "function-calling")
+            : "text",
+        tool: tool ? {
+            name: tool.name,
+            descriptionChars: String(tool.description ?? "").length,
+            schemaShape: summarizeSchemaShape(geminiSchema),
+            schema: geminiSchema,
+        } : null,
+        generationConfig: generationConfig ?? null,
+        customParamKeys: Object.keys(customParams ?? {}),
+    };
+
+    // Intentionally do NOT log the request URL/API key, prompt text, or chat history.
+    console.error(
+        "[OH Gemini diagnostics] Provider rejected request.\n" +
+        stringifyDiagnostic(diagnostic),
+    );
+
+    return diagnostic;
 }
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
@@ -233,6 +370,78 @@ function toGeminiSchema(value) {
         .filter(([key]) => key !== "additionalProperties" && key !== "$schema")
         .map(([key, entry]) => [key, toGeminiSchema(entry)]),
     );
+}
+
+const GEMINI_STRUCTURED_SCHEMA_KEYS = new Set([
+    "$id",
+    "$defs",
+    "$ref",
+    "$anchor",
+    "type",
+    "format",
+    "title",
+    "description",
+    "enum",
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "minimum",
+    "maximum",
+    "anyOf",
+    "oneOf",
+    "properties",
+    "additionalProperties",
+    "required",
+    "propertyOrdering",
+]);
+
+function toGeminiStructuredSchema(value) {
+    if (Array.isArray(value)) return value.map(toGeminiStructuredSchema);
+    if (!value || typeof value !== "object") return value;
+
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) {
+        // Gemini structured output accepts a documented JSON-Schema subset.
+        // Strip unsupported validation-only keywords (e.g. minLength) here;
+        // native OpenHistoria validation still enforces the full internal schema.
+        if (!GEMINI_STRUCTURED_SCHEMA_KEYS.has(key)) continue;
+
+        if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+            out.properties = Object.fromEntries(
+                Object.entries(entry).map(([name, schema]) => [name, toGeminiStructuredSchema(schema)]),
+            );
+            continue;
+        }
+
+        out[key] = toGeminiStructuredSchema(entry);
+    }
+    return out;
+}
+
+function buildGeminiToolResponseSchema(tool) {
+    const schema = toGeminiStructuredSchema(tool?.schema);
+    if (!schema || typeof schema !== "object") return schema;
+
+    // Empirically isolated on Gemini 3.5 Flash-Lite:
+    // the full pregame schema is accepted with events<=10 and canonicalUpdates<=12,
+    // while the same schema at the previous 12/32 capacity is rejected at the API
+    // boundary with INVALID_ARGUMENT before generation. Keep the canonical internal
+    // schema unchanged; this is only a Gemini provider-facing output-capacity limit.
+    if (tool?.name === "submit_pregame_history") {
+        const properties = schema.properties;
+        if (properties?.events && typeof properties.events === "object") {
+            properties.events.maxItems = Math.min(Number(properties.events.maxItems) || 10, 10);
+        }
+        if (properties?.canonicalUpdates && typeof properties.canonicalUpdates === "object") {
+            properties.canonicalUpdates.maxItems = Math.min(
+                Number(properties.canonicalUpdates.maxItems) || 12,
+                12,
+            );
+        }
+    }
+
+    return schema;
 }
 
 function getGeminiUrl(model, apiKey) {
@@ -565,7 +774,9 @@ async function callGemini(systemPrompt, history, {
                 contents: history,
                 generationConfig: {
                     maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
-                    ...(reasoningEnabled ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+                    ...(buildGeminiThinkingConfig(model, reasoningEnabled)
+                        ? { thinkingConfig: buildGeminiThinkingConfig(model, reasoningEnabled) }
+                        : {}),
                 },
                 ...customParams,
             }),
@@ -581,38 +792,76 @@ async function callGemini(systemPrompt, history, {
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
+        const geminiThinkingConfig = buildGeminiThinkingConfig(model, reasoningEnabled);
+        const generationConfig = (geminiThinkingConfig || Number(maxTokens) > 0)
+            ? {
+                ...(Number(maxTokens) > 0
+                    ? { maxOutputTokens: Math.max(1, Number(maxTokens)) }
+                    : {}),
+                ...(geminiThinkingConfig
+                    ? { thinkingConfig: geminiThinkingConfig }
+                    : {}),
+            }
+            : null;
+
+        const usePregameStructuredOutput = tool?.name === "submit_pregame_history";
+
+        // IMPORTANT:
+        // OpenHistoria's established Gemini structured tasks (jumpForward, actions,
+        // GM, stats, directors, etc.) continue to use the original forced function-
+        // calling transport. Those schemas were already working in production and
+        // several are intentionally much larger/deeper than Gemini Structured Output
+        // accepts.
+        //
+        // ONLY Round Zero uses Structured Output. We empirically isolated that its
+        // former function declaration/schema transport was rejected on Gemini 3.5
+        // Flash-Lite, while the provider-safe structured-output envelope succeeds.
+        const geminiSchema = tool
+            ? (usePregameStructuredOutput
+                ? buildGeminiToolResponseSchema(tool)
+                : toGeminiSchema(tool.schema))
+            : null;
+
+        const requestSystemPrompt = usePregameStructuredOutput
+            ? `${systemPrompt}
+
+[Gemini transport note] Return one JSON object matching the enforced response schema. Do not attempt to call an external function; OpenHistoria will validate and apply the object natively.`
+            : systemPrompt;
+
+        const requestGenerationConfig = usePregameStructuredOutput
+            ? {
+                ...(generationConfig || {}),
+                responseFormat: {
+                    text: {
+                        mimeType: "APPLICATION_JSON",
+                        schema: geminiSchema,
+                    },
+                },
+            }
+            : generationConfig;
+
+        const requestBody = {
+            system_instruction: { parts: [{ text: requestSystemPrompt }] },
+            contents: history,
+            ...(requestGenerationConfig ? { generationConfig: requestGenerationConfig } : {}),
+            ...customParams,
+            ...(tool && !usePregameStructuredOutput ? {
+                tools: [{ functionDeclarations: [{
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: geminiSchema,
+                }] }],
+                toolConfig: { functionCallingConfig: {
+                    mode: "ANY",
+                    allowedFunctionNames: [tool.name],
+                } },
+            } : {}),
+        };
+
         const response = await fetch(getGeminiUrl(model, apiKey), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: history,
-                // Lightweight structured tasks can explicitly disable reasoning and
-                // cap output; long simulation turns still omit maxTokens and keep the
-                // provider/model defaults.
-                ...((reasoningEnabled || Number(maxTokens) > 0)
-                    ? { generationConfig: {
-                        ...(Number(maxTokens) > 0
-                            ? { maxOutputTokens: Math.max(1, Number(maxTokens)) }
-                            : {}),
-                        ...(reasoningEnabled
-                            ? { thinkingConfig: { thinkingBudget: 8192 } }
-                            : {}),
-                    } }
-                    : {}),
-                ...customParams,
-                ...(tool ? {
-                    tools: [{ functionDeclarations: [{
-                        name: tool.name,
-                        description: tool.description,
-                        parameters: toGeminiSchema(tool.schema),
-                    }] }],
-                    toolConfig: { functionCallingConfig: {
-                        mode: "ANY",
-                        allowedFunctionNames: [tool.name],
-                    } },
-                } : {}),
-            }),
+            body: JSON.stringify(requestBody),
             signal,
         });
 
@@ -634,17 +883,52 @@ async function callGemini(systemPrompt, history, {
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
+            const message = extractErrorMessage(
+                payload,
+                `Gemini API request failed (${response.status})`,
+            );
+
+            if (response.status === 400) {
+                logGeminiRejectedRequest({
+                    response,
+                    payload,
+                    model,
+                    tool,
+                    geminiSchema,
+                    generationConfig: requestGenerationConfig,
+                    customParams,
+                });
+
+                const providerDetails = geminiProviderDetailText(payload);
+                throw new Error(
+                    providerDetails
+                        ? `${message}\nGemini provider details: ${providerDetails}`
+                        : message,
+                );
+            }
+
+            throw new Error(message);
         }
 
         const data = await response.json();
-        if (tool) {
-            const toolInput = extractGeminiToolInput(data, tool);
-            if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
-            return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null };
-        }
-        const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
+        const responseText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
 
+        if (tool) {
+            if (usePregameStructuredOutput) {
+                if (!responseText) {
+                    throw new Error("Gemini pregame structured response did not contain JSON text.");
+                }
+                return { rawText: responseText, toolInput: null };
+            }
+
+            const toolInput = extractGeminiToolInput(data, tool);
+            return {
+                rawText: responseText,
+                toolInput: toolInput || null,
+            };
+        }
+
+        const text = responseText;
         if (!text) {
             throw new Error("Gemini response did not contain text.");
         }

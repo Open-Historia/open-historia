@@ -1,11 +1,13 @@
 /*!
  * open historia enhanced — native territory director
- * v0.1.1
+ * v0.1.2
  *
  * regionOwnershipOverrides is what the map actually paints, so it is de-facto
  * control. regionClaimants is already the native striped dispute layer. this pass
  * finally stops treating every muddy wartime occupation like a peace treaty.
  */
+
+const VERSION = "0.1.2";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -32,7 +34,7 @@ const NEGATED_CONTROL_CHANGE_PATTERN =
   /\b(?:does not|did not|doesn't|didn't|fails? to|failed to|without|neither side|no side)\b[^.!?]{0,90}\b(?:take|gain|secure|establish|assume|assert|wrest|impose|capture|seize|occupy)\w*\b[^.!?]{0,50}\bcontrol\b/i;
 
 const CONTEST_PATTERN =
-  /\b(battle|clash|combat|skirmish|firefight|fighting|contested?|disputed?|offensive|counteroffensive|attack|assault|siege|front(?:line)?|bridgehead|beachhead|foothold|incursion|cross(?:es|ed|ing)? the border|cross(?:es|ed|ing)? the frontier)\b/i;
+  /\b(battl\w*|clash\w*|combat|skirmish\w*|firefight\w*|fight\w*|contested?|disputed?|offensive|counteroffensive|attack\w*|assault\w*|siege|front(?:line)?|bridgehead|beachhead|foothold|incursion|insurrect\w*|uprising|rebellion|revolt\w*|engag\w*|seiz\w*|cross(?:es|ed|ing)? the border|cross(?:es|ed|ing)? the frontier)\b/i;
 
 const CLEAR_CONTEST_PATTERN =
   /\b(ceasefire|armistice|peace|withdraw\w*|retreat\w*|evacuat\w*|pulls? back|pulled back|disengag\w*|demilitariz\w*|front dissolves|fighting ends|hostilities end|stand(?:s)? down)\b/i;
@@ -229,10 +231,98 @@ const sanitizeDirectorOrders = ({ events, orders }) => {
   return { acceptedByEvent, diagnostics };
 };
 
+const runNativeTerritoryDirectorSelfTests = () => {
+  const easterEvent = {
+    title: "The Easter Rising Erupts in Dublin",
+    description:
+      "Armed nationalist and republican volunteers stage a coordinated insurrection in Dublin, seizing the General Post Office and proclaiming the establishment of an independent Irish Republic. British garrison troops and artillery are swiftly deployed to seal off the city center and engage insurgent strongholds, triggering heavy urban skirmishing across the capital over the subsequent week.",
+    impacts: {
+      regionTransfers: [],
+      regionControlOps: [],
+      unitOps: [],
+    },
+  };
+
+  const easterOrders = [{
+    eventIndex: 0,
+    regionControlOps: [{
+      actorCode: "Ireland",
+      op: "contest",
+      regionName: "Dublin",
+      fromCode: "British Empire",
+      regionId: "Dublin",
+      note: "Easter Rising in Dublin",
+    }],
+  }];
+
+  const easterResult = sanitizeDirectorOrders({
+    events: [easterEvent],
+    orders: easterOrders,
+  });
+  const easterAccepted = easterResult.acceptedByEvent.get(0) || [];
+
+  const sameActorResult = sanitizeDirectorOrders({
+    events: [easterEvent],
+    orders: [{
+      eventIndex: 0,
+      regionControlOps: [{
+        actorCode: "British Empire",
+        op: "contest",
+        fromCode: "British Empire",
+        regionId: "Dublin",
+      }],
+    }],
+  });
+
+  const quietEvent = {
+    title: "Railway Officials Convene",
+    description: "Officials review freight timetables and administrative procedures.",
+    impacts: {
+      regionTransfers: [],
+      regionControlOps: [],
+      unitOps: [],
+    },
+  };
+
+  const cases = [
+    {
+      name: "Easter Rising language supports Dublin contest",
+      pass:
+        hasTerritorialContent(easterEvent) &&
+        easterAccepted.length === 1 &&
+        easterAccepted[0]?.op === "contest",
+      detail: easterResult.diagnostics.map((row) => `${row.action}:${row.reason}`).join(" | "),
+    },
+    {
+      name: "same actor cannot contest itself",
+      pass:
+        (sameActorResult.acceptedByEvent.get(0) || []).length === 0 &&
+        sameActorResult.diagnostics.some((row) =>
+          String(row.reason || "").includes("different nonblank")
+        ),
+      detail: sameActorResult.diagnostics.map((row) => `${row.action}:${row.reason}`).join(" | "),
+    },
+    {
+      name: "administrative meeting is not territorial",
+      pass: hasTerritorialContent(quietEvent) === false,
+      detail: "no territorial cue",
+    },
+  ];
+
+  const passed = cases.every((entry) => entry.pass);
+  console.table(cases);
+  console.info(
+    `[OH Native Territory Director self-test] ${passed ? "PASS" : "FAIL"} — ` +
+    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
+  );
+  return { passed, cases };
+};
+
 const publishDiagnostics = ({ candidates = [], analysis = null, eventOrders = [], diagnostics = [], skippedReason = "" } = {}) => {
   if (typeof window === "undefined") return;
   window.__OH_NATIVE_TERRITORY_DIRECTOR__ = {
-    version: "0.1.1",
+    version: VERSION,
+    selfTest: () => runNativeTerritoryDirectorSelfTests(),
     last: () => ({
       candidateCount: candidates.length,
       candidateTitles: candidates.map(({ event, index }) => ({
@@ -246,6 +336,8 @@ const publishDiagnostics = ({ candidates = [], analysis = null, eventOrders = []
     }),
   };
 };
+
+publishDiagnostics();
 
 export const directGeneratedTerritoryOps = async ({
   events = [],
@@ -268,7 +360,7 @@ export const directGeneratedTerritoryOps = async ({
       diagnostics: converted.diagnostics,
       skippedReason,
     });
-    console.groupCollapsed(`[OH Native Territory Director v0.1.1] ${candidates.length} territorial event(s)`);
+    console.groupCollapsed(`[OH Native Territory Director v${VERSION}] ${candidates.length} territorial candidate(s)`);
     console.info(skippedReason);
     if (converted.diagnostics.length > 0) console.table(converted.diagnostics);
     console.groupEnd();
@@ -328,7 +420,13 @@ export const directGeneratedTerritoryOps = async ({
     diagnostics,
   });
 
-  console.groupCollapsed(`[OH Native Territory Director v0.1.1] ${candidates.length} territorial event(s)`);
+  const acceptedCount = [...sanitized.acceptedByEvent.values()]
+    .reduce((sum, ops) => sum + normalizeArray(ops).length, 0);
+
+  console.groupCollapsed(
+    `[OH Native Territory Director v${VERSION}] ${candidates.length} territorial candidate(s); ` +
+    `${acceptedCount} control op(s) accepted`,
+  );
   if (diagnostics.length > 0) console.table(diagnostics);
   else console.info("no territorial control operations were added this turn.");
   console.groupEnd();

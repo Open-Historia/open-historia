@@ -1,13 +1,13 @@
 /*!
  * open historia enhanced — native timeline curator
- * v0.4.0 — deterministic live build
+ * v0.5.3 — deterministic live build
  *
  * the ai may suggest that an event is redundant or boring.
  * javascript now checks whether that opinion deserves to survive contact
  * with reality before we even think about deleting anything.
  */
 
-const VERSION = "0.4.0-live";
+const VERSION = "0.5.4-live";
 
 const CONFIG = Object.freeze({
   historyLookbackEvents: 80,
@@ -22,6 +22,7 @@ const CONFIG = Object.freeze({
   saturationHardCount: 4,
   nativeProcessFillerConfidenceFloor: 0.82,
   saturatedIncrementalConfidenceFloor: 0.82,
+  saturatedRoutineMilitaryConfidenceFloor: 0.80,
 
   lowValueIncrementalConfidenceFloor: 0.88,
   lowValueIncrementalMinimumPriorCount: 2,
@@ -83,15 +84,28 @@ const structuredImpactReasons = (event) => {
 
   const result = [];
 
+  // Hard mechanical consequences deserve fail-open protection because dropping the
+  // event would otherwise erase an actual map/control/unit/object/chat transition.
   for (const key of [
     "regionTransfers",
-    "polityChanges",
+    "regionControlOps",
     "unitOps",
     "markerOps",
     "createdChats",
   ]) {
     if (asArray(impacts[key]).length) result.push(key);
   }
+
+  // Polity lifecycle transitions are equally hard. A generic operation="update"
+  // is deliberately NOT an automatic KEEP: models sometimes decorate an otherwise
+  // redundant debate/review with a tiny stability/tag tweak. Such soft metadata/stat
+  // updates must earn the event's timeline slot through the normal semantic gates.
+  const hardPolityLifecycle = asArray(impacts.polityChanges)
+    .some((change) =>
+      ["create", "rename", "restore", "dissolve"]
+        .includes(normalizeString(change?.operation).toLowerCase()),
+    );
+  if (hardPolityLifecycle) result.push("polityLifecycle");
 
   return result;
 };
@@ -186,10 +200,56 @@ const isProspectiveOutcomeEvidence = (event, evidence) => {
 // this is not a generic blacklist; it protects material recurrence from the
 // "yeah yeah same storyline" garbage disposal.
 
+const MATERIAL_RECURRENCE_TERM_RE =
+  /\b(?:incident|incidents|clash|clashes|skirmish|skirmishes|strike|strikes|protest|protests|riot|riots|unrest|detention|detentions|arrest|arrests|sanction|sanctions|embargo|blockade|shortage|shortages|disruption|disruptions|breakdown|breakdowns|failure|failures|casualty|casualties|killed|wounded|violence|violent|mutiny|mutinies|default|bankruptcy|bankruptcies|epidemic|outbreak|sabotage|collision|accident|losses|walkout|walkouts|shutdown|suspension|withdrawal)\b/g;
+
+const recurrenceCueIsNegated = (text, cueIndex) => {
+  const prefix = text
+    .slice(Math.max(0, cueIndex - 72), cueIndex)
+    .trimEnd();
+
+  return /(?:\bwithout|\bno|\bnot|\bneither|\babsence of|\bfree of|\bavoided|\baverted|\bprevented)(?:\s+[a-z0-9]+){0,5}$/.test(
+    prefix,
+  );
+};
+
 const hasMaterialRecurrenceCue = (event) => {
   const text = normalizeText(eventText(event));
+  if (!text) return false;
 
-  return /\b(?:incident|incidents|clash|clashes|skirmish|skirmishes|strike|strikes|protest|protests|riot|riots|unrest|detention|detentions|arrest|arrests|sanction|sanctions|embargo|blockade|shortage|shortages|disruption|disruptions|breakdown|breakdowns|failure|failures|casualty|casualties|killed|wounded|violence|violent|mutiny|mutinies|default|bankruptcy|bankruptcies|epidemic|outbreak|sabotage|collision|accident|losses|walkout|walkouts|shutdown|suspension|withdrawal)\b/.test(
+  MATERIAL_RECURRENCE_TERM_RE.lastIndex = 0;
+  let match;
+
+  while ((match = MATERIAL_RECURRENCE_TERM_RE.exec(text))) {
+    if (!recurrenceCueIsNegated(text, match.index)) return true;
+  }
+
+  return false;
+};
+
+// Routine military recurrence is where saturated war storylines most often
+// game the generic recurrence safety valve: another probe/skirmish/artillery
+// exchange gets labelled "recurrence matters" despite changing nothing. This
+// cue never drops an event by itself; it only participates in the saturated,
+// high-confidence, incremental/no-qualitative-advance gate below.
+const hasRoutineMilitaryContinuationCue = (event) => {
+  const text = normalizeText(eventText(event));
+  if (!text) return false;
+
+  const routineMilitaryNoun =
+    /\b(?:artillery|barrage|bombardment|counter battery|counter-battery|patrol|patrols|probe|probing|skirmish|skirmishes|trench|trenches|frontline|frontlines|front line|front lines|entrenchment|entrenchments|cantonment|cantonments)\b/.test(text);
+
+  const continuationFrame =
+    /\b(?:continue|continues|continued|continuing|ongoing|periodic|sporadic|localized|localised|routine|again|renewed|exchange|exchanges|probe|probing|patrol|patrols|skirmish|skirmishes)\b/.test(text);
+
+  return routineMilitaryNoun && continuationFrame;
+};
+
+const hasStrongMilitaryConsequenceCue = (event) => {
+  const text = normalizeText(eventText(event));
+  if (!text) return false;
+
+  return /\b(?:breakthrough|breaks through|breach|breaches|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|retreat|retreats|retreated|withdrawal|withdraws|withdrew|encircle|encirclement|surrender|surrenders|capitulat(?:e|es|ed|ion)|collapse|collapses|collapsed|destroy(?:s|ed|ing)|casualty|casualties|killed|wounded|losses|annihilat(?:e|es|ed|ion)|ceasefire|armistice|occupation|liberat(?:e|es|ed|ion)|control changes|changes control|front collapses|offensive begins|major offensive|general offensive)\b/.test(
     text,
   );
 };
@@ -724,6 +784,12 @@ const nativeObservableOutcomeGrounded =
   const materialRecurrenceCue =
     hasMaterialRecurrenceCue(event);
 
+  const routineMilitaryContinuationCue =
+    hasRoutineMilitaryContinuationCue(event);
+
+  const strongMilitaryConsequenceCue =
+    hasStrongMilitaryConsequenceCue(event);
+
   const establishedLowValueIncremental =
     recentStorylineCount >=
       CONFIG.lowValueIncrementalMinimumPriorCount &&
@@ -767,8 +833,10 @@ const nativeObservableOutcomeGrounded =
   let enforcementReason = "default KEEP";
   let hard = false;
 
-  // impacts always win. if the event actually mutates the world, timeline space
-  // is the least of our fucking concerns.
+  // Hard structured impacts always win. Soft polity operation="update" metadata/stat
+  // tweaks do not: they must earn the event's existence through the semantic gates,
+  // otherwise a model can smuggle repetitive filler into canon by attaching a tiny
+  // arbitrary stability/tag update.
   if (impacts.length) {
     route = "STRUCTURED_IMPACT_KEEP";
 
@@ -948,6 +1016,58 @@ else {
       "high-confidence incremental continuation + no qualitative advance/worthwhile value/personality/material recurrence";
   }
 
+  // Universal routine-military no-delta gate. Saturation is useful evidence but
+  // must NOT be required: otherwise the exact same artillery/patrol/probe loop
+  // escapes as soon as its recent count cools from "saturated" to "busy", then
+  // rebuilds the saturation again. If the analyst itself says the event is
+  // incremental and not a qualitative advance, and the prose contains no concrete
+  // military consequence, recurrence/grounding/worthwhile labels cannot buy a card.
+  if (
+    wouldAction === "KEEP" &&
+    impacts.length === 0 &&
+    model.confidence >= CONFIG.saturatedRoutineMilitaryConfidenceFloor &&
+    model.incrementalProcess === true &&
+    model.qualitativeAdvance === false &&
+    model.personalityTexture === false &&
+    routineMilitaryContinuationCue &&
+    !strongMilitaryConsequenceCue
+  ) {
+    wouldAction = "DROP";
+    route = "ROUTINE_MILITARY_NO_DELTA";
+
+    enforcementReason =
+      `routine military continuation with no material delta: ${
+        saturation?.storyline ||
+        model.storyline
+      }; incremental/no qualitative advance and no concrete military consequence`;
+  }
+
+  // Saturated military loops retain the older stronger labelled backstop for any
+  // cases not caught above. Concrete consequences (casualties, breakthrough,
+  // capture, retreat, ceasefire, etc.) and qualitative advances still survive.
+  if (
+    wouldAction === "KEEP" &&
+    impacts.length === 0 &&
+    storylineSaturated &&
+    model.confidence >=
+      CONFIG.saturatedRoutineMilitaryConfidenceFloor &&
+    model.incrementalProcess === true &&
+    model.qualitativeAdvance === false &&
+    model.personalityTexture === false &&
+    routineMilitaryContinuationCue &&
+    !strongMilitaryConsequenceCue
+  ) {
+    wouldAction = "DROP";
+    route = "SATURATED_ROUTINE_MILITARY_CHURN";
+
+    enforcementReason =
+      `saturated routine military continuation: ${
+        saturation?.storyline ||
+        model.storyline
+      } (${recentStorylineCount} recent); ` +
+      "incremental/no qualitative advance and no concrete military consequence";
+  }
+
   // old saturated-storyline guard. even here we still require grounded history,
   // high confidence, no qualitative advance and no meaningful recurrence.
   if (
@@ -1031,6 +1151,8 @@ actualAction: wouldAction,
     nativeObservableOutcomeGrounded,
     nativePureProcessFiller,
 materialRecurrenceCue,
+    routineMilitaryContinuationCue,
+    strongMilitaryConsequenceCue,
     routineProcessRecurrenceOverride,
     effectiveRecurrenceMatters,
     establishedLowValueIncremental,
@@ -1224,6 +1346,12 @@ const droppedEvents =
 
         recurrence:
           entry.effectiveRecurrenceMatters,
+
+        routineMilitary:
+          entry.routineMilitaryContinuationCue,
+
+        militaryConsequence:
+          entry.strongMilitaryConsequenceCue,
 
         grounded:
           entry.groundedEvidencePass,
@@ -1430,11 +1558,57 @@ return keptEvents;
 export const getLastNativeCuratorAudit =
   () => lastAudit;
 
+const runNativeCuratorSelfTests = () => {
+  const make = (description) => ({
+    title: "Test",
+    description,
+    impacts: {
+      createdChats: [],
+      polityChanges: [],
+      regionTransfers: [],
+      regionControlOps: [],
+      unitOps: [],
+      markerOps: [],
+    },
+  });
+
+  const cases = [
+    {
+      name: "real disruption counts as material recurrence",
+      pass: hasMaterialRecurrenceCue(
+        make("Repeated shortages and transport disruption spread across the district."),
+      ) === true,
+    },
+    {
+      name: "without disruption is not material recurrence",
+      pass: hasMaterialRecurrenceCue(
+        make("Spring sowing concludes without major domestic disruption."),
+      ) === false,
+    },
+    {
+      name: "no shortages is not material recurrence",
+      pass: hasMaterialRecurrenceCue(
+        make("Officials report no shortages or unrest during the distribution period."),
+      ) === false,
+    },
+  ];
+
+  const passed = cases.every((entry) => entry.pass);
+  console.table(cases);
+  console.info(
+    `[OH Native Timeline Curator self-test] ${passed ? "PASS" : "FAIL"} — ` +
+    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
+  );
+
+  return { passed, cases };
+};
+
 if (typeof window !== "undefined") {
   window.__OH_NATIVE_TIMELINE_CURATOR__ = {
     version: VERSION,
     mode: "live",
     config: CONFIG,
     last: () => lastAudit,
+    selfTest: () => runNativeCuratorSelfTests(),
   };
 }

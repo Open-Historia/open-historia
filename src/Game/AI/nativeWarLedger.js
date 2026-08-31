@@ -10,7 +10,7 @@
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 
-export const WAR_LEDGER_VERSION = "0.1.0";
+export const WAR_LEDGER_VERSION = "0.1.3-contextual-combat-terms";
 
 const WAR_UPDATE_SEPARATOR = "~";
 const MAX_WAR_UPDATES_PER_PASS = 16;
@@ -339,20 +339,94 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
 };
 
 const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|attack(?:s|ed|ing)?|raid(?:s|ed|ing)?|siege|clash(?:es|ed)?|combat|fighting|repuls(?:e|es|ed)|captures?|recaptures?|liberat(?:es|ed|ion)|front\b.*\b(stalemate|fighting)|stalemate\b.*\bfront)\b/i;
+// Strong battlefield terms that are safe even if `kind` was imperfectly tagged.
+// Generic "attack" / "capture" are intentionally excluded because they are
+// common in political and economic prose.
+const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|combat|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
 const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b/i;
 const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities)\b/i;
 const CEASEFIRE_RE = /\b(ceasefire (?:takes effect|begins|signed|agreed|declared)|armistice (?:takes effect|signed|agreed)|truce (?:takes effect|signed|agreed))\b/i;
 const WAR_END_RE = /\b(peace treaty (?:signed|takes effect)|war ends|ends? the war|hostilities formally end|peace is signed)\b/i;
 
+// Military vocabulary is full of nouns that contain combat words without
+// describing combat: "infantry fighting vehicle", "main battle tank",
+// "attack helicopter", "assault rifle", "combat readiness", etc.
+//
+// Mask those lexicalized platform/doctrine phrases before battlefield detection.
+// This is generic semantic normalization, not a country/event-specific exception.
+const NON_BATTLEFIELD_COMBAT_TERMS_RE = new RegExp(
+  [
+    String.raw`\b(?:infantry|armou?red|tracked|mechanized|mechanised)?\s*fighting vehicles?\b`,
+    String.raw`\bmain battle tanks?\b`,
+    String.raw`\battack helicopters?\b`,
+    String.raw`\bassault rifles?\b`,
+    String.raw`\bassault weapons?\b`,
+    String.raw`\bcombat vehicles?\b`,
+    String.raw`\bcombat aircraft\b`,
+    String.raw`\bcombat systems?\b`,
+    String.raw`\bcombat readiness\b`,
+    String.raw`\bcombat training\b`,
+    String.raw`\bcombat capability\b`,
+    String.raw`\bcombat capabilities\b`,
+    String.raw`\bcombat support\b`,
+  ].join("|"),
+  "gi",
+);
+
+const combatSemanticText = (event) =>
+  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
+    .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ");
+
+// Semantic WHAT: does the event itself actually describe battlefield combat?
+// This deliberately ignores impacts.unitOps. A post-processor may implement
+// event semantics, but it may not turn a conscription law, exercise, readiness
+// measure, procurement decision, training cycle or administrative military event
+// into combat merely by attaching op=attack.
+export const eventNarratesHardCombat = (event) => {
+  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
+  const text = combatSemanticText(event);
+  const military = normalizeString(event?.kind).toLowerCase() === "military";
+  const hasControl = normalizeArray(impacts.regionControlOps)
+    .some((op) => ["contest", "control"].includes(normalizeString(op?.op).toLowerCase()));
+
+  if (UNAMBIGUOUS_COMBAT_RE.test(text) || ACTIVE_OFFENSIVE_RE.test(text)) return true;
+  if (military && HARD_COMBAT_RE.test(text)) return true;
+  return hasControl && HARD_COMBAT_RE.test(text);
+};
+
 const eventHasHardCombat = (event) => {
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   if (normalizeArray(impacts.unitOps).some((op) => normalizeString(op?.op).toLowerCase() === "attack")) return true;
-  const military = normalizeString(event?.kind).toLowerCase() === "military";
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  if (military && (HARD_COMBAT_RE.test(text) || ACTIVE_OFFENSIVE_RE.test(text))) return true;
-  const hasControl = normalizeArray(impacts.regionControlOps)
-    .some((op) => ["contest", "control"].includes(normalizeString(op?.op).toLowerCase()));
-  return hasControl && HARD_COMBAT_RE.test(text);
+  return eventNarratesHardCombat(event);
+};
+
+// Integration guard for Native Unit Director and other post-processors.
+// Remove only unsupported attack ops. Other unit mutations are left alone.
+export const stripUnsupportedUnitAttackOps = (events = []) => {
+  const dropped = [];
+
+  normalizeArray(events).forEach((event, eventIndex) => {
+    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : null;
+    if (!impacts || !Array.isArray(impacts.unitOps) || eventNarratesHardCombat(event)) return;
+
+    const kept = [];
+    impacts.unitOps.forEach((op, opIndex) => {
+      if (normalizeString(op?.op).toLowerCase() !== "attack") {
+        kept.push(op);
+        return;
+      }
+      dropped.push({
+        eventIndex,
+        opIndex,
+        title: normalizeString(event?.title),
+        unitId: normalizeString(op?.unitId),
+        targetUnitId: normalizeString(op?.targetUnitId),
+      });
+    });
+    impacts.unitOps = kept;
+  });
+
+  return dropped;
 };
 
 const eventTransitionExpectation = (event) => {
@@ -451,6 +525,268 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
     }
   }
   return "";
+};
+
+const compactWarField = (value) =>
+  normalizeString(value)
+    .replace(/~/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const generatedWarIdPart = (value) =>
+  canonicalPolity(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "belligerent";
+
+const matchingWarForCombatants = (wars, combatants, statuses = new Set(["active"])) => {
+  const combatantKeys = new Set(combatants.map(polityKey).filter(Boolean));
+  if (combatantKeys.size < 2) return [];
+
+  return wars.filter((war) => {
+    if (!statuses.has(war.status)) return false;
+    const sideA = new Set(war.sideA.map(polityKey));
+    const sideB = new Set(war.sideB.map(polityKey));
+    const hasA = [...combatantKeys].some((key) => sideA.has(key));
+    const hasB = [...combatantKeys].some((key) => sideB.has(key));
+    const allKnown = [...combatantKeys].every((key) => sideA.has(key) || sideB.has(key));
+    return hasA && hasB && allKnown;
+  });
+};
+
+const matchingStartUpdateForCombatants = (updates, combatants) => {
+  const combatantKeys = new Set(combatants.map(polityKey).filter(Boolean));
+  if (combatantKeys.size < 2) return [];
+
+  return updates.filter((update) => {
+    if (!["start", "resume"].includes(normalizeString(update?.op).toLowerCase())) return false;
+    const sideA = new Set(uniquePolities(update?.actors).map(polityKey));
+    const sideB = new Set(uniquePolities(update?.opponents).map(polityKey));
+    if (!sideA.size || !sideB.size) return false;
+    const hasA = [...combatantKeys].some((key) => sideA.has(key));
+    const hasB = [...combatantKeys].some((key) => sideB.has(key));
+    const allKnown = [...combatantKeys].every((key) => sideA.has(key) || sideB.has(key));
+    return hasA && hasB && allKnown;
+  });
+};
+
+const appendCompactWarUpdate = (candidate, line) => {
+  if (Array.isArray(candidate?.warUpdates)) {
+    const parsed = parseWarUpdateRecord(line, candidate.warUpdates.length);
+    if (parsed) candidate.warUpdates = [...candidate.warUpdates, parsed];
+    return;
+  }
+  const prior = String(candidate?.warUpdates ?? "").trim();
+  candidate.warUpdates = prior ? `${prior}\n${line}` : line;
+};
+
+const deriveGeneratedWarId = ({ combatants, event, world, updates }) => {
+  const parts = [...combatants]
+    .map(generatedWarIdPart)
+    .filter(Boolean)
+    .sort()
+    .slice(0, 2);
+  const datePart = normalizeString(event?.date).replace(/[^0-9]/g, "") || "undated";
+  const base = `war-${parts.join("-")}-${datePart}`.slice(0, 120);
+
+  const occupied = new Set([
+    ...normalizedWars(world).map((entry) => entry.id),
+    ...decodeWarUpdates(updates).map((entry) => normalizeString(entry?.id)),
+  ].filter(Boolean));
+
+  if (!occupied.has(base)) return base;
+  for (let suffix = 2; suffix <= 99; suffix += 1) {
+    const candidateId = `${base}-${suffix}`;
+    if (!occupied.has(candidateId)) return candidateId;
+  }
+  return `${base}-${Date.now()}`;
+};
+
+/**
+ * Native combat -> war-ledger reconciliation.
+ *
+ * AI owns the semantic WHAT: an event says that named combatants are actually
+ * fighting. Javascript owns the canonical HOW: bind that combat to the one
+ * matching active war, resume the one matching ceasefire, or — when exactly two
+ * opposing combatants are explicit and no canonical conflict exists — materialize
+ * the missing war start instead of throwing away the entire world pass.
+ *
+ * Ambiguous combat remains invalid. We never guess sides for 3+ ungrouped actors
+ * and never create a war without at least two explicit event.combatants.
+ */
+export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { bound: 0, started: 0, resumed: 0, unresolved: [] };
+  }
+
+  const events = Array.isArray(candidate.events) ? candidate.events : [];
+  const wars = normalizedWars(world);
+  let updates = decodeWarUpdates(candidate.warUpdates);
+  let bound = 0;
+  let started = 0;
+  let resumed = 0;
+  const unresolved = [];
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    if (!eventHasHardCombat(event)) continue;
+
+    const combatants = uniquePolities(event.combatants, 8);
+    if (combatants.length < 2) {
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: "hard combat has fewer than two explicit combatants",
+      });
+      continue;
+    }
+
+    const explicitWarId = normalizeString(event.warId);
+    if (explicitWarId) {
+      const known = wars.find((war) => war.id === explicitWarId);
+      const matchingUpdate = updates.find((update) => normalizeString(update?.id) === explicitWarId);
+      if (known || matchingUpdate) continue;
+
+      // The model supplied a stable war id and two explicit opponents but omitted
+      // the lifecycle row. That is unambiguous bookkeeping, so materialize start.
+      if (combatants.length === 2) {
+        const note = compactWarField(
+          `Native bootstrap from hard-combat event: ${normalizeString(event.title)}`,
+        );
+        appendCompactWarUpdate(
+          candidate,
+          `${compactWarField(explicitWarId)}~start~${compactWarField(combatants[0])}~${compactWarField(combatants[1])}~${index + 1}~${note}`,
+        );
+        updates = decodeWarUpdates(candidate.warUpdates);
+        started += 1;
+        console.warn(
+          `[OH war ledger bootstrap] materialized missing start ${explicitWarId} from hard combat ` +
+          `"${normalizeString(event.title)}".`,
+        );
+        continue;
+      }
+
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: `unknown warId ${explicitWarId} with ambiguous ${combatants.length}-combatant sides`,
+      });
+      continue;
+    }
+
+    const activeMatches = matchingWarForCombatants(
+      wars,
+      combatants,
+      new Set(["active"]),
+    );
+    if (activeMatches.length === 1) {
+      event.warId = activeMatches[0].id;
+      bound += 1;
+      console.warn(
+        `[OH war ledger binding] attached combat event "${normalizeString(event.title)}" ` +
+        `to active canonical war ${activeMatches[0].id}.`,
+      );
+      continue;
+    }
+    if (activeMatches.length > 1) {
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: "combatants match more than one active canonical war",
+      });
+      continue;
+    }
+
+    const updateMatches = matchingStartUpdateForCombatants(updates, combatants);
+    if (updateMatches.length === 1) {
+      event.warId = updateMatches[0].id;
+      bound += 1;
+      console.warn(
+        `[OH war ledger binding] attached combat event "${normalizeString(event.title)}" ` +
+        `to supplied ${updateMatches[0].op} update ${updateMatches[0].id}.`,
+      );
+      continue;
+    }
+    if (updateMatches.length > 1) {
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: "combatants match more than one supplied war start/resume",
+      });
+      continue;
+    }
+
+    const ceasefireMatches = matchingWarForCombatants(
+      wars,
+      combatants,
+      new Set(["ceasefire"]),
+    );
+    if (ceasefireMatches.length === 1) {
+      const war = ceasefireMatches[0];
+      event.warId = war.id;
+      const note = compactWarField(
+        `Hostilities resumed in ${normalizeString(event.title)}`,
+      );
+      appendCompactWarUpdate(
+        candidate,
+        `${compactWarField(war.id)}~resume~~~${index + 1}~${note}`,
+      );
+      updates = decodeWarUpdates(candidate.warUpdates);
+      resumed += 1;
+      console.warn(
+        `[OH war ledger bootstrap] materialized resume ${war.id} from renewed hard combat ` +
+        `"${normalizeString(event.title)}".`,
+      );
+      continue;
+    }
+    if (ceasefireMatches.length > 1) {
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: "combatants match more than one ceasefire war",
+      });
+      continue;
+    }
+
+    // Exactly two explicit combatants carries its own side partition: because
+    // event.combatants means DIRECT OPPONENTS, one is Side A and one is Side B.
+    // That is enough semantic evidence to create the missing canonical ledger row.
+    if (combatants.length === 2) {
+      const warId = deriveGeneratedWarId({
+        combatants,
+        event,
+        world,
+        updates: candidate.warUpdates,
+      });
+      event.warId = warId;
+      const note = compactWarField(
+        `Native bootstrap from hard-combat event: ${normalizeString(event.title)}`,
+      );
+      appendCompactWarUpdate(
+        candidate,
+        `${warId}~start~${compactWarField(combatants[0])}~${compactWarField(combatants[1])}~${index + 1}~${note}`,
+      );
+      updates = decodeWarUpdates(candidate.warUpdates);
+      started += 1;
+      console.warn(
+        `[OH war ledger bootstrap] created ${warId}: ${combatants[0]} ↔ ${combatants[1]} ` +
+        `from hard combat "${normalizeString(event.title)}".`,
+      );
+      continue;
+    }
+
+    unresolved.push({
+      index,
+      title: normalizeString(event.title),
+      reason: `cannot infer opposing sides from ${combatants.length} ungrouped combatants`,
+    });
+  }
+
+  return { bound, started, resumed, unresolved };
 };
 
 export const validateWarLedgerPayload = (candidate, { world = {} } = {}) => {

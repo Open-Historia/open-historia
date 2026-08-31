@@ -1,11 +1,12 @@
 /*
  * OpenHistoria Phase 9 context diagnostics.
  *
- * Phase 9.5A diagnostics:
+ * Phase 9.5B diagnostics:
  * - Phase 9.3A focused bounded context remains ACTIVE for diplomaticReply;
  * - Phase 9.4A longitudinal attention remains ACTIVE for jumpForward/autoJumpForward;
- * - Phase 9.5A audits which candidate variables the ACTUAL loaded/frozen task prompt
- *   and current live runtime directives can demand, without changing prompt behavior;
+ * - Phase 9.5B uses the ACTUAL loaded/frozen task prompt + reachable helpers +
+ *   current live runtime directives to construct only demanded context variables;
+ * - diagnostics report that production selection and timing without mutating save state;
  * - young campaigns still receive their complete consolidated history;
  * - once old history exceeds the 24k activation ceiling, the SAME 24k transport
  *   envelope becomes ~18k broad summary coverage + up to 6k canonical-event anchors;
@@ -209,7 +210,9 @@ const approximateTokens = (chars) => Math.ceil(Math.max(0, Number(chars) || 0) /
 
 
 // ---------------------------------------------------------------------------
-// 9.5A actual task-variable demand audit (observational only)
+// 9.5B actual task-variable demand contract
+// The same resolver now drives production lazy construction; diagnostics remain
+// observational and verify that the selected context matches the loaded task.
 // ---------------------------------------------------------------------------
 // Campaigns can carry frozen/custom task + helper prompts, so demand must be derived
 // from the ACTUAL loaded prompt pack, never hard-coded from today's defaults alone.
@@ -233,6 +236,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
   autoJumpForward: Object.freeze([
     "playerPolity",
     "canonicalWarContext",
+    "territorialControlContext",
     "worldInitiativeContext",
     "diplomaticContinuity",
     "dateReadable",
@@ -256,10 +260,12 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "canonicalDiplomaticContext",
     "idleDiplomacyBlockedParticipantSets",
     "eventDiplomaticReactionContext",
+    "jumpDiplomaticInitiativeContext",
   ]),
   jumpForward: Object.freeze([
     "playerPolity",
     "canonicalWarContext",
+    "territorialControlContext",
     "worldInitiativeContext",
     "diplomaticContinuity",
     "dateReadable",
@@ -269,6 +275,13 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "playerPolityReputationContext",
   ]),
   nextSpeaker: Object.freeze(["canonicalDiplomaticContext"]),
+  pregameHistory: Object.freeze([
+    "date",
+    "dateReadable",
+    "pregameCanonicalPolityVocabulary",
+    "canonicalWarContext",
+    "canonicalDiplomaticContext",
+  ]),
   unitDirector: Object.freeze([
     "unitDirectorUnits",
     "unitDirectorCandidates",
@@ -277,7 +290,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
   ]),
 });
 
-const resolveTemplateVariableDemand = ({
+export const resolveTemplateVariableDemand = ({
   helperTemplates = {},
   promptTemplate = "",
   taskKey = "",
@@ -715,7 +728,7 @@ export const buildShadowAttentionPreview = ({
   });
 
   return {
-    version: "9.5A-shadow-demand-audit",
+    version: "9.5B-task-aware-context",
     profileKey: profile.key,
     exact,
     bounded,
@@ -788,6 +801,10 @@ export const logContextDiagnostics = ({
     variableChars: variableSizes.reduce((sum, entry) => sum + entry.chars, 0),
     largestVariables: variableSizes.slice(0, 16),
     demand,
+    contextBuild:
+      variables && typeof variables === "object" && variables.__ohContextBuildMeta
+        ? { ...variables.__ohContextBuildMeta }
+        : null,
     shadow,
   };
 
@@ -796,7 +813,7 @@ export const logContextDiagnostics = ({
   try {
     const stageLabel = report.stage.replace(/-/g, " ").toUpperCase();
     console.groupCollapsed(
-      `[context 9.5A] ${report.taskKey} [${stageLabel}] · ${report.profileLabel} · ` +
+      `[context 9.5B] ${report.taskKey} [${stageLabel}] · ${report.profileLabel} · ` +
       `${report.totalInputChars.toLocaleString()} chars (~${report.approximateInputTokens.toLocaleString()} tokens)`,
     );
     const productionWorldHistory = ["jumpForward", "autoJumpForward"].includes(report.taskKey);
@@ -809,6 +826,14 @@ export const logContextDiagnostics = ({
     );
     console.log("Profile intent:", profile.intent);
     console.log("Profile priorities:", profile.priority);
+    if (report.contextBuild) {
+      console.log(
+        "Phase 9.5B task-aware context build:",
+        `${Number(report.contextBuild.elapsedMs || 0).toFixed(1)} ms; ` +
+        `${report.contextBuild.constructedVariableCount || 0}/${report.contextBuild.candidateVariableCount || 0} candidate variables materialized; ` +
+        `${report.contextBuild.skippedVariableCount || 0} skipped before construction.`,
+      );
+    }
     console.table({
       systemPrompt: { chars: report.systemPromptChars, approxTokens: approximateTokens(report.systemPromptChars) },
       history: { chars: report.historyChars, approxTokens: approximateTokens(report.historyChars) },
@@ -819,7 +844,7 @@ export const logContextDiagnostics = ({
 
     if (promptTemplate) {
       console.log(
-        "Phase 9.5A ACTUAL prompt-pack demand audit: derives placeholders from the loaded/frozen task + helper templates, " +
+        "Phase 9.5B ACTUAL prompt-pack demand: derives placeholders from the loaded/frozen task + reachable helper templates, " +
         "then adds variables consumed by current live runtime directives. OBSERVATIONAL ONLY; no context is skipped yet.",
       );
       console.table({
@@ -846,7 +871,7 @@ export const logContextDiagnostics = ({
       console.log("Combined required variable keys:", demand.requiredVariableKeys);
       if (demand.missingRequiredVariableKeys.length > 0) {
         console.warn(
-          "9.5A demand audit found required keys missing from the constructed variable object:",
+          "9.5B demand check found required keys missing from the constructed variable object:",
           demand.missingRequiredVariableKeys,
         );
       }

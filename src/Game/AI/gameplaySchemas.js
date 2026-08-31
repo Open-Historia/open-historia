@@ -382,37 +382,44 @@ const unitOpSchema = {
   ],
 };
 
+const markerStatusSchema = {
+  type: "string",
+  enum: ["planned", "under_construction", "active", "damaged", "inactive", "abandoned", "destroyed"],
+  description: "Current lifecycle state of the persistent physical feature.",
+};
+
 const markerSchema = {
   type: "object",
   description:
-    "A named structure on the map. kind is free-form lowercase - city, military base, "
-    + "bunker, missile silo, embassy, port, airfield, factory, monument, or anything else.",
+    "A persistent named physical feature on the map. kind is free-form lowercase - city, military base, "
+    + "bunker, missile silo, embassy, port, airfield, factory, laboratory, logistics hub, monument, or anything else.",
   properties: {
-    id: textSchema("Stable marker identifier."),
-    name: nonEmptyTextSchema("Display name of the structure."),
-    kind: nonEmptyTextSchema("What the structure is, as a short lowercase noun phrase."),
-    ownerCode: textSchema("Owning polity's FULL country name (\"Spain\") when owned, never a country code."),
+    id: textSchema("Stable marker identifier. Omit for a genuinely new feature; native Javascript assigns it."),
+    name: nonEmptyTextSchema("Display name of the physical feature."),
+    kind: nonEmptyTextSchema("What the feature is, as a short lowercase noun phrase."),
+    ownerCode: textSchema("Operating/owning polity's FULL country name (\"Spain\") when owned, never a country code."),
+    status: markerStatusSchema,
     lng: {
       type: "number",
-      description: "Longitude of the structure.",
+      description: "Longitude of the feature.",
       minimum: -180,
       maximum: 180,
     },
     lat: {
       type: "number",
-      description: "Latitude of the structure.",
+      description: "Latitude of the feature.",
       minimum: -90,
       maximum: 90,
     },
-    note: textSchema("Brief description shown when the structure is inspected."),
-    foundedAt: textSchema("In-game date the structure was built or founded."),
+    note: textSchema("Brief current description useful for later history."),
+    foundedAt: textSchema("In-game date the feature was built, founded, or first established."),
   },
   required: ["name", "kind", "lng", "lat"],
   additionalProperties: false,
 };
 
 const markerOpSchema = {
-  description: "A structure/place mutation. Use op build, remove, or rename and fill the fields that op needs.",
+  description: "Persistent physical-world mutation. Use build for a genuinely new feature; update/rename for an existing stable object; remove only for canonical deletion/admin cleanup.",
   anyOf: [
     {
       type: "object",
@@ -423,23 +430,21 @@ const markerOpSchema = {
       required: ["op", "marker"],
       additionalProperties: false,
     },
-    // The same build, written flat. Models routinely put the structure's fields
-    // beside `op` instead of nesting them under `marker`, and the engine has always
-    // read that shape (normalizeMarkerOp falls back to the entry itself). Only this
-    // schema refused it — and because a rejected op fails the WHOLE payload, one
-    // flattened building threw away the entire turn and left the player with
-    // fallback events. Accept what we already understand.
+    // Flat build remains accepted because older/frozen prompts and weaker models
+    // sometimes place the marker fields beside `op`; runtime lifts it canonically.
     {
       type: "object",
       properties: {
         op: { type: "string", enum: ["build"] },
-        id: textSchema("Stable marker identifier."),
-        name: nonEmptyTextSchema("Name of the structure or place."),
-        kind: textSchema("What it is: city, base, bunker, silo, embassy, port."),
-        ownerCode: textSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
+        id: textSchema("Stable marker identifier; normally omit for a new feature."),
+        name: nonEmptyTextSchema("Name of the physical feature."),
+        kind: textSchema("What it is: factory, base, bunker, silo, embassy, port, laboratory, logistics hub, etc."),
+        ownerCode: textSchema("Operating/owning polity's FULL country name (\"Spain\"), never a country code."),
+        status: markerStatusSchema,
         lng: { type: "number", description: "Longitude.", minimum: -180, maximum: 180 },
         lat: { type: "number", description: "Latitude.", minimum: -90, maximum: 90 },
-        note: textSchema("Brief explanation."),
+        note: textSchema("Brief current description."),
+        foundedAt: textSchema("In-game establishment date."),
       },
       required: ["op", "name", "lng", "lat"],
       additionalProperties: false,
@@ -447,24 +452,40 @@ const markerOpSchema = {
     {
       type: "object",
       properties: {
-        op: { type: "string", enum: ["remove"] },
-        markerId: textSchema("Existing marker identifier, when known."),
-        name: nonEmptyTextSchema("Name of the structure to remove."),
-        note: textSchema("Brief explanation of the removal."),
+        op: { type: "string", enum: ["update"] },
+        markerId: textSchema("Existing stable marker id. Prefer this whenever supplied in CURRENT MAP STRUCTURES."),
+        name: textSchema("Existing feature name, only as fallback when markerId is unavailable."),
+        kind: textSchema("New/current feature kind when materially changed."),
+        ownerCode: textSchema("New/current operating polity's FULL country name when control/ownership changes."),
+        status: markerStatusSchema,
+        lng: { type: "number", description: "New longitude only when the physical feature genuinely relocates.", minimum: -180, maximum: 180 },
+        lat: { type: "number", description: "New latitude only when the physical feature genuinely relocates.", minimum: -90, maximum: 90 },
+        note: textSchema("Updated brief current description after this event."),
       },
-      required: ["op", "name"],
+      required: ["op"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["remove"] },
+        markerId: textSchema("Existing stable marker identifier, preferred when known."),
+        name: textSchema("Existing feature name when markerId is unavailable."),
+        note: textSchema("Brief explanation of canonical deletion/correction."),
+      },
+      required: ["op"],
       additionalProperties: false,
     },
     {
       type: "object",
       properties: {
         op: { type: "string", enum: ["rename"] },
-        markerId: textSchema("Existing marker identifier, when known."),
-        name: nonEmptyTextSchema("Current name of the structure or city to rename."),
+        markerId: textSchema("Existing stable marker identifier, preferred when known."),
+        name: textSchema("Current name of the feature or city when markerId is unavailable."),
         newName: nonEmptyTextSchema("New display name."),
         note: textSchema("Brief explanation of the rename."),
       },
-      required: ["op", "name", "newName"],
+      required: ["op", "newName"],
       additionalProperties: false,
     },
   ],
@@ -506,9 +527,7 @@ const impactsSchema = {
     markerOps: {
       type: "array",
       description:
-        "Structures built or destroyed on the map. Use whenever the event founds, "
-        + "constructs, or destroys a named place - a city, military base, bunker, "
-        + "missile silo, embassy, port - so the map shows it.",
+        "Persistent physical-world lifecycle changes. Build significant new named facilities/places; update existing ones when they are expanded, captured, damaged, converted, completed, abandoned, or destroyed; rename without replacing identity. Remove is canonical cleanup, not ordinary destruction.",
       items: markerOpSchema,
     },
   },
@@ -623,6 +642,214 @@ export const ACTIONS_SCHEMA = {
   additionalProperties: false,
 };
 
+
+// ---------------------------------------------------------------------------
+// Structured canonical ledger transport
+// ---------------------------------------------------------------------------
+// The model decides semantic state. Javascript owns serialization, relation-status
+// derivation, canonical identity resolution, causal event binding, clamping,
+// deduplication and persistence. These arrays deliberately expose NO positional
+// mini-language and NO pass-local event-number fields to the model.
+const storylineUpdateSchema = {
+  type: "object",
+  description:
+    "One semantic persistent-storyline update. Do not provide event indexes/ids; native Javascript binds causal events.",
+  properties: {
+    id: nonEmptyTextSchema("Stable storyline id. Reuse an existing id when advancing an existing process."),
+    status: {
+      type: "string",
+      enum: ["active", "dormant", "resolved"],
+      description: "Current process status.",
+    },
+    pressure: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Current structural pressure, 0-100.",
+    },
+    momentum: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Current tendency to keep developing without a new external shove, 0-100.",
+    },
+    startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
+    kind: nonEmptyTextSchema("Short process category such as war, crisis, revolution, diplomacy, politics, or economy."),
+    title: nonEmptyTextSchema("Concise persistent process title."),
+    participants: {
+      type: "array",
+      maxItems: 12,
+      description: "Current canonical polity participants. Use exact current polity identities.",
+      items: nonEmptyTextSchema("One current canonical polity."),
+    },
+    state: nonEmptyTextSchema("Semantic state through the current stop date: what is true now and why the process remains active/dormant/resolved."),
+  },
+  required: ["id", "status", "pressure", "momentum", "kind", "title", "participants", "state"],
+  additionalProperties: false,
+};
+
+const warUpdateSchema = {
+  type: "object",
+  description:
+    "One semantic canonical belligerency lifecycle operation. Do not provide event indexes/ids; native Javascript binds it to the causal event, primarily through event.warId and transition semantics.",
+  properties: {
+    id: nonEmptyTextSchema("Stable canonical war id. Reuse the same id for later operations on the same conflict."),
+    op: {
+      type: "string",
+      enum: ["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"],
+      description: "Belligerency lifecycle operation.",
+    },
+    actors: {
+      type: "array",
+      maxItems: 12,
+      description: "Polities performing the operation. For start, these are Side A.",
+      items: nonEmptyTextSchema("One current canonical polity."),
+    },
+    opponents: {
+      type: "array",
+      maxItems: 12,
+      description: "For start, Side B. Otherwise include opponents only when semantically useful; an empty array is valid.",
+      items: nonEmptyTextSchema("One current canonical polity."),
+    },
+    note: textSchema("Brief semantic reason/current meaning of the operation."),
+  },
+  required: ["id", "op", "actors", "opponents"],
+  additionalProperties: false,
+};
+
+const relationUpdateSchema = {
+  type: "object",
+  description:
+    "One material bilateral political-climate update. The model chooses the absolute score and reason; native Javascript derives the status band and binds the causal event.",
+  properties: {
+    a: nonEmptyTextSchema("First current canonical polity."),
+    b: nonEmptyTextSchema("Second current canonical polity."),
+    score: {
+      type: "integer",
+      minimum: -100,
+      maximum: 100,
+      description: "Absolute bilateral political-climate score after the causal development.",
+    },
+    summary: nonEmptyTextSchema("Why this bilateral climate has this value now."),
+  },
+  required: ["a", "b", "score", "summary"],
+  additionalProperties: false,
+};
+
+const agreementUpdateSchema = {
+  type: "object",
+  description:
+    "One semantic formal-agreement lifecycle operation. Do not provide event indexes/ids; native Javascript binds the causal event.",
+  properties: {
+    id: nonEmptyTextSchema("Stable agreement id. Reuse an existing id for later lifecycle operations."),
+    op: {
+      type: "string",
+      enum: ["start", "update", "suspend", "resume", "end", "expire"],
+      description: "Formal agreement lifecycle operation.",
+    },
+    type: {
+      type: "string",
+      enum: [
+        "alliance",
+        "mutual_defense",
+        "guarantee",
+        "non_aggression",
+        "friendship_consultation",
+        "trade_economic",
+        "military_cooperation",
+        "military_access",
+        "neutrality",
+        "peace_settlement",
+        "other",
+      ],
+      description: "Agreement category when known. For a new start, choose the best matching category.",
+    },
+    parties: {
+      type: "array",
+      maxItems: 12,
+      description: "Current canonical parties. For guarantees, guarantor first and beneficiary second.",
+      items: nonEmptyTextSchema("One current canonical polity."),
+    },
+    title: textSchema("Formal agreement title. Required semantically for a new start; may repeat the current title on later lifecycle changes."),
+    terms: textSchema("Concise material terms/current change. Do not invent legal detail solely to fill this field."),
+  },
+  required: ["id", "op", "type", "parties", "title"],
+  additionalProperties: false,
+};
+
+
+
+// ---------------------------------------------------------------------------
+// Gemini-safe canonical update envelope
+// ---------------------------------------------------------------------------
+// Function-calling ANY mode is sensitive to schema complexity. Keep this transport
+// intentionally flat and all-required: the model supplies semantic values, while
+// Javascript ignores irrelevant fields for each kind and owns every bookkeeping step.
+const canonicalUpdateSchema = {
+  type: "object",
+  description:
+    "One semantic canonical-state update. Every field is required for provider reliability; use empty string, empty array, or 0 for fields irrelevant to this kind.",
+  properties: {
+    kind: {
+      type: "string",
+      description:
+        "Semantic kind code. Use relation; storyline:active; storyline:dormant; storyline:resolved; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start; agreement:update; agreement:suspend; agreement:resume; agreement:end; agreement:expire.",
+    },
+    id: { type: "string", description: "Stable storyline/war/agreement id, or empty for relation." },
+    polities: {
+      type: "array",
+      description:
+        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors/Side A. Agreement: parties.",
+      items: { type: "string" },
+    },
+    opponents: {
+      type: "array",
+      description: "War opponents/Side B; empty for non-war updates.",
+      items: { type: "string" },
+    },
+    score: {
+      type: "integer",
+      description: "Relation absolute score -100..100; 0 for non-relation updates. Javascript clamps and derives status.",
+    },
+    pressure: {
+      type: "integer",
+      description: "Storyline pressure 0..100; 0 for non-storyline updates.",
+    },
+    momentum: {
+      type: "integer",
+      description: "Storyline momentum 0..100; 0 for non-storyline updates.",
+    },
+    date: { type: "string", description: "Storyline startedDate when known; otherwise empty." },
+    category: {
+      type: "string",
+      description: "Storyline process kind or agreement type; otherwise empty.",
+    },
+    title: {
+      type: "string",
+      description: "Storyline/agreement title when relevant; otherwise empty.",
+    },
+    detail: {
+      type: "string",
+      description: "Relation summary, storyline state, war note, or agreement terms.",
+    },
+  },
+  required: [
+    "kind",
+    "id",
+    "polities",
+    "opponents",
+    "score",
+    "pressure",
+    "momentum",
+    "date",
+    "category",
+    "title",
+    "detail",
+  ],
+  additionalProperties: false,
+};
+
+
 export const JUMP_FORWARD_SCHEMA = {
   type: "object",
   description: "A simulated timeline jump containing dated events and the resulting campaign state.",
@@ -669,15 +896,25 @@ export const JUMP_FORWARD_SCHEMA = {
         "Compact newline-separated formal treaty/agreement lifecycle updates. Empty string when no formal commitment starts, changes, suspends, resumes, ends, or expires. Record format is documented in the live prompt.",
     },
   },
-  required: ["events", "stopDate", "summary", "clearActions", "storylineUpdates", "warUpdates", "relationUpdates", "agreementUpdates"],
+  required: [
+    "events",
+    "stopDate",
+    "summary",
+    "clearActions",
+    "storylineUpdates",
+    "warUpdates",
+    "relationUpdates",
+    "agreementUpdates",
+  ],
   additionalProperties: false,
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
 
-// Backstory events deliberately have NO impacts field: the scenario's world
-// state already reflects everything that happened before round one, so a
-// pre-game event is a record, never a change to apply.
+// Backstory events deliberately have NO impacts field: the scenario's map/world
+// already reflects pre-round-one territorial and polity state. Pregame generation
+// may, however, carry a canonical warId so the SAME one-time response can bootstrap
+// already-existing wars into world.wars without replaying historical impacts.
 const pregameEventSchema = {
   type: "object",
   description: "One dated historical event from BEFORE the game's start date.",
@@ -688,6 +925,9 @@ const pregameEventSchema = {
     quote: eventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
+    warId: textSchema(
+      "Canonical war id when this event establishes or materially concerns a conflict that is still active or in ceasefire at Round One; omit/blank otherwise.",
+    ),
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
@@ -695,7 +935,8 @@ const pregameEventSchema = {
 
 export const PREGAME_HISTORY_SCHEMA = {
   type: "object",
-  description: "The pre-game backstory: the events that led up to the start of the campaign.",
+  description:
+    "The pre-game backstory plus the canonical Round-One bootstrap for unresolved processes and already-existing diplomatic/war state.",
   properties: {
     events: {
       type: "array",
@@ -705,8 +946,19 @@ export const PREGAME_HISTORY_SCHEMA = {
       items: pregameEventSchema,
     },
     summary: textSchema("One-paragraph summary of the era leading into the start date."),
+    canonicalUpdates: {
+      type: "array",
+      description:
+        "Semantic Day-1 storyline/war/relation/agreement state. Empty array only when no qualifying canonical state exists. Javascript dispatches and binds it.",
+      maxItems: 32,
+      items: canonicalUpdateSchema,
+    },
   },
-  required: ["events", "summary"],
+  required: [
+    "events",
+    "summary",
+    "canonicalUpdates",
+  ],
   additionalProperties: false,
 };
 
@@ -1114,7 +1366,7 @@ const statNumberSchema = (description, { minimum, maximum } = {}) => ({
 export const COUNTRY_STAT_GENERATION_SCHEMA = {
   type: "object",
   description:
-    "Compact generation transport for a persistent national statistics sheet. Native code decodes territorialComponentsText and deterministically derives population/GDP aggregates before canonical validation.",
+    "Compact generation transport for a persistent national statistics sheet. Native code expands a bounded regional macro estimate into the exact live-map territorial ledger and deterministically derives population/GDP aggregates before canonical validation.",
   properties: {
     capital: nonEmptyTextSchema("Capital or primary seat of government."),
     continent: nonEmptyTextSchema("Continent or broad geographic region."),
@@ -1134,11 +1386,36 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
       additionalProperties: false,
     },
-    territorialComponentsText: {
+    populationCalibration: {
+      type: "object",
+      description:
+        "Scenario-causality provenance for a native regional bootstrap/reconstruction. Return this ONLY when the live Stats prompt says CAUSAL CALIBRATION REQUIRED. It identifies the history authority frontier but does not impose a whole-polity numeric target.",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["historical_start", "counterfactual_start", "campaign_reconstruction"],
+          description:
+            "historical_start only when scenario history is still materially shared through the start date; counterfactual_start when pre-start canon diverged; campaign_reconstruction for a later hard audit reconstructed from campaign canon.",
+        },
+        historyAuthorityCutoff: nonEmptyTextSchema(
+          "Latest date/era through which real-world history is still causally shared enough to use as demographic evidence. After this frontier, scenario/campaign canon wins.",
+        ),
+        basis: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description:
+            "One concise evidence summary for the regional calibration: identify the shared historical/regional baseline and relevant post-cutoff scenario canon. Do not provide hidden reasoning; state only the usable basis.",
+        },
+      },
+      required: ["mode", "historyAuthorityCutoff", "basis"],
+      additionalProperties: false,
+    },
+    territorialMacroComponentsText: {
       type: "string",
       minLength: 1,
       description:
-        "Compact territorial component ledger. One row per line, exactly group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent. population is an integer; gdpPerCapita is a positive number in 2026-EUR-equivalent accounting terms. Do not use ~ inside geography names.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. Compatibility fallback without a native macro plan may use group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive number in 2026-EUR-equivalent accounting terms.",
     },
     economy: {
       type: "object",
@@ -1171,7 +1448,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
     "leader",
     "stability",
     "indices",
-    "territorialComponentsText",
+    "territorialMacroComponentsText",
     "economy",
     "gdpBreakdown",
   ],
@@ -1196,6 +1473,11 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         assessedRound: { type: "integer", minimum: 0 },
         stateFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed simulation/economic state."),
         territorialFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed legal territorial basis."),
+        populationCalibrationVersion: {
+          type: "integer",
+          minimum: 1,
+          description: "Native population-calibration generation version. Presence means the component ledger has passed the bounded regional causal-calibration path.",
+        },
         accountedEventIds: {
           type: "array",
           maxItems: 64,
@@ -1235,9 +1517,8 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
     territorialComponents: {
       type: "array",
       minItems: 1,
-      maxItems: 64,
       description:
-        "One demographic/economic component for every material legal territorial geography in the supplied territorial basis. Estimate EACH component independently. Never copy metropolitan productivity to colonies/dependencies/peripheral territories.",
+        "One demographic/economic component for every authoritative territorial geography in the live-map basis. There is deliberately no fixed component cap: map granularity must never delete population/GDP. Generation expands bounded regional macro estimates into this exact canonical ledger natively; the model does not author these rows one-by-one.",
       items: {
         type: "object",
         properties: {
@@ -1733,7 +2014,7 @@ export const GAME_MASTER_TOOL = makeTool(
 
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
-  "Submit the compact national statistics generation payload. Native code decodes the territorial ledger and derives aggregate population/GDP fields before persistence.",
+  "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
   COUNTRY_STAT_GENERATION_SCHEMA,
 );
 
@@ -1745,7 +2026,7 @@ export const IDLE_DIPLOMACY_TOOL = makeTool(
 
 export const PREGAME_HISTORY_TOOL = makeTool(
   "submit_pregame_history",
-  "Submit the pre-game backstory events that led up to the campaign's start date.",
+  "Submit the pre-game backstory plus the canonical Round-One bootstrap for unresolved storylines, active wars, material relations, and active formal agreements.",
   PREGAME_HISTORY_SCHEMA,
 );
 
