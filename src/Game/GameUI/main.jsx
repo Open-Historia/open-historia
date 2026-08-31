@@ -8,6 +8,7 @@ import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
+import { installPerformanceWatchdog, reportPerfOperation } from "../../runtime/assets.js";
 import {
   getStoredProvider,
   loadProviderSettingsFormState,
@@ -31,6 +32,14 @@ const readAdvisorWidth = () => {
   } catch { /* private-mode storage — fall through to default */ }
   return clampAdvisorWidth(ADVISOR_DEFAULT_WIDTH);
 };
+const reportReactRender = (id, phase, actualDuration) => {
+  reportPerfOperation(
+    `React ${id} ${phase}`,
+    Number(actualDuration) || 0,
+    { warnAt: 40 },
+  );
+};
+
 const baseStyle = {
   position: "fixed",
   backgroundColor: "rgba(17, 24, 39, 0.9)",
@@ -153,6 +162,25 @@ const Main = ({
     if (!checkWebGL()) setShowWebGLWarning(true);
   }, []);
 
+  // First-open lazy chunks used to make Cheats/Advisor look like "the whole game
+  // froze" while the browser fetched/parsed them. Warm both when the main thread
+  // is idle; opening the panel remains lazy from the user's perspective.
+  useEffect(() => {
+    const warm = () => {
+      import("./advisor").catch(() => {});
+      import("./cheats").catch(() => {});
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warm, { timeout: 3000 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(warm, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  // R2.28: catch silent visible freezes too, not only named code paths.
+  useEffect(() => installPerformanceWatchdog(), []);
+
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
   // inbox unprompted. Everything that could break it is guarded inside
@@ -233,6 +261,14 @@ const Main = ({
   const openAdvisor = useCallback(() => {
     setIsAdvisorOpen(true);
   }, []);
+  const closeAdvisor = useCallback(() => setIsAdvisorOpen(false), []);
+  const toggleAdvisor = useCallback(() => setIsAdvisorOpen((open) => !open), []);
+  const toggleForces = useCallback(() => setIsForcesOpen((open) => !open), []);
+  const closeCheats = useCallback(() => setIsCheatsOpen(false), []);
+  const openForcesFromCheats = useCallback(() => {
+    setIsCheatsOpen(false);
+    setIsForcesOpen(true);
+  }, []);
 
   // Called on every pointermove while the user drags the advisor's edge.
   const handleAdvisorResize = useCallback((px) => {
@@ -258,9 +294,13 @@ const Main = ({
   }, []);
 
   return (
+    <React.Profiler id="MainUI" onRender={reportReactRender}>
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
+      <React.Profiler id="LibraryTopBar" onRender={reportReactRender}>
       <LibraryTopBar />
+      </React.Profiler>
+      <React.Profiler id="DateWidget" onRender={reportReactRender}>
       <DateWidget
         activePanel={activeBottomPanel}
         mapRef={mapRef}
@@ -269,39 +309,53 @@ const Main = ({
         rightShift={rightShift}
         topOffset={TOP_BAR_OFFSET}
       />
+      </React.Profiler>
+      <React.Profiler id="Toolbar" onRender={reportReactRender}>
       <Toolbar
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
       />
+      </React.Profiler>
+      <React.Profiler id="OtherBadge" onRender={reportReactRender}>
       <Other rightShift={rightShift} />
+      </React.Profiler>
+      <React.Profiler id="Search" onRender={reportReactRender}>
       <Search mapRef={mapRef} />
+      </React.Profiler>
+      <React.Profiler id="ForcesPanel" onRender={reportReactRender}>
       <ForcesPanel
         mapRef={mapRef}
         topOffset={TOP_BAR_OFFSET}
         open={isForcesOpen}
-        onToggle={() => setIsForcesOpen((v) => !v)}
+        onToggle={toggleForces}
       />
+      </React.Profiler>
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         rightShift={rightShift}
-        onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
+        onToggle={toggleAdvisor}
       />
+      <React.Profiler id="AdvisorPanel" onRender={reportReactRender}>
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
-          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} width={advisorWidth} onResize={handleAdvisorResize} />
+          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={closeAdvisor} width={advisorWidth} onResize={handleAdvisorResize} />
         )}
       </Suspense>
+      </React.Profiler>
+      <React.Profiler id="CheatsPanel" onRender={reportReactRender}>
       <Suspense fallback={null}>
         {shouldLoadCheats && (
-          <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
+          <LazyCheatsPanel open={isCheatsOpen} onClose={closeCheats} onOpenForces={openForcesFromCheats} />
         )}
       </Suspense>
+      </React.Profiler>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
       />
       {isSettingsOpen && (
+        <React.Profiler id="SettingsMenu" onRender={reportReactRender}>
         <SettingsMenu
           discordUrl="https://discord.gg/C3AVwHacZ4"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
@@ -327,8 +381,10 @@ const Main = ({
           providerSettings={providerSettings}
           onProviderSettingChange={handleProviderSettingChange}
         />
+        </React.Profiler>
       )}
     </>
+    </React.Profiler>
   );
 };
 

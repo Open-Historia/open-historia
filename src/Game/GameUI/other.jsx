@@ -60,23 +60,48 @@ const Other = memo(function Other({ rightShift = "0.5rem" }) {
 
     useEffect(() => {
         let cancelled = false;
-        const refresh = async () => {
-            try {
-                const data = await readJson(JSON_URLS.game, { defaultValue: {} });
-                if (cancelled) return;
-                const code = data.country;
-                setCountry(code);
-                // force:false rides the memoized world read (cheap; a real jump
-                // invalidates the cache, so this still sees territory changes).
-                const world = await readWorldState({ force: false });
-                if (!cancelled) setLandless(isPolityLandless(world, code));
-            } catch (err) {
-                if (!cancelled) console.error("Failed to load game.json:", err);
+        const liveCountry = { current: "" };
+        const liveWorld = { current: null };
+
+        const apply = () => {
+            if (cancelled) return;
+            const code = liveCountry.current;
+            setCountry((current) => current === code ? current : code);
+            if (liveWorld.current) {
+                const next = isPolityLandless(liveWorld.current, code);
+                setLandless((current) => current === next ? current : next);
             }
         };
-        refresh();
-        const intervalId = window.setInterval(refresh, 5000);
-        return () => { cancelled = true; window.clearInterval(intervalId); };
+
+        Promise.all([
+            readJson(JSON_URLS.game, { defaultValue: {}, force: false, clone: false }),
+            readWorldState({ force: false }),
+        ])
+            .then(([game, world]) => {
+                liveCountry.current = game?.country || "";
+                liveWorld.current = world;
+                apply();
+            })
+            .catch((err) => {
+                if (!cancelled) console.error("Failed to load player badge state:", err);
+            });
+
+        const onGameUpdated = (event) => {
+            liveCountry.current = event?.detail?.game?.country || liveCountry.current;
+            apply();
+        };
+        const onWorldUpdated = (event) => {
+            liveWorld.current = event?.detail?.world || liveWorld.current;
+            apply();
+        };
+
+        window.addEventListener("oh:game-updated", onGameUpdated);
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:game-updated", onGameUpdated);
+            window.removeEventListener("oh:world-updated", onWorldUpdated);
+        };
     }, []);
 
     useEffect(() => {

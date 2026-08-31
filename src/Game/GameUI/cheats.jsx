@@ -10,6 +10,7 @@ import {
 import {
     applyCountryStatPatchToWorld,
     applyEventImpactsToWorld,
+    MARKER_STATUSES,
     readEventsState,
     readGameData,
     readWorldState,
@@ -183,7 +184,7 @@ const rgbToHex = (rgb) =>
 // map this yields the invented nations only, never real-Earth countries; a country
 // you just created shows up too (it's in polityOverrides).
 const loadPolities = async () => {
-    const world = await readWorldState({ force: true });
+    const world = await readWorldState({ force: false });
     const overrides = world.regionOwnershipOverrides ?? {};
     const polityOverrides = world.polityOverrides ?? {};
 
@@ -201,28 +202,16 @@ const loadPolities = async () => {
     for (const owner of Object.values(overrides)) if (owner) owners.add(String(owner));
     for (const code of world.ownerCodes ?? []) if (code) owners.add(String(code));
 
-    // Owners of the actually-rendered geometry, with current overrides applied: the
-    // scenario's own custom regions when present, otherwise the stock GADM catalog.
-    const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
-    // Owners are country NAMES. Both fallback tails below reach for the region's
-    // GADM provenance, which is a code — so this set used to be a mix of "Russia"
-    // and "RUS" depending only on whether a given region had an override, and the
-    // two never compared equal. Resolve the code to its name at ingest so the set
-    // is one namespace.
-    if (Array.isArray(custom?.features) && custom.features.length) {
-        for (const feature of custom.features) {
-            const props = feature?.properties ?? {};
-            const id = props.id != null ? String(props.id) : "";
-            const gid0 = props.gid0 ? String(props.gid0) : "";
-            const owner = overrides[id] ?? props.owner ?? COUNTRY_NAMES[gid0] ?? gid0;
-            if (owner) owners.add(String(owner));
-        }
-    } else {
-        for (const region of await loadRegionCatalog().catch(() => [])) {
-            const code = region.countryCode ? String(region.countryCode) : "";
-            const owner = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
-            if (owner) owners.add(String(owner));
-        }
+    // R2.30: never reopen the full custom region geometry just to enumerate owners.
+    // Nations already projects the active map to the compact region catalog.
+    for (const region of await loadRegionCatalog().catch(() => [])) {
+        const code = region.countryCode ? String(region.countryCode) : "";
+        const owner =
+            overrides[region.id] ??
+            region.country ??
+            COUNTRY_NAMES[code] ??
+            code;
+        if (owner) owners.add(String(owner));
     }
 
     const polities = Array.from(owners)
@@ -258,7 +247,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
         try {
             const [{ polities: nextPolities }, nextGame] = await Promise.all([
                 loadPolities(),
-                readGameData({ force: true }),
+                readGameData({ force: false }),
             ]);
             setPolities(nextPolities);
             setGame(nextGame);
@@ -480,6 +469,19 @@ const MAP_FEATURE_KINDS = [
     { id: "temporary marker", label: "Temporary", icon: "⌖" },
     { id: "other", label: "Other", icon: "+" },
 ];
+
+const MAP_FEATURE_STATUS_META = {
+    planned: { label: "Planned", color: "#c4b5fd" },
+    under_construction: { label: "Under construction", color: "#fcd34d" },
+    active: { label: "Active", color: "#86efac" },
+    damaged: { label: "Damaged", color: "#fca5a5" },
+    inactive: { label: "Inactive", color: "#cbd5e1" },
+    abandoned: { label: "Abandoned", color: "#fdba74" },
+    destroyed: { label: "Destroyed", color: "#f87171" },
+};
+
+const mapFeatureStatusMeta = (status) =>
+    MAP_FEATURE_STATUS_META[String(status ?? "").trim().toLowerCase()] || MAP_FEATURE_STATUS_META.active;
 
 const CITY_PROMINENCE = [
     { tier: 1, label: "Town" },
@@ -2397,10 +2399,24 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 <div>
                                     {subsectionTitle("Map features", markerOps.length)}
                                     {markerOps.map((entry, index) => {
-                                        let detail = `${String(entry.op || "operation").toUpperCase()} · ${entry.name || entry.marker?.name || "unnamed feature"}`;
-                                        if (entry.op === "build") detail += ` · ${entry.marker?.kind || "feature"} · owner ${entry.marker?.ownerCode || "none"} · ${entry.marker?.lat ?? "?"}, ${entry.marker?.lng ?? "?"}`;
+                                        const patch = entry?.changes && typeof entry.changes === "object" ? entry.changes : entry;
+                                        const displayName = entry.name || entry.marker?.name || "unnamed feature";
+                                        let detail = `${String(entry.op || "operation").toUpperCase()} · ${displayName}`;
+                                        if (entry.markerId) detail += ` · id ${entry.markerId}`;
+                                        if (entry.op === "build") {
+                                            detail += ` · ${entry.marker?.kind || "feature"} · owner ${entry.marker?.ownerCode || "none"} · status ${mapFeatureStatusMeta(entry.marker?.status).label} · ${entry.marker?.lat ?? "?"}, ${entry.marker?.lng ?? "?"}`;
+                                        }
+                                        if (entry.op === "update") {
+                                            const changes = [];
+                                            if (patch.status) changes.push(`status → ${mapFeatureStatusMeta(patch.status).label}`);
+                                            if (patch.kind) changes.push(`type → ${patch.kind}`);
+                                            if (Object.prototype.hasOwnProperty.call(patch, "ownerCode")) changes.push(`owner → ${patch.ownerCode || "none"}`);
+                                            if (Number.isFinite(Number(patch.lat)) && Number.isFinite(Number(patch.lng))) changes.push(`location → ${Number(patch.lat).toFixed(2)}, ${Number(patch.lng).toFixed(2)}`);
+                                            if (patch.foundedAt) changes.push(`founded → ${patch.foundedAt}`);
+                                            if (changes.length) detail += ` · ${changes.join(" · ")}`;
+                                        }
                                         if (entry.op === "rename") detail += ` → ${entry.newName || "unnamed"}`;
-                                        return <div key={`marker-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}><strong style={{ color: "rgba(255,255,255,0.88)" }}>{detail}</strong><span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>{entry.note || entry.marker?.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note || entry.marker?.note}</div> : null}</div>;
+                                        return <div key={`marker-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}><strong style={{ color: "rgba(255,255,255,0.88)" }}>{detail}</strong><span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>{patch.note || entry.marker?.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{patch.note || entry.marker?.note}</div> : null}</div>;
                                     })}
                                 </div>
                             )}
@@ -3305,7 +3321,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             setSearch("");
         };
         const markerRows = markers
-            .filter((marker) => !q || [marker?.name, marker?.kind, marker?.ownerCode, marker?.note].some((value) => String(value ?? "").toLowerCase().includes(q)))
+            .filter((marker) => !q || [marker?.name, marker?.kind, marker?.ownerCode, marker?.status, marker?.note].some((value) => String(value ?? "").toLowerCase().includes(q)))
             .slice(0, 80);
         const cityRows = cities
             .map((feature, index) => ({ feature, index }))
@@ -3321,6 +3337,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             lng: Number(coords?.lng ?? fields.lng ?? marker.lng),
             lat: Number(coords?.lat ?? fields.lat ?? marker.lat),
             note: String(fields.note ?? marker.note ?? "").trim(),
+            status: MARKER_STATUSES.includes(String(fields.status ?? marker.status ?? "active").trim().toLowerCase())
+                ? String(fields.status ?? marker.status ?? "active").trim().toLowerCase()
+                : "active",
             foundedAt: String(fields.foundedAt ?? marker.foundedAt ?? "").trim(),
             createdAt: marker.createdAt,
         });
@@ -3329,16 +3348,35 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const nextMarker = markerFromForm(marker, coords);
             if (!nextMarker.name) throw new Error("Give the feature a name.");
             if (markers.some((entry) => entry.id !== marker.id && String(entry.name || "").trim().toLowerCase() === nextMarker.name.toLowerCase())) {
-                throw new Error(`Another runtime feature is already named “${nextMarker.name}”. Use a unique name so the canonical build seam does not replace it.`);
+                throw new Error(`Another runtime feature is already named “${nextMarker.name}”. Use a unique name so stable marker identities never become ambiguous.`);
             }
             if (!Number.isFinite(nextMarker.lng) || !Number.isFinite(nextMarker.lat) || (nextMarker.lng === 0 && nextMarker.lat === 0)) {
                 throw new Error("The feature needs valid map coordinates.");
             }
-            await applyAdminMarkerOps([
-                { op: "remove", markerId: marker.id, name: marker.name },
-                { op: "build", marker: nextMarker },
-            ]);
-            return nextMarker;
+            const markerOps = [];
+            if (String(nextMarker.name).trim() !== String(marker.name || "").trim()) {
+                markerOps.push({
+                    op: "rename",
+                    markerId: marker.id,
+                    name: marker.name,
+                    newName: nextMarker.name,
+                    note: "Map Feature Editor rename",
+                });
+            }
+            markerOps.push({
+                op: "update",
+                markerId: marker.id,
+                name: nextMarker.name,
+                kind: nextMarker.kind,
+                ownerCode: nextMarker.ownerCode,
+                status: nextMarker.status,
+                lng: nextMarker.lng,
+                lat: nextMarker.lat,
+                note: nextMarker.note,
+                foundedAt: nextMarker.foundedAt,
+            });
+            const refreshed = await applyAdminMarkerOps(markerOps);
+            return (refreshed?.markers ?? []).find((entry) => entry.id === marker.id) || nextMarker;
         };
 
         const editCity = async (index, coords = null) => {
@@ -3411,7 +3449,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     style={inputStyle}
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder={activeTab === "runtime" ? "Search name, type, owner…" : "Search scenario cities…"}
+                    placeholder={activeTab === "runtime" ? "Search name, type, owner, status…" : "Search scenario cities…"}
                 />
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.38rem", marginTop: "0.5rem", overflowY: "auto", paddingRight: "0.08rem" }}>
@@ -3430,7 +3468,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ alignItems: "center", display: "flex", gap: "0.36rem", minWidth: 0 }}>
                                         <span style={{ color: "#ede9fe", fontSize: "0.8rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{marker.name}</span>
-                                        <span style={{ ...badgeStyle, color: "#c4b5fd" }}>LIVE</span>
+                                        <span style={{ ...badgeStyle, color: "#c4b5fd" }}>RUNTIME</span>
+                                        <span style={{ ...badgeStyle, color: mapFeatureStatusMeta(marker.status).color }}>
+                                            {mapFeatureStatusMeta(marker.status).label}
+                                        </span>
                                     </div>
                                     <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.63rem", marginTop: "0.1rem" }}>
                                         {kindLabel(marker.kind)}{marker.ownerCode ? ` · ${nameOf(marker.ownerCode)}` : ""}
@@ -3453,6 +3494,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                 kind: knownKind,
                                                 customKind: knownKind === "other" ? marker.kind || "" : "",
                                                 ownerCode: marker.ownerCode || "",
+                                                status: marker.status || "active",
                                                 note: marker.note || "",
                                                 foundedAt: marker.foundedAt || "",
                                                 lng: String(marker.lng ?? ""),
@@ -3501,6 +3543,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                                     <label style={labelStyle}>Associated country (optional)</label>
                                     <PolitySelect polities={polities} value={fields.ownerCode ?? ""} onChange={(value) => setFields({ ...fields, ownerCode: value })} placeholder="Neutral / no associated country" />
+
+                                    <label style={labelStyle}>Lifecycle status</label>
+                                    <select
+                                        value={fields.status || "active"}
+                                        onChange={(event) => setFields({ ...fields, status: event.target.value })}
+                                        style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}
+                                    >
+                                        {MARKER_STATUSES.map((markerStatus) => (
+                                            <option key={markerStatus} value={markerStatus} style={{ background: "#111827", color: "#fff" }}>
+                                                {mapFeatureStatusMeta(markerStatus).label}
+                                            </option>
+                                        ))}
+                                    </select>
 
                                     <label style={labelStyle}>Note (optional)</label>
                                     <textarea style={{ ...inputStyle, minHeight: "4.2rem", resize: "vertical" }} value={fields.note ?? ""} onChange={(event) => setFields({ ...fields, note: event.target.value })} />
@@ -3732,6 +3787,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const tier = Math.max(1, Math.min(4, Number(fields.tier) || 2));
             const population = Number(fields.population);
             const ownerCode = String(fields.ownerCode ?? "").trim();
+            const markerStatusRaw = String(fields.status ?? "active").trim().toLowerCase();
+            const markerStatus = MARKER_STATUSES.includes(markerStatusRaw) ? markerStatusRaw : "active";
             const note = String(fields.note ?? "").trim();
             const foundedAt = String(fields.foundedAt ?? game?.gameDate ?? "").trim();
 
@@ -3771,6 +3828,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             name,
                             kind: isCity ? "city" : customKind,
                             ownerCode,
+                            status: markerStatus,
                             lng,
                             lat,
                             note,
@@ -3778,7 +3836,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         },
                     }]);
                     endClickMode();
-                    setFields({ addType: type });
+                    setFields({ addType: type, status: "active" });
                     setStatus(`${name} added as a persistent world feature.`);
                 } catch (error) {
                     endClickMode();
@@ -3844,6 +3902,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     )}
                     <label style={labelStyle}>Associated country (optional)</label>
                     <PolitySelect polities={polities} value={fields.ownerCode ?? ""} onChange={(value) => setFields({ ...fields, ownerCode: value })} placeholder="Neutral / no associated country" />
+                    <label style={labelStyle}>Lifecycle status</label>
+                    <select
+                        value={fields.status || "active"}
+                        onChange={(event) => setFields({ ...fields, status: event.target.value })}
+                        style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}
+                    >
+                        {MARKER_STATUSES.map((markerStatus) => (
+                            <option key={markerStatus} value={markerStatus} style={{ background: "#111827", color: "#fff" }}>
+                                {mapFeatureStatusMeta(markerStatus).label}
+                            </option>
+                        ))}
+                    </select>
+                    <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.3rem" }}>
+                        Planned and under-construction features remain canonical map objects before they become operational; damaged, abandoned, and destroyed features also remain visible historical objects.
+                    </div>
                     <label style={labelStyle}>Note (optional)</label>
                     <textarea style={{ ...inputStyle, minHeight: "4.2rem", resize: "vertical" }} value={fields.note ?? ""} onChange={(event) => setFields({ ...fields, note: event.target.value })} placeholder="Purpose, status, or short description…" />
                     <label style={labelStyle}>Founded / established date (optional)</label>
@@ -3855,7 +3928,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     Place on map →
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.38rem" }}>
-                    Placement changes the present canonical world only. Normal future simulation remains free to rename, destroy, replace, or otherwise evolve the feature.
+                    Placement changes the present canonical world only. Normal future simulation remains free to rename or lifecycle-update the same stable feature; historical damage/destruction changes status rather than deleting its identity.
                 </div>
                 {statusLine}
             </div>

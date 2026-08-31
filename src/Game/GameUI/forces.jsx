@@ -1,5 +1,5 @@
 /*! Open Historia — Force Manager / Forces panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   subscribeUnits,
   getUnits,
@@ -176,7 +176,7 @@ const fieldsFromUnit = (unit) => ({
 // map interaction model is retained for normal player deploys. Editing an existing
 // force here is an AUTHORITATIVE admin action and intentionally does not queue a
 // player order or ask the AI for permission.
-export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle }) => {
+export const ForcesPanel = memo(function ForcesPanel({ mapRef, topOffset = "0px", open = false, onToggle }) {
   const setOpen = (next) => {
     const resolved = typeof next === "function" ? next(open) : next;
     if (resolved !== open) onToggle?.();
@@ -198,17 +198,34 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
 
   useEffect(() => {
     const unsubscribe = subscribeUnits(() => {
+      const nextMode = getInteractionMode();
+      setMode((current) =>
+        current?.kind === nextMode?.kind &&
+        current?.unitId === nextMode?.unitId
+          ? current
+          : nextMode
+      );
+
+      // A closed Force Manager has no reason to rebuild/filter the entire unit list.
+      // Interaction-mode changes still flow so the lightweight map-action toast works.
+      if (!open) return;
       setUnits(getUnits());
-      setMode(getInteractionMode());
       setAllowedTypes(getAllowedUnitTypes());
     });
     return unsubscribe;
-  }, []);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setUnits(getUnits());
+    setAllowedTypes(getAllowedUnitTypes());
+  }, [open]);
 
   const [, setNamesEpoch] = useState(0);
   useEffect(() => {
+    if (!open) return;
     ensurePolityNames().then(() => setNamesEpoch((epoch) => epoch + 1)).catch(() => {});
-  }, [units.length]);
+  }, [open, units.length]);
 
   const availableTypes =
     Array.isArray(allowedTypes) && allowedTypes.length
@@ -574,6 +591,6 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
       )}
     </>
   );
-};
+});
 
 export default ForcesPanel;

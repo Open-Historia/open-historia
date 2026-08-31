@@ -1,5 +1,5 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { appendDiplomaticPlayerMessage, sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
@@ -8,6 +8,7 @@ import { Actions } from "./actions";
 import {
     getNationColors,
     getNationFlags,
+    JSON_URLS,
     loadCountryNames as loadCachedCountryNames,
 } from "../../runtime/assets.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -15,8 +16,10 @@ import {
     chatParticipantSetKey,
     mergeIncomingChats,
     readChatsState,
+    readChatsStateView,
     readGameData,
     readWorldState,
+    readWorldStateView,
     reconcileChatsForPlayer,
     resolveChatParticipantIdentity,
     writeChatsState,
@@ -32,6 +35,7 @@ const saveAllChats = async (chats, { world = null, playerCountry = "" } = {}) =>
 
 const loadAllChats = async ({ force = false, world = null, playerCountry = "" } = {}) => {
     try {
+        if (!world) return await readChatsStateView({ force });
         return await readChatsState({ force, world, playerCountry });
     } catch { return []; }
 };
@@ -57,6 +61,13 @@ const chatStorageSignature = (list) => (Array.isArray(list) ? list : []).map((ch
         last?.text ?? "",
     ].join("\u001e");
 }).join("\u001f");
+
+const chatsNeedIdentityMigration = (list) =>
+    (Array.isArray(list) ? list : []).some((chat) =>
+        (Array.isArray(chat?.countries) ? chat.countries : []).some((country) =>
+            country && typeof country === "object" && !String(country?.polityKey || "").trim()
+        )
+    );
 
 const storageAddsChatInformation = (local, stored) => {
     const localById = new Map((Array.isArray(local) ? local : []).map((chat) => [String(chat?.id ?? ""), chat]));
@@ -260,17 +271,11 @@ const nationColorFromCode = (code, map) => {
     return null;
 };
 
+const NationColorContext = React.createContext({});
+
 const useNationColor = (code) => {
-    const [color, setColor] = useState(null);
-    useEffect(() => {
-        if (!code) return;
-        let cancelled = false;
-        getNationColors().then(map => {
-            if (!cancelled) setColor(nationColorFromCode(code, map));
-        });
-            return () => { cancelled = true; };
-    }, [code]);
-    return color;
+    const map = React.useContext(NationColorContext);
+    return useMemo(() => nationColorFromCode(code, map), [code, map]);
 };
 
 // ── Markdown styles ───────────────────────────────────────────────────────────
@@ -375,7 +380,7 @@ const ChatDateSeparator = ({ value }) => (
     </div>
 );
 
-const MessageBubble = ({ msg }) => {
+const MessageBubble = memo(function MessageBubble({ msg }) {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
     const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker, polityKey: msg.polityKey });
@@ -385,7 +390,7 @@ const MessageBubble = ({ msg }) => {
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible", contentVisibility: "auto", containIntrinsicSize: "0 88px" }}>
         <div style={{ position: "relative", maxWidth: "90%", overflow: "visible" }}>
 
         {!isPlayer && (
@@ -434,11 +439,11 @@ const MessageBubble = ({ msg }) => {
         </div>
         </div>
     );
-};
+});
 
 // ── Reaction bubble ───────────────────────────────────────────────────────────
 
-const ReactionBubble = ({ country, emoji, flag, code }) => {
+const ReactionBubble = memo(function ReactionBubble({ country, emoji, flag, code }) {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
@@ -496,9 +501,9 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
         </div>
         </div>
     );
-};
+});
 
-const TypingBubble = ({ speaker, code, polityKey }) => {
+const TypingBubble = memo(function TypingBubble({ speaker, code, polityKey }) {
     const flag = useCountryFlag({ code, name: speaker, polityKey });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
@@ -508,7 +513,7 @@ const TypingBubble = ({ speaker, code, polityKey }) => {
         </div>
         </div>
     );
-};
+});
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
@@ -636,8 +641,15 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
 // parliament. Each NPC may speak at most once per player message and the burst is
 // capped even in very large conferences.
 const MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE = 3;
+const CHAT_INITIAL_RENDER_WINDOW = 4;
+const CHAT_AUTO_RENDER_TARGET = 12;
+const CHAT_RENDER_WINDOW_STEP = 40;
+const CHAT_PROGRESSIVE_RENDER_STEP = 1;
+const CHAT_AI_HISTORY_WINDOW = 24;
+const CHAT_LIST_INITIAL_WINDOW = 12;
+const CHAT_LIST_WINDOW_STEP = 12;
 
-const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBack, onMessagesUpdate }) => {
+const ConversationView = memo(function ConversationView({ chat, playerCountry, world, gameDate, onDelete, onBack, onMessagesUpdate }) {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -666,6 +678,7 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
     const [playerInput, setPlayerInput]         = useState("");
     const [pendingCountry, setPendingCountry]   = useState(null);
     const [speakingCountry, setSpeakingCountry] = useState(null);
+    const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
 
     const lastPlayerMessage = useRef("");
     const messagesEndRef    = useRef(null);
@@ -678,13 +691,80 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
 
     useEffect(() => {
         const saved = chat.messages ?? [];
-        if (saved.length > 0) loadDiplomaticHistory(saved);
-        else startDiplomaticChat();
+        setVisibleMessageLimit(Math.min(CHAT_INITIAL_RENDER_WINDOW, Math.max(1, saved.length)));
+
+        let cancelled = false;
+        let idleHandle = null;
+        let timer = null;
+
+        // UI and AI context are separate concerns. Paint a small recent tail first;
+        // then hydrate the bounded diplomatic model history after the browser has had
+        // a chance to render. Rolling memorySummary exists specifically so a long
+        // negotiation does not require replaying hundreds of messages on every open.
+        const hydrateAiHistory = () => {
+            if (cancelled) return;
+            if (saved.length > 0) {
+                loadDiplomaticHistory(saved.slice(-CHAT_AI_HISTORY_WINDOW));
+            } else {
+                startDiplomaticChat();
+            }
+        };
+
+        if (typeof window.requestIdleCallback === "function") {
+            idleHandle = window.requestIdleCallback(hydrateAiHistory, { timeout: 1800 });
+        } else {
+            timer = window.setTimeout(hydrateAiHistory, 50);
+        }
+
+        return () => {
+            cancelled = true;
+            if (idleHandle != null && typeof window.cancelIdleCallback === "function") {
+                window.cancelIdleCallback(idleHandle);
+            }
+            if (timer) window.clearTimeout(timer);
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chat.id]);
 
+    const visibleMessages = useMemo(
+        () => messages.length > visibleMessageLimit
+            ? messages.slice(messages.length - visibleMessageLimit)
+            : messages,
+        [messages, visibleMessageLimit],
+    );
+    const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
+
+    useEffect(() => {
+        const target = Math.min(CHAT_AUTO_RENDER_TARGET, messages.length);
+        if (visibleMessageLimit >= target) return undefined;
+
+        let cancelled = false;
+        let idleHandle = null;
+        let timer = null;
+        const reveal = () => {
+            if (cancelled) return;
+            setVisibleMessageLimit((current) =>
+                Math.min(target, current + CHAT_PROGRESSIVE_RENDER_STEP)
+            );
+        };
+
+        if (typeof window.requestIdleCallback === "function") {
+            idleHandle = window.requestIdleCallback(reveal, { timeout: 700 });
+        } else {
+            timer = window.setTimeout(reveal, 16);
+        }
+
+        return () => {
+            cancelled = true;
+            if (idleHandle != null && typeof window.cancelIdleCallback === "function") {
+                window.cancelIdleCallback(idleHandle);
+            }
+            if (timer) window.clearTimeout(timer);
+        };
+    }, [messages.length, visibleMessageLimit]);
+
         useEffect(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
         }, [messages, isLoading, phase]);
 
         const pushMessages = (updated) => {
@@ -882,16 +962,34 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
                 Begin the diplomatic conversation.
                 </p>
             )}
-            {messages.map((msg, i) => {
-                const previous = messages[i - 1];
+            {hiddenMessageCount > 0 && (
+                <button
+                    type="button"
+                    onClick={() => setVisibleMessageLimit((current) => current + CHAT_RENDER_WINDOW_STEP)}
+                    style={{
+                        alignSelf: "center",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.09)",
+                        borderRadius: "999px",
+                        color: "rgba(255,255,255,0.58)",
+                        cursor: "pointer",
+                        fontSize: "0.68rem",
+                        padding: "0.35rem 0.65rem",
+                    }}
+                >
+                    Show {Math.min(hiddenMessageCount, CHAT_RENDER_WINDOW_STEP)} earlier message{Math.min(hiddenMessageCount, CHAT_RENDER_WINDOW_STEP) === 1 ? "" : "s"}
+                </button>
+            )}
+            {visibleMessages.map((msg, i) => {
+                const previous = visibleMessages[i - 1];
                 const dateKey = chatDateKey(msg?.time);
                 const previousDateKey = chatDateKey(previous?.time);
-                const showDateSeparator = Boolean(dateKey) && dateKey !== previousDateKey;
+                const showDateSeparator = Boolean(dateKey) && (i === 0 || dateKey !== previousDateKey);
 
                 return (
-                    <React.Fragment key={`${i}-${dateKey || "undated"}`}>
+                    <React.Fragment key={`${messages.length - visibleMessages.length + i}-${dateKey || "undated"}`}>
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
-                    <MessageBubble msg={msg} chatCountries={countries} />
+                    <MessageBubble msg={msg} />
                     </React.Fragment>
                 );
             })}
@@ -940,7 +1038,7 @@ const ConversationView = ({ chat, playerCountry, world, gameDate, onDelete, onBa
             ) : null}
             </>
         );
-};
+});
 
 const CountryTurnLabel = ({ country }) => {
     const flag = useCountryFlag(country);
@@ -1012,8 +1110,8 @@ const TOAST_DATE_CONTROL_FALLBACK_RIGHT_PX = 184;
 
 // Keep the pre-5D.4 toolbar's background cadence instead of increasing it.
 // Hidden tabs back off further because responsiveness matters less there.
-const NOTIFICATION_VISIBLE_POLL_MS = 15000;
-const NOTIFICATION_HIDDEN_POLL_MS = 30000;
+const NOTIFICATION_VISIBLE_POLL_MS = 0; // event-driven; external safety runs on tab return
+const NOTIFICATION_HIDDEN_POLL_MS = 0; // event-driven
 
 let activeDiplomaticChatId = "";
 let notificationAudioContext = null;
@@ -1239,7 +1337,7 @@ const ChatListDateSeparator = ({ value }) => (
     </div>
 );
 
-const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
+const ChatListItem = memo(function ChatListItem({ chat, onClick, onDelete, unread = false }) {
     const [hovered, setHovered] = React.useState(false);
     // Deleting a chat is not undoable, so the bin arms first and deletes on the
     // second click. Resets whenever the pointer leaves the row, so a half-pressed
@@ -1251,7 +1349,7 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
     const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
 
     return (
-        <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
+        <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative", contentVisibility: "auto", containIntrinsicSize: "0 64px" }}>
         <button onClick={onClick} style={{ width: "100%", padding: "0.7rem 0.9rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: hovered ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer", transition: "background 0.15s", fontFamily: "sans-serif", textAlign: "left" }}>
         {/* Fixed-width slot, always rendered, so read and unread rows stay aligned. */}
         <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
@@ -1274,7 +1372,7 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
         )}
         </div>
     );
-};
+});
 
 // ── Main ChatPanel ────────────────────────────────────────────────────────────
 
@@ -1285,13 +1383,15 @@ export const requestDiplomaticChat = (country) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
 };
 
-const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, requestedChatId, onConsumeRequestedChat }) => {
+const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, onConsumeRequest, requestedChatId, onConsumeRequestedChat }) {
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
     const [gameDate, setGameDate]                 = useState("");
     const [world, setWorld]                       = useState(null);
+    const [identityWorld, setIdentityWorld]       = useState(null);
     const [flagCatalog, setFlagCatalog]           = useState({});
+    const [colorCatalog, setColorCatalog]         = useState({});
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
@@ -1299,7 +1399,15 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     const wasOpenRef = useRef(false);
     const identitySignatureRef = useRef("");
     const identityRefreshSeqRef = useRef(0);
-    const openChats = chats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    const [visibleChatLimit, setVisibleChatLimit] = useState(CHAT_LIST_INITIAL_WINDOW);
+    const openChats = useMemo(
+        () => chats.filter((chat) =>
+            chat.status !== "closed" &&
+            Array.isArray(chat.countries) &&
+            chat.countries.length > 0
+        ),
+        [chats],
+    );
 
     // Expose only the currently VISIBLE conversation to the lightweight watcher.
     // New messages arriving in this exact thread are marked seen and never toast.
@@ -1320,9 +1428,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
 
     const refreshDiplomaticIdentityState = async ({ preserveActiveChat = true } = {}) => {
         const refreshSeq = ++identityRefreshSeqRef.current;
+        setLoadingCountries(true);
         const [gameData, nextWorld, nextCountries, nextFlags] = await Promise.all([
-            readGameData({ force: true }),
-            readWorldState({ force: true }),
+            readGameData({ force: false }),
+            readWorldStateView({ force: false }),
             loadCountryNames(),
             getNationFlags().catch(() => ({})),
         ]);
@@ -1342,8 +1451,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
         setPlayerCountry(nextPlayer);
         setGameDate(nextGameDate);
         setWorld(nextWorld);
+        setIdentityWorld(nextWorld);
         setCountries(nextCountries.map((country) => canonicalCountry(country, nextWorld)));
         setFlagCatalog(nextFlags || {});
+        setLoadingCountries(false);
 
         // Reopening diplomacy and opening the country selector should normally be
         // cheap: fresh world + flags + country catalog only. Full semantic chat
@@ -1410,24 +1521,33 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     // unread-first + storage order, which is why a newly active thread could remain
     // buried near the bottom. Grouping is by the date of each thread's latest dated
     // message, matching the date semantics used inside the conversation itself.
-    const orderedChats = openChats
-        .map((chat, index) => ({
-            chat,
-            index,
-            activityDate: chatLastActivityDate(chat),
-            unread: unreadIds.has(String(chat.id)),
-        }))
-        .sort((left, right) => {
-            const byDate = chatActivitySortValue(right.activityDate) - chatActivitySortValue(left.activityDate);
-            if (byDate !== 0) return byDate;
+    const orderedChats = useMemo(
+        () => openChats
+            .map((chat, index) => ({
+                chat,
+                index,
+                activityDate: chatLastActivityDate(chat),
+                unread: unreadIds.has(String(chat.id)),
+            }))
+            .sort((left, right) => {
+                const byDate = chatActivitySortValue(right.activityDate) - chatActivitySortValue(left.activityDate);
+                if (byDate !== 0) return byDate;
 
-            // Within the same in-game day there may be no wall-clock timestamp.
-            // Prefer unread/new material, then newer storage insertion as a stable
-            // approximation without adding another persistence field or timer.
-            if (left.unread !== right.unread) return left.unread ? -1 : 1;
-            return right.index - left.index;
-        })
-        .map((entry) => entry.chat);
+                // Within the same in-game day there may be no wall-clock timestamp.
+                // Prefer unread/new material, then newer storage insertion as a stable
+                // approximation without adding another persistence field or timer.
+                if (left.unread !== right.unread) return left.unread ? -1 : 1;
+                return right.index - left.index;
+            })
+            .map((entry) => entry.chat),
+        [openChats, unreadIds],
+    );
+
+    const visibleOrderedChats = useMemo(
+        () => orderedChats.slice(0, Math.max(CHAT_LIST_INITIAL_WINDOW, visibleChatLimit)),
+        [orderedChats, visibleChatLimit],
+    );
+    const hiddenChatCount = Math.max(0, orderedChats.length - visibleOrderedChats.length);
 
     // Opening a chat marks it read, so messages that landed while the panel was
     // already open don't come back flagged on the next open.
@@ -1439,15 +1559,40 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     useEffect(() => {
         const justOpened = isOpen && !wasOpenRef.current;
         wasOpenRef.current = isOpen;
+        if (!justOpened) return;
 
-        if (!justOpened || !hasLoadedInitialData) return;
+        setVisibleChatLimit(CHAT_LIST_INITIAL_WINDOW);
+        if (!hasLoadedInitialData) return;
 
-        refreshDiplomaticIdentityState()
-            .catch(() => {
-                // Keep the last good UI state if a refresh fails.
-            });
-        // `refreshDiplomaticIdentityState` intentionally reads the live save on open.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // Opening diplomacy is presentation, not world reconstruction. While the
+        // panel was closed it intentionally ignored its heavier semantic listeners,
+        // so catch up from the canonical normalized chat view only. A normal turn's
+        // writeChatsState() already primes this cache.
+        let cancelled = false;
+        const refreshCachedArchive = async () => {
+            try {
+                const saved = await readChatsStateView({ force: false });
+                if (cancelled || !Array.isArray(saved)) return;
+                startTransition(() => {
+                    setChats((current) => current === saved ? current : saved);
+                    setActiveChat((current) => {
+                        if (!current) return current;
+                        return saved.find((candidate) => candidate.id === current.id) || current;
+                    });
+                });
+            } catch {
+                // Keep the last good panel state. Opening the drawer must never
+                // become a save/world retry loop.
+            }
+        };
+
+        if (typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => void refreshCachedArchive());
+        } else {
+            window.setTimeout(() => void refreshCachedArchive(), 0);
+        }
+
+        return () => { cancelled = true; };
     }, [isOpen, hasLoadedInitialData]);
 
     useEffect(() => {
@@ -1456,40 +1601,65 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
         let cancelled = false;
         (async () => {
             try {
-                const [countryList, gameData, worldData, flags] = await Promise.all([
-                    loadCountryNames(),
-                    readGameData({ force: true }),
-                    readWorldState({ force: true }),
-                    getNationFlags({ force: true }).catch(() => ({})),
+                // Minimum first-paint dependency set. Country PMTiles, custom flags,
+                // and nation colors are selector/decorative data and must not sit in
+                // front of the diplomatic drawer opening.
+                const [gameData, worldData, rawChats] = await Promise.all([
+                    readGameData({ force: false }),
+                    readWorldStateView({ force: false }),
+                    loadAllChats({ force: false }),
                 ]);
                 if (cancelled) return;
 
                 const currentPlayer = gameData.country || "your nation";
-                const savedChats = await loadAllChats({
-                    force: true,
-                    world: worldData,
-                    playerCountry: currentPlayer,
-                });
+                const needsMigration = chatsNeedIdentityMigration(rawChats);
+                const savedChats = needsMigration
+                    ? reconcileChatsForPlayer(rawChats, worldData, currentPlayer)
+                    : rawChats;
                 if (cancelled) return;
 
-                setCountries(countryList.map((country) => canonicalCountry(country, worldData)));
                 setPlayerCountry(currentPlayer);
                 setGameDate(gameData.gameDate || "");
                 setWorld(worldData);
-                setFlagCatalog(flags || {});
+                setIdentityWorld(worldData);
                 identitySignatureRef.current = polityIdentitySignature(worldData);
-                setLoadingCountries(false);
                 setChats(savedChats);
                 lastStoredChatSignatureRef.current = chatStorageSignature(savedChats);
                 setHasLoadedInitialData(true);
 
-                // Persist the one-time migration immediately: player aliases are
-                // stripped from participant lists and duplicate open threads created
-                // by [counterpart, player] vs [counterpart] collapse in storage too.
-                saveAllChats(savedChats);
+                // The expensive country PMTiles catalog is loaded only if the player
+                // explicitly opens Start New Chat.
+                setLoadingCountries(true);
+
+                // Visual catalogs enrich an already-painted panel.
+                const enrichVisualCatalogs = async () => {
+                    try {
+                        const [flags, colors] = await Promise.all([
+                            getNationFlags().catch(() => ({})),
+                            getNationColors().catch(() => ({})),
+                        ]);
+                        if (cancelled) return;
+                        startTransition(() => {
+                            setFlagCatalog(flags || {});
+                            setColorCatalog(colors || {});
+                        });
+                    } catch {
+                        // Stock/fallback presentation remains valid without overrides.
+                    }
+                };
+
+                if (typeof window.requestIdleCallback === "function") {
+                    window.requestIdleCallback(() => void enrichVisualCatalogs(), { timeout: 1800 });
+                } else {
+                    window.setTimeout(() => void enrichVisualCatalogs(), 50);
+                }
+
+                // Persist only genuine legacy identity migration. Established saves
+                // already carry polityKey and must not rewrite the whole chat archive
+                // merely because the panel was opened.
+                if (needsMigration) saveAllChats(savedChats);
             } catch {
                 if (!cancelled) {
-                    setLoadingCountries(false);
                     setHasLoadedInitialData(true);
                 }
             }
@@ -1502,7 +1672,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
         if (!isOpen || !hasLoadedInitialData) return;
         let cancelled = false;
         const refresh = () => {
-            getNationFlags({ force: true })
+            getNationFlags()
                 .then((flags) => { if (!cancelled) setFlagCatalog(flags || {}); })
                 .catch(() => {});
         };
@@ -1514,49 +1684,45 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     }, [isOpen, hasLoadedInitialData]);
 
     useEffect(() => {
-        if (!isOpen || !hasLoadedInitialData) return;
+        if (!isOpen || !hasLoadedInitialData || typeof window === "undefined") return undefined;
 
         let cancelled = false;
-        let lastSignature = `${playerCountry}|${gameDate}`;
-        const go = async () => {
-            try {
-                const data = await readGameData({ force: true });
-                if (cancelled) return;
 
-                const nextCountry = data.country || playerCountry;
-                const nextDate = data.gameDate || gameDate;
-                const signature = `${nextCountry}|${nextDate}`;
-
-                setPlayerCountry(nextCountry);
-                setGameDate(nextDate);
-
-                // A date/country change means a turn may have renamed/reconstituted
-                // polities. Refresh world identity and the dynamic country catalog
-                // only then, rather than force-reading world.json every five seconds.
-                if (signature !== lastSignature) {
-                    lastSignature = signature;
-                    const [nextWorld, nextCountries] = await Promise.all([
-                        readWorldState({ force: true }),
-                        loadCountryNames(),
-                    ]);
-                    if (cancelled) return;
-                    setWorld(nextWorld);
-                    setCountries(nextCountries.map((country) => canonicalCountry(country, nextWorld)));
-                    identitySignatureRef.current = polityIdentitySignature(nextWorld);
-                    setChats((prev) => {
-                        const reconciled = reconcileChatsForPlayer(prev, nextWorld, nextCountry);
-                        lastStoredChatSignatureRef.current = chatStorageSignature(reconciled);
-                        saveAllChats(reconciled);
-                        return reconciled;
-                    });
-                }
-            } catch { /* keep the last good UI state */ }
+        const onGameUpdated = (event) => {
+            const data = event?.detail?.game;
+            if (!data || cancelled) return;
+            const nextCountry = data.country || playerCountry;
+            const nextDate = data.gameDate || gameDate;
+            setPlayerCountry((current) => current === nextCountry ? current : nextCountry);
+            setGameDate((current) => current === nextDate ? current : nextDate);
         };
 
-        const iv = setInterval(go, 5000);
+        const onWorldUpdated = (event) => {
+            const nextWorld = event?.detail?.world;
+            if (!nextWorld || cancelled) return;
+            const nextSignature = polityIdentitySignature(nextWorld);
+            const identityChanged = nextSignature !== identitySignatureRef.current;
+
+            setWorld(nextWorld);
+            if (!identityChanged) return;
+
+            identitySignatureRef.current = nextSignature;
+            setIdentityWorld(nextWorld);
+            setCountries((current) => current.map((country) => canonicalCountry(country, nextWorld)));
+            setChats((current) => {
+                const reconciled = reconcileChatsForPlayer(current, nextWorld, playerCountry);
+                lastStoredChatSignatureRef.current = chatStorageSignature(reconciled);
+                saveAllChats(reconciled);
+                return reconciled;
+            });
+        };
+
+        window.addEventListener("oh:game-updated", onGameUpdated);
+        window.addEventListener("oh:world-updated", onWorldUpdated);
         return () => {
             cancelled = true;
-            clearInterval(iv);
+            window.removeEventListener("oh:game-updated", onGameUpdated);
+            window.removeEventListener("oh:world-updated", onWorldUpdated);
         };
     }, [isOpen, hasLoadedInitialData, playerCountry, gameDate]);
 
@@ -1570,11 +1736,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     // that semantic cost only when storage contains information the local UI does
     // not already have.
     useEffect(() => {
-        if (!isOpen || !hasLoadedInitialData || !world) return;
+        if (!isOpen || !hasLoadedInitialData || !world || typeof window === "undefined") return undefined;
 
         let cancelled = false;
-        const sync = () => loadAllChats({ force: true })
-        .then((saved) => {
+
+        const applySaved = (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             const storedSignature = chatStorageSignature(saved);
 
@@ -1586,12 +1752,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
                     return prev;
                 }
 
-                // An in-flight local save can make storage temporarily OLDER than
-                // React state. Never invoke the expensive semantic merger merely to
-                // rediscover that local state already has more messages.
-                if (!storageAddsChatInformation(prev, saved)) {
-                    return prev;
-                }
+                if (!storageAddsChatInformation(prev, saved)) return prev;
 
                 const merged = mergeIncomingChats(prev, saved, world, { playerCountry });
                 lastStoredChatSignatureRef.current = chatStorageSignature(merged);
@@ -1609,13 +1770,44 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
                 });
                 return merged;
             });
-        })
-        .catch(() => {});
+        };
 
-        const iv = setInterval(sync, 5000);
+        const adoptCanonicalArchive = async () => {
+            try {
+                const saved = await readChatsStateView({ force: false });
+                if (cancelled || !Array.isArray(saved)) return;
+
+                const storedSignature = chatStorageSignature(saved);
+                lastStoredChatSignatureRef.current = storedSignature;
+
+                startTransition(() => {
+                    setChats((current) =>
+                        chatStorageSignature(current) === storedSignature ? current : saved
+                    );
+                    setActiveChat((current) => {
+                        if (!current) return current;
+                        return saved.find((candidate) => candidate.id === current.id) || current;
+                    });
+                });
+            } catch {
+                // Explicit diplomacy update fallback below remains available.
+            }
+        };
+
+        const onRuntimeUpdate = (event) => {
+            if (event?.detail?.url !== JSON_URLS.chat) return;
+            void adoptCanonicalArchive();
+        };
+        const onDiplomacyUpdate = () => {
+            loadAllChats({ force: false }).then(applySaved).catch(() => {});
+        };
+
+        window.addEventListener("oh:runtime-json-updated", onRuntimeUpdate);
+        window.addEventListener("oh:diplomacy-chats-updated", onDiplomacyUpdate);
         return () => {
             cancelled = true;
-            clearInterval(iv);
+            window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdate);
+            window.removeEventListener("oh:diplomacy-chats-updated", onDiplomacyUpdate);
         };
     }, [isOpen, hasLoadedInitialData, world, playerCountry]);
 
@@ -1632,7 +1824,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
         return available;
     }, [countries, playerCountry, world]);
 
-    const handleMessagesUpdate = (chatId, newMessages) => {
+    const handleMessagesUpdate = useCallback((chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") {
             recordRecentDiplomaticOutgoing(chatId);
         }
@@ -1647,15 +1839,17 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
             setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
-    };
+    }, []);
 
     const openCountrySelector = async () => {
         setShowSelector(true);
+        setLoadingCountries(true);
         try {
             await refreshDiplomaticIdentityState({ preserveActiveChat: true });
         } catch {
             // The selector can still use the last good identity/flag catalog if a
             // one-off refresh fails. No polling or retry loop is introduced here.
+            setLoadingCountries(false);
         }
     };
 
@@ -1708,7 +1902,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
     // This is what the old Archive button did, so there is no separate archive
     // control any more: two buttons that both close a chat only invited the
     // question of which one really deleted it.
-    const handleDeleteChat = (id) => {
+    const handleDeleteChat = useCallback((id) => {
         setChats(prev => {
             const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
             lastStoredChatSignatureRef.current = chatStorageSignature(updated);
@@ -1716,7 +1910,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
             return updated;
         });
         if (activeChat?.id === id) setActiveChat(null);
-    };
+    }, [activeChat?.id]);
 
     // Open (or reuse) a 1-on-1 chat requested from a region popup, using stable
     // lineage identity rather than the current display-name spelling.
@@ -1771,8 +1965,19 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, requestedChatId, hasLoadedInitialData, chats]);
 
+        const closeActiveChat = useCallback(() => setActiveChat(null), []);
+        const deleteActiveChat = useCallback(() => {
+            if (activeChat?.id != null) handleDeleteChat(activeChat.id);
+        }, [activeChat?.id, handleDeleteChat]);
+
+        const flagContextValue = useMemo(
+            () => ({ flags: flagCatalog, world: identityWorld || world }),
+            [flagCatalog, identityWorld, world],
+        );
+
         return (
-            <FlagContext.Provider value={{ flags: flagCatalog, world }}>
+            <FlagContext.Provider value={flagContextValue}>
+            <NationColorContext.Provider value={colorCatalog}>
             <>
             <MarkdownStyleInjector />
             <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(17,24,39,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
@@ -1780,7 +1985,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} world={world} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
+                <ConversationView key={String(activeChat.id)} chat={activeChat} playerCountry={playerCountry} world={identityWorld || world} gameDate={gameDate} onDelete={deleteActiveChat} onBack={closeActiveChat} onMessagesUpdate={handleMessagesUpdate} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -1790,14 +1995,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                {openChats.length === 0 ? (
+                {!hasLoadedInitialData ? (
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.32)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
+                    Loading diplomatic conversations…
+                    </div>
+                ) : openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : orderedChats.map((chat, index) => {
+                ) : visibleOrderedChats.map((chat, index) => {
                     const activityDate = chatLastActivityDate(chat);
                     const previousActivityDate = index > 0
-                        ? chatLastActivityDate(orderedChats[index - 1])
+                        ? chatLastActivityDate(visibleOrderedChats[index - 1])
                         : null;
                     const showDateSeparator = index === 0 ||
                         chatDateKey(activityDate) !== chatDateKey(previousActivityDate);
@@ -1814,6 +2023,26 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
                         </React.Fragment>
                     );
                 })}
+                {hiddenChatCount > 0 && (
+                    <button
+                        onClick={() => setVisibleChatLimit((current) =>
+                            Math.min(orderedChats.length, current + CHAT_LIST_WINDOW_STEP)
+                        )}
+                        style={{
+                            marginTop: "0.35rem",
+                            padding: "0.55rem",
+                            borderRadius: "9px",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            background: "rgba(255,255,255,0.035)",
+                            color: "rgba(255,255,255,0.58)",
+                            cursor: "pointer",
+                            fontSize: "0.72rem",
+                            fontFamily: "sans-serif",
+                        }}
+                    >
+                        Show {Math.min(CHAT_LIST_WINDOW_STEP, hiddenChatCount)} older conversations · {hiddenChatCount} hidden
+                    </button>
+                )}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <button onClick={openCountrySelector} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
@@ -1824,13 +2053,14 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest, reques
             )}
             </div>
             </>
+            </NationColorContext.Provider>
             </FlagContext.Provider>
         );
-};
+});
 
 // ── Chat toolbar button + 5D.4 notification center ───────────────────────────
 
-const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
+const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
     const [pendingChatId, setPendingChatId] = useState("");
@@ -1880,7 +2110,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             if (cancelled) return;
             clear();
             try {
-                const world = await readWorldState({ force: true });
+                const world = await readWorldStateView({ force: false });
                 const queue = Array.isArray(world?.pendingEventOutreach)
                     ? world.pendingEventOutreach
                     : [];
@@ -2005,11 +2235,9 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     // compare only per-chat count + tail fingerprint. Full history is never rescanned.
     useEffect(() => {
         let cancelled = false;
-        let timer = null;
-
-        const check = async () => {
+        const check = async (provided = null, { force = false } = {}) => {
             try {
-                const saved = await loadAllChats({ force: true });
+                const saved = provided ?? await loadAllChats({ force });
                 if (cancelled || !Array.isArray(saved)) return;
 
                 const open = saved.filter((chat) =>
@@ -2165,33 +2393,35 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             }
         };
 
-        const schedule = () => {
-            if (cancelled) return;
-            clearTimeout(timer);
-            timer = setTimeout(async () => {
-                await check();
-                schedule();
-            }, document.hidden ? NOTIFICATION_HIDDEN_POLL_MS : NOTIFICATION_VISIBLE_POLL_MS);
-        };
 
-        const onVisibilityChange = () => {
-            clearTimeout(timer);
-            check().finally(schedule);
+        const onRuntimeUpdate = (event) => {
+            if (event?.detail?.url !== JSON_URLS.chat) return;
+            void check(event?.detail?.value);
         };
 
         const onExternalChatUpdate = () => {
-            clearTimeout(timer);
-            check().finally(schedule);
+            void loadAllChats({ force: false }).then((saved) => check(saved)).catch(() => {});
         };
 
-        check().finally(schedule);
+        const onVisibilityChange = () => {
+            if (document.hidden) return;
+            const run = () => void check(null, { force: true });
+            if (typeof window.requestIdleCallback === "function") {
+                window.requestIdleCallback(run, { timeout: 2500 });
+            } else {
+                window.setTimeout(run, 250);
+            }
+        };
+
+        void check(null, { force: false });
         document.addEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("oh:runtime-json-updated", onRuntimeUpdate);
         window.addEventListener("oh:diplomacy-chats-updated", onExternalChatUpdate);
 
         return () => {
             cancelled = true;
-            clearTimeout(timer);
             document.removeEventListener("visibilitychange", onVisibilityChange);
+            window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdate);
             window.removeEventListener("oh:diplomacy-chats-updated", onExternalChatUpdate);
         };
     }, [isOpen, soundEnabled]);
@@ -2316,6 +2546,10 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         };
     }, [unseenCount, notificationItems.length, soundEnabled, desktopPermission]);
 
+    const closePanel = useCallback(() => onToggle(), [onToggle]);
+    const consumePendingCountry = useCallback(() => setPendingCountry(null), []);
+    const consumePendingChat = useCallback(() => setPendingChatId(""), []);
+
     const notificationPortal = typeof document !== "undefined"
         ? ReactDOM.createPortal(
             <>
@@ -2333,7 +2567,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     gap: "0.55rem",
                 }}
             >
-                {toastItems.map((item) => (
+                {!isOpen && toastItems.map((item) => (
                     <div
                         key={item.id}
                         role={item.chatId ? "button" : undefined}
@@ -2546,11 +2780,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         {hasOpened && (
             <ChatPanel
                 isOpen={isOpen}
-                onClose={onToggle}
+                onClose={closePanel}
                 requestedCountry={pendingCountry}
-                onConsumeRequest={() => setPendingCountry(null)}
+                onConsumeRequest={consumePendingCountry}
                 requestedChatId={pendingChatId}
-                onConsumeRequestedChat={() => setPendingChatId("")}
+                onConsumeRequestedChat={consumePendingChat}
             />
         )}
 
@@ -2622,17 +2856,19 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         </button>
         </>
     );
-};
+});
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
 const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
+    const toggleChat = useCallback(() => onTogglePanel("chat"), [onTogglePanel]);
+    const toggleActions = useCallback(() => onTogglePanel("actions"), [onTogglePanel]);
     return (
         <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "8.75rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
-        <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
-        <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
+        <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={toggleChat} />
+        <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={toggleActions} />
         </div>
     );
 });

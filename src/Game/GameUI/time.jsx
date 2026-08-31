@@ -1,9 +1,10 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { memo, startTransition, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import {
+    JSON_URLS,
     PMTILES_ARCHIVES,
     decodeVectorTile,
     getPmtilesArchive,
@@ -1262,14 +1263,14 @@ const TimelineHistoryPanel = ({
     );
 };
 
-const DateWidget = ({
+const DateWidget = memo(function DateWidget({
     activePanel = null,
     mapRef,
     onSetPanel = null,
     onTogglePanel = null,
     rightShift,
     topOffset = "0.5rem",
-}) => {
+}) {
     const [gameData, setGameData] = useState(null);
     const [events, setEvents] = useState([]);
     const [worldState, setWorldState] = useState(null);
@@ -1300,90 +1301,129 @@ const DateWidget = ({
 
     useEffect(() => {
         let cancelled = false;
+        loadCountryNames()
+            .then((countries) => {
+                if (!cancelled) setPolityLookup(new Map((countries ?? []).map((entry) => [entry.code, entry.name])));
+            })
+            .catch((lookupError) => {
+                if (!cancelled) console.error("Failed to load country names:", lookupError);
+            });
+        return () => { cancelled = true; };
+    }, []);
 
-        const loadLookups = async () => {
-            try {
-                const [countries, regions, nextCountryBounds, nextRegionBounds] = await Promise.all([
-                    loadCountryNames(),
-                                                                                                    loadRegionCatalog(),
-                                                                                                    loadCountryBounds(),
-                                                                                                    loadRegionBounds(),
-                ]);
+    // Region catalogs + PMTiles bounds exist only for the event-history camera.
+    // Do not decode/build them while the player is simply using the normal HUD.
+    useEffect(() => {
+        if (openPanel !== "history") return undefined;
+        let cancelled = false;
 
-                if (cancelled) {
-                    return;
-                }
-
+        Promise.all([
+            loadRegionCatalog(),
+            loadCountryBounds(),
+            loadRegionBounds(),
+        ])
+            .then(([regions, nextCountryBounds, nextRegionBounds]) => {
+                if (cancelled) return;
                 setCountryBounds(nextCountryBounds);
-                setPolityLookup(new Map((countries ?? []).map((entry) => [entry.code, entry.name])));
                 setRegionBounds(nextRegionBounds);
                 setRegionLookup(new Map((regions ?? []).map((entry) => [entry.id, entry])));
-            } catch (lookupError) {
-                if (!cancelled) {
-                    console.error("Failed to load timeline lookups:", lookupError);
-                }
-            }
-        };
+            })
+            .catch((lookupError) => {
+                if (!cancelled) console.error("Failed to load timeline map lookups:", lookupError);
+            });
 
-        loadLookups();
-
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+        return () => { cancelled = true; };
+    }, [openPanel]);
 
     useEffect(() => {
         let cancelled = false;
+        let pendingFrame = 0;
+        const pending = { game: null, events: null, world: null };
 
-        const loadState = async () => {
-            // Only the newest read in this component generation may apply. This
-            // prevents an older overlapping poll from landing after a newer one.
-            const readEpoch = ++stateReadEpochRef.current;
-
-            try {
-                const [game, nextEvents, world] = await Promise.all([
-                    readGameData({ force: true }),
-                                                                    readEventsState({ force: true }),
-                                                                    readWorldState({ force: true }),
-                ]);
-
-                if (cancelled || readEpoch !== stateReadEpochRef.current) {
-                    return;
-                }
-
-                // Trust canonical persisted state even when its round/date moved
-                // backwards (Undo, external restore, debug restore). Stale in-flight
-                // reads are handled by the epoch fence above rather than chronology.
-
-                setGameData(game);
-                setEvents(nextEvents);
-                setWorldState(world);
-            } catch (loadError) {
-                if (!cancelled) {
-                    console.error("Failed to load timeline state:", loadError);
-                }
+        const flush = () => {
+            pendingFrame = 0;
+            if (cancelled) return;
+            if (pending.game) {
+                setGameData(pending.game);
+                pending.game = null;
+            }
+            if (pending.events) {
+                setEvents(pending.events);
+                pending.events = null;
+            }
+            if (pending.world) {
+                setWorldState(pending.world);
+                pending.world = null;
             }
         };
 
-        loadState();
-        const interval = setInterval(loadState, 5000);
+        const queue = (key, value) => {
+            if (!value || cancelled) return;
+            pending[key] = value;
+            if (!pendingFrame) pendingFrame = window.requestAnimationFrame(flush);
+        };
+
+        const loadState = async ({ force = false } = {}) => {
+            const readEpoch = ++stateReadEpochRef.current;
+            try {
+                const [game, nextEvents, world] = await Promise.all([
+                    readGameData({ force }),
+                    readEventsState({ force }),
+                    readWorldState({ force }),
+                ]);
+                if (cancelled || readEpoch !== stateReadEpochRef.current) return;
+                queue("game", game);
+                queue("events", nextEvents);
+                queue("world", world);
+            } catch (loadError) {
+                if (!cancelled) console.error("Failed to load timeline state:", loadError);
+            }
+        };
+
+        const onGameUpdated = (event) => queue("game", event?.detail?.game);
+        const onWorldUpdated = (event) => queue("world", event?.detail?.world);
+        const onRuntimeUpdated = (event) => {
+            if (event?.detail?.url === JSON_URLS.events) queue("events", event?.detail?.value);
+        };
+        const onVisibility = () => {
+            if (document.visibilityState !== "visible") return;
+            const run = () => void loadState({ force: true });
+            if (typeof window.requestIdleCallback === "function") {
+                window.requestIdleCallback(run, { timeout: 2500 });
+            } else {
+                window.setTimeout(run, 250);
+            }
+        };
+
+        void loadState({ force: false });
+        window.addEventListener("oh:game-updated", onGameUpdated);
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        window.addEventListener("oh:runtime-json-updated", onRuntimeUpdated);
+        document.addEventListener("visibilitychange", onVisibility);
 
         return () => {
             cancelled = true;
-            clearInterval(interval);
+            if (pendingFrame) window.cancelAnimationFrame(pendingFrame);
+            window.removeEventListener("oh:game-updated", onGameUpdated);
+            window.removeEventListener("oh:world-updated", onWorldUpdated);
+            window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdated);
+            document.removeEventListener("visibilitychange", onVisibility);
         };
     }, []);
 
-    // Pre-game history: a fresh game (round 1, no events, no turns) whose
-    // scenario wrote a "World Before Round One" briefing gets its backstory
-    // generated once, the first time the player actually enters it. Waits out
-    // the main menu (the poll re-runs this every 5s) so tokens are never spent
-    // on a game the player is only hovering past; every other guard — busy
-    // lock, still-the-same-game check, the done-marker — lives in
-    // maybeGeneratePregameHistory itself.
-    const pregameAttemptedRef = React.useRef(false);
+    // Pre-game history: fresh saves bootstrap once on entry. A failed bootstrap
+    // must NOT permanently poison this component: keep only an in-flight fence and
+    // allow one bounded caller-level retry after the task runner's own correction
+    // attempt. This avoids both the old "attempted=true before success" bug and an
+    // endless expensive retry loop on a persistently invalid scenario.
+    const pregameAttemptStateRef = React.useRef({
+        completed: false,
+        failures: 0,
+        inFlight: false,
+        retryAfter: 0,
+    });
     useEffect(() => {
-        if (pregameAttemptedRef.current || !gameData || !worldState) {
+        if (!gameData || !worldState) {
             return;
         }
         const fresh =
@@ -1396,8 +1436,48 @@ const DateWidget = ({
         if (isMainMenuOpen()) {
             return;
         }
-        pregameAttemptedRef.current = true;
-        maybeGeneratePregameHistory().catch(() => {});
+
+        const attempt = pregameAttemptStateRef.current;
+        if (
+            attempt.completed ||
+            attempt.inFlight ||
+            attempt.failures >= 2 ||
+            Date.now() < attempt.retryAfter
+        ) {
+            return;
+        }
+
+        attempt.inFlight = true;
+        maybeGeneratePregameHistory()
+            .then((result) => {
+                if (result) {
+                    attempt.completed = true;
+                    attempt.failures = 0;
+                    return;
+                }
+                // maybeGeneratePregameHistory intentionally converts internal
+                // generation/validation failures to null after logging them. Count
+                // null as a bounded caller failure too: retry once, never loop AI
+                // generation forever on a persistently invalid bootstrap.
+                attempt.failures += 1;
+                attempt.retryAfter = Date.now() + 10000;
+                console.warn(
+                    `[OH pregame bootstrap] no state was initialized on caller attempt ${attempt.failures}; ` +
+                    `${attempt.failures < 2 ? "one caller retry remains." : "no further retries this open."}`,
+                );
+            })
+            .catch((pregameError) => {
+                attempt.failures += 1;
+                attempt.retryAfter = Date.now() + 10000;
+                console.warn(
+                    `[OH pregame bootstrap] initialization attempt ${attempt.failures} failed; ` +
+                    `${attempt.failures < 2 ? "one caller retry remains." : "no further retries this open."}`,
+                    pregameError,
+                );
+            })
+            .finally(() => {
+                attempt.inFlight = false;
+            });
     }, [gameData, worldState, events]);
 
     function setPanel(panelName) {
@@ -1435,6 +1515,18 @@ const DateWidget = ({
         const controller = new AbortController();
         jumpAbortRef.current = controller;
         try {
+            // Do not start campaign normalization/simulation in the same task that
+            // handled the click. Guarantee the "Simulating…" UI and map get a paint.
+            await new Promise((resolve) => {
+                if (typeof window.requestAnimationFrame === "function") {
+                    window.requestAnimationFrame(() =>
+                        window.requestAnimationFrame(resolve)
+                    );
+                } else {
+                    window.setTimeout(resolve, 0);
+                }
+            });
+
             const result = mode === "auto"
             ? await simulateAutoJump({ days, signal: controller.signal })
             : await simulateTimelineJump({ days, signal: controller.signal });
@@ -1442,14 +1534,18 @@ const DateWidget = ({
             // Invalidate every poll that started before this local mutation
             // completed; none of them may overwrite the freshly returned turn.
             stateReadEpochRef.current += 1;
-            setGameData(result.game);
-            setEvents(result.events);
-            setWorldState(result.world);
-            setVisibleEventCount(1);
-            if (result.generation?.source === "fallback") {
-                setFallbackWarning(`Turn generated by fallback: ${result.generation.fallbackReason || "structured AI output was unavailable"}`);
-            }
-            setPanel("history");
+            // The completed turn can update a very large map/world tree. Mark the
+            // presentation commit non-urgent so pointer/camera work may interrupt it.
+            startTransition(() => {
+                setGameData(result.game);
+                setEvents(result.events);
+                setWorldState(result.world);
+                setVisibleEventCount(1);
+                if (result.generation?.source === "fallback") {
+                    setFallbackWarning(`Turn generated by fallback: ${result.generation.fallbackReason || "structured AI output was unavailable"}`);
+                }
+                setPanel("history");
+            });
         } catch (jumpError) {
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
                 // Player cancelled — nothing was written, so just close out quietly.
@@ -1513,6 +1609,7 @@ const DateWidget = ({
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
     const historyRecords = useMemo(() => {
+        if (openPanel !== "history") return [];
         const rawHistory = worldState?.simulationHistory ?? [];
         return rawHistory
         .map((entry, index) => buildTurnRecord({
@@ -1524,7 +1621,7 @@ const DateWidget = ({
             lookups,
         }))
         .filter(Boolean);
-    }, [eventLookup, gameData, lookups, worldState]);
+    }, [eventLookup, gameData, lookups, openPanel, worldState]);
 
     // The legacy Events panel used historyRecords[0] unconditionally. That assumes
     // every simulationHistory row is a normal turn and that no stale/future/manual
@@ -1737,6 +1834,10 @@ const DateWidget = ({
         const { world: stagedWorld } = applyEventImpactsToWorld({
             colors: {},
             events: revealed,
+            // Timeline staging replays impacts from the pre-turn snapshot on every
+            // state refresh. Keep the preview mechanically identical without
+            // re-emitting canonical unit-combat diagnostics each time.
+            logUnitCombat: false,
             world: stagedBase.world,
         });
         setWorldStateOverride(stagedWorld);
@@ -1754,31 +1855,35 @@ const DateWidget = ({
 
     return (
         <>
-        <TimelineSkipPanel
-        canUndo={undoCount > 0}
-        currentDate={currentDate}
-        error={error}
-        isLoading={isLoading}
-        isOpen={openPanel === "skip"}
-        onAutoJump={() => runJump(365, "auto")}
-        onCancel={cancelJump}
-        onClose={() => setPanel(null)}
-        onJump={(days) => runJump(days, "jump")}
-        onUndo={runUndo}
-        topOffset={topOffset}
-        undoCount={undoCount}
-        />
-        <TimelineHistoryPanel
-        isOpen={openPanel === "history"}
-        onRevealNextEvent={revealNextEvent}
-        onRevealAll={revealAllEvents}
-        lookups={lookups}
-        onClose={() => setPanel(null)}
-        record={latestTurnRecord}
-        topOffset={topOffset}
-        visibleEventCount={visibleEventCount}
-        warning={fallbackWarning || persistedFallbackWarning}
-        />
+        {openPanel === "skip" && (
+            <TimelineSkipPanel
+            canUndo={undoCount > 0}
+            currentDate={currentDate}
+            error={error}
+            isLoading={isLoading}
+            isOpen
+            onAutoJump={() => runJump(365, "auto")}
+            onCancel={cancelJump}
+            onClose={() => setPanel(null)}
+            onJump={(days) => runJump(days, "jump")}
+            onUndo={runUndo}
+            topOffset={topOffset}
+            undoCount={undoCount}
+            />
+        )}
+        {openPanel === "history" && (
+            <TimelineHistoryPanel
+            isOpen
+            onRevealNextEvent={revealNextEvent}
+            onRevealAll={revealAllEvents}
+            lookups={lookups}
+            onClose={() => setPanel(null)}
+            record={latestTurnRecord}
+            topOffset={topOffset}
+            visibleEventCount={visibleEventCount}
+            warning={fallbackWarning || persistedFallbackWarning}
+            />
+        )}
 
         <div
         style={{
@@ -1875,6 +1980,6 @@ const DateWidget = ({
         </div>
         </>
     );
-};
+});
 
 export { DateWidget };

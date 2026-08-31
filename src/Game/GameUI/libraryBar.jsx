@@ -1760,7 +1760,7 @@ const LibraryTopBar = () => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed) => {
+  const applyMapToScenario = async (scenario, seed, { play = true } = {}) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
@@ -1772,10 +1772,12 @@ const LibraryTopBar = () => {
       world: {
         ...currentWorld,
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
-        polityOverrides: {
-          ...(currentWorld.polityOverrides ?? {}),
-          ...(seed.world?.polityOverrides ?? {}),
-        },
+        // Scenario Workshop is now authoritative for the scenario polity registry.
+        // The editor hydrates the full current registry before editing, including
+        // landless polities, so merging here would resurrect deleted/renamed ghost
+        // entries forever. Replace it with the validated editor seed instead.
+        polityOverrides: seed.world?.polityOverrides ?? {},
+        ownerSchema: seed.world?.ownerSchema ?? currentWorld.ownerSchema,
         // Playable factions for the start-country picker.
         ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
         customRegions: true,
@@ -1854,6 +1856,13 @@ const LibraryTopBar = () => {
       );
     } else {
       await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+    }
+
+    // A Scenario Workshop save no longer has to launch a game. Persisting the
+    // scenario is a complete operation by itself; Apply & Play opts into the old
+    // fresh-game flow below.
+    if (!play) {
+      return { saved: true, scenarioId };
     }
 
     // Create + activate a fresh game so the running map reflects the edit. Relying
@@ -2155,7 +2164,7 @@ const LibraryTopBar = () => {
               scenarioName={mapEditorScenario?.name}
               initialMap={mapEditorSeed}
               onApplyToScenario={
-                mapEditorScenario ? (seed) => applyMapToScenario(mapEditorScenario, seed) : undefined
+                mapEditorScenario ? (seed, options) => applyMapToScenario(mapEditorScenario, seed, options) : undefined
               }
             />
           </Suspense>
@@ -2564,6 +2573,9 @@ const LibraryTopBar = () => {
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
                 flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
                 tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
+                polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
+                  ? world.polityOverrides
+                  : {},
                 background,
                 basemap: world.basemap || null,
               });
