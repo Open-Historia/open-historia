@@ -5,6 +5,7 @@ import {
   APP_UPDATE_CHECK_INTERVAL_MS,
   APP_UPDATE_REFOCUS_THROTTLE_MS,
   isUpdateAvailable,
+  isUpdateSettled,
   parseUpdateManifest,
 } from "./appUpdate.js";
 
@@ -92,8 +93,11 @@ export default function AppUpdateBanner() {
   const lastRefocusRef = useRef(0);
 
   // A second-by-second poll, but only between pressing Update and the update being
-  // ready (or failing) — never while the banner is merely sitting there.
-  const running = progress?.state === "checking" || progress?.state === "downloading";
+  // ready (or failing) — never while the banner is merely sitting there. `progress`
+  // is null until the player presses Update, which is what keeps it idle; from then
+  // on it runs until the updater settles, through every intermediate state rather
+  // than only the two it happens to spend the longest in.
+  const running = progress !== null && !isUpdateSettled(progress.state);
   useEffect(() => {
     if (!running) return undefined;
     let stopped = false;
@@ -272,7 +276,10 @@ export default function AppUpdateBanner() {
     return "Installs itself in the background — your games are kept.";
   };
   const ready = Boolean(desktop && desktop.auto && progress?.state === "ready");
-  const busy = Boolean(desktop && desktop.auto && (progress?.state === "checking" || progress?.state === "downloading"));
+  // Anything the updater is still working through, by the same rule the poll uses —
+  // so a state with no percentage to show yet still reads as busy rather than
+  // falling through to the button's idle label and claiming a download is opening.
+  const busy = Boolean(desktop && desktop.auto && running);
 
   return (
     <div style={bar} role="status" aria-live="polite">
