@@ -347,8 +347,8 @@
         <button class="tab" role="tab" data-os="linux" aria-selected="false">🐧 Linux</button>
       </div>
       <div class="tab-body on" data-os="windows">Run <b>Open-Historia-Setup.exe</b> and follow the installer, then open <b>Open Historia</b> from the Start Menu. If Windows SmartScreen warns, choose <span class="kbd">More info → Run anyway</span> — the installer isn't code-signed yet.</div>
-      <div class="tab-body" data-os="mac">Unzip the download and drag <b>Open Historia</b> into your Applications folder. The first time, right-click it and choose <span class="kbd">Open</span> — the app isn't code-signed yet, so macOS asks for confirmation once.</div>
-      <div class="tab-body" data-os="linux">Make the AppImage executable (<span class="kbd">chmod +x Open-Historia-x86_64.AppImage</span>) and run it. Nothing is installed system-wide and no packages are needed.</div>
+      <div class="tab-body" data-os="mac">Unzip the download and drag <b>Open Historia</b> into your Applications folder. The first time, right-click it and choose <span class="kbd">Open</span> — the app isn't code-signed yet, so macOS asks for confirmation once. If it says the app is <b>damaged</b> instead, macOS quarantined the download — clear it with <span class="kbd">xattr -dr com.apple.quarantine "/Applications/Open Historia.app"</span> and open it again.</div>
+      <div class="tab-body" data-os="linux">On Debian, Ubuntu and derivatives install the <b>.deb</b> (<span class="kbd">sudo apt install ./open-historia_amd64.deb</span>) — it lands in your applications menu like any other program. Otherwise use the AppImage: <span class="kbd">chmod +x Open-Historia-x86_64.AppImage</span> and run it, nothing installed system-wide.</div>
     </div>
   </section>
 
@@ -356,7 +356,7 @@
     <p class="eyebrow">Downloads</p>
     <h2>Pick your platform</h2>
     <div class="rule"></div>
-    <p class="lead">Desktop is the full experience. On Android, install the app and point it at a desktop or Termux server.</p>
+    <p class="lead">Desktop is the full experience. The Android app plays on its own — nothing to run alongside it.</p>
     <div class="dl">
       <div class="card feature">
         <span class="tag">Recommended</span>
@@ -385,7 +385,7 @@
         <div class="ic">📱</div>
         <h3>Android app</h3>
         <div class="meta">Thin client · ~6 MB</div>
-        <p>A lightweight client that connects to a game server (a desktop on your network, or Termux on the same phone).</p>
+        <p>Install it and play. Your games are saved on the phone and the world map is stored there after the first download — no server to run, nothing to set up.</p>
         <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/android/open-historia.apk">⬇ Download APK</a>
       </div>
     </div>
@@ -447,7 +447,7 @@
       <details><summary>Is it really free?</summary><p>Yes. Open Historia is free and open source under the MIT license. The AI features connect to an AI backend you configure — see the <a href="https://github.com/Open-Historia/open-historia#readme" target="_blank" rel="noopener">README</a> or ask in <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> for setup help.</p></details>
       <details><summary>Where does it run — is my data uploaded?</summary><p>The game runs locally on your own machine and opens in your browser at <code>localhost:3000</code>. Your saves and scenarios stay on your computer.</p></details>
       <details><summary>How do I update later?</summary><p>Run the <b>Update Open Historia</b> script that comes with your install — it fetches the latest version while preserving your saves, scenarios, and map data. You can choose the Stable or Beta channel when updating.</p></details>
-      <details><summary>What about mobile?</summary><p>Download the Android APK — it's a thin client that connects to a game server. Run the desktop app on your PC (or a Termux server on the phone itself) and point the app at it.</p></details>
+      <details><summary>What about mobile?</summary><p>Download the Android APK and open it — that is the whole setup. Your games live on the phone and the world map is kept there after it downloads the first time, so there is no server to run and nothing to point it at.</p></details>
       <details><summary>Can I help by hosting a server?</summary><p>Yes! Running a <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">content node</a> caches the game's map data and serves it to nearby players, so everyone loads faster. It's a one-click install and completely safe — a node only serves read-only, checksum-verified map files and never touches games, accounts, or API keys. See <a href="#host">Host a server node</a>.</p></details>
     </div>
   </section>
