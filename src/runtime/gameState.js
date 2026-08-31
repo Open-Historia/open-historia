@@ -34,6 +34,11 @@ export const WORLD_DEFAULTS = {
   // lowercased original city name -> new display name. world.markers cities are
   // renamed in place by applyMarkerOps; this is the override layer for the rest.
   cityRenames: {},
+  // AI changes to a city's POPULATION, same override shape as cityRenames and for
+  // the same reason: stock cities live in PMTiles and cannot be edited in place.
+  // Lowercased original city name -> number. Applies to authored cities too, so a
+  // siege or a boom moves one number wherever the city came from.
+  cityPopulations: {},
   // Country-label styling, set in the scenario settings. Empty = the defaults
   // (Impact, white letters, half-black outline). The font renders from the
   // PLAYER's local fonts — the style has no glyphs endpoint, so MapLibre v5
@@ -631,6 +636,22 @@ const normalizeMarkerOp = (entry) => {
     return { op: "rename", markerId, name, newName, note: normalizeOptionalString(entry.note) };
   }
 
+  if (op === "population") {
+    const markerId = normalizeOptionalString(entry.markerId || entry.id);
+    const name = normalizeOptionalString(entry.name || entry.city);
+    const population = Number(entry.population ?? entry.value);
+    // 0 is a real outcome — a city emptied by war or evacuation — so only a
+    // non-finite or negative number is rejected.
+    if ((!markerId && !name) || !Number.isFinite(population) || population < 0) return null;
+    return {
+      op: "population",
+      markerId,
+      name,
+      population: Math.round(population),
+      note: normalizeOptionalString(entry.note),
+    };
+  }
+
   return null;
 };
 
@@ -1039,6 +1060,11 @@ export const normalizeWorldState = (world) => {
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
         .filter(([key, value]) => key && value),
     ),
+    cityPopulations: Object.fromEntries(
+      Object.entries(nextWorld.cityPopulations && typeof nextWorld.cityPopulations === "object" ? nextWorld.cityPopulations : {})
+        .map(([city, value]) => [normalizeOptionalString(city).toLowerCase(), Number(value)])
+        .filter(([city, value]) => city && Number.isFinite(value) && value >= 0),
+    ),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units: normalizeUnits(nextWorld.units),
@@ -1278,11 +1304,21 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // the label layer can show the new name (see Cities.jsx / cityRenames).
       for (const raw of normalizeArray(event.impacts.markerOps)) {
         const op = normalizeMarkerOp(raw);
-        if (!op || op.op !== "rename" || !op.name) continue;
+        if (!op || !op.name) continue;
         const matched = before.some((m) =>
           op.markerId ? m.id === op.markerId : m.name.toLowerCase() === op.name.toLowerCase());
-        if (!matched) {
+        if (op.op === "rename" && !matched) {
           nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [op.name.toLowerCase()]: op.newName };
+        }
+        // Population is recorded in the override for EVERY city, matched or not.
+        // A built marker keeps its own population field, but the map reads the
+        // override for both layers, so writing it here is what makes the change
+        // visible without a second code path per city source.
+        if (op.op === "population") {
+          nextWorld.cityPopulations = {
+            ...(nextWorld.cityPopulations || {}),
+            [op.name.toLowerCase()]: op.population,
+          };
         }
       }
     }
