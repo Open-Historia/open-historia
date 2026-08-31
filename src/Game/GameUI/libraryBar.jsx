@@ -516,7 +516,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
   );
 };
 
-const GameCard = ({ active, game, onActivate, onClone, onEdit }) => {
+const GameCard = ({ active, game, onActivate, onArchive, onClone, onEdit }) => {
   const cardImageUrl = game.coverImageUrl || "/loading_screen.jpg";
 
   return (
@@ -610,8 +610,19 @@ const GameCard = ({ active, game, onActivate, onClone, onEdit }) => {
             <button onClick={() => onEdit(game.id)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
               Edit
             </button>
-            <button onClick={() => onClone(game)} style={{ ...actionButtonStyle, flexBasis: "100%" }} type="button">
-              Clone Game
+            <button onClick={() => onClone(game)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
+              Clone
+            </button>
+            {/* Hide a finished or abandoned run without destroying it — the case
+                Delete cannot serve. Archiving the ACTIVE game is allowed: the
+                server hands the active slot to another game first. */}
+            <button
+              onClick={() => onArchive(game)}
+              style={{ ...actionButtonStyle, flexBasis: "100%" }}
+              title={game.archived ? "Move back into your library" : "Hide from the library without deleting"}
+              type="button"
+            >
+              {game.archived ? "Unarchive" : "Archive"}
             </button>
           </div>
         </div>
@@ -1395,6 +1406,15 @@ const LibraryTopBar = () => {
 
   // Play an existing game from the menu: close the menu (module flag first —
   // the activation remounts the UI) and activate. Reopen only on failure.
+  const handleGameArchive = async (game) => {
+    setEditorError(null);
+    try {
+      await saveGame(game.id, { archived: !game.archived });
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
+  };
+
   const handleGameActivate = async (gameId) => {
     setMenuOpen(false);
     try {
@@ -1962,13 +1982,22 @@ const LibraryTopBar = () => {
   // The catalog's game order is already activation recency (activating unshifts),
   // so games without a lastPlayedAt stamp (pre-feature saves) keep a sensible
   // relative order behind the stamped ones.
-  const lastPlayedGames = useMemo(
-    () => [...games].sort((a, b) => String(b.lastPlayedAt ?? "").localeCompare(String(a.lastPlayedAt ?? ""))),
+  // Archived games stay in the catalog (and keep their playCount and events) but
+  // leave the normal shelves, so a long library is the games you actually play.
+  const visibleGames = useMemo(() => games.filter((game) => !game.archived), [games]);
+  const archivedGames = useMemo(
+    () => games
+      .filter((game) => game.archived)
+      .sort((a, b) => String(b.lastPlayedAt ?? "").localeCompare(String(a.lastPlayedAt ?? ""))),
     [games],
   );
+  const lastPlayedGames = useMemo(
+    () => [...visibleGames].sort((a, b) => String(b.lastPlayedAt ?? "").localeCompare(String(a.lastPlayedAt ?? ""))),
+    [visibleGames],
+  );
   const mostPlayedGames = useMemo(
-    () => [...games].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.round ?? 0) - (a.round ?? 0)),
-    [games],
+    () => [...visibleGames].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.round ?? 0) - (a.round ?? 0)),
+    [visibleGames],
   );
   const mostPlayedScenarios = useMemo(
     () => [...scenarios].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.gameCount ?? 0) - (a.gameCount ?? 0)),
@@ -2404,7 +2433,7 @@ const LibraryTopBar = () => {
                 <CommunityPanel fullPage onImported={() => setActiveTab("scenarios")} />
               </Suspense>
             ) : activeTab === "games" ? (
-              loaded && games.length === 0 ? (
+              loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
                 <div style={{ alignItems: "center", display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "60vh", textAlign: "center" }}>
                   <img alt="" src="/logo.png" style={{ height: "5rem", marginBottom: "1.2rem", opacity: 0.9, width: "5rem" }} />
                   <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.02em" }}>No games yet</div>
@@ -2437,6 +2466,7 @@ const LibraryTopBar = () => {
                         active={game.id === activeGameId}
                         game={game}
                         onActivate={handleGameActivate}
+                        onArchive={handleGameArchive}
                         onClone={handleGameClone}
                         onEdit={openGameEditor}
                       />
@@ -2449,11 +2479,27 @@ const LibraryTopBar = () => {
                         active={game.id === activeGameId}
                         game={game}
                         onActivate={handleGameActivate}
+                        onArchive={handleGameArchive}
                         onClone={handleGameClone}
                         onEdit={openGameEditor}
                       />
                     ))}
                   </MenuRow>
+                  {archivedGames.length > 0 && (
+                    <MenuRow title={`🗄️ Archived (${archivedGames.length})`}>
+                      {archivedGames.map((game) => (
+                        <GameCard
+                          key={game.id}
+                          active={game.id === activeGameId}
+                          game={game}
+                          onActivate={handleGameActivate}
+                          onArchive={handleGameArchive}
+                          onClone={handleGameClone}
+                          onEdit={openGameEditor}
+                        />
+                      ))}
+                    </MenuRow>
+                  )}
                 </>
               )
             ) : (

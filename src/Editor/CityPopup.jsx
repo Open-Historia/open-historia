@@ -5,8 +5,10 @@
 
 // Inline city editor, anchored where the map was clicked. Opens when the city
 // tool places a new city (name pre-selected — just type) or when an existing
-// city is clicked with the tool. Size sets the population/prominence tier that
-// drives when the city appears on the exported game map.
+// city is clicked with the tool. Size is a preset that fills the population, and
+// population drives both the prominence tier and when the city appears on the
+// exported game map — so a city that is not one of the three presets can be given
+// its real figure instead of being rounded to the nearest one.
 
 import { useEffect, useRef } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
@@ -68,6 +70,21 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
         style={{ ...inputStyle, padding: "6px 8px", fontSize: 13, fontWeight: 600 }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="number"
+          min="0"
+          step="1000"
+          value={Number.isFinite(Number(feature.population)) ? Number(feature.population) : 0}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            // 0 is meaningful (an abandoned or ruined settlement); only a
+            // non-number or a negative one is ignored.
+            if (Number.isFinite(next) && next >= 0) onChange({ population: Math.round(next) });
+          }}
+          title="Population"
+          aria-label="Population"
+          style={{ ...inputStyle, padding: "5px 6px", flex: 1, minWidth: 0 }}
+        />
         <select
           value={sizeOf(feature.population)}
           onChange={(e) => {
