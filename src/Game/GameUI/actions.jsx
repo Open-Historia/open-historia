@@ -49,6 +49,12 @@ const SparkleIcon = () => (
     </svg>
 );
 
+const StopIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+);
+
 const SendIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
@@ -235,6 +241,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [isImproving, setIsImproving] = React.useState(false);
+    // Holds the in-flight improve's AbortController so the button can stop it,
+    // the same shape as the timeline jump's cancel (time.jsx jumpAbortRef).
+    const improveAbortRef = React.useRef(null);
     const [isSuggesting, setIsSuggesting] = React.useState(false);
     const inputRef = React.useRef(null);
     const lastRoundRef = React.useRef(null);
@@ -367,16 +376,27 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         setIsImproving(true);
+        const controller = new AbortController();
+        improveAbortRef.current = controller;
         try {
-            const refined = await refinePlayerAction(trimmed, { persist: false });
+            const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal });
             const improvedText = refined?.text || buildActionDisplayText(refined) || trimmed;
             setInputValue(improvedText);
             inputRef.current?.focus();
         } catch (error) {
-            console.error("Failed to improve action:", error);
+            // Stopping on purpose is not a failure, and it must leave the text the
+            // player typed exactly as it was.
+            if (error?.name !== "AbortError") {
+                console.error("Failed to improve action:", error);
+            }
         } finally {
+            improveAbortRef.current = null;
             setIsImproving(false);
         }
+    };
+
+    const handleStopImprove = () => {
+        improveAbortRef.current?.abort(new DOMException("Improve cancelled.", "AbortError"));
     };
 
     const handleDelete = async (index) => {
@@ -686,16 +706,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         />
         <button
         type="button"
-        onClick={handleImprove}
-        title="Improve action text"
-        aria-label="Improve action text"
+        onClick={isImproving ? handleStopImprove : handleImprove}
+        title={isImproving ? "Stop generating" : "Improve action text"}
+        aria-label={isImproving ? "Stop generating" : "Improve action text"}
         style={{
             alignItems: "center",
             background: "none",
             border: "none",
             borderRadius: "8px",
-            color: inputValue.trim() ? "rgba(196,165,255,0.78)" : "rgba(196,165,255,0.35)",
-            cursor: inputValue.trim() ? "pointer" : "default",
+            color: isImproving || inputValue.trim() ? "rgba(196,165,255,0.78)" : "rgba(196,165,255,0.35)",
+            cursor: isImproving || inputValue.trim() ? "pointer" : "default",
             display: "flex",
             height: "1.8rem",
             justifyContent: "center",
@@ -706,7 +726,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             width: "1.8rem",
         }}
         >
-        {isImproving ? <SpinnerRing size={14} tone="rgba(196,165,255,0.9)" /> : <SparkleIcon />}
+        {isImproving ? <StopIcon /> : <SparkleIcon />}
         </button>
         </div>
 

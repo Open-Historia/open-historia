@@ -459,6 +459,22 @@ const markerOpSchema = {
       required: ["op", "name", "newName"],
       additionalProperties: false,
     },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["population"] },
+        markerId: textSchema("Existing marker identifier, when known."),
+        name: nonEmptyTextSchema("Name of the city whose population changed."),
+        population: {
+          type: "integer",
+          description: "The city's new total population, as a whole number of people.",
+          minimum: 0,
+        },
+        note: textSchema("Why it changed: siege, famine, industrial boom, refugees."),
+      },
+      required: ["op", "name", "population"],
+      additionalProperties: false,
+    },
   ],
 };
 
@@ -751,9 +767,10 @@ const impactsSchema = {
     markerOps: {
       type: "array",
       description:
-        "Structures built or destroyed on the map. Use whenever the event founds, "
-        + "constructs, or destroys a named place - a city, military base, bunker, "
-        + "missile silo, embassy, port - so the map shows it.",
+        "Structures built, destroyed, renamed or resized on the map. Use whenever "
+        + "the event founds, constructs, or destroys a named place - a city, military "
+        + "base, bunker, missile silo, embassy, port - so the map shows it, and "
+        + "whenever a city's POPULATION changes.",
       items: markerOpSchema,
     },
     regionClaims: {
