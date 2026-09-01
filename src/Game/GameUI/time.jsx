@@ -773,12 +773,16 @@ const TimelineSkipPanel = ({
     error,
     isLoading,
     isOpen,
+    isRetryingProjects,
     onAutoJump,
     onCancel,
     onClose,
+    onDiscardProjects,
     onJump,
+    onRetryProjects,
     onUndo,
     progressLabel,
+    projectsHeld,
     topOffset,
     undoCount,
 }) => {
@@ -2001,12 +2005,16 @@ const DateWidget = ({
         error={error}
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
+        isRetryingProjects={isRetryingProjects}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
+        onDiscardProjects={discardHeldProjects}
         onJump={(days) => runJump(days, "jump")}
+        onRetryProjects={retryHeldProjects}
         onUndo={runUndo}
         progressLabel={jumpProgress}
+        projectsHeld={projectsHeld}
         topOffset={topOffset}
         undoCount={undoCount}
         />
