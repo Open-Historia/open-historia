@@ -9,6 +9,13 @@ import {
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
 import {
+    STRUCTURED_MODES,
+    STRUCTURED_MODE_HINTS,
+    STRUCTURED_MODE_INTRO,
+    STRUCTURED_MODE_LABELS,
+    normalizeStructuredMode,
+} from "../AI/structuredMode.js";
+import {
     getLanguageOptions,
     getStoredChatLanguage,
     getStoredLanguage,
@@ -389,6 +396,41 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
+// How to ask this provider for structured data. "Auto" tries the strongest
+// method and steps down when a gateway ignores it, which is right for almost
+// everyone — but that discovery costs a full generation per rung, and on a slow
+// endpoint that accepts tool calling without honouring it, re-learning it on
+// every call has been measured at half a turn. Setting it explicitly skips
+// straight to what works.
+//
+// Never a lock: whatever is chosen, the ladder can still step down from it, so a
+// setting made months ago cannot strand a campaign when a provider changes.
+const StructuredModeSelect = ({ onChange, value }) => {
+    const mode = normalizeStructuredMode(value);
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>How the AI answers</label>
+        <select
+        data-no-translate
+        value={mode}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        {["auto", ...STRUCTURED_MODES].map((option) => (
+            <option key={option} value={option} style={{ color: "black" }}>
+            {STRUCTURED_MODE_LABELS[option]}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {/* The general point first, so it reads the same whatever is selected,
+            then what THIS choice means. */}
+        {mode === "auto" ? STRUCTURED_MODE_INTRO : STRUCTURED_MODE_HINTS[mode]}
+        </div>
+        </div>
+    );
+};
+
 const SettingsInput = ({
     label,
     value,
@@ -484,6 +526,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"generationConfig": {"topP": 0.9}}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <StructuredModeSelect
+            value={settings.geminiStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("geminiStructuredMode", value)}
+            />
             </>
         )}
 
@@ -516,6 +562,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <StructuredModeSelect
+            value={settings.openaiStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("openaiStructuredMode", value)}
+            />
             </>
         )}
 
@@ -543,6 +593,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("anthropicCustomParams", value)}
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
+            <StructuredModeSelect
+            value={settings.anthropicStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("anthropicStructuredMode", value)}
             />
             </>
         )}
@@ -584,6 +638,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <StructuredModeSelect
+            value={settings.openaiCompatibleStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("openaiCompatibleStructuredMode", value)}
+            />
             </>
         )}
 
@@ -618,6 +676,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("anthropicCompatibleCustomParams", value)}
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
+            <StructuredModeSelect
+            value={settings.anthropicCompatibleStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("anthropicCompatibleStructuredMode", value)}
             />
             </>
         )}

@@ -11,6 +11,7 @@ import {
     loadRegionCatalog,
 } from "../../runtime/assets.js";
 import { NO_RESPONSE_BODY_NOTE, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
@@ -774,9 +775,12 @@ const TimelineSkipPanel = ({
     isLoading,
     isOpen,
     isRetryingProjects,
+    modeSuggestion,
+    onAcceptModeSuggestion,
     onAutoJump,
     onCancel,
     onClose,
+    onDeclineModeSuggestion,
     onDiscardProjects,
     onJump,
     onRetryProjects,
@@ -1092,6 +1096,71 @@ const TimelineSkipPanel = ({
             </div>
             </div>
         )}
+
+        {/* The ladder has twice found the same lower method working for this
+            endpoint. Offered, never applied silently: the app did the discovery,
+            the player makes the decision — and declining is remembered so this
+            asks once rather than after every turn. */}
+        {modeSuggestion && (
+            <div
+            style={{
+                background: "rgba(30,58,138,0.28)",
+                border: "1px solid rgba(96,165,250,0.32)",
+                borderRadius: "16px",
+                color: "#bfdbfe",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>
+            <strong>Turns could be faster.</strong> Your AI model can&apos;t use the
+            method the game tries first, so every turn wastes time working that
+            out. The game can skip straight to what works — on a long turn that
+            can save several minutes. Nothing else changes.
+            <div style={{ color: "rgba(191,219,254,0.62)", fontSize: "0.72rem", marginTop: "0.4rem" }}>
+            You can undo this any time under Settings → How the AI answers.
+            </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                onClick={onAcceptModeSuggestion}
+                style={{
+                    background: "rgba(96,165,250,0.2)",
+                    border: "1px solid rgba(96,165,250,0.42)",
+                    borderRadius: "12px",
+                    color: "#bfdbfe",
+                    cursor: "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Yes, speed up turns
+                </button>
+                <button
+                type="button"
+                onClick={onDeclineModeSuggestion}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                No thanks
+                </button>
+            </div>
+            </div>
+        )}
         </PanelChrome>
     );
 };
@@ -1315,6 +1384,11 @@ const DateWidget = ({
     // again. Nothing has been saved either way.
     const [projectsHeld, setProjectsHeld] = useState("");
     const [isRetryingProjects, setIsRetryingProjects] = useState(false);
+    // The structured-output ladder has now twice found the same lower method
+    // working for this endpoint. Offered rather than applied: the app does the
+    // discovery, the player makes the decision. Checked after a turn ends, so it
+    // never interrupts one.
+    const [modeSuggestion, setModeSuggestion] = useState(null);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
@@ -1590,6 +1664,9 @@ const DateWidget = ({
             jumpAbortRef.current = null;
             setIsLoading(false);
             setJumpProgress("");
+            // Between turns, never during one. If the ladder has learned
+            // something consistent about this endpoint, offer it now.
+            setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
@@ -1641,6 +1718,19 @@ const DateWidget = ({
     const discardHeldProjects = () => {
         discardPendingProjectsJump();
         setProjectsHeld("");
+    };
+
+    const acceptModeSuggestion = () => {
+        if (!modeSuggestion) return;
+        acceptStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode, modeSuggestion.provider);
+        setModeSuggestion(null);
+    };
+
+    const declineModeSuggestion = () => {
+        if (!modeSuggestion) return;
+        // Remembered for the session, so it asks once rather than every turn.
+        declineStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode);
+        setModeSuggestion(null);
     };
 
     // How many turns can be undone (a restore point is captured at the start of
@@ -2006,9 +2096,12 @@ const DateWidget = ({
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
         isRetryingProjects={isRetryingProjects}
+        modeSuggestion={modeSuggestion}
+        onAcceptModeSuggestion={acceptModeSuggestion}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
+        onDeclineModeSuggestion={declineModeSuggestion}
         onDiscardProjects={discardHeldProjects}
         onJump={(days) => runJump(days, "jump")}
         onRetryProjects={retryHeldProjects}

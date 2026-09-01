@@ -46,16 +46,19 @@ const PROVIDER_SETTINGS = {
         apiKey: { storageKey: "gemini_api_key", defaultValue: "" },
         model: { storageKey: "gemini_model", defaultValue: "gemini-3.5-flash-lite" },
         customParams: { storageKey: "gemini_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "gemini_structured_mode", defaultValue: "auto" },
     },
     openai: {
         apiKey: { storageKey: "openai_api_key", defaultValue: "" },
         model: { storageKey: "openai_model", defaultValue: "" },
         customParams: { storageKey: "openai_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "openai_structured_mode", defaultValue: "auto" },
     },
     anthropic: {
         apiKey: { storageKey: "anthropic_api_key", defaultValue: "" },
         model: { storageKey: "anthropic_model", defaultValue: "claude-haiku-4-5" },
         customParams: { storageKey: "anthropic_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "anthropic_structured_mode", defaultValue: "auto" },
     },
     // Self-hosted proxy speaking the Anthropic Messages API — called directly
     // from the browser first, falling back to the local relay only when the page
@@ -67,6 +70,7 @@ const PROVIDER_SETTINGS = {
         endpoint: { storageKey: "anthropic_compatible_endpoint", defaultValue: "" },
         model: { storageKey: "anthropic_compatible_model", defaultValue: "claude-haiku-4-5" },
         customParams: { storageKey: "anthropic_compatible_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "anthropic_compatible_structured_mode", defaultValue: "auto" },
     },
     "openai-compatible": {
         apiKey: { storageKey: "openai_compatible_api_key", defaultValue: "" },
@@ -81,6 +85,7 @@ const PROVIDER_SETTINGS = {
             defaultValue: "",
         },
         customParams: { storageKey: "openai_compatible_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "openai_compatible_structured_mode", defaultValue: "auto" },
     },
 };
 
@@ -88,20 +93,25 @@ const FORM_FIELD_MAP = {
     geminiApiKey: { provider: "gemini", field: "apiKey" },
     geminiModel: { provider: "gemini", field: "model" },
     geminiCustomParams: { provider: "gemini", field: "customParams" },
+    geminiStructuredMode: { provider: "gemini", field: "structuredMode" },
     openaiApiKey: { provider: "openai", field: "apiKey" },
     openaiModel: { provider: "openai", field: "model" },
     openaiCustomParams: { provider: "openai", field: "customParams" },
+    openaiStructuredMode: { provider: "openai", field: "structuredMode" },
     anthropicApiKey: { provider: "anthropic", field: "apiKey" },
     anthropicModel: { provider: "anthropic", field: "model" },
     anthropicCustomParams: { provider: "anthropic", field: "customParams" },
+    anthropicStructuredMode: { provider: "anthropic", field: "structuredMode" },
     anthropicCompatibleApiKey: { provider: "anthropic-compatible", field: "apiKey" },
     anthropicCompatibleEndpoint: { provider: "anthropic-compatible", field: "endpoint" },
     anthropicCompatibleModel: { provider: "anthropic-compatible", field: "model" },
     anthropicCompatibleCustomParams: { provider: "anthropic-compatible", field: "customParams" },
+    anthropicCompatibleStructuredMode: { provider: "anthropic-compatible", field: "structuredMode" },
     openaiCompatibleApiKey: { provider: "openai-compatible", field: "apiKey" },
     openaiCompatibleEndpoint: { provider: "openai-compatible", field: "endpoint" },
     openaiCompatibleModel: { provider: "openai-compatible", field: "model" },
     openaiCompatibleCustomParams: { provider: "openai-compatible", field: "customParams" },
+    openaiCompatibleStructuredMode: { provider: "openai-compatible", field: "structuredMode" },
 };
 
 function isSupportedProvider(value) {
@@ -153,6 +163,28 @@ export function getProviderField(provider, field) {
 export function setProviderField(provider, field, value) {
     const setting = getSettingConfig(provider, field);
     if (!setting?.storageKey) return;
+
+    // Changing the MODEL retires an explicit structured-output choice.
+    //
+    // That choice is stored per provider (it belongs beside the endpoint and the
+    // key, which is where a player looks for it), but the evidence behind it is
+    // per MODEL: the same gateway can serve one model that honours tool calling
+    // and one that ignores it. Carrying the old choice onto a new model would
+    // silently start it in a weaker mode than it may well support, and because
+    // the ladder only ever steps DOWN, nothing would ever discover otherwise.
+    //
+    // Reverting to "auto" costs at most one wasted attempt, after which the
+    // ladder re-learns and offers the setting again. Getting it wrong the other
+    // way costs enforced schemas on every call, silently, forever.
+    if (field === "model") {
+        const previous = getProviderField(provider, "model");
+        const next = String(value ?? "");
+        if (previous && previous !== next) {
+            const modeSetting = getSettingConfig(provider, "structuredMode");
+            if (modeSetting?.storageKey) localStorage.removeItem(modeSetting.storageKey);
+        }
+    }
+
     localStorage.setItem(setting.storageKey, value ?? "");
     syncAiDebugContext();
 }
@@ -196,6 +228,12 @@ export function getProviderSettings(provider) {
         endpoint: getProviderField(normalized, "endpoint"),
         model: getProviderField(normalized, "model"),
         customParams: getProviderField(normalized, "customParams"),
+        // Where structured-output attempts START on the ladder (see
+        // structuredMode.js). "auto" means the strongest first, stepping down on
+        // failure; anything else names a rung to begin at. Never a lock: the
+        // ladder still walks down from wherever it starts, so a setting chosen
+        // months ago cannot permanently break a campaign.
+        structuredMode: getProviderField(normalized, "structuredMode") || "auto",
     };
 }
 
