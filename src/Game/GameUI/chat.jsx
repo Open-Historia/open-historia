@@ -13,10 +13,12 @@ import { Actions } from "./actions";
 import {
     JSON_URLS,
     getNationColors,
+    getNationFlags,
     loadCountryNames as loadCachedCountryNames,
     readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState } from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -47,25 +49,112 @@ const countryMatchesIdentity = (country, identity) => {
 };
 
 // ── Flags ─────────────────────────────────────────────────────────────────────
-// Flag emoji are derived locally from each nation's GID_0 country code. (The
-// previous source, restcountries.com, deprecated its public API and no longer
-// returns flag data.)
+// Country flags render as images rather than emoji. Resolution order per
+// country: 1 flagcdn.com artwork via countryFlags.js 2. for a custom nation that table doesn't know, the map
+// author's own flag for that owner code, from the scenario's flags.json getNationFlags) 
 
-const FALLBACK_FLAG = "🏳";
+const FALLBACK_FLAG_EMOJI = "🏳";
 
-const getCountryFlag = ({ code } = {}) => flagEmojiFromGid(code) ?? FALLBACK_FLAG;
+// "code::name" -> Promise<string|null>. Module-level so every component asking
+// about the same country shares one resolution, and the hub/flags.json are
+// each fetched once.
+const flagUrlCache = new Map();
+let communityFlagsPromise = null;
+let nationFlagsPromise = null;
 
-const useCountryFlag = ({ code } = {}) =>
-    useMemo(() => getCountryFlag({ code }), [code]);
+const getCommunityFlagPosts = () => {
+    if (!communityFlagsPromise) communityFlagsPromise = fetchCommunityFlags().catch(() => []);
+    return communityFlagsPromise;
+};
 
-const useCountryFlags = (countries) => {
+// getNationFlags() itself memoizes on the scenario token and is invalidated on
+// write (see assets.js), so this wrapper only needs its own promise for the
+// duration of one resolveFlagImageUrl batch
+const getScenarioFlagMap = () => {
+    if (!nationFlagsPromise) nationFlagsPromise = getNationFlags().catch(() => ({}));
+    return nationFlagsPromise;
+};
+
+const findCommunityFlagPost = (posts, { code, name }) => {
+    const normalizedCode = String(code ?? "").trim().toUpperCase();
+    const normalizedName = String(name ?? "").trim().toLowerCase();
+    return posts.find((post) => {
+        if (post.fromScenario || !post.imageUrl) return false;
+        if (normalizedCode && post.code && post.code.toUpperCase() === normalizedCode) return true;
+        return normalizedName && String(post.title ?? "").trim().toLowerCase() === normalizedName;
+    }) ?? null;
+};
+
+const resolveFlagImageUrl = ({ code, name } = {}) => {
+    if (!code && !name) return Promise.resolve(null);
+    const key = `${code ?? ""}::${name ?? ""}`;
+    if (flagUrlCache.has(key)) return flagUrlCache.get(key);
+
+    const builtIn = flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name);
+    const promise = builtIn
+        ? Promise.resolve(builtIn)
+        : getScenarioFlagMap()
+            .then((flags) => (code && flags?.[code]) || null)
+            .catch(() => null)
+            .then((scenarioFlag) => {
+                if (scenarioFlag) return scenarioFlag;
+                return getCommunityFlagPosts()
+                    .then((posts) => {
+                        const match = findCommunityFlagPost(posts, { code, name });
+                        return match ? loadCommunityFlagDataUrl(match).catch(() => null) : null;
+                    })
+                    .catch(() => null);
+            });
+
+    flagUrlCache.set(key, promise);
+    return promise;
+};
+
+const useCountryFlagUrl = ({ code, name } = {}) => {
+    const [url, setUrl] = useState(null);
+    useEffect(() => {
+        let cancelled = false;
+        setUrl(null);
+        resolveFlagImageUrl({ code, name }).then((resolved) => { if (!cancelled) setUrl(resolved); });
+        return () => { cancelled = true; };
+    }, [code, name]);
+    return url;
+};
+
+const useCountryFlagUrls = (countries) => {
     const depsKey = countries.map(c => `${c.name}:${c.code ?? ""}`).join(",");
-    return useMemo(() => {
-        const flags = {};
-        for (const { name, code } of countries) flags[name] = getCountryFlag({ code });
-        return flags;
+    const [urls, setUrls] = useState({});
+    useEffect(() => {
+        let cancelled = false;
+        Promise.all(
+            countries.map(({ name, code }) => resolveFlagImageUrl({ code, name }).then((url) => [name, url])),
+        ).then((entries) => { if (!cancelled) setUrls(Object.fromEntries(entries)); });
+        return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [depsKey]);
+    return urls;
+};
+
+// Renders the resolved flag image, or the fallback glyph while unresolved/unmatched.
+const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
+    const w = width ?? size;
+    const h = height ?? size;
+    return url ? (
+        <img
+            src={url}
+            alt={alt}
+            style={{
+                width: w, height: h, objectFit: "cover", borderRadius: "2px",
+                display: "inline-block", verticalAlign: "middle",
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.12)", flexShrink: 0,
+            }}
+        />
+    ) : (
+        <span aria-hidden="true" style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: w, height: h, verticalAlign: "middle", fontSize: size, flexShrink: 0,
+        }}>{FALLBACK_FLAG_EMOJI}</span>
+    );
 };
 
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
@@ -180,9 +269,9 @@ const TrashIcon = () => (
 const MessageBubble = ({ msg }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
-    const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
+    const flagUrl  = useCountryFlagUrl(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
     const reactions = Object.entries(msg.reactions ?? {});
-    const reactionFlags = useCountryFlags(reactions.map(([name, { code }]) => ({ name, code })));
+    const reactionFlags = useCountryFlagUrls(reactions.map(([name, { code }]) => ({ name, code })));
     const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
 
@@ -192,20 +281,22 @@ const MessageBubble = ({ msg }) => {
 
         {!isPlayer && (
             <span style={{
-                display: "block",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
                 fontSize: "0.7rem",
                 color: "rgba(255,255,255,0.4)",
                        marginBottom: "0.25rem",
                        whiteSpace: "nowrap",
             }}>
-            {isError ? "⚠️ Error" : `${flag} ${msg.speaker}`}
+            {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size="0.95em" />{msg.speaker}</>}
             </span>
         )}
 
         {isPlayer && reactions.length > 0 && (
             <div style={{ display: "flex", flexDirection: "row-reverse", gap: "0.15rem", marginBottom: "0.3rem" }}>
             {reactions.map(([country, { emoji, code }]) => (
-                <ReactionBubble key={country} country={country} emoji={emoji} flag={reactionFlags[country] ?? "🏳"} code={code} />
+                <ReactionBubble key={country} country={country} emoji={emoji} flagUrl={reactionFlags[country] ?? null} code={code} />
             ))}
             </div>
         )}
@@ -245,7 +336,7 @@ const MessageBubble = ({ msg }) => {
 
 // ── Reaction bubble ───────────────────────────────────────────────────────────
 
-const ReactionBubble = ({ country, emoji, flag, code }) => {
+const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
@@ -274,8 +365,11 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
                                                     whiteSpace: "nowrap",
                                                     pointerEvents: "none",
                                                     zIndex: 99999,
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    gap: "0.3rem",
         }}>
-        {flag} {country}
+        <FlagImg url={flagUrl} alt={country} size="0.9em" /> {country}
         </div>,
         document.body
     ) : null;
@@ -306,10 +400,10 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
 };
 
 const TypingBubble = ({ speaker, code }) => {
-    const flag = useCountryFlag({ code, name: speaker });
+    const flagUrl = useCountryFlagUrl({ code, name: speaker });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>{flag} {speaker}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}><FlagImg url={flagUrl} alt={speaker} size="0.95em" /> {speaker}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
         <ThinkingDots />
         </div>
@@ -319,7 +413,7 @@ const TypingBubble = ({ speaker, code }) => {
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
-const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
+const CountryTile = ({ country, code, flagUrl, isSelected, onToggle }) => {
     const [hovered, setHovered] = React.useState(false);
     const shortName = country.length > 12 ? country.slice(0, 11) + "…" : country;
     return (
@@ -357,7 +451,7 @@ const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
         {isSelected && (
             <div style={{ position: "absolute", top: "0.3rem", right: "0.3rem", width: "14px", height: "14px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.55rem", color: "white", fontWeight: 700 }}>✓</div>
         )}
-        <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>{flag}</span>
+        <FlagImg url={flagUrl} alt={country} width="2.3rem" height="1.6rem" />
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.8)", textAlign: "center", lineHeight: 1.3 }}>{shortName}</span>
         </button>
     );
@@ -375,8 +469,8 @@ const CountrySelectorModal = ({
     const [search, setSearch]     = React.useState("");
     const [selected, setSelected] = React.useState([]);
     const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
-    const filteredFlags = useCountryFlags(filtered);
-    const selectedFlags = useCountryFlags(selected);
+    const filteredFlagUrls = useCountryFlagUrls(filtered);
+    const selectedFlagUrls = useCountryFlagUrls(selected);
     const isSelectedName = (name) => selected.some(s => s.name === name);
     // single: a spy goes to ONE country, so picking another replaces the pick
     // rather than adding to it, and picking the same one again clears it.
@@ -398,8 +492,12 @@ const CountrySelectorModal = ({
         </div>
         <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem" }}>
-        {selected.length === 0 ? emptyLabel : selected.map(c => `${selectedFlags[c.name] ?? "🏳"} ${c.name}`).join(", ")}
+        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
+        {selected.length === 0 ? emptyLabel : selected.map((c, i) => (
+            <span key={c.name} style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+            <FlagImg url={selectedFlagUrls[c.name]} alt={c.name} size="0.9em" />{c.name}{i < selected.length - 1 ? "," : ""}
+            </span>
+        ))}
         </div>
         </div>
         <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
@@ -413,7 +511,7 @@ const CountrySelectorModal = ({
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.5rem 1rem", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "5.5rem", gap: "0.5rem", alignContent: "start" }}>
         {loading && <p style={{ gridColumn: "1/-1", color: "rgba(255,255,255,0.35)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center" }}>Loading countries…</p>}
         {filtered.map(c => (
-            <CountryTile key={c.name} country={c.name} code={c.code} flag={filteredFlags[c.name] ?? "🏳"} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
+            <CountryTile key={c.name} country={c.name} code={c.code} flagUrl={filteredFlagUrls[c.name] ?? null} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
         ))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
@@ -459,7 +557,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const messagesRef       = useRef(chat.messages ?? []);
 
     useEffect(() => {
-        countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
+        countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
     }, [countries]);
 
     useEffect(() => {
@@ -687,10 +785,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 };
 
 const CountryTurnLabel = ({ country, remaining }) => {
-    const flag = useCountryFlag({ code: country.code, name: country.name });
+    const flagUrl = useCountryFlagUrl({ code: country.code, name: country.name });
     return (
         <>
-        {flag} <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
+        <FlagImg url={flagUrl} alt={country.name} size="0.95em" /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
         {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
         </>
     );
@@ -742,8 +840,7 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
     // delete never sits waiting to catch a later click.
     const [confirming, setConfirming] = React.useState(false);
     const previewCountries = chat.countries.slice(0, 4);
-    const flagMap  = useCountryFlags(previewCountries);
-    const flags    = previewCountries.map(c => flagMap[c.name] ?? "🏳").join(" ");
+    const flagUrlMap = useCountryFlagUrls(previewCountries);
     const names    = chat.countries.map(c => c.name).join(", ");
     const lastMsg  = chat.messages?.at(-1);
     const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
@@ -755,7 +852,11 @@ const ChatListItem = ({ chat, onClick, onDelete, unread = false }) => {
         <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
         {unread && <div style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "#60a5fa" }} />}
         </div>
-        <div style={{ fontSize: "1.3rem", flexShrink: 0, lineHeight: 1 }}>{flags}</div>
+        <div style={{ display: "flex", gap: "0.15rem", flexShrink: 0 }}>
+        {previewCountries.map((c) => (
+            <FlagImg key={c.name} url={flagUrlMap[c.name] ?? null} alt={c.name} width="1.3rem" height="0.9rem" />
+        ))}
+        </div>
         <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "0.82rem", fontWeight: unread ? 700 : 600, color: unread ? "#fff" : "rgba(255,255,255,0.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}{unread && <span style={{ fontWeight: 400, fontSize: "0.7rem", color: "#60a5fa", marginLeft: "0.4rem" }}>new</span>}</div>
         <div style={{ fontSize: "0.75rem", color: unread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)", marginTop: "0.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preview}</div>
