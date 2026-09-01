@@ -187,3 +187,84 @@ describe("AI relay", () => {
     assert.match(error, /ECONNREFUSED/);
   });
 });
+
+// The full chain a self-hosted model's answer actually travels: a local server
+// with no CORS headers → the relay → the browser's SSE reader → the idle
+// deadline's activity signal. Each leg is covered above and in
+// streamAssembly.test.js; this is the one that proves they connect, because the
+// reported bug lived exactly in the seam between them — the relay buffered, so a
+// perfectly good stream reached the game as a single blob five minutes later.
+describe("a local model's stream, end to end", () => {
+  let dataDir;
+  let child;
+  let upstream;
+  let port;
+
+  before(async () => {
+    dataDir = mkdtempSync(path.join(os.tmpdir(), "oh-relay-e2e-"));
+
+    // Stands in for llama.cpp / LM Studio / Ollama answering a timeline jump:
+    // an OpenAI-style tool call whose arguments arrive a fragment at a time.
+    upstream = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const frames = [
+        { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: "{\"events\":[" } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ function: { arguments: "{\"title\":\"A war\"}" } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ function: { arguments: "]}" } }] }, finish_reason: "tool_calls" }] },
+      ];
+      frames.forEach((frame, index) => {
+        setTimeout(() => {
+          res.write(`data: ${JSON.stringify(frame)}\n\n`);
+          if (index === frames.length - 1) {
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }
+        }, index * 200);
+      });
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+
+    port = await freePort();
+    child = spawn(process.execPath, [SERVER], {
+      env: { ...process.env, OH_DATA_DIR: dataDir, PORT: String(port) },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.resume();
+    child.stderr.resume();
+    await waitForServer(port, child);
+  });
+
+  after(async () => {
+    if (child && child.exitCode === null) {
+      child.kill();
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(dataDir, { force: true, recursive: true });
+  });
+
+  test("the tool call rebuilds, and every chunk reports life to the idle deadline", async () => {
+    const { readOpenAIStreamedResponse } = await import("../src/Game/AI/streamAssembly.js");
+    const upstreamUrl = `http://127.0.0.1:${upstream.address().port}/v1/chat/completions`;
+
+    const response = await relay(port, upstreamUrl);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+
+    const ticks = [];
+    const data = await readOpenAIStreamedResponse(response, () => { ticks.push(Date.now()); });
+
+    // The arguments were split across three frames upstream and have to come back
+    // out as one parseable string, or the turn falls back to canned events.
+    const call = data.choices[0].message.tool_calls[0];
+    assert.equal(call.function.name, "submit_jump_result");
+    assert.deepEqual(JSON.parse(call.function.arguments), { events: [{ title: "A war" }] });
+
+    // More than one tick is the whole point: a single tick at the end is what a
+    // buffering relay produces, and it cannot tell a working model from a stalled
+    // one. Spread over time, not delivered together at the end.
+    assert.ok(ticks.length > 1, `expected several activity ticks, got ${ticks.length}`);
+    assert.ok(ticks[ticks.length - 1] - ticks[0] > 100, "the chunks arrived all at once — the relay is buffering");
+  });
+});

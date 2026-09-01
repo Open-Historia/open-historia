@@ -12,8 +12,9 @@ export const MAP_SETTING_KEYS = {
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
-    // an AI task gives up after 5 minutes with NOTHING arriving from the model
-    // and falls back to canned events. Off waits as long as the model needs.
+    // an AI task gives up when the model goes quiet — 5 minutes part-way through
+    // an answer, 15 with no answer at all — and falls back to canned events. Off
+    // waits as long as the model needs.
     //
     // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
     // an absent key here means "on", not "off".
