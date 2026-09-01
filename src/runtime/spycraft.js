@@ -142,8 +142,19 @@ export const suspicionChance = (ownerIntelligence, targetIntelligence) => {
 
 // Per jump, another polity plants a spy in the player. A capable service does
 // it as a matter of course; a hostile one goes looking.
-export const foreignDeployChance = (polityIntelligence, { hostile = false } = {}) =>
-  clamp01(clampPct(polityIntelligence) / 100 * 0.12 + (hostile ? 0.15 : 0), 0, 0.4);
+//
+// `hostile` is a boolean today because the caller (gameplay.js, the
+// espionageCandidates block) has no war state to read and guesses it. When
+// real wars exist, the intended shape is a 0..1 `hostility` — at peace 0, cold
+// rivalry ~0.4, open war 1 — replacing the flat +0.15 with `+ hostility * 0.2`
+// so a full war roughly doubles a capable service's odds and a skirmish nudges
+// them. Keep the 0.4 cap: three agents in one polity at once is already the
+// limit (MAX_FOREIGN_SPIES), and higher per-roll odds just reach it sooner.
+export const foreignDeployChance = (polityIntelligence, { hostile = false, hostility = null } = {}) => {
+  // Accept the graded form already, so wiring it is a one-line change upstream.
+  const h = Number.isFinite(Number(hostility)) ? clamp01(Number(hostility)) : (hostile ? 0.75 : 0);
+  return clamp01(clampPct(polityIntelligence) / 100 * 0.12 + h * 0.2, 0, 0.4);
+};
 
 // ---- the per-jump resolution ------------------------------------------------
 //
@@ -151,8 +162,12 @@ export const foreignDeployChance = (polityIntelligence, { hostile = false } = {}
 // world is written. Deterministic: every roll is keyed on the round and the
 // spy, so the same inputs always produce the same outcome.
 //
-// candidates: [{ polity, hostile }] — polities that could plant a spy in the
-// player this round (the caller knows who is in the world; this file does not).
+// candidates: [{ polity, hostile, hostility? }] — polities that could plant a
+// spy in the player this round. The caller knows who is in the world and how
+// they stand with the player; this file does not, and must not start to: keep
+// war state upstream in gameplay.js and pass its verdict in. `hostility` (0..1)
+// is the graded form for when wars carry a scale; `hostile` is the boolean
+// stand-in used until then. Both are read by foreignDeployChance.
 export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "", candidates = [] } = {}) => {
   const player = String(playerPolity ?? "").trim();
   let spies = normalizeSpies(world?.spies);
@@ -216,7 +231,7 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
       if (!polity || polity === player) continue;
       if (inPlayer().length >= MAX_FOREIGN_SPIES) break;
       if (inPlayer().some((spy) => spy.owner === polity)) continue;
-      if (roll(`${polity}:deploy`) < foreignDeployChance(intel(polity), { hostile: candidate?.hostile === true })) {
+      if (roll(`${polity}:deploy`) < foreignDeployChance(intel(polity), { hostile: candidate?.hostile === true, hostility: candidate?.hostility })) {
         spies = [...spies, {
           id: mintId(spies, polity, player), owner: polity, target: player, deployedAt: date,
           status: "active", turnedAt: "", exposedAt: "", coverStory: "", suspected: false,
