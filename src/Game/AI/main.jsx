@@ -594,6 +594,7 @@ async function resolveModel(provider, { endpoint = "", headers = {}, fallbackMod
 async function callGemini(systemPrompt, history, {
     deadline,
     maxTokens = 8192,
+    onActivity,
     onChunk,
     retries = 3,
     retryDelay = 15000,
@@ -722,7 +723,7 @@ async function callGemini(systemPrompt, history, {
         // or proxy that ignored alt=sse still answers plain JSON, and that must
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response)
+            ? await readGeminiStreamedResponse(response, onActivity)
             : await response.json();
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
@@ -775,6 +776,7 @@ async function callOpenAIStyleChatCompletions({
     deadline,
     signal,
     tool,
+    onActivity,
     onChunk,
     allowJsonSchemaFallback = false,
     maxTokens,
@@ -998,7 +1000,7 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response)
+            ? await readOpenAIStreamedResponse(response, onActivity)
             : await response.json();
         const text = extractOpenAIMessageText(data);
 
@@ -1140,6 +1142,7 @@ const anthropicModelMax = new Map(); // model -> learned output ceiling
 async function callAnthropic(systemPrompt, history, {
     deadline,
     maxTokens,
+    onActivity,
     onChunk,
     retries = 3,
     retryDelay = 15000,
@@ -1277,7 +1280,7 @@ async function callAnthropic(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response)
+            ? await readAnthropicStreamedResponse(response, onActivity)
             : await response.json();
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
@@ -1316,6 +1319,7 @@ async function callAnthropic(systemPrompt, history, {
 async function callAnthropicCompatible(systemPrompt, history, {
     deadline,
     maxTokens,
+    onActivity,
     onChunk,
     retries = 3,
     retryDelay = 15000,
@@ -1448,7 +1452,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response)
+            ? await readAnthropicStreamedResponse(response, onActivity)
             : await response.json();
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);

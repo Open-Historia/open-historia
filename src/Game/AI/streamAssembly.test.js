@@ -239,3 +239,59 @@ test("gemini: reads a real SSE body end to end", async () => {
   const call = data.candidates[0].content.parts.find((part) => part.functionCall)?.functionCall;
   assert.deepEqual(call.args, { summary: "A quiet year." });
 });
+
+// ---------------------------------------------------------------------------
+// Activity reporting — what "Limit AI generation" counts (idleDeadline.js).
+
+// A multi-chunk body must report life more than once, or a long generation looks
+// identical to a stalled one and the idle deadline aborts a healthy turn.
+test("activity is reported once per network chunk, not once per stream", async () => {
+  let ticks = 0;
+  await readOpenAIStreamedResponse(
+    sseResponse([
+      { choices: [{ delta: { content: "one " } }] },
+      { choices: [{ delta: { content: "two " } }] },
+      { choices: [{ delta: { content: "three" } }] },
+    ]),
+    () => { ticks += 1; },
+  );
+  // Three frames plus the [DONE] line, one chunk each (see sseResponse).
+  assert.equal(ticks, 4);
+});
+
+// A keep-alive comment or a frame split across two reads is still the endpoint
+// telling us it is alive, so it must count even though it parses to nothing.
+test("unparseable chunks still count as life", async () => {
+  const encoder = new TextEncoder();
+  let ticks = 0;
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        controller.enqueue(encoder.encode("data: {\"choices\":[{\"delta\":"));
+        controller.enqueue(encoder.encode("{\"content\":\"split\"}}]}\n\n"));
+        controller.close();
+      },
+    }),
+  };
+
+  const data = await readOpenAIStreamedResponse(response, () => { ticks += 1; });
+  assert.equal(ticks, 3);
+  assert.equal(data.choices[0].message.content, "split");
+});
+
+test("a throwing activity callback never breaks the stream", async () => {
+  const data = await readGeminiStreamedResponse(
+    sseResponse([{ candidates: [{ content: { parts: [{ text: "survived" }] } }] }]),
+    () => { throw new Error("watchdog exploded"); },
+  );
+  assert.equal(data.candidates[0].content.parts[0].text, "survived");
+});
+
+test("the readers work with no activity callback at all", async () => {
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "fine" } },
+  ]));
+  assert.deepEqual(data.content, [{ type: "text", text: "fine" }]);
+});

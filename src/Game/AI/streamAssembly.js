@@ -36,7 +36,14 @@
 // Reads an SSE body and hands each `data:` payload to onFrame as parsed JSON.
 // Non-JSON and keep-alive lines are skipped rather than thrown on: a gateway
 // that injects comments or padding must not break a turn.
-async function readSSE(response, onFrame) {
+//
+// `onActivity` fires once per network chunk — before the chunk is parsed, and
+// whether or not it contained a whole frame. It is what "Limit AI generation"
+// counts (idleDeadline.js): the question that setting asks is whether anything
+// is still arriving, and a keep-alive comment or half a frame answers it just as
+// well as a token does. Wrapped like the onChunk callbacks, since a throwing UI
+// callback must never cost the player a turn.
+async function readSSE(response, onFrame, onActivity) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -44,6 +51,9 @@ async function readSSE(response, onFrame) {
         for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (onActivity) {
+                try { onActivity(); } catch { /* a watchdog callback must not break the stream */ }
+            }
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
             buffer = lines.pop() ?? "";
@@ -109,9 +119,9 @@ export function finishOpenAIStream(state) {
     };
 }
 
-export async function readOpenAIStreamedResponse(response) {
+export async function readOpenAIStreamedResponse(response, onActivity) {
     const state = createOpenAIStreamState();
-    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk));
+    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk), onActivity);
     return finishOpenAIStream(state);
 }
 
@@ -214,9 +224,9 @@ export function finishAnthropicStream(state) {
     };
 }
 
-export async function readAnthropicStreamedResponse(response) {
+export async function readAnthropicStreamedResponse(response, onActivity) {
     const state = createAnthropicStreamState();
-    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk));
+    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk), onActivity);
     return finishAnthropicStream(state);
 }
 
@@ -284,8 +294,8 @@ export function finishGeminiStream(state) {
     };
 }
 
-export async function readGeminiStreamedResponse(response) {
+export async function readGeminiStreamedResponse(response, onActivity) {
     const state = createGeminiStreamState();
-    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk));
+    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk), onActivity);
     return finishGeminiStream(state);
 }

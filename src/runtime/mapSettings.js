@@ -12,10 +12,19 @@ export const MAP_SETTING_KEYS = {
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
-    // timeline-jump generation gets a 5-minute deadline and falls back to
-    // canned events past it. OFF (the default) waits as long as the model
-    // needs — the fallback is only reachable through a real error, never a
-    // slow model (Cancel still works either way).
+    // an AI task gives up after 5 minutes with NOTHING arriving from the model
+    // and falls back to canned events. Off waits as long as the model needs.
+    //
+    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
+    // an absent key here means "on", not "off".
+    //
+    // It ships on because it now measures SILENCE rather than elapsed time (see
+    // AI/idleDeadline.js). The old version was a stopwatch started when the
+    // request was sent — five minutes for a jump, however well it was going —
+    // which threw away good turns from slow models, so it had to default off,
+    // which left a genuinely stalled request hanging forever. A window that
+    // every token restarts never interrupts a model that is answering, so it is
+    // safe to have on, and it is the only thing that ever ends a stall.
     limitAiGeneration: "ai_limit_generation",
     // Long time skips are generated in SEGMENTS — several shorter model calls
     // merged into the one round the player asked for — rather than as a single

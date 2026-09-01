@@ -1107,7 +1107,9 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+        // Not getMapSetting: this one ships ON, and an absent key must read as
+        // on rather than off (see mapSettings.js).
+        limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
         // Not getMapSetting: this one ships ON, and an absent key must read as
         // on rather than off (see mapSettings.js).
         chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
@@ -1266,7 +1268,7 @@ const SettingsMenu = ({
         onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)}
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On: time skips give the model 5 minutes, then fall back to canned events. Off (default): generation waits as long as the model needs. Cancel works either way.
+        On (default): if nothing arrives from the model for 5 minutes, the game stops waiting and falls back to canned events. A model that is still answering is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
         </div>
         <Toggle
         label="Generate long time skips in segments"
