@@ -1555,8 +1555,44 @@ const applySimulationResult = async ({
   // Espionage resolves on the world the turn produced, deterministically (keyed
   // on the round), and its consequences are EVENTS the model reads next turn —
   // an exposed ring, a suspected agent — so what was found out changes what
-  // happens. Hostility is approximated: a polity the player spies on, or one
-  // whose reputation is in the gutter, goes looking for a spy of its own.
+  // happens.
+  //
+  // HOSTILITY IS A STAND-IN. There is no war state in the world yet, so
+  // `hostile` is guessed: a polity the player spies on, or one whose reputation
+  // is in the gutter, goes looking for a spy of its own.
+  //
+  // ── For whoever wires real wars in ──────────────────────────────────────
+  // This block is the ONLY place hostility is derived; spycraft.js just takes
+  // what it is handed. When world state carries wars, replace the two-line
+  // heuristic below with the real thing and leave the rest alone:
+  //
+  //   1. Keep the contract: candidates is [{ polity, hostile }], one entry per
+  //      polity that could plant an agent this round. Every polity in the
+  //      world should be a candidate — being at peace only lowers the odds.
+  //
+  //   2. hostile: true for every polity currently AT WAR with the player. Keep
+  //      the reputation clause as an OR if you like (a pariah state still spies
+  //      on everyone); drop the "spiedOn" tit-for-tat, which only exists because
+  //      nothing better was available.
+  //
+  //   3. If wars carry a scale (skirmish vs total war, or belligerent vs
+  //      co-belligerent), pass `hostility` as a 0..1 number instead of the
+  //      boolean and read it in spycraft.js foreignDeployChance — the note
+  //      there says how. Do NOT change the seeded roll keys (`${polity}:deploy`)
+  //      or every existing save replays its next round differently.
+  //
+  //   4. Consider a target at war EXPELLING rather than turning a caught agent
+  //      (spycraft.js resolveEspionage, the turnChance branch): wartime
+  //      counter-intelligence tends to make arrests public. That is a design
+  //      choice, not a bug fix — leave it if you want double agents in wartime.
+  //
+  //   5. The simulator's [Espionage] block (spycraft.js espionageBrief) should
+  //      say who is at war with whom next to the agent list, so the model can
+  //      connect a stolen plan to the front it matters on. That is one line
+  //      added to the brief, fed from the same war state.
+  //
+  // What NOT to touch: detectionChance / suspicionChance are about the two
+  // services, not the relationship, and should stay independent of war.
   const espionageCandidates = (() => {
     const player = normalizeString(baseGame.country);
     const named = new Set([
