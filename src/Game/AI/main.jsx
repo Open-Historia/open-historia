@@ -1518,13 +1518,39 @@ async function callAnthropicCompatible(systemPrompt, history, {
         : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
 
+    // This is a SELF-HOSTED PROXY, not Anthropic — the same risk the
+    // OpenAI-compatible path carries, and the reason both exist as separate
+    // providers from their native siblings. A proxy may accept `tool_choice` and
+    // then not enforce it, leaving the model free to narrate its plan and never
+    // emit the call. Native Anthropic honours its own contract and needs none of
+    // this, which is why it does not have it.
+    //
+    // The Messages API has no `response_format`, so there is no json_schema or
+    // json_object rung here: the ladder is two steps, tool -> text_json, with the
+    // schema moved into the system prompt. A shorter fall, but the FIRST step is
+    // the one that rescued a real endpoint.
+    const anthropicStartMode = startingStructuredMode(settings.structuredMode) === "tool" ? "tool" : "text_json";
+    let structuredMode = tool ? anthropicStartMode : "text";
+    let insistedOnToolCall = false;
+    // Derived here rather than threaded in: this caller already knows both halves,
+    // and the observation is per provider AND model (the same proxy can front one
+    // model that honours tool calling and one that does not).
+    const observerKey = `anthropic-compatible|${model}`;
+
     for (let attempt = 1; attempt <= retries; attempt++) {
+        const useToolChannel = Boolean(tool) && structuredMode === "tool";
+        // In text_json the schema has to travel in the prompt, since there is no
+        // parameter to carry it. The sentinel gives a rambling model a defined
+        // point to stop planning and start answering (jsonSalvage.js).
+        const requestSystemPrompt = tool && structuredMode === "text_json"
+            ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}\n\n${ANSWER_SENTINEL_DIRECTIVE}`
+            : systemPrompt;
         // The advisor (tokens to the UI) and tool calls (keep-alive, and the
         // long-request refusal above). A plain buffered call stays buffered.
         const streamThisRequest = Boolean(onChunk || tool) && !streamingDisabled;
         const body = {
             model,
-            system: systemPrompt,
+            system: requestSystemPrompt,
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
@@ -1536,7 +1562,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             ...(streamThisRequest ? { stream: true } : {}),
             messages: toAnthropicMessages(history),
             ...customParams,
-            ...(tool ? {
+            ...(useToolChannel ? {
                 tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
                 tool_choice: { type: "tool", name: tool.name },
             } : {}),
@@ -1633,7 +1659,24 @@ async function callAnthropicCompatible(systemPrompt, history, {
                     partialChars: data.partialToolJson.length,
                 }, { verbose: true });
             }
-            return { rawText: extractAnthropicText(data), toolInput: null };
+
+            const anthropicText = extractAnthropicText(data);
+            // No tool call, and what came back is a planning monologue rather
+            // than anything a salvage pass could parse. The proxy accepted
+            // tool_choice without enforcing it, so asking again more firmly
+            // achieves nothing — change the channel instead. There is only one
+            // step down on this API, but it is the step that matters.
+            if (structuredMode === "tool" && !insistedOnToolCall
+                && looksLikeDeliberation(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
+                insistedOnToolCall = true;
+                structuredMode = "text_json";
+                console.warn(`[ai] Anthropic Compatible deliberated instead of calling ${tool.name}; dropping from tool to text_json`);
+                continue;
+            }
+            if (anthropicText) {
+                noteStructuredModeLanding(observerKey, anthropicStartMode, structuredMode, settings.structuredMode);
+            }
+            return { rawText: anthropicText, toolInput: null };
         }
         const text = extractAnthropicText(data);
 

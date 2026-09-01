@@ -526,10 +526,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"generationConfig": {"topP": 0.9}}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
-            <StructuredModeSelect
-            value={settings.geminiStructuredMode ?? "auto"}
-            onChange={(value) => onSettingChange("geminiStructuredMode", value)}
-            />
             </>
         )}
 
@@ -593,10 +589,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("anthropicCustomParams", value)}
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
-            />
-            <StructuredModeSelect
-            value={settings.anthropicStructuredMode ?? "auto"}
-            onChange={(value) => onSettingChange("anthropicStructuredMode", value)}
             />
             </>
         )}
