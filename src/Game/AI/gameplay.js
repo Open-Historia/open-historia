@@ -507,13 +507,17 @@ Where NEITHER is true yet, the order is not refused and not quietly deferred - i
   // programme also MOVES it -- otherwise the board freezes at whatever the
   // advisor last said and the player stops trusting it. Injected at call time for
   // the same frozen-prompt reason as the directives above.
-  // catalystExecutor and catalystSummary used to be on this list, and paid ~1k
-  // tokens each for it, but neither schema has an `impacts` field at all
+  // Only the game master still moves the board inline. The jump handed it to the
+  // separate `projects` task (generateProjectOps), whose whole prompt is the
+  // board and whose schema is the only place projectOps now appears for a jump —
+  // so telling a jump about it would describe a lever its schema no longer has,
+  // for ~1k tokens and a wasted retry when it tried to use one.
+  //
+  // catalystExecutor and catalystSummary were removed for that same reason
+  // earlier: neither schema has an `impacts` field at all
   // (CATALYST_EXECUTOR_SCHEMA is {summary, resolved, nextChoices};
-  // CATALYST_SUMMARY_SCHEMA is {title, description, importance}). They were being
-  // told in detail how to use a channel they cannot reach, and any projectOps
-  // they emitted would have failed schema validation and cost the call a retry.
-  if (["jumpForward", "autoJumpForward", "gameMaster"].includes(taskKey)) {
+  // CATALYST_SUMMARY_SCHEMA is {title, description, importance}).
+  if (taskKey === "gameMaster") {
     const projects = normalizeString(variables.projectsSummary);
     const board = projects && !projects.startsWith("No projects")
       ? `\n\nThe board as it stands:\n${projects}`
@@ -817,6 +821,73 @@ const CONSOLIDATION_INTERVAL_ROUNDS = 5;
 const CONSOLIDATION_RETAIN_EVENTS = 24;
 const CONSOLIDATION_SIZE_THRESHOLD = 48;
 const CONSOLIDATION_BATCH_SIZE = 60;
+
+// The Projects & Operations board, moved out of the jump into its own call.
+//
+// Why it is separate: projectOps was two thirds of the jump's output contract,
+// and the board dominated what the model spent its attention on — a field run
+// caught one narrating stalled programmes for three minutes and never reaching
+// the events it was asked for. The board is BOOKKEEPING: it follows from the
+// events rather than competing with them for the same budget. Split out, each
+// call carries one contract, and this one sees only what it needs.
+//
+// Runs ONCE per jump, never per segment: a segmented jump would otherwise pay
+// for this three times and show the model only a third of the round each time.
+//
+// Returns the ops rather than applying them. simulateTimelineJump attaches them
+// back onto the events that caused them, so the board change is recorded as part
+// of that event and the existing write path (applyEventImpactsToWorld ->
+// releaseProjectCompletionEffects -> applyProjectOps) runs unchanged, inside the
+// same single write and the same rollback snapshot.
+const generateProjectOps = async (bundle, events, { signal } = {}) => {
+  const board = normalizeArray(bundle.world?.projects);
+  // Nothing to keep in step, and nothing an event could plausibly open against
+  // an empty board that is worth a whole extra request.
+  if (board.length === 0 || events.length === 0) return { ops: [], skipped: true };
+
+  const variables = await buildTemplateVariables(bundle, {});
+  // The events, numbered, because eventIndex is how an op says which one moved
+  // the effort. Impacts are deliberately left out: this call decides what the
+  // STORY did to the board, and the other levers are noise for that question.
+  const eventList = events
+    .map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`)
+    .join("\n\n");
+
+  const { generation, payload } = await runJsonTask("projects", {
+    signal,
+    userMessage:
+      `These events have just been simulated. Move the board to match them, and return `
+      + `{"projectOps":[]} if nothing on it genuinely moved.\n\n${eventList}`,
+    variables,
+    // No fallback: an empty board is exactly what a failed call should leave
+    // behind, and runJsonTask throwing is what lets the caller tell the player
+    // the board did not update rather than pretending it did.
+  });
+  return { generation, ops: normalizeArray(payload?.projectOps) };
+};
+
+// Put each op onto the event that caused it, so the board move is part of that
+// event's impacts. An op with no usable eventIndex lands on the LAST event: the
+// alternative is dropping it, and a board change the model asked for is worth
+// more than perfect attribution of which event caused it.
+const attachProjectOpsToEvents = (events, ops) => {
+  if (!events.length || !ops.length) return 0;
+  let attached = 0;
+  for (const op of ops) {
+    if (!op || typeof op !== "object") continue;
+    const raw = Number(op.eventIndex);
+    const index = Number.isInteger(raw) && raw >= 0 && raw < events.length ? raw : events.length - 1;
+    const event = events[index];
+    if (!event.impacts || typeof event.impacts !== "object") event.impacts = {};
+    if (!Array.isArray(event.impacts.projectOps)) event.impacts.projectOps = [];
+    // eventIndex was addressing, not content — it means nothing once the op is
+    // sitting on its event, and normalizeProjectOp would only have to ignore it.
+    const { eventIndex, ...rest } = op;
+    event.impacts.projectOps.push(rest);
+    attached += 1;
+  }
+  return attached;
+};
 
 const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
   const variables = await buildTemplateVariables(bundle, {
@@ -2730,6 +2801,33 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   // repeats WITHIN the batch as well as against the existing log, so a later
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(segmentPayloads, { targetDate });
+
+  // The board, in its own call, once for the whole round — after the segments
+  // merge so it sees the complete story, and before the world is written so its
+  // ops ride along inside the same single write and rollback snapshot.
+  //
+  // A failure here must never cost the player the simulation. The events are
+  // already generated and validated at this point; throwing them away to re-roll
+  // a bookkeeping call would be the worst possible outcome, so the jump applies
+  // regardless and the board simply does not move — the same end state as a jump
+  // that emitted no projectOps. projectsFailed is handed to the UI so it can say
+  // so and offer a retry, rather than leaving a silently stale board, which is
+  // the exact failure the board's own rules exist to prevent.
+  let projectsFailed = null;
+  try {
+    const { ops, skipped } = await generateProjectOps(bundle, merged.events, { signal });
+    if (!skipped && ops.length) {
+      const attached = attachProjectOpsToEvents(merged.events, ops);
+      logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
+    }
+  } catch (error) {
+    // A deliberate cancel is the player's, and must abort the turn like any
+    // other — it is not a board failure to report and retry.
+    if (error?.name === "AbortError") throw error;
+    projectsFailed = error?.message || "The Projects & Operations board did not update.";
+    logDebugEvent("turn", "Projects board did NOT update this turn.", error);
+  }
+
   const result = {
     catalyst: merged.catalyst,
     clearActions: merged.clearActions,
@@ -2739,6 +2837,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     stopDate: merged.stopDate,
     summary: merged.summary,
     generation,
+    projectsFailed,
   };
 
   return applySimulationResult({

@@ -783,6 +783,23 @@ const impactsSchema = {
   additionalProperties: false,
 };
 
+// The same impacts, minus the board. A jump no longer moves projects inline: it
+// writes the story, and the separate `projects` task reads that story and moves
+// the board to match (PROJECTS_SCHEMA), attaching its ops back onto these very
+// events before anything is written.
+//
+// So this only narrows what the MODEL is asked to produce in a jump. The data
+// path is unchanged — applyEventImpactsToWorld still reads impacts.projectOps,
+// which is exactly how the attached ops get applied. The game master keeps the
+// full impacts object, since a direct "make this happen" command is one call
+// with no separate pass to hand the work to.
+const jumpImpactsSchema = {
+  ...impactsSchema,
+  properties: Object.fromEntries(
+    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
+  ),
+};
+
 const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
@@ -801,7 +818,7 @@ const eventSchema = {
       type: "boolean",
       description: "Whether the event directly concerns the player polity.",
     },
-    impacts: impactsSchema,
+    impacts: jumpImpactsSchema,
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
@@ -1063,6 +1080,53 @@ export const GAME_MASTER_SCHEMA = {
   additionalProperties: false,
 };
 
+// The Projects & Operations board, moved OUT of the jump and into its own call.
+//
+// Why: projectOps was the single largest thing in the jump contract by a wide
+// margin, and the board dominated what the model spent its attention on. A field
+// run caught a model narrating its plan for three minutes — enumerating stalled
+// programmes one by one — and never reaching the events it was actually asked
+// for. The board is bookkeeping: it follows from the events rather than
+// competing with them for the same budget.
+//
+// So the jump writes the story, and this call reads that story and moves the
+// board to match. It sees the finished events and the board, and nothing else —
+// no world summary, no city coordinates, no unit list, no chat history.
+export const PROJECTS_SCHEMA = {
+  type: "object",
+  description:
+    "Changes to the Projects & Operations board that follow from the events just simulated.",
+  properties: {
+    projectOps: {
+      type: "array",
+      description:
+        "One entry per change. Return an empty array when nothing on the board moved this "
+        + "period — that is a normal and correct answer, and inventing progress is worse "
+        + "than reporting none.",
+      items: {
+        ...projectOpSchema,
+        properties: {
+          ...projectOpSchema.properties,
+          // Which event caused this. The ops are attached back onto that event
+          // before the world is written, so the board change is recorded as part
+          // of the event that caused it — which is what lets the staged reveal
+          // show them together and what keeps a rollback consistent.
+          eventIndex: {
+            type: "integer",
+            description:
+              "Zero-based index of the event in the list above that causes this change. "
+              + "Use the event that actually moved the effort; omit only when no single "
+              + "event is responsible.",
+            minimum: 0,
+          },
+        },
+      },
+    },
+  },
+  required: ["projectOps"],
+  additionalProperties: false,
+};
+
 const percentageSchema = (description) => ({
   type: "integer",
   description,
@@ -1136,6 +1200,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
+  projects: PROJECTS_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -1194,6 +1259,12 @@ export const CATALYST_SUMMARY_TOOL = makeTool(
   CATALYST_SUMMARY_SCHEMA,
 );
 
+export const PROJECTS_TOOL = makeTool(
+  "submit_project_ops",
+  "Submit the Projects & Operations board changes that follow from the events just simulated.",
+  PROJECTS_SCHEMA,
+);
+
 export const GAME_MASTER_TOOL = makeTool(
   "submit_game_master",
   "Submit the summary and structured map or world-state effects of a game-master request.",
@@ -1234,6 +1305,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,
+  projects: PROJECTS_TOOL,
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;

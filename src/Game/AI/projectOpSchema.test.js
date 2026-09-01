@@ -17,21 +17,13 @@ import assert from "node:assert/strict";
 
 import { GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
 
-// The smallest valid jump payload that carries one projectOp, so the op is what
-// is actually under test rather than the envelope around it.
-const jumpWith = (...projectOps) => ({
-  summary: "A quarter passes.",
-  stopDate: "1936-04-01",
-  events: [{
-    date: "1936-03-02",
-    title: "The yards are laid down",
-    description: "Work begins on the new programme.",
-    impacts: { projectOps },
-  }],
-});
+// The ops are their own task payload now: the board moved out of the jump into
+// a separate call (PROJECTS_SCHEMA), so this validates the envelope that
+// actually carries them.
+const boardOps = (...projectOps) => ({ projectOps });
 
 const accepts = (op, what) => {
-  const result = validateGameplayPayload("jumpForward", jumpWith(op));
+  const result = validateGameplayPayload("projects", boardOps(op));
   assert.equal(result.valid, true, `${what} should validate, got: ${result.error}`);
 };
 
@@ -102,28 +94,56 @@ test("a rename carries both the current and the new name", () => {
 // field is how a silently-dropped op happens, and the strict/salvage validator
 // downstream relies on the schema catching it first.
 test("the schema still rejects what it should", () => {
-  const unknownField = validateGameplayPayload("jumpForward", jumpWith({ op: "update", name: "X", progres: 50 }));
+  const unknownField = validateGameplayPayload("projects", boardOps({ op: "update", name: "X", progres: 50 }));
   assert.equal(unknownField.valid, false, "a misspelled field must not pass silently");
 
-  const unknownOp = validateGameplayPayload("jumpForward", jumpWith({ op: "advance", name: "X" }));
+  const unknownOp = validateGameplayPayload("projects", boardOps({ op: "advance", name: "X" }));
   assert.equal(unknownOp.valid, false, "an op verb outside the enum must be rejected");
 
-  const noName = validateGameplayPayload("jumpForward", jumpWith({ op: "update", progress: 50 }));
+  const noName = validateGameplayPayload("projects", boardOps({ op: "update", progress: 50 }));
   assert.equal(noName.valid, false, "an op that names nothing cannot be routed to a project");
 
-  const badProgress = validateGameplayPayload("jumpForward", jumpWith({ op: "update", name: "X", progress: 150 }));
+  const badProgress = validateGameplayPayload("projects", boardOps({ op: "update", name: "X", progress: 150 }));
   assert.equal(badProgress.valid, false, "progress outside 0-100 must be rejected");
 });
 
-// The reason the collapse was worth doing at all.
-test("the collapse actually removed the bulk it was meant to", () => {
-  const jumpSchemaChars = JSON.stringify(GAMEPLAY_TOOLS.jumpForward.schema).length;
-  const projectOpsChars = JSON.stringify(
-    GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties.projectOps,
-  ).length;
+// An op carries the event that caused it, so the ops can be attached back onto
+// the jump's events before the world is written.
+test("an op says which event caused it", () => {
+  accepts({ op: "update", name: "Project Leviathan", eventIndex: 3, progress: 60 }, "an op with eventIndex");
+  // Optional: not every change traces to one event.
+  accepts({ op: "update", name: "Project Leviathan", progress: 60 }, "an op without eventIndex");
+  assert.equal(
+    validateGameplayPayload("projects", boardOps({ op: "update", name: "X", eventIndex: -1 })).valid,
+    false,
+    "a negative event index addresses nothing",
+  );
+});
 
-  // Was 41,538 of 63,161 — two thirds of the whole contract for one impact
-  // branch. A regression here means someone re-embedded projectSchema.
-  assert.ok(projectOpsChars < 14000, `projectOps grew back to ${projectOpsChars} chars`);
-  assert.ok(jumpSchemaChars < 38000, `the jump schema grew back to ${jumpSchemaChars} chars`);
+// An empty board is a normal answer, and the prompt says so. If the schema
+// rejected it the model would be pushed into inventing progress, which is the
+// one thing the board must never contain.
+test("reporting that nothing moved is valid", () => {
+  assert.equal(validateGameplayPayload("projects", { projectOps: [] }).valid, true);
+});
+
+// The reason all of this was worth doing.
+test("the board no longer costs the jump anything", () => {
+  const jumpSchema = GAMEPLAY_TOOLS.jumpForward.schema;
+  const jumpChars = JSON.stringify(jumpSchema).length;
+  const impacts = jumpSchema.properties.events.items.properties.impacts.properties;
+
+  // The board moved to its own call, so a jump must not describe it at all.
+  assert.equal("projectOps" in impacts, false, "projectOps is back in the jump contract");
+
+  // 63,161 originally; 31,678 after the anyOf collapse. A regression here means
+  // someone re-embedded projectSchema or put the board back in the jump.
+  assert.ok(jumpChars < 26000, `the jump schema grew back to ${jumpChars} chars`);
+
+  // ...and the game master, which has no second pass to hand the board to, keeps it.
+  assert.equal(
+    "projectOps" in GAMEPLAY_TOOLS.gameMaster.schema.properties.impacts.properties,
+    true,
+    "the game master lost its board access",
+  );
 });
