@@ -5,7 +5,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import {
+  ANSWER_SENTINEL,
+  ANSWER_SENTINEL_DIRECTIVE,
+  extractJsonPayload,
+  stripBeforeSentinel,
+  unwrapMimickedToolCall,
+} from "./jsonSalvage.js";
 
 const TOOL = "submit_jump_result";
 
@@ -95,4 +101,49 @@ test("a complete inner list inside the unclosed envelope is kept whole", () => {
 
 test("a bare unclosed bracket is not salvaged", () => {
   assert.equal(extractJsonPayload("[["), null);
+});
+
+// ---------------------------------------------------------------------------
+// The answer sentinel
+//
+// <think> tags only help when a model emits them. Several do not — they narrate
+// the plan as ordinary content and never switch to answering (a 192-second,
+// correct, entirely useless plan ending "Let's craft 11 events"). The sentinel
+// gives such a model a defined moment to stop, and gives us a cut point that
+// does not depend on guessing where prose ends.
+
+test("everything before the sentinel is discarded", () => {
+  const reply = `We need to produce JSON with 11 events. Let's craft them.
+${ANSWER_SENTINEL}
+{"summary":"A quarter passes.","events":[]}`;
+  assert.deepEqual(extractJsonPayload(reply), { summary: "A quarter passes.", events: [] });
+});
+
+// A model that restates the instruction while planning would otherwise have its
+// own plan read as the answer, so the LAST marker wins, not the first.
+test("a sentinel quoted inside the reasoning does not win", () => {
+  const reply = `First I will think, then I write ${ANSWER_SENTINEL} followed by the object.
+Still planning here: 11 events, dates spread across the span.
+${ANSWER_SENTINEL}
+{"summary":"real answer","events":[]}`;
+  assert.deepEqual(extractJsonPayload(reply), { summary: "real answer", events: [] });
+});
+
+test("stripBeforeSentinel leaves text without a sentinel untouched", () => {
+  // Every model that already answers correctly must be unaffected.
+  assert.equal(stripBeforeSentinel('{"a":1}'), '{"a":1}');
+  assert.equal(stripBeforeSentinel(""), "");
+  assert.equal(stripBeforeSentinel(null), "");
+  assert.deepEqual(extractJsonPayload('{"summary":"no sentinel needed"}'), { summary: "no sentinel needed" });
+});
+
+test("the sentinel composes with the existing think-block stripping", () => {
+  const reply = `<think>internal</think>
+${ANSWER_SENTINEL}
+{"summary":"both handled"}`;
+  assert.deepEqual(extractJsonPayload(reply), { summary: "both handled" });
+});
+
+test("the directive actually names the marker it asks for", () => {
+  assert.ok(ANSWER_SENTINEL_DIRECTIVE.includes(ANSWER_SENTINEL));
 });

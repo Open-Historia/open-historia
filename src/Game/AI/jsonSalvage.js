@@ -157,10 +157,37 @@ export const unwrapMimickedToolCall = (value, toolName) => {
   return args;
 };
 
+// An explicit gear-change for a model that will not stop planning.
+//
+// `<think>` tags only help when the model emits them; plenty do not, and simply
+// narrate their plan as ordinary content until the budget runs out. Asking for a
+// literal marker before the payload does two jobs: it gives the model a defined
+// moment to STOP deliberating and start answering — which is the actual failure,
+// not the formatting — and it gives us an unambiguous cut point that does not
+// depend on guessing where prose ends and JSON begins.
+//
+// Deliberately ugly and unlikely to appear in narrative prose about diplomacy.
+export const ANSWER_SENTINEL = "<<<JSON>>>";
+
+// How to ask for it. Kept next to the marker so the two can never drift apart.
+export const ANSWER_SENTINEL_DIRECTIVE =
+  `Think silently if you must, but you MUST finish by writing the line ${ANSWER_SENTINEL} `
+  + "on its own, and then the JSON object and nothing else. Everything before that line is "
+  + "discarded, so the answer itself must come after it. Do not stop before writing it.";
+
+// Everything after the LAST sentinel. Last rather than first: a model that
+// restates the instruction while planning ("...then I write <<<JSON>>>...")
+// would otherwise have its own plan treated as the answer.
+export const stripBeforeSentinel = (text) => {
+  const body = String(text ?? "");
+  const at = body.lastIndexOf(ANSWER_SENTINEL);
+  return at === -1 ? body : body.slice(at + ANSWER_SENTINEL.length);
+};
+
 export const extractJsonPayload = (rawText) => {
   // Reasoning models (and several Ollama chat templates) prepend a think block
   // the strict parser chokes on; the answer follows it.
-  const text = rawText
+  const text = stripBeforeSentinel(rawText)
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/^[\s\S]*?<\/think>/i, "")
     .trim();

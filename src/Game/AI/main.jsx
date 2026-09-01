@@ -24,6 +24,7 @@ import {
     providerErrorReplyMessage,
     retryDelayMsFromPayload,
 } from "./providerErrors.js";
+import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createFirstByteTimer, normalizeUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
@@ -839,8 +840,12 @@ async function callOpenAIStyleChatCompletions({
         if (disableToolReasoning) {
             delete requestCustomParams.reasoning;
         }
+        // In the non-tool modes the answer arrives as ordinary content, so a model
+        // that narrates its plan first has nowhere to put it but in the payload.
+        // ANSWER_SENTINEL gives it a defined moment to stop thinking and start
+        // answering, and gives extractJsonPayload an unambiguous cut point.
         const baseSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
-            ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
+            ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}\n\n${ANSWER_SENTINEL_DIRECTIVE}`
             : systemPrompt;
         const requestSystemPrompt = insistedOnToolCall
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
@@ -1065,18 +1070,42 @@ async function callOpenAIStyleChatCompletions({
             // is a planning monologue rather than anything a salvage pass could
             // parse. Left alone this returns unparseable prose, runJsonTask spends
             // an attempt on it, the same thing happens again, and the player loses
-            // the turn to canned events — which is exactly what happened on 3 of 4
-            // turns in the field report behind looksLikeDeliberation.
+            // the turn to canned events — 3 of 4 turns in the field report behind
+            // looksLikeDeliberation.
             //
-            // Retry once with the cap lifted and a blunt instruction to just call
-            // the tool. This does NOT consume one of runJsonTask's two attempts,
-            // for the same reason the overload retry does not.
-            if (structuredMode === "tool" && !insistedOnToolCall && looksLikeDeliberation(text)
-                && canRetryBeforeDeadline(deadline, 0)) {
-                insistedOnToolCall = true;
-                liftedCapForReasoning = true;
-                console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
-                continue;
+            // The first version of this just re-asked for the tool call, more
+            // firmly. That does not work, and the log says why: the model spent
+            // 192s producing a CORRECT plan ("...Let's craft 11 events") and simply
+            // never switched to answering. Its gateway accepts tool_choice:
+            // "required" without enforcing it, so the tool channel is advisory —
+            // and you cannot nag a model into a channel nobody is policing.
+            //
+            // So change the channel instead of the volume. The structuredMode
+            // ladder already exists for exactly this and already knows how to
+            // inline the schema and ask for plain JSON; it simply never fired
+            // here, because it only advances on an HTTP 400/422 and this arrives
+            // as a perfectly good 200 full of prose. Advance it on "no tool call"
+            // too. Each rung transitions at most once, so this terminates.
+            if (looksLikeDeliberation(text) && canRetryBeforeDeadline(deadline, 0)) {
+                const nextMode = structuredMode === "tool" && allowJsonSchemaFallback ? "json_schema"
+                    : structuredMode === "json_schema" ? "json_object"
+                    : structuredMode === "json_object" ? "text_json"
+                    : null;
+                // Native OpenAI enforces tool_choice, so a deliberating model there
+                // is a different problem and keeps the old one-shot insistence.
+                if (nextMode) {
+                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
+                    structuredMode = nextMode;
+                    liftedCapForReasoning = true;
+                    insistedOnToolCall = true;
+                    continue;
+                }
+                if (!insistedOnToolCall) {
+                    insistedOnToolCall = true;
+                    liftedCapForReasoning = true;
+                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
+                    continue;
+                }
             }
 
             if (structuredMode === "tool") return { rawText: extractOpenAIToolRaw(data, tool) || text, toolInput: null };
