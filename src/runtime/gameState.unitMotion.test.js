@@ -15,6 +15,7 @@ import {
   applyUnitOps,
   buildOwnerFootprint,
   clampUnitStrength,
+  clearStaleUnitMotion,
   enforceUnitVolume,
   normalizePendingUnitOrders,
   normalizeUnits,
@@ -478,4 +479,52 @@ test("falling short of the destination still reads as moving", () => {
     { gameDate: "2024-01-01", elapsedDays: 7 },
   );
   assert.equal(result.units[0].status, "moving");
+});
+
+// ---- stale "moving" on old saves -------------------------------------------
+
+test("a unit left claiming to move with nothing moving it is repaired to idle", () => {
+  const world = normalizeWorldState({
+    units: [unit({ id: "u1", status: "moving" })],
+    pendingUnitOrders: [],
+  });
+  const repaired = clearStaleUnitMotion(world);
+  assert.equal(repaired.units[0].status, "idle");
+  assert.equal(repaired.units[0].orderId, "");
+});
+
+test("a unit the engine is still advancing keeps its moving status", () => {
+  const world = normalizeWorldState({
+    units: [unit({ id: "u1", status: "moving", lng: 0, lat: 1 })],
+    pendingUnitOrders: [{ id: "o1", unitId: "u1", kind: "move", toLng: 40, toLat: 40 }],
+  });
+  assert.equal(clearStaleUnitMotion(world), world, "an ordered unit must not be touched");
+});
+
+test("a classic long-range order still in the queue keeps its unit moving", () => {
+  const world = normalizeWorldState({
+    units: [unit({ id: "u1", status: "moving" })],
+    pendingUnitOrders: [],
+  });
+  assert.equal(clearStaleUnitMotion(world, { queuedUnitIds: ["u1"] }), world);
+});
+
+test("clearStaleUnitMotion repairs only the stale unit, and is idempotent", () => {
+  const world = normalizeWorldState({
+    units: [
+      unit({ id: "u1", status: "moving" }),
+      unit({ id: "u2", status: "moving", lng: 0, lat: 1 }),
+      unit({ id: "u3", status: "engaged" }),
+    ],
+    pendingUnitOrders: [{ id: "o1", unitId: "u2", kind: "move", toLng: 40, toLat: 40 }],
+  });
+  const repaired = clearStaleUnitMotion(world);
+  const byId = Object.fromEntries(repaired.units.map((entry) => [entry.id, entry.status]));
+  assert.deepEqual(byId, { u1: "idle", u2: "moving", u3: "engaged" });
+  assert.equal(clearStaleUnitMotion(repaired), repaired, "a repaired world reads back unchanged");
+});
+
+test("a world with nothing moving comes back untouched", () => {
+  const world = normalizeWorldState({ units: [unit({ id: "u1", status: "idle" })] });
+  assert.equal(clearStaleUnitMotion(world), world);
 });

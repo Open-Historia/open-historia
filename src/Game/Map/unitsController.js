@@ -31,6 +31,7 @@ import {
   readGameData,
   readActionsState,
   writeActionsState,
+  clearStaleUnitMotion,
   normalizeUnitEntry,
 } from "../../runtime/gameState.js";
 import { resolveClash, distanceKm, engagementRangeKm, moveLeashKm } from "./unitCombat.js";
@@ -110,9 +111,39 @@ const refresh = async () => {
   }
 };
 
+// Once per session, on the first sync: clear the stale "moving" status that older
+// saves carry on units nothing is actually moving. See clearStaleUnitMotion for
+// what produced them and why a unit under a queued order is left alone. Written
+// back rather than merely displayed, so the save stops lying about it too.
+let motionRepaired = false;
+const repairStaleUnitMotion = async () => {
+  if (motionRepaired) return;
+  motionRepaired = true;
+  busy = true;
+  try {
+    const [world, actions] = await Promise.all([
+      readWorldState({ force: true }),
+      readActionsState({ force: true }),
+    ]);
+    // Every unit an action in the queue is still standing over: the classic
+    // long-range move and approach orders record theirs here (see queueOrder's
+    // unitRevert), and those units really are under orders they have not reached.
+    const queuedUnitIds = actions.map((action) => action?.unitRevert?.unitId).filter(Boolean);
+    const repaired = clearStaleUnitMotion(world, { queuedUnitIds });
+    if (repaired === world) return;
+    const saved = await writeWorldState(repaired);
+    units = saved.units ?? repaired.units;
+    emit();
+  } catch (error) {
+    console.error("Failed to clear stale unit motion:", error);
+  } finally {
+    busy = false;
+  }
+};
+
 export const startUnitsSync = () => {
   if (pollTimer) return () => {};
-  refresh();
+  refresh().then(repairStaleUnitMotion);
   pollTimer = setInterval(refresh, 5000);
   return () => {
     clearInterval(pollTimer);
@@ -272,10 +303,17 @@ export const moveUnitTo = async (unitId, lng, lat) => {
     return { resolved: false, distance, leash };
   }
 
+  // Within the leash the unit is placed on its destination immediately, so it has
+  // ARRIVED — the same rule the beta engine applies on arrival. This used to stamp
+  // "moving" on a formation already standing where it was sent, and classic has no
+  // engine to ever take it back off: the unit kept a yellow moving ring and a popup
+  // reading "moving" for the rest of the campaign. Saves already carrying that are
+  // repaired on load by clearStaleUnitMotion. The out-of-range branch above is the
+  // one that genuinely IS moving — it leaves the unit where it stands.
   await commit((list) =>
     list.map((u) =>
       u.id === unitId
-        ? { ...u, lng, lat, status: "moving", updatedAt: new Date().toISOString() }
+        ? { ...u, lng, lat, status: "idle", updatedAt: new Date().toISOString() }
         : u,
     ),
   );
