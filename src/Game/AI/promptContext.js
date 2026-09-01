@@ -12,6 +12,7 @@ import {
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
+import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildRegionOwnershipText } from "./regionVocab.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { buildForcePostureText } from "./forcePosture.js";
@@ -164,9 +165,25 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
 // has talked to across many separate rounds). An explicit date lets the model
 // answer "the recent message from Algeria" by actually comparing dates
 // instead of guessing from list position.
-export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
-  if (normalizedChats.length === 0) return "No chats occurred in these rounds.";
+// `visibleTo` names the polity this transcript is being rendered FOR, and keeps
+// only the chats that polity was actually a participant in. Omit it (the default)
+// for the omniscient readers — the jump narrator, the consolidator, and the
+// player's own advisor, who is in every chat anyway.
+//
+// This is what makes a diplomatic channel private. Without it the `leader` prompt
+// handed every AI power the player's letters to every other power, so no offer
+// could be confidential and every leader wrote in the same borrowed voice. See
+// chatVisibility.js for the field evidence.
+export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10, visibleTo = "" } = {}) => {
+  const normalizedChats = filterChatsVisibleTo(normalizeChats(chats), visibleTo);
+  if (normalizedChats.length === 0) {
+    // Distinct wording per case: "this polity has no correspondence" is a very
+    // different fact from "nothing happened this round", and a leader told the
+    // latter when the former is true may invent a conversation to fill the gap.
+    return visibleTo
+      ? "You have exchanged no messages with them in these rounds."
+      : "No chats occurred in these rounds.";
+  }
 
   return normalizedChats.slice(0, limit).map((chat, index) => {
     const lastActivityMs = chatLastMessageTimeMs(chat);
@@ -761,6 +778,13 @@ export const buildPromptContext = async (bundle, {
   chat = null,
   chatLimit = 8,
   chatsToConsolidate = "",
+  // The polity this prompt SPEAKS AS, when that limits what it may have read.
+  // Set by the leader path so one government cannot read another's private
+  // correspondence (chatVisibility.js). Deliberately its own option rather than
+  // being inferred from respondingPolityName, which is also filled in as a
+  // fallback on paths that are entitled to see everything — inferring it there
+  // would silently blind the jump narrator.
+  chatVisibleTo = "",
   eventLimit = 10,
   eventsToConsolidate = "",
   gameMasterRequest = "",
@@ -833,7 +857,10 @@ export const buildPromptContext = async (bundle, {
     citiesSummary,
     chat: JSON.stringify(unconsolidatedChats),
     chatHistory: currentChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") || "No chat history.",
-    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit }),
+    // The only transcript that is visibility-filtered. `chatsToConsolidate` below
+    // stays unfiltered on purpose: the consolidator is the archivist and must
+    // fold the WHOLE round into canon, not one government's view of it.
+    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit, visibleTo: chatVisibleTo }),
     chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
     chatSummary: buildChatSummaryText(unconsolidatedChats),
     chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(unconsolidatedChats, { limit: 12, messageLimit: 50 }),
