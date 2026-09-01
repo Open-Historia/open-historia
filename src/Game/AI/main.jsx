@@ -16,10 +16,13 @@ import {
     busyProviderMessage,
     errorPayloadText,
     isBusyErrorPayload,
+    isQuotaExhaustedPayload,
     isStreamingRefusal,
     isStreamingRequired,
     providerErrorReplyMessage,
+    retryDelayMsFromPayload,
 } from "./providerErrors.js";
+import { createFirstByteTimer, normalizeUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
 import {
@@ -596,6 +599,7 @@ async function callGemini(systemPrompt, history, {
     maxTokens = 8192,
     onActivity,
     onChunk,
+    onUsage,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -698,10 +702,31 @@ async function callGemini(systemPrompt, history, {
             signal,
         });
 
+        // A 429 used to be fatal here while every other provider retried it, so
+        // one per-minute trip on a free-tier key destroyed the turn and dropped
+        // the player to canned events. Only a SPENT quota (daily allowance, or
+        // billing) is worth failing over; a rate limit is what waiting is for.
         if (response.status === 429) {
             const payload = await readErrorPayload(response);
             const details = extractErrorMessage(payload, "Gemini returned 429.");
-            throw new Error(`Gemini returned 429. Your balance or quota appears to be exhausted. ${details}`.trim());
+
+            if (isQuotaExhaustedPayload(payload)) {
+                throw new Error(`Gemini returned 429. Your balance or quota appears to be exhausted. ${details}`.trim());
+            }
+
+            // Honour the provider's own RetryInfo when it sent one; it knows the
+            // window better than a fixed guess does.
+            const wait = retryDelayMsFromPayload(payload) ?? retryDelay;
+            if (attempt === retries || !canRetryBeforeDeadline(deadline, wait)) {
+                throw new Error(
+                    `Gemini is rate limiting this key after ${retries} attempts. ${details} `
+                    + "Wait a minute and try again, or lower the request rate in Settings.".trim(),
+                );
+            }
+
+            console.warn(`[ai] Gemini rate limited. Retrying in ${wait / 1000}s... (attempt ${attempt}/${retries})`);
+            await sleep(wait, signal);
+            continue;
         }
 
         if (response.status === 503) {
@@ -725,6 +750,7 @@ async function callGemini(systemPrompt, history, {
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readGeminiStreamedResponse(response, onActivity)
             : await response.json();
+        onUsage?.(data);
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
@@ -778,6 +804,7 @@ async function callOpenAIStyleChatCompletions({
     tool,
     onActivity,
     onChunk,
+    onUsage,
     allowJsonSchemaFallback = false,
     maxTokens,
     tokenLimitField = "max_tokens",
@@ -1002,6 +1029,7 @@ async function callOpenAIStyleChatCompletions({
         const data = responseType.includes("text/event-stream")
             ? await readOpenAIStreamedResponse(response, onActivity)
             : await response.json();
+        onUsage?.(data);
         const text = extractOpenAIMessageText(data);
 
         if (tool) {
@@ -1144,6 +1172,7 @@ async function callAnthropic(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onUsage,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -1282,6 +1311,7 @@ async function callAnthropic(systemPrompt, history, {
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
             : await response.json();
+        onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
@@ -1321,6 +1351,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onUsage,
     retries = 3,
     retryDelay = 15000,
     signal,
@@ -1454,6 +1485,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
             : await response.json();
+        onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
@@ -1561,11 +1593,32 @@ export async function callAI(systemPrompt, history, opts = {}) {
         reasoning: getReasoningEnabled(),
     }, { verbose: true });
 
+    // What the call actually cost, and how long it sat before answering.
+    //
+    // Character counts have always been logged, but prose, JSON schema and
+    // campaign state tokenize at visibly different rates, so they cannot tell a
+    // real saving from noise. TTFB matters separately: it isolates prompt
+    // evaluation — the part a stable prompt prefix makes nearly free — from
+    // generation, which no amount of prompt work speeds up.
+    //
+    // The timer wraps the caller's own onActivity (runJsonTask passes the idle
+    // watchdog's note()), so it observes the first chunk without displacing it.
+    const timer = createFirstByteTimer(providerOpts.onActivity);
+    let usage = null;
+
     try {
-        const result = await dispatchToProvider(provider, systemPrompt, history, providerOpts);
+        const result = await dispatchToProvider(provider, systemPrompt, history, {
+            ...providerOpts,
+            onActivity: timer.note,
+            onUsage: (data) => { usage = normalizeUsage(data) ?? usage; },
+        });
         logDebugEvent("ai-call", `${label}: ${provider} answered in ${elapsedSeconds(startedAt)}.`, {
             replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
             viaToolCall: Boolean(result?.toolInput),
+            // Omitted rather than zeroed when unknown: a buffered call never
+            // fires onActivity, and plenty of gateways report no usage at all.
+            ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
+            ...(usage ?? {}),
         }, { verbose: true });
         return result;
     } catch (error) {

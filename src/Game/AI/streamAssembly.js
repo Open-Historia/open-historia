@@ -81,6 +81,7 @@ export const createOpenAIStreamState = () => ({
     toolArguments: "",
     finishReason: null,
     streamError: null,
+    usage: null,
 });
 
 export function applyOpenAIFrame(state, chunk) {
@@ -88,6 +89,11 @@ export function applyOpenAIFrame(state, chunk) {
     // error in a frame on an otherwise fine 200. Keep it so the caller can tell
     // "busy, ask again" from "the model said nothing".
     if (chunk?.error && !state.streamError) state.streamError = chunk.error;
+    // Token accounting rides on the final frame and has no `choices`, so it has
+    // to be picked up before the early return below. Native OpenAI only sends it
+    // when asked (stream_options.include_usage); most local gateways send it
+    // unprompted. Kept whenever it appears — see usageStats.js.
+    if (chunk?.usage && typeof chunk.usage === "object") state.usage = chunk.usage;
     const choice = chunk?.choices?.[0];
     if (!choice) return state;
     const delta = choice.delta ?? choice.message ?? {};
@@ -116,6 +122,7 @@ export function finishOpenAIStream(state) {
             },
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
+        ...(state.usage ? { usage: state.usage } : {}),
     };
 }
 
@@ -135,6 +142,10 @@ export const createAnthropicStreamState = () => ({
     blocks: new Map(),
     stopReason: null,
     streamError: null,
+    // Anthropic splits the accounting across two events: message_start carries
+    // the input side (including the cache_read figure that proves a prefix cache
+    // hit), message_delta the output side. Merged rather than replaced.
+    usage: null,
 });
 
 const blockAt = (state, index) => {
@@ -150,6 +161,12 @@ export function applyAnthropicFrame(state, chunk) {
     // status-code retry in main.jsx never sees it. Surface it instead.
     if (type === "error" && !state.streamError) {
         state.streamError = chunk.error ?? chunk;
+        return state;
+    }
+
+    // message_start opens with the input-token side of the accounting.
+    if (type === "message_start" && chunk.message?.usage) {
+        state.usage = { ...state.usage, ...chunk.message.usage };
         return state;
     }
 
@@ -176,8 +193,11 @@ export function applyAnthropicFrame(state, chunk) {
         return state;
     }
 
-    if (type === "message_delta" && chunk.delta?.stop_reason) {
-        state.stopReason = chunk.delta.stop_reason;
+    if (type === "message_delta") {
+        if (chunk.delta?.stop_reason) state.stopReason = chunk.delta.stop_reason;
+        // The output-token side. Merged onto message_start's input side rather
+        // than replacing it, or the input and cache figures would be lost.
+        if (chunk.usage) state.usage = { ...state.usage, ...chunk.usage };
     }
 
     return state;
@@ -221,6 +241,7 @@ export function finishAnthropicStream(state) {
         stop_reason: state.stopReason,
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
+        ...(state.usage ? { usage: state.usage } : {}),
     };
 }
 
@@ -251,6 +272,11 @@ export const createGeminiStreamState = () => ({
     calls: [],
     finishReason: null,
     streamError: null,
+    // Gemini repeats usageMetadata on frames as the answer grows, each one
+    // cumulative, so the last is the total. Kept unconditionally rather than
+    // only on the final frame, since a stream cut short still reports what it
+    // had spent.
+    usage: null,
 });
 
 export function applyGeminiFrame(state, chunk) {
@@ -262,6 +288,7 @@ export function applyGeminiFrame(state, chunk) {
     if (chunk?.promptFeedback?.blockReason && !state.streamError) {
         state.streamError = { message: `Gemini blocked the prompt (${chunk.promptFeedback.blockReason}).` };
     }
+    if (chunk?.usageMetadata && typeof chunk.usageMetadata === "object") state.usage = chunk.usageMetadata;
     const candidate = chunk?.candidates?.[0];
     if (!candidate) return state;
     for (const part of candidate.content?.parts ?? []) {
@@ -291,6 +318,7 @@ export function finishGeminiStream(state) {
             finishReason: state.finishReason,
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
+        ...(state.usage ? { usageMetadata: state.usage } : {}),
     };
 }
 

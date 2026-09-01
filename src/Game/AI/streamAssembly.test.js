@@ -295,3 +295,53 @@ test("the readers work with no activity callback at all", async () => {
   ]));
   assert.deepEqual(data.content, [{ type: "text", text: "fine" }]);
 });
+
+// ---------------------------------------------------------------------------
+// Token accounting survives reassembly
+//
+// Every tool call streams, so if the assemblers dropped `usage` the game could
+// only ever measure the cheap buffered chat turns — useless for judging whether
+// a prompt change actually made the expensive path cheaper.
+
+test("OpenAI's usage frame is kept, though it carries no choices", async () => {
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "hi" } }] },
+    // The accounting frame: an empty choices array and the totals.
+    { choices: [], usage: { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 } },
+  ]));
+  assert.equal(data.choices[0].message.content, "hi");
+  assert.deepEqual(data.usage, { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 });
+});
+
+test("Anthropic's two-sided accounting is merged, not overwritten", async () => {
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    // Input side, including the cache read that proves a prefix hit.
+    { type: "message_start", message: { usage: { input_tokens: 12, cache_read_input_tokens: 40000 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    // Output side arrives separately; the input figures must survive it.
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 55 } },
+  ]));
+  assert.deepEqual(data.content, [{ type: "text", text: "ok" }]);
+  assert.equal(data.usage.input_tokens, 12);
+  assert.equal(data.usage.cache_read_input_tokens, 40000);
+  assert.equal(data.usage.output_tokens, 55);
+});
+
+test("Gemini's cumulative usageMetadata keeps the last figure", async () => {
+  const data = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "a" }] } }], usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 1 } },
+    { candidates: [{ content: { parts: [{ text: "b" }] } }], usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 2, totalTokenCount: 92 } },
+  ]));
+  assert.equal(data.candidates[0].content.parts[0].text, "ab");
+  assert.deepEqual(data.usageMetadata, { promptTokenCount: 90, candidatesTokenCount: 2, totalTokenCount: 92 });
+});
+
+// A provider that never reports usage must not gain an empty key — downstream
+// treats "absent" as "unknown", and an empty object is neither.
+test("a stream with no accounting gains no usage key", async () => {
+  const openai = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "x" } }] }]));
+  assert.equal("usage" in openai, false);
+  const gemini = await readGeminiStreamedResponse(sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] } }] }]));
+  assert.equal("usageMetadata" in gemini, false);
+});

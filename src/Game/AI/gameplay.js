@@ -50,6 +50,7 @@ import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { UNIT_CONTRACT_MARKER, templateAlreadySays } from "./promptDedupe.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -437,7 +438,21 @@ const runJsonTask = async (taskKey, {
   // The unit contract itself. defaultPrompts.json carries the same rules for NEW
   // games; this is what reaches the campaigns that already exist, whose prompts are
   // frozen — the same reason [Player Agency] and [Map Truth] are injected here.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+  //
+  // Skipped when the rendered template ALREADY says it. The bundled template's
+  // units section is a near-verbatim copy of this block (same rules, same order,
+  // largely the same sentences), so a new game was paying for both — ~2 KB of
+  // every jump prompt spent saying the same thing twice, which is worse than
+  // wasteful: a rule repeated in two slightly different wordings invites the
+  // model to look for a distinction that is not there.
+  //
+  // Deliberately NOT extended to ACTIONS_REFERENCE, though it overlaps the
+  // template's output-contract tail just as much. The template predates
+  // regionClaims, actionIds and projectOps, and ACTIONS_REFERENCE is the ONLY
+  // place a frozen-prompt campaign is told those three levers exist — skipping it
+  // would silently take them away. That duplication gets resolved by rewriting
+  // the template itself, not by dropping the block that carries the newer rules.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey) && !templateAlreadySays(systemPrompt, UNIT_CONTRACT_MARKER)) {
     const playerName = normalizeString(variables.playerPolity) || "the player's polity";
     systemPrompt = `${systemPrompt}\n\n[Units on the Map]\nUnits are EVIDENCE OF YOUR OWN EVENTS. The player cannot move or fight their own formations - the map is there to show them what is happening - so every unit you spawn or move must be something one of this jump's events actually describes. Reach for them readily: a mobilization, a build-up on a border, a fleet sailing, an offensive, a withdrawal all deserve to be visible. But keep the map legible - only formations that matter to the story. A great power at war might show five or six; a country at peace shows one or two, or none.\nstrength is a PERCENTAGE of established strength (100 = fresh and full, 60 = worn down, 20 = a shell), and composition says what the formation actually is ("1 aircraft carrier, 2 frigates", "3 tank regiments"). Write both, plus a one-sentence note on what it is doing and where. A counter that does not say what it is tells the player nothing.\nDo not teleport. A move may only cover what that unit could really travel between the previous event's date and this one's. The engine enforces this: an over-long move becomes a partial advance that continues automatically on later turns, so ordering the full distance is safe and correct.\nThe map is what ${playerName} KNOWS, not omniscience. A force may legitimately appear far from its own territory when it is being DETECTED rather than arriving - a submarine that has shadowed a fleet for weeks, infiltrators already in country, a deployment only now confirmed. Such a unit is drawn as unconfirmed, which is correct and not a penalty. The one thing you cannot conjure is a fixed installation: use markerOps build for a base, and never spawn a far-flung garrison.\nSet posture whenever you place or move a unit - holding, massing, patrol, transit, exercise, blockade, withdrawing. It is how the player reads intent off the map. "patrol" is special: the engine keeps a patrolling unit working its station on its own, turn after turn, so state it once and leave it.`;
   }
@@ -488,7 +503,13 @@ Where NEITHER is true yet, the order is not refused and not quietly deferred - i
   // programme also MOVES it -- otherwise the board freezes at whatever the
   // advisor last said and the player stops trusting it. Injected at call time for
   // the same frozen-prompt reason as the directives above.
-  if (["jumpForward", "autoJumpForward", "gameMaster", "catalystExecutor", "catalystSummary"].includes(taskKey)) {
+  // catalystExecutor and catalystSummary used to be on this list, and paid ~1k
+  // tokens each for it, but neither schema has an `impacts` field at all
+  // (CATALYST_EXECUTOR_SCHEMA is {summary, resolved, nextChoices};
+  // CATALYST_SUMMARY_SCHEMA is {title, description, importance}). They were being
+  // told in detail how to use a channel they cannot reach, and any projectOps
+  // they emitted would have failed schema validation and cost the call a retry.
+  if (["jumpForward", "autoJumpForward", "gameMaster"].includes(taskKey)) {
     const projects = normalizeString(variables.projectsSummary);
     const board = projects && !projects.startsWith("No projects")
       ? `\n\nThe board as it stands:\n${projects}`
