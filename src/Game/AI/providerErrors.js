@@ -121,6 +121,67 @@ export const retryDelayMsFromPayload = (error) => {
     return Math.min(Math.round(seconds * 1000), 120000);
 };
 
+// ---------------------------------------------------------------------------
+// The model thought out loud instead of calling the tool
+// ---------------------------------------------------------------------------
+//
+// main.jsx already recovers from "it spent its whole budget reasoning", but that
+// test reads the `reasoning` / `reasoning_content` DELTA FIELDS. Plenty of
+// models put their chain of thought straight into `content` instead, which is
+// indistinguishable from an answer by field alone.
+//
+// Field report: an NVIDIA model on openai-compatible fell back on 3 of 4 turns
+// against a round-356 save. Every jump came back with viaToolCall:false and text
+// like:
+//
+//   "We need to produce JSON with events between 2032-11-15 and 2033-02-13...
+//    We must produce events with dates spread across period. Probably 11 events.
+//    We need to include projectOps for each project that needs decision..."
+//
+// It planned until the budget ran out and never emitted the call. Both attempts
+// were spent on it, so the turn fell back to canned events. Its small-schema task
+// (idleDiplomacy) succeeded every time, so the model is capable — it is the size
+// of the jump contract that tips it into deliberating.
+//
+// Note this only has to be judged in TOOL mode, where any text without a tool
+// call is ALREADY a failure. So the question is not "is this prose?" but "is
+// retrying worth one more request?", and the bar is correspondingly low.
+
+// First-person planning, in the register models actually use. Anchored at a
+// sentence start so a legitimate answer that happens to contain "we need" in
+// narration does not match.
+const DELIBERATION_TEXT =
+    /(^|[.!?]\s+|\n)\s*(we|i|let'?s|let me|okay|ok|alright|first|now|so)\b[^.!?\n]{0,60}\b(need|must|should|have to|want|will|can|could|'ll|going to|think|consider|plan|figure|decide|start|begin|produce|generate|write|include|make|use)\b/i;
+
+// A second, cheaper signal: models narrating a plan talk ABOUT the output shape
+// rather than producing it.
+const DELIBERATION_META = /\b(we|i)\s+(need|have|want|should|must)\s+to\s+(produce|generate|create|output|return|write|include|emit)\b/i;
+
+/**
+ * In tool mode, did the model deliberate instead of answering?
+ *
+ * `text` is the assistant's content when no tool call came back. Returns false
+ * for anything that even looks like it might carry a payload — a fenced block or
+ * a balanced brace — because that is the tolerant-parsing path's job
+ * (jsonSalvage.js), not this one, and retrying would throw away a salvageable
+ * answer.
+ */
+export const looksLikeDeliberation = (text) => {
+    const body = String(text ?? "").trim();
+    if (!body) return false;
+    // Anything that might parse is not ours to judge.
+    if (body.includes("```") || body.includes("{") || body.includes("[")) return false;
+    return DELIBERATION_META.test(body) || DELIBERATION_TEXT.test(body);
+};
+
+// What to add to the system prompt for the one retry. Deliberately blunt and
+// short: the model has already read a very long contract and talked itself out
+// of answering, so this has to cut through rather than add nuance.
+export const TOOL_CALL_INSISTENCE =
+    "\n\nCRITICAL: Do NOT think out loud, plan, or explain. Do not write any prose at all. "
+    + "Your entire response must be a single call to the provided function. "
+    + "Begin the function call immediately.";
+
 // Says whose fault it is, which is the whole point: the previous message sent
 // the player off to shorten their question and check their model was healthy,
 // and none of that would have helped.
