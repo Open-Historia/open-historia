@@ -1681,6 +1681,11 @@ async function buildPromptVariables({
         eventLimit: 16,
         longEventLimit: 24,
         respondingPolityName: speakingAs,
+        // What this prompt is allowed to have READ. A leader speaks as one polity
+        // and may only see chats that polity was in; the advisor passes no
+        // speakingAs and therefore sees everything, which is correct — it is the
+        // player's own staff, and the player is in every chat.
+        chatVisibleTo: speakingAs,
     });
 }
 
@@ -1906,7 +1911,13 @@ async function buildAdvisorSystemPrompt() {
     return `${rendered}\n\n${directives.join("\n\n")}`;
 }
 
-export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
+// `speakingAs` names the polity whose leader is about to reply. It decides both
+// how the prompt addresses itself AND which chats it is allowed to have read
+// (chatVisibility.js), so passing the real speaker matters: in a group chat the
+// old "first non-player participant" guess would have shown one member's private
+// correspondence to another. Callers that genuinely have no speaker yet may omit
+// it and keep the old derivation.
+export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "") {
     await ensurePromptsLoaded();
     const participantList = countries.map((country) => `- ${country}`).join("\n");
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1925,7 +1936,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
             chatData,
             eventData,
             gameData,
-            speakingAs: countries.find((country) => country !== playerCountry) || "",
+            speakingAs: speakingAs || countries.find((country) => country !== playerCountry) || "",
             worldData,
         })),
         chatParticipants: participantList || "",
@@ -2055,7 +2066,11 @@ function parseReaction(raw) {
 }
 
 export async function sendDiplomaticMessage(playerMessage, speakingAs, countries, opts) {
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, null);
+    // speakingAs is passed through now (it used to be dropped, leaving the prompt
+    // to guess "first participant" — which with a null playerCountry could pick
+    // the PLAYER). It selects this turn's voice and gates which chats that polity
+    // may have read.
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs);
 
     diplomaticHistory.push({ role: "user", parts: [{ text: playerMessage }] });
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
@@ -2106,7 +2121,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 // it here would splice this unrelated exchange into whatever chat the player
 // happens to be mid-reading.
 export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], opts }) {
-    const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry);
+    const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry, speakingAs);
 
     let history = priorMessages
         .filter((msg) => ["user", "leader"].includes(msg.role))
