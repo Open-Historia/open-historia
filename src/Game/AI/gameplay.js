@@ -866,6 +866,59 @@ const generateProjectOps = async (bundle, events, { signal } = {}) => {
   return { generation, ops: normalizeArray(payload?.projectOps) };
 };
 
+// The turn is generated and waiting, not lost. Flagged so the UI can tell this
+// apart from an ordinary jump failure and offer to retry just the board rather
+// than regenerating the whole round.
+const projectsHeldError = (cause) => {
+  const error = new Error(
+    "Your events are ready, but the Projects & Operations board did not update, so nothing has been "
+    + `saved yet: ${cause?.message || "the board task returned no usable answer"}. `
+    + "Retry the board to finish the turn, or discard it and run the turn again.",
+  );
+  error.projectsHeld = true;
+  error.cause = cause;
+  return error;
+};
+
+// Finish a held turn by re-running ONLY the board call. The events are not
+// regenerated — they are already valid, and on a slow model they may have cost
+// ten minutes. Because nothing was written, this is the same code path as the
+// first attempt rather than a second one to keep in step.
+export const retryPendingProjectsJump = async ({ signal } = {}) => {
+  if (!pendingProjectsJump) throw new Error("There is no turn waiting on the Projects board.");
+  const { applyArgs, bundle, events } = pendingProjectsJump;
+  beginSimulation();
+  try {
+    let ops = [];
+    let skipped = false;
+    try {
+      ({ ops, skipped } = await generateProjectOps(bundle, events, { signal }));
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      // The BOARD failed again. Nothing written, turn still held: the player can
+      // retry once more or discard. Only this branch re-holds — a failure after
+      // this point is a different situation and must not pretend otherwise.
+      logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
+      throw projectsHeldError(error);
+    }
+
+    if (!skipped && ops.length) {
+      const attached = attachProjectOpsToEvents(events, ops);
+      logDebugEvent("turn", `Projects board updated on retry: ${attached} op(s).`, undefined, { verbose: true });
+    }
+
+    // Released BEFORE the write, so a turn can never be applied twice. If the
+    // write itself fails the slot stays empty and its error propagates as an
+    // ordinary turn failure — the player rolls back, which is the right move for
+    // a half-finished write and the wrong one for a board that just needs asking
+    // again.
+    pendingProjectsJump = null;
+    return await applySimulationResult(applyArgs);
+  } finally {
+    endSimulation();
+  }
+};
+
 // Put each op onto the event that caused it, so the board move is part of that
 // event's impacts. An op with no usable eventIndex lands on the LAST event: the
 // alternative is dropping it, and a board change the model asked for is worth
@@ -1009,7 +1062,39 @@ const mergePolityCatalog = (countryCatalog, world) => {
 let activeSimulations = 0;
 const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
-export const isSimulationBusy = () => activeSimulations > 0;
+
+// A turn whose events are generated and validated but NOT yet written, because
+// the Projects & Operations board could not be brought in step with them.
+//
+// Nothing is applied while this is set. That is deliberate and is what keeps the
+// retry honest: the board's ops must ride in on the events that caused them
+// (applyEventImpactsToWorld -> releaseProjectCompletionEffects -> applyProjectOps),
+// which only works BEFORE the world is written. A retry that ran afterwards would
+// have to go through the non-event door, which refuses to close a project
+// carrying an onComplete — correct for the advisor, wrong for the simulation, and
+// it would silently leave a finished annexation with the border unmoved.
+//
+// Holding the whole turn instead means the retry is the SAME path as the first
+// attempt, with no privileged bypass to add and no second behaviour to keep in
+// step. If it cannot be resolved the turn fails like any other and the player
+// rolls back, which is what they do with a bad turn anyway.
+let pendingProjectsJump = null;
+
+// A pending turn counts as busy. The idle pulse already checks this before it
+// starts and again before every write, so one guard keeps it from writing chat
+// or units into a world that is about to be replaced by the held turn.
+export const isSimulationBusy = () => activeSimulations > 0 || pendingProjectsJump !== null;
+
+export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
+
+// Abandon the held turn. Nothing was written, so there is nothing to undo — the
+// player simply loses the generation, the same as cancelling a jump.
+export const discardPendingProjectsJump = () => {
+  const had = pendingProjectsJump !== null;
+  pendingProjectsJump = null;
+  if (had) logDebugEvent("turn", "Held turn discarded; the board was never updated and nothing was written.");
+  return had;
+};
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
@@ -2630,6 +2715,10 @@ export const advanceActiveCatalyst = async (choiceText) => {
 };
 
 export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, signal } = {}) => {
+  // Starting a fresh turn abandons any turn still held on the board. Its state
+  // was captured against a world snapshot this one is about to re-read, so
+  // applying it later would write a turn built on stale ground.
+  discardPendingProjectsJump();
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -2806,28 +2895,6 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   // merge so it sees the complete story, and before the world is written so its
   // ops ride along inside the same single write and rollback snapshot.
   //
-  // A failure here must never cost the player the simulation. The events are
-  // already generated and validated at this point; throwing them away to re-roll
-  // a bookkeeping call would be the worst possible outcome, so the jump applies
-  // regardless and the board simply does not move — the same end state as a jump
-  // that emitted no projectOps. projectsFailed is handed to the UI so it can say
-  // so and offer a retry, rather than leaving a silently stale board, which is
-  // the exact failure the board's own rules exist to prevent.
-  let projectsFailed = null;
-  try {
-    const { ops, skipped } = await generateProjectOps(bundle, merged.events, { signal });
-    if (!skipped && ops.length) {
-      const attached = attachProjectOpsToEvents(merged.events, ops);
-      logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
-    }
-  } catch (error) {
-    // A deliberate cancel is the player's, and must abort the turn like any
-    // other — it is not a board failure to report and retry.
-    if (error?.name === "AbortError") throw error;
-    projectsFailed = error?.message || "The Projects & Operations board did not update.";
-    logDebugEvent("turn", "Projects board did NOT update this turn.", error);
-  }
-
   const result = {
     catalyst: merged.catalyst,
     clearActions: merged.clearActions,
@@ -2837,10 +2904,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     stopDate: merged.stopDate,
     summary: merged.summary,
     generation,
-    projectsFailed,
   };
-
-  return applySimulationResult({
+  const applyArgs = {
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -2848,7 +2913,29 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     baseGame: bundle.game,
     baseWorld: bundle.world,
     result,
-  });
+  };
+
+  // The board, in its own call, once for the whole round — after the segments
+  // merge so it sees the complete story, and BEFORE anything is written so its
+  // ops ride in on the events that caused them.
+  //
+  // On failure the turn is HELD rather than applied: see pendingProjectsJump for
+  // why the retry has to happen on this side of the write.
+  try {
+    const { ops, skipped } = await generateProjectOps(bundle, merged.events, { signal });
+    if (!skipped && ops.length) {
+      const attached = attachProjectOpsToEvents(merged.events, ops);
+      logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
+    }
+  } catch (error) {
+    // A deliberate cancel is the player's and aborts the turn like any other.
+    if (error?.name === "AbortError") throw error;
+    pendingProjectsJump = { applyArgs, bundle, events: merged.events };
+    logDebugEvent("turn", "Turn HELD: the board did not update, so nothing was written.", error);
+    throw projectsHeldError(error);
+  }
+
+  return applySimulationResult(applyArgs);
   } finally {
     endSimulation();
   }
