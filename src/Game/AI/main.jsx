@@ -1215,14 +1215,24 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
+    const speakingAs = countries.find((country) => country !== playerCountry) || "";
+    // A leader only knows the conversations they are actually in. The leader
+    // prompt carries the recent chat history, and this used to hand it EVERY
+    // chat — so the polity answering here could see, and react to, what the
+    // player had said to someone else. Diplomacy with others is private; the
+    // only way to learn it is the spy the game now lets the player plant.
+    const isParticipant = (chat) => (Array.isArray(chat?.countries) ? chat.countries : [])
+        .some((country) => [country?.name, country?.code].map((v) => String(v ?? "").trim().toUpperCase())
+            .includes(String(speakingAs).trim().toUpperCase()));
+    const ownChats = Array.isArray(chatData) ? chatData.filter(isParticipant) : [];
     const variables = {
         ...(await buildPromptVariables({
             actionData,
             advisorData,
-            chatData,
+            chatData: ownChats,
             eventData,
             gameData,
-            speakingAs: countries.find((country) => country !== playerCountry) || "",
+            speakingAs,
             worldData,
         })),
         chatParticipants: participantList || "",
