@@ -146,11 +146,14 @@ The OpenAI‑style caller runs a **`structuredMode` state machine** (`main.jsx:5
 
 ### Streaming vs buffered
 
-Cloud providers use a **buffered** path (`await response.json()`). **Streaming is used only for local OpenAI‑compatible endpoints**, and only to make Cancel physical:
+**Every tool call streams, on every provider**, and so does every chat turn that renders tokens as they arrive (`onChunk`). Only a plain buffered chat turn (no tool, no `onChunk`) stays buffered. Two reasons, both in the header comment of `streamAssembly.js`:
 
-- `streamLocalEndpoint = isLocalEndpoint(endpoint)` (`main.jsx:575`). When true, `stream: true` is added to the body (`main.jsx:583`). Local inference servers (llama.cpp, LM Studio, Ollama) only notice a dead socket on their next token write; without streaming a cancelled non‑streaming request keeps generating the whole completion. Streaming makes the next token write fail, stopping inference within a token or two.
-- The response is branched on the **actual** `content-type`, not on what was asked: `text/event-stream` → `readOpenAIStreamedResponse` (`main.jsx:343`), else `response.json()` (`main.jsx:681`). `readOpenAIStreamedResponse` reassembles SSE `data:` deltas (content + `tool_calls` arguments + `finish_reason`) back into a normal chat‑completions object so the existing extractors work unchanged.
-- Anthropic‑compatible does **not** stream even when local; Gemini and native Anthropic never stream.
+- **Cancel.** Local inference servers (llama.cpp, LM Studio, Ollama) only notice a dead socket on their next token write; a cancelled non‑streaming request keeps generating the whole completion. Streaming stops inference within a token or two.
+- **Staying alive.** A jump is the longest request the game makes (a ~190 KB prompt asking for 30+ events). A buffered one sends *zero bytes* for that whole span, which is what a proxy, an API edge — or, until it was fixed, the game's own relay — cuts at around five minutes. The player sees canned events and reads it as "Limit AI generation", which is the bug that made Gemini the last provider to stream.
+
+Per provider: Gemini picks `:streamGenerateContent?alt=sse` whenever there is a tool (`main.jsx:673`); OpenAI‑style sets `stream: true` on `(streamLocalEndpoint || onChunk || tool) && !streamingDisabled` (`main.jsx:817`); both Anthropic callers on `(onChunk || tool) && !streamingDisabled` (`main.jsx:1187`, `:1364`). `streamingDisabled` is a one‑shot concession for a gateway that refuses stream+tools together.
+
+The response is always branched on the **actual** `content-type`, not on what was asked, so a gateway that ignores the request still works: `text/event-stream` → `readOpenAIStreamedResponse` / `readAnthropicStreamedResponse` / `readGeminiStreamedResponse` (`streamAssembly.js:112`, `:217`, `:287`), else `response.json()`. Each reader rebuilds that provider's normal envelope — chat‑completions, Messages, or `generateContent` — so the existing extractors work unchanged. A refusal that arrives *inside* a 200 stream (an overload error frame) is retried once by every tool path, since it no longer arrives as a 429/503.
 
 ### maxTokens / token‑cap semantics
 
@@ -251,7 +254,7 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 |--------|------|------|
 | `callAI(systemPrompt, history, opts)` | `main.jsx:942` | Provider dispatch; returns string (chat) or `{rawText,toolInput}` (structured). |
 | `sendMessage`, `sendDiplomaticMessage` | `main.jsx:1084`, `:1138` | Advisor / leader chat turns. |
-| `readOpenAIStreamedResponse` | `main.jsx:343` | SSE → chat‑completions reassembly (local streaming). |
+| `readOpenAIStreamedResponse`, `readAnthropicStreamedResponse`, `readGeminiStreamedResponse` | `streamAssembly.js:112`, `:217`, `:287` | SSE → that provider's normal envelope, so streaming is invisible downstream. |
 | `getStoredProvider`, `getProviderSettings`, `getReasoningEnabled` | `providerConfig.js:132`, `:157`, `:174` | Read selected provider / its settings / reasoning toggle. |
 | `runJsonTask(taskKey, opts)` | `gameplay.js:382` | Structured task runner (2 attempts, validate/salvage, fallback). |
 | `simulateTimelineJump`, `applyGameMasterCommand`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |

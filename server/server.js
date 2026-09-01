@@ -2,6 +2,8 @@
 import crypto from "crypto";
 import express from "express";
 import fs from "fs";
+import http from "http";
+import https from "https";
 import os from "os";
 import path from "path";
 import url from "url";
@@ -201,7 +203,19 @@ ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
-  res.status(statusCode).json({ error: message });
+  // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
+  // puts the real cause on error.cause — which is the difference between a
+  // mistyped endpoint (ENOTFOUND), a backend that is not running
+  // (ECONNREFUSED) and a request that ran past a timeout
+  // (UND_ERR_HEADERS_TIMEOUT). The player's copied bug report is the only place
+  // any of this is ever read, and it used to say "fetch failed" and nothing
+  // else. Appended rather than substituted: the message is what a human reads.
+  const detail = error instanceof Error
+    ? (error.cause?.code || error.cause?.message || error.code || "")
+    : "";
+  res.status(statusCode).json({
+    error: detail && !message.includes(detail) ? `${message} (${detail})` : message,
+  });
 };
 
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
@@ -796,15 +810,37 @@ const ALLOW_REMOTE_RELAY = process.env.OH_ALLOW_REMOTE_RELAY === "1";
 const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 
+// Spoken with http/https directly rather than with fetch(), for one reason:
+// Node's fetch() is undici, whose headersTimeout defaults to 300 seconds and
+// cannot be changed without the undici package. A generation that takes longer
+// than five minutes to produce its FIRST byte — a big save's ~190 KB prompt
+// being evaluated by a local model, or any buffered (non-streamed) answer — was
+// therefore killed by the relay itself at ~301-307s, no matter what the player
+// had set. The game read that as a failed turn and served canned events, which
+// is exactly what "Limit AI generation" does: the reported symptom was a
+// five-minute limit that the toggle said was off, because the limit was never
+// the toggle's. RELAY_TIMEOUT_MS above is the only deadline now, and it is one
+// somebody chose.
+//
+// Direct http also lets the upstream body be PIPED back instead of buffered,
+// which is what makes the streaming the rest of the AI stack does worth doing:
+// the browser now sees tokens as they arrive rather than one blob at the end,
+// so a local model notices a cancelled request on its next write.
+const relayTransport = (target) => (target.protocol === "https:" ? https : http);
+
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
   let completed = false;
+  let timedOut = false;
   const abortUpstream = () => {
     if (!completed) controller.abort();
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
-  const timeout = setTimeout(abortUpstream, RELAY_TIMEOUT_MS);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    abortUpstream();
+  }, RELAY_TIMEOUT_MS);
 
   try {
     if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
@@ -830,34 +866,88 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       return sendError(res, 400, new Error(verdict.reason));
     }
 
-    const upstream = await fetch(target, {
-      method: method === "GET" ? "GET" : "POST",
-      headers: { "Content-Type": "application/json", ...sanitizeRelayHeaders(headers) },
-      body: method === "GET" ? undefined : JSON.stringify(payload ?? {}),
-      signal: controller.signal,
-      // A 302 from the configured endpoint to somewhere else is not something an
-      // AI backend does; following one would re-open the target check we just
-      // passed. The status comes back as-is and the client can act on it.
-      redirect: "manual",
+    const requestMethod = method === "GET" ? "GET" : "POST";
+    const body = requestMethod === "GET" ? undefined : JSON.stringify(payload ?? {});
+    // Lowercased and merged by name, because http.request sends this object's
+    // keys verbatim: a caller passing "content-type" beside our "Content-Type"
+    // would have the endpoint receive BOTH. fetch's Headers used to fold them
+    // for us (case-insensitive, last wins), and this keeps that behaviour.
+    // sanitizeRelayHeaders has already dropped content-length and host.
+    const upstreamHeaders = { "content-type": "application/json" };
+    for (const [key, value] of Object.entries(sanitizeRelayHeaders(headers))) {
+      upstreamHeaders[key.toLowerCase()] = value;
+    }
+    if (body !== undefined) upstreamHeaders["content-length"] = Buffer.byteLength(body);
+
+    const upstream = await new Promise((resolve, reject) => {
+      // http.request does not follow redirects at all, which is the behaviour
+      // the old fetch asked for with redirect:"manual": a 302 from the
+      // configured endpoint to somewhere else is not something an AI backend
+      // does, and following one would re-open the target check just passed. The
+      // status comes back as-is and the client can act on it.
+      const upstreamRequest = relayTransport(target).request(target, {
+        method: requestMethod,
+        headers: upstreamHeaders,
+        signal: controller.signal,
+      }, resolve);
+      upstreamRequest.on("error", reject);
+      upstreamRequest.end(body);
     });
 
-    // Read with a ceiling rather than buffering whatever the endpoint sends.
-    const declared = Number(upstream.headers.get("content-length"));
+    // Refuse an oversized response before reading a byte of it when the endpoint
+    // declares its size, and stop mid-body when it does not.
+    const declared = Number(upstream.headers["content-length"]);
     if (Number.isFinite(declared) && declared > RELAY_MAX_RESPONSE_BYTES) {
-      return sendError(res, 502, new Error("The AI endpoint's response is too large to relay."));
-    }
-    const text = await upstream.text();
-    if (Buffer.byteLength(text) > RELAY_MAX_RESPONSE_BYTES) {
+      upstream.destroy();
       return sendError(res, 502, new Error("The AI endpoint's response is too large to relay."));
     }
 
+    res.status(upstream.statusCode || 502);
+    res.type(upstream.headers["content-type"] || "application/json");
+
+    let received = 0;
+    await new Promise((resolve, reject) => {
+      upstream.on("data", (chunk) => {
+        received += chunk.length;
+        if (received > RELAY_MAX_RESPONSE_BYTES) {
+          upstream.destroy(new Error("The AI endpoint's response is too large to relay."));
+          return;
+        }
+        // Backpressure: a slow client must not make the relay buffer the whole
+        // answer in memory, which is what it was doing before.
+        if (!res.write(chunk)) {
+          upstream.pause();
+          res.once("drain", () => upstream.resume());
+        }
+      });
+      upstream.on("end", resolve);
+      upstream.on("error", reject);
+    });
+
     completed = true;
-    res.status(upstream.status);
-    res.type(upstream.headers.get("content-type") || "application/json");
-    res.send(text);
+    res.end();
   } catch (error) {
+    // The relay's own deadline used to abort the upstream and then send
+    // NOTHING: no status, no body, no res.end(), so the game sat on an open
+    // socket forever instead of failing. Answer it.
+    if (timedOut) {
+      if (!res.headersSent) {
+        sendError(res, 504, new Error(
+          `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
+            + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
+        ));
+      } else if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
+      return;
+    }
     if (!controller.signal.aborted && !res.headersSent) {
       sendError(res, 502, error);
+    } else if (!res.writableEnded && !res.destroyed) {
+      // Headers are already out, so there is no status left to set — end the
+      // response rather than leaking the socket. (A client that went away has
+      // destroyed it already; there is nothing to answer.)
+      res.end();
     }
   } finally {
     clearTimeout(timeout);
