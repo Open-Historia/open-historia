@@ -2182,6 +2182,55 @@ export const advanceStandingOrders = (
   };
 };
 
+// Repair units that claim to be moving when nothing is moving them. This is a
+// save repair, not a rule: both systems used to mint these and both are fixed at
+// the source now.
+//
+//   * The classic system teleports an in-leash move straight to its destination
+//     and used to stamp "moving" on the unit standing on it (unitsController's
+//     moveUnitTo), and classic has no engine that could ever clear it again.
+//   * The beta move op used to read `step.arrived && posture === "patrol"`, so a
+//     unit that arrived under any other posture was stamped "moving" — and
+//     pruneSatisfiedUnitOrders then dropped its order, leaving nothing behind to
+//     correct it (see applyUnitOpBatch).
+//
+// Either way the formation keeps its yellow moving ring on the map and reads
+// "moving" in its popup for the rest of the campaign while it sits still.
+//
+// A unit is left alone whenever something can still move it: a standing order
+// the beta engine is advancing, or a queued classic order the AI has yet to
+// answer (`queuedUnitIds`, from the actions queue — a long-range move or an
+// approach keeps its unit where it is BY DESIGN, so "moving" is true there and
+// clearing it would delete real state). What is left has no motive force behind
+// it at all, and is what it looks like: idle.
+//
+// Deliberately not run from normalizeWorldState, for the reason enforceUnitVolume
+// documents below and one of its own: the actions queue is a different file, so a
+// world normalizer cannot see the queued orders that make a "moving" unit honest.
+// Pure and idempotent — returns the same world untouched when there is nothing to
+// repair, so it is safe to run on load.
+export const clearStaleUnitMotion = (world, { queuedUnitIds = [] } = {}) => {
+  const units = normalizeUnits(world?.units);
+  if (!units.some((unit) => unit.status === "moving")) return world;
+
+  const ordered = new Set(
+    normalizePendingUnitOrders(world?.pendingUnitOrders).map((order) => order.unitId),
+  );
+  const queued = new Set(
+    normalizeArray(queuedUnitIds).map((id) => normalizeOptionalString(id)).filter(Boolean),
+  );
+  const isStale = (unit) =>
+    unit.status === "moving" && !ordered.has(unit.id) && !queued.has(unit.id);
+  if (!units.some(isStale)) return world;
+
+  const stamp = new Date().toISOString();
+  return {
+    ...world,
+    units: units.map((unit) =>
+      (isStale(unit) ? { ...unit, status: "idle", orderId: "", updatedAt: stamp } : unit)),
+  };
+};
+
 // Keep the map legible. Applies to A.I. polities ONLY: the player's own forces
 // are filtered out before anything is counted, so neither cap constrains them and
 // their units never eat another power's headroom — the player manages their own
