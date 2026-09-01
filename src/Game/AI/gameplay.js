@@ -48,7 +48,8 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
+import { AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -318,10 +319,25 @@ const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of leve
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
 export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
 
+// "Limit AI generation" (ON by default) — the whole policy, in one place rather
+// than a number per call site.
+//
+// It used to be a stopwatch: five minutes for a jump, two for most tasks, one
+// for the small ones, counted from the moment the request was sent and applied
+// whether or not the model was answering. That could not tell a slow model from
+// a stopped one, so it was off by default and the game waited forever instead —
+// which is no protection at all, and left players watching a dead spinner.
+//
+// Now it counts SILENCE: five minutes with nothing arriving (idleDeadline.js).
+// A model that keeps writing is never interrupted however long the turn takes,
+// so the setting is safe to ship on; a stalled one is caught in five minutes
+// instead of never. Off still means "wait as long as the model needs".
+const taskIdleTimeoutMs = () =>
+  (getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
-  timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0,
   userMessage,
   validatePayload,
   variables,
@@ -508,9 +524,17 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
     if (signal.aborted) controller.abort(signal.reason);
     else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
   }
-  const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
-  const timeoutError = new Error(`AI task "${taskKey}" timed out.`);
-  const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
+  const idleMs = taskIdleTimeoutMs();
+  const timeoutError = new Error(
+    `AI task "${taskKey}" timed out: nothing arrived from the model for ${Math.round(idleMs / 1000)}s. `
+      + "Turn off \"Limit AI generation\" in Settings to wait as long as the model needs.",
+  );
+  // Armed by the first bytes of the answer and restarted by every one after, so
+  // it measures the gap BETWEEN pieces of output. Deliberately not armed before
+  // then: a long prompt being evaluated, and a buffered endpoint that sends its
+  // headers only once the whole answer is ready, both look exactly like a stall
+  // from here, and killing those is the failure this replaced.
+  const idle = createIdleDeadline(idleMs, () => controller.abort(timeoutError));
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
@@ -523,7 +547,7 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
     promptChars: systemPrompt.length,
     userMessageChars: String(userMessage ?? "").length,
     tool: tool?.name || "(none — raw JSON expected)",
-    timeoutMs: timeoutMs || "(no deadline)",
+    idleTimeoutMs: idleMs || "(no deadline — waits as long as the model needs)",
   }, { verbose: true });
   // The instruction itself, separately. It is short (a sentence), it is the one
   // part of the prompt that differs between two runs of the same task, and it is
@@ -560,13 +584,23 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
         // canned events that carry NO regionTransfers and NO diplomacy, which is why
         // the map never changed and no chats opened. main.jsx now lets each provider
         // use its own model maximum when no maxTokens is passed.
-        deadline,
+        // The moment this task gives up if nothing more arrives — null while
+        // nothing has come back yet. The providers read it to decide whether a
+        // busy-retry wait still fits inside the window.
+        deadline: idle.deadline,
+        // Every network chunk of the answer restarts that window.
+        onActivity: idle.note,
         signal: controller.signal,
         tool,
         // Names this call in the ai-call transport entries, so a task's own
         // entries and the request/response pair underneath them line up.
         logLabel: `task "${taskKey}"`,
       });
+      // This attempt is answered: stop counting silence against it. Validation,
+      // salvage and the retry's own prompt evaluation all happen with nothing on
+      // the wire, and leaving the window armed across them would have attempt
+      // 1's clock abort a perfectly healthy attempt 2. The next answer re-arms it.
+      idle.cancel();
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       lastRawText = rawText;
       sawResponseBody = true;
@@ -682,7 +716,7 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
       ? `${firstFailureReason}${transportReason ? ` The retry then failed: ${transportReason}` : ""}`
       : transportReason || failureReason;
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+    idle.cancel();
   }
 
   // A deliberate user cancel must NOT silently fall back to canned events —
@@ -776,7 +810,6 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
         actions.length ? `Player orders resolved: ${actions.map((action) => action.title).join("; ")}` : "",
       ].filter(Boolean).join("\n"),
     }),
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     variables,
   });
@@ -2528,10 +2561,6 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     : [dateStep];
   const segmentCount = segmentDays.length;
   const plannedActionShare = Math.ceil(plannedActionCount / segmentCount);
-  // The deadline is PER REQUEST, and always was — five minutes bounds one model
-  // call, so a segmented jump gives each segment its own bound.
-  const jumpTimeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0;
-
   if (segmentCount > 1) {
     logDebugEvent("turn", `Timeline jump split into ${segmentCount} segments.`, {
       dateStep,
@@ -2588,13 +2617,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
         ? {}
         : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
       signal,
-      // The jump IS the game — by default generation waits as long as the model
-      // needs (0 disables the deadline in runJsonTask), so the canned fallback is
-      // only reachable through a real error, never a slow local/reasoning model.
-      // The "Limit AI generation" toggle opts back into a 5-minute bound for
-      // players who prefer a guaranteed turn over a guaranteed answer (Cancel
-      // works either way).
-      timeoutMs: jumpTimeoutMs,
+      // The jump IS the game, and its deadline is runJsonTask's for every task:
+      // silence, not elapsed time, so a long segment is never mistaken for a
+      // stalled one (and a segmented jump gets that window per segment, since it
+      // is per request). Cancel works either way.
       userMessage: buildSegmentInstruction({
         mode,
         segmentIndex,
@@ -2816,7 +2842,6 @@ export const maybeGeneratePregameHistory = async () => {
   try {
     const variables = await buildTemplateVariables(bundle);
     const { payload } = await runJsonTask("pregameHistory", {
-      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
       userMessage: "Write the pre-game historical timeline as JSON only.",
       validatePayload: (candidate, { finalAttempt } = {}) =>
         validatePregameEvents(candidate, { startDate, strict: !finalAttempt }),
@@ -2986,7 +3011,6 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
       idleChatAllowed: allowChat ? "yes" : "no",
     };
     const { payload } = await runJsonTask("idleDiplomacy", {
-      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
       userMessage: allowChat
         ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move. Return JSON only."
         : "A quiet moment between rounds. Decide whether any forces would visibly move right now. Return chat as null. Return JSON only.",

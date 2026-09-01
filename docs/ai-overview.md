@@ -173,10 +173,10 @@ So `maxTokens` is a **per‑response output ceiling only for providers that take
 
 ## The task runner: `runJsonTask`
 
-`runJsonTask(taskKey, { fallback, signal, timeoutMs, userMessage, validatePayload, variables })` (`gameplay.js:382`) is the structured‑generation core. Steps:
+`runJsonTask(taskKey, { fallback, signal, userMessage, validatePayload, variables })` (`gameplay.js:338`) is the structured‑generation core. Steps:
 
 1. **Prompt assembly**: `renderTemplate(prompts.tasks[taskKey], { …variables, …helpers })`, then append call‑time directives: `difficultyDirective` for all tasks; `[Player Agency]` + `[Map Truth]` for `jumpForward`/`autoJumpForward` (`gameplay.js:411`); `[International Reputation]` for `actions`/jumps/catalyst tasks (`gameplay.js:425`). These are appended **at call time** because each save carries its own frozen copy of the prompts — a `defaultPrompts.json` edit never reaches existing campaigns.
-2. **Deadline/abort wiring**: an internal `AbortController` is aborted by (a) the external `signal` (player Cancel) or (b) a `timeoutMs` timer (`gameplay.js:441`). `timeoutMs` default is 120000 ms; jumps pass `0` (no deadline) unless the "Limit AI generation" map setting opts into a 5‑minute bound (`gameplay.js:1888`).
+2. **Deadline/abort wiring**: an internal `AbortController` is aborted by (a) the external `signal` (player Cancel) or (b) the idle deadline (`gameplay.js:537`, see [Cancellation & timeouts](#cancellation--timeouts)). No call site sets its own window any more — the policy is one setting read in `taskIdleTimeoutMs`.
 3. **Two output attempts** (`gameplay.js:447`): call `callAI` with the task `tool` and `maxTokens: 8192`; parse `response.toolInput ?? extractJsonPayload(rawText)`; run `validateGameplayPayload(taskKey, parsed)` (schema) then the caller's `validatePayload`. On attempt‑1 failure it pushes the model's answer + a corrective instruction into `history` and retries once. A model that used a tool is told to "call it again"; a prose model is told to "respond with ONLY the corrected JSON".
 4. **Outcome**: valid → `{ generation:{source:"ai"}, payload }`. Both attempts fail → deterministic `fallback()` with `generation.source:"fallback"` and the `failureReason`. No `fallback` → throw. A user **abort** is re‑thrown, never falling back (`gameplay.js:513`).
 
@@ -243,7 +243,10 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 ## Cancellation & timeouts
 
 - **Player Cancel** passes an `AbortSignal` into `simulateTimelineJump`/etc → `runJsonTask` → `callAI` → `fetch`/relay. A deliberate cancel is re‑thrown as an `AbortError` and **does not** write state or fall back to canned events (`gameplay.js:513`).
-- **Timeout** (`timeoutMs`) aborts the same controller but **does** use the deterministic fallback, because a slow model shouldn't leave the turn with nothing. Jumps default to no timeout (wait as long as the model needs); the "Limit AI generation" setting imposes 5 minutes.
+- **Timeout** aborts the same controller but **does** use the deterministic fallback, because a stalled model shouldn't leave the turn with nothing. It measures **silence, not elapsed time**: the "Limit AI generation" setting (`ai_limit_generation`, **on** by default — read with `getMapSettingDefaultOn`) gives a task `AI_IDLE_TIMEOUT_MS` (5 minutes) with nothing arriving; off disables it entirely and generation waits as long as the model needs.
+  - `createIdleDeadline` (`idleDeadline.js`) owns the timer. It is **not armed until the first bytes of the answer**, and every network chunk restarts it — so a model that keeps writing is never interrupted however long the turn takes, while a long prompt evaluation and a buffered endpoint (headers only once the whole answer is ready) are never mistaken for a stall.
+  - The activity signal comes from `readSSE` (`streamAssembly.js`), which calls `onActivity` per chunk; `runJsonTask` passes `idle.note` down through `callAI` to each provider caller's stream reader, and `idle.deadline` as the retry bound.
+  - It is cancelled as soon as an attempt is answered (`gameplay.js`, after the `callAI` await), so validation, salvage and the retry's own prompt evaluation are not counted as silence.
 - **Conversational** `callAI` callers accept an `opts.signal` too (advisor/diplomacy Stop button); on abort the just‑pushed history entry is popped.
 
 ---
