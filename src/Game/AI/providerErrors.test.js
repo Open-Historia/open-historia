@@ -8,7 +8,9 @@ import {
   isBusyErrorPayload,
   isQuotaExhaustedPayload,
   isStreamingRefusal,
+  TOOL_CALL_INSISTENCE,
   isStreamingRequired,
+  looksLikeDeliberation,
   providerErrorReplyMessage,
   retryDelayMsFromPayload,
 } from "./providerErrors.js";
@@ -171,4 +173,54 @@ test("a payload object is read the same way as a bare string", () => {
   assert.equal(isStreamingRequired({ message: "Streaming is required for this request." }), true);
   assert.equal(isStreamingRefusal(null), false);
   assert.equal(isStreamingRequired(null), false);
+});
+
+// ---------------------------------------------------------------------------
+// Deliberation instead of a tool call
+//
+// The verbatim opening of a real failure: an NVIDIA model on openai-compatible,
+// which fell back on 3 of 4 turns against a round-356 save because it planned
+// until its budget ran out and never emitted the call.
+const NVIDIA_MONOLOGUE =
+  "We need to produce JSON with events between 2032-11-15 and 2033-02-13 (about 3 months). "
+  + "10-13 events. Must include impacts, projectOps updates for projects needing decision. "
+  + "Also need to consider diplomatic chats, unitOps, regionTransfers, etc. The player has no "
+  + "actions this round. We must simulate world events: ongoing projects progress, diplomatic "
+  + "interactions, military movements.\n\nWe must produce events with dates spread across period. "
+  + "Probably 11 events.";
+
+test("a planning monologue is recognised as deliberation", () => {
+  assert.equal(looksLikeDeliberation(NVIDIA_MONOLOGUE), true);
+  assert.equal(looksLikeDeliberation("Let me think about what events to produce first."), true);
+  assert.equal(looksLikeDeliberation("Okay, I should start by listing the stalled projects."), true);
+  assert.equal(looksLikeDeliberation("First, we need to decide how many events this span warrants."), true);
+});
+
+// The tolerant-parsing path (jsonSalvage.js) owns anything that might carry a
+// payload. Retrying would throw away an answer it could have salvaged.
+test("anything that might still parse is left to the salvage path", () => {
+  assert.equal(looksLikeDeliberation('We need to produce this: {"summary":"x","events":[]}'), false);
+  assert.equal(looksLikeDeliberation('```json\n{"summary":"x"}\n```'), false);
+  assert.equal(looksLikeDeliberation('[{"date":"2032-01-01"}]'), false);
+  // A truncated object is still the salvage path's problem, not a retry.
+  assert.equal(looksLikeDeliberation('We must produce {"summary":"x","events":[{"date"'), false);
+});
+
+test("an ordinary answer is not mistaken for deliberation", () => {
+  assert.equal(looksLikeDeliberation(""), false);
+  assert.equal(looksLikeDeliberation(null), false);
+  assert.equal(looksLikeDeliberation(undefined), false);
+  assert.equal(looksLikeDeliberation("   "), false);
+  // Narrative prose that happens to contain the words, not at a sentence start
+  // in the planning register.
+  assert.equal(
+    looksLikeDeliberation("The delegation will need to cross the border before winter closes the passes."),
+    false,
+  );
+  assert.equal(looksLikeDeliberation("Algeria rejects the proposal and recalls its ambassador."), false);
+});
+
+test("the insistence directive is blunt and names the failure", () => {
+  assert.match(TOOL_CALL_INSISTENCE, /do not think out loud/i);
+  assert.match(TOOL_CALL_INSISTENCE, /function call/i);
 });

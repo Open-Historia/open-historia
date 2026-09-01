@@ -17,8 +17,10 @@ import {
     errorPayloadText,
     isBusyErrorPayload,
     isQuotaExhaustedPayload,
+    TOOL_CALL_INSISTENCE,
     isStreamingRefusal,
     isStreamingRequired,
+    looksLikeDeliberation,
     providerErrorReplyMessage,
     retryDelayMsFromPayload,
 } from "./providerErrors.js";
@@ -824,6 +826,11 @@ async function callOpenAIStyleChatCompletions({
     // below: giving up streaming costs a keep-alive, while giving up tool mode
     // costs structured output, so the cheaper concession goes first.
     let streamingDisabled = false;
+    // The model answered with its own planning monologue instead of calling the
+    // tool (see looksLikeDeliberation in providerErrors.js). One-shot, same
+    // discipline as the two above: it drives a retry that does not consume one of
+    // runJsonTask's two output attempts, so it must only ever flip once.
+    let insistedOnToolCall = false;
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -832,9 +839,12 @@ async function callOpenAIStyleChatCompletions({
         if (disableToolReasoning) {
             delete requestCustomParams.reasoning;
         }
-        const requestSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
+        const baseSystemPrompt = structuredMode === "text_json" || structuredMode === "json_object"
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}`
             : systemPrompt;
+        const requestSystemPrompt = insistedOnToolCall
+            ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
+            : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
@@ -1048,6 +1058,24 @@ async function callOpenAIStyleChatCompletions({
                 retriedAfterOverload = true;
                 console.warn(`[ai] ${providerLabel} reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
                 await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+
+            // The model talked itself out of answering: no tool call, and the text
+            // is a planning monologue rather than anything a salvage pass could
+            // parse. Left alone this returns unparseable prose, runJsonTask spends
+            // an attempt on it, the same thing happens again, and the player loses
+            // the turn to canned events — which is exactly what happened on 3 of 4
+            // turns in the field report behind looksLikeDeliberation.
+            //
+            // Retry once with the cap lifted and a blunt instruction to just call
+            // the tool. This does NOT consume one of runJsonTask's two attempts,
+            // for the same reason the overload retry does not.
+            if (structuredMode === "tool" && !insistedOnToolCall && looksLikeDeliberation(text)
+                && canRetryBeforeDeadline(deadline, 0)) {
+                insistedOnToolCall = true;
+                liftedCapForReasoning = true;
+                console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
                 continue;
             }
 
