@@ -49,7 +49,7 @@ import {
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
-import { AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -328,10 +328,11 @@ export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty respons
 // a stopped one, so it was off by default and the game waited forever instead —
 // which is no protection at all, and left players watching a dead spinner.
 //
-// Now it counts SILENCE: five minutes with nothing arriving (idleDeadline.js).
-// A model that keeps writing is never interrupted however long the turn takes,
-// so the setting is safe to ship on; a stalled one is caught in five minutes
-// instead of never. Off still means "wait as long as the model needs".
+// Now it counts SILENCE (idleDeadline.js): five minutes with nothing arriving
+// part-way through an answer, fifteen with no answer at all. A model that keeps
+// writing is never interrupted however long the turn takes, so the setting is
+// safe to ship on; a stalled one is caught instead of hanging the turn forever.
+// Off still means "wait as long as the model needs".
 const taskIdleTimeoutMs = () =>
   (getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
@@ -526,15 +527,16 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
   }
   const idleMs = taskIdleTimeoutMs();
   const timeoutError = new Error(
-    `AI task "${taskKey}" timed out: nothing arrived from the model for ${Math.round(idleMs / 1000)}s. `
+    `AI task "${taskKey}" timed out: the model stopped answering. `
       + "Turn off \"Limit AI generation\" in Settings to wait as long as the model needs.",
   );
-  // Armed by the first bytes of the answer and restarted by every one after, so
-  // it measures the gap BETWEEN pieces of output. Deliberately not armed before
-  // then: a long prompt being evaluated, and a buffered endpoint that sends its
-  // headers only once the whole answer is ready, both look exactly like a stall
-  // from here, and killing those is the failure this replaced.
-  const idle = createIdleDeadline(idleMs, () => controller.abort(timeoutError));
+  // Two windows (idleDeadline.js): a long one for an answer that has not started
+  // — prompt evaluation and buffered endpoints both look like a stall from here —
+  // and a short one between the pieces of an answer that has.
+  const idle = createIdleDeadline(
+    { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
+    () => controller.abort(timeoutError),
+  );
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
@@ -548,6 +550,7 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
     userMessageChars: String(userMessage ?? "").length,
     tool: tool?.name || "(none — raw JSON expected)",
     idleTimeoutMs: idleMs || "(no deadline — waits as long as the model needs)",
+    ...(idleMs ? { firstByteTimeoutMs: AI_FIRST_BYTE_TIMEOUT_MS } : {}),
   }, { verbose: true });
   // The instruction itself, separately. It is short (a sentence), it is the one
   // part of the prompt that differs between two runs of the same task, and it is
@@ -578,6 +581,9 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      // Per attempt, not per task: a retry re-sends the whole prompt and so
+      // re-does the wait for a first byte.
+      idle.start();
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to

@@ -1268,7 +1268,7 @@ const SettingsMenu = ({
         onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)}
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On (default): if nothing arrives from the model for 5 minutes, the game stops waiting and falls back to canned events. A model that is still answering is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
+        On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
         </div>
         <Toggle
         label="Generate long time skips in segments"
