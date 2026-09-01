@@ -28,9 +28,14 @@ export const WORLD_DEFAULTS = {
   // intercepted exchange the player can read — and how much of the player's own
   // traffic a rival can.
   intelligence: {},
-  // The player's deployed spies: [{ id, target, deployedAt, status }]. What they
-  // bring back lives in the intercepts asset, not here (see readInterceptsState).
+  // Every spy in the world, both directions: [{ id, owner, target, deployedAt,
+  // status, turnedAt, exposedAt, coverStory, suspected }] — see spycraft.js for
+  // the statuses. What the player's spies bring back lives in the intercepts
+  // asset, sealed under spySeal (see readInterceptsState, spySeal.js).
   spies: [],
+  // Random per-game key the intercepts are sealed with. Minted the first time a
+  // spy exists; 64 hex chars.
+  spySeal: "",
   // Persisted per-country stat sheets (code -> the full sheet), seeded on first view
   // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
   // stop regenerating/drifting every date change.
@@ -1010,18 +1015,28 @@ export const normalizeWorldState = (world) => {
       .filter(([polityCode, value]) => polityCode && Number.isFinite(value))
       .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
   );
+  const SPY_STATUSES = ["active", "discovered", "turned", "exposed", "recalled"];
   const spies = normalizeArray(nextWorld.spies)
     .map((spy, index) => {
       const target = normalizeOptionalString(spy?.target || spy?.polity);
       if (!target) return null;
       return {
         id: normalizeOptionalString(spy?.id) || `spy-${index + 1}`,
+        // Pre-ownership records were all the player's; the field is filled in
+        // at read time by whoever knows the player's name (spycraft treats an
+        // empty owner as "the player" only when asked to).
+        owner: normalizeOptionalString(spy?.owner),
         target,
         deployedAt: normalizeOptionalString(spy?.deployedAt),
-        status: spy?.status === "recalled" ? "recalled" : "active",
+        status: SPY_STATUSES.includes(spy?.status) ? spy.status : "active",
+        turnedAt: normalizeOptionalString(spy?.turnedAt),
+        exposedAt: normalizeOptionalString(spy?.exposedAt),
+        coverStory: normalizeOptionalString(spy?.coverStory),
+        suspected: spy?.suspected === true,
       };
     })
     .filter(Boolean);
+  const spySeal = /^[0-9a-f]{64}$/i.test(String(nextWorld.spySeal ?? "")) ? String(nextWorld.spySeal) : "";
 
   // Keyed by country NAME, verbatim — same namespace as internationalReputation
   // above, polityOverrides and colors. This used to uppercase while its neighbours
@@ -1052,6 +1067,7 @@ export const normalizeWorldState = (world) => {
     internationalReputation,
     intelligence,
     spies,
+    spySeal,
     labelFont: normalizeOptionalString(nextWorld.labelFont),
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),

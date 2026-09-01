@@ -15,6 +15,7 @@ import {
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
+import { foreignAgentBrief } from "../../runtime/spycraft.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -1239,8 +1240,25 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry) {
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
+    // The other direction of the leak fix: a polity that has planted an agent in
+    // the player DOES get to see the player's private material — the chats the
+    // player has with everyone else, and the player's queued plans — redacted by
+    // that polity's service against the player's. A polity whose agent has been
+    // turned gets the cover story the player wrote instead, and believes it.
+    const otherChats = Array.isArray(chatData) ? chatData.filter((chat) => !isParticipant(chat)) : [];
+    const stolen = [
+        ...otherChats.slice(-4).map((chat) => {
+            const who = (chat.countries || []).map((c) => c?.name).filter(Boolean).join(", ");
+            const last = (chat.messages || []).slice(-4).map((m) => (m.speaker || m.role) + ": " + m.text).join(" | ");
+            return last ? "Talks between " + who + ": " + last : "";
+        }),
+        ...(Array.isArray(actionData) ? actionData : []).filter((a) => a?.status === "planned").slice(-5).map((a) => "Planned by " + (playerCountry || "the player") + ": " + (a.title || a.text || a.description || "")),
+    ].filter(Boolean).join("\n");
+    const agent = foreignAgentBrief(worldData, speakingAs, { playerPolity: playerCountry || gameData?.country || "", material: stolen });
+    const espionage = agent ? "\n\n[Your Intelligence]\n" + agent : "";
+
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}${espionage}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];

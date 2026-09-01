@@ -5,8 +5,10 @@ import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker, gatherIntelligence } from "../AI/gameplay.js";
 import {
-    MAX_ACTIVE_SPIES, activeSpies, deploySpy, intelligenceOf, normalizeIntercepts, recallSpy, redactExchange, signalClarity,
+    MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
+    recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
 } from "../../runtime/spycraft.js";
+import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
 import {
     JSON_URLS,
@@ -797,8 +799,19 @@ const ClarityMeter = ({ clarity }) => {
     );
 };
 
-const InterceptView = ({ target, exchange, clarity, onBack }) => {
-    const shown = useMemo(() => redactExchange(exchange, clarity), [exchange, clarity]);
+const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
+    const [opened, setOpened] = useState(null);
+    useEffect(() => {
+        let live = true;
+        // No seal (a record from before sealing) reads as-is; otherwise open it here
+        // and nowhere else. The plaintext lives in this component's state only for
+        // as long as the view is on screen.
+        (isSeal(seal) ? openExchange(seal, exchange) : Promise.resolve(exchange))
+            .then((value) => { if (live) setOpened(value); })
+            .catch(() => { if (live) setOpened(exchange); });
+        return () => { live = false; };
+    }, [exchange, seal]);
+    const shown = useMemo(() => redactExchange(opened ?? { ...exchange, messages: [] }, clarity), [opened, exchange, clarity]);
     return (
         <>
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -815,7 +828,7 @@ const InterceptView = ({ target, exchange, clarity, onBack }) => {
             return (
                 <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
                 <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
-                <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em",
+                <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none",
                     background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {message.text}
                 </div>
@@ -847,14 +860,33 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
     useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
 
     const myIntel = intelligenceOf(world, playerCountry);
-    const spies = activeSpies(world);
+    // Pre-ownership records (no owner) were all the player's.
+    const spies = activeSpies(world).filter((spy) => !spy.owner || spy.owner === playerCountry);
+    const foreign = foreignSpies(world, playerCountry);
+    const history = normalizeSpies(world?.spies).filter((spy) => (!spy.owner || spy.owner === playerCountry) && spy.status === "exposed").slice(-3);
+    const [storyDraft, setStoryDraft] = useState({}); // spy id -> cover story being typed
 
     const commitSpies = async (next) => {
         // Re-read at write time so a jump's world write is never clobbered with
-        // the copy this tab happened to load earlier.
+        // the copy this tab happened to load earlier. The seal is minted here, on
+        // the first deployment, so every report ever stored has one to be sealed
+        // under.
         const fresh = await readWorldState({ force: true });
-        await writeWorldState({ ...fresh, spies: next });
+        await writeWorldState({ ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() });
         await refresh();
+    };
+
+    const handleExpel = async (spy) => {
+        setError("");
+        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleTurn = async (spy) => {
+        setError("");
+        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleStory = async (spy) => {
+        setError("");
+        try { await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory)); } catch (err) { setError(err?.message || String(err)); }
     };
 
     const handleGather = async (target) => {
@@ -881,11 +913,13 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
     if (open) {
         const clarity = signalClarity(myIntel, intelligenceOf(world, open.target));
-        return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} onBack={() => setOpen(null)} />;
+        return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
     }
 
     const targets = Object.keys(intercepts);
     const candidates = countries.filter((c) => c.name !== playerCountry && !spies.some((s) => s.target === c.name));
+    const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
+    const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
 
     return (
@@ -904,7 +938,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         {spies.map((spy) => (
             <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spy.target}</div>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ possibly compromised</span>}
+            </div>
             <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
             {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
             </div>
@@ -915,6 +951,41 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
             </div>
         ))}
+        {history.length > 0 && (
+            <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>
+            {history.map((spy) => "Agent expelled by " + spy.target + (spy.exposedAt ? " on " + spy.exposedAt : "")).join(" · ")}
+            </div>
+        )}
+
+        {/* Agents other polities have in the player. An undiscovered one is not
+            listed — that is what makes the intelligence stat matter on defence.
+            A discovered one waits for a decision; a turned one is fed whatever
+            the player types here. */}
+        {foreign.filter((spy) => spy.status !== "active").length > 0 && (
+            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Foreign agents in {playerCountry}</div>
+        )}
+        {foreign.filter((spy) => spy.status !== "active").map((spy) => (
+            <div key={spy.id} style={{ padding: "0.55rem 0.7rem", borderRadius: "10px", background: spy.status === "discovered" ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (spy.status === "discovered" ? "rgba(251,191,36,0.35)" : "rgba(255,255,255,0.08)") }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{spy.status === "discovered" ? "🚨 " : "🎭 "}{spy.owner}</div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
+            {spy.status === "discovered" ? "agent in custody — decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " — " + spy.owner + " still trusts them"}
+            </div>
+            </div>
+            {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+            {spy.status === "discovered" && <button onClick={() => handleTurn(spy)} style={spyBtn(true)}>Turn</button>}
+            </div>
+            {spy.status !== "exposed" && (
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                <input value={storyOf(spy)} onChange={(e) => setStoryDraft((d) => ({ ...d, [spy.id]: e.target.value }))} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : "What your double agent tells " + spy.owner}
+                    style={inputStyle} />
+                {spy.status === "turned" && <button onClick={() => handleStory(spy)} style={spyBtn(true)}>Save</button>}
+                </div>
+            )}
+            </div>
+        ))}
+
         {error && <div style={{ fontSize: "0.74rem", color: "#fca5a5", padding: "0.3rem 0.1rem" }}>{error}</div>}
 
         {targets.length > 0 && (

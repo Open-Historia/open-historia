@@ -3,7 +3,8 @@ import { callAI } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { activeSpies, normalizeIntercepts } from "../../runtime/spycraft.js";
+import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -26,6 +27,7 @@ import {
   readInterceptsState,
   writeInterceptsState,
   normalizeActionEntry,
+  normalizeEventEntry,
   normalizeActions,
   normalizeChatEntry,
   normalizeChats,
@@ -440,6 +442,18 @@ const runJsonTask = async (taskKey, {
     // Place renaming: appended at call time so existing frozen-prompt campaigns get it
     // too; the markerOps rename op ships via the LIVE tool schema either way.
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
+  }
+
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    try {
+      const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
+      const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
+      if (brief) {
+        systemPrompt = systemPrompt + "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n" + brief;
+      }
+    } catch {
+      /* no espionage context this turn */
+    }
   }
 
   // The consolidator's summary REPLACES what it covers, so anything it leaves out
@@ -1538,6 +1552,25 @@ const applySimulationResult = async ({
   // than putting the stale snapshot back. See the re-read before writeChatsState.
   const generatedChats = [];
 
+  // Espionage resolves on the world the turn produced, deterministically (keyed
+  // on the round), and its consequences are EVENTS the model reads next turn —
+  // an exposed ring, a suspected agent — so what was found out changes what
+  // happens. Hostility is approximated: a polity the player spies on, or one
+  // whose reputation is in the gutter, goes looking for a spy of its own.
+  const espionageCandidates = (() => {
+    const player = normalizeString(baseGame.country);
+    const named = new Set([
+      ...Object.keys(baseWorld.polityOverrides ?? {}),
+      ...Object.keys(baseWorld.intelligence ?? {}),
+      ...normalizeChats(baseChats).flatMap((chat) => chat.countries.map((country) => normalizeString(country.name))),
+    ]);
+    const spiedOn = new Set(normalizeSpies(baseWorld.spies).filter((spy) => spy.owner === player && (spy.status === "active" || spy.status === "turned")).map((spy) => spy.target));
+    return [...named].filter((polity) => polity && polity !== player).map((polity) => ({
+      polity,
+      hostile: spiedOn.has(polity) || Number(baseWorld.internationalReputation?.[polity] ?? 50) <= 30,
+    }));
+  })();
+
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
@@ -1566,6 +1599,19 @@ const applySimulationResult = async ({
       ].slice(0, 12),
     },
   });
+  const espionage = resolveEspionage(worldWithImpacts, {
+    round: nextGame.round,
+    date: nextGame.gameDate,
+    playerPolity: normalizeString(baseGame.country),
+    candidates: espionageCandidates,
+  });
+  worldWithImpacts.spies = espionage.spies;
+  // A spy in the world needs a seal for what it will report under.
+  if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
+  for (const event of espionage.events) {
+    const entry = normalizeEventEntry({ ...event, id: "espionage-" + nextGame.round + "-" + freshEvents.length }, freshEvents.length);
+    if (entry) freshEvents.push(entry);
+  }
   let nextWorld = worldWithImpacts;
 
   for (const event of freshEvents) {
@@ -1812,11 +1858,31 @@ export const generateCountryStats = async ({ code, name } = {}) => {
 // world state. Stored UNredacted — redaction is applied at render time from the
 // player's intelligence stat, so a better service later reveals more of the
 // same intercept rather than needing a new one.
+// The seal the intercepts are stored under. Minted at deploy time by the UI and
+// by the jump when a foreign agent appears; this is the fallback for a save that
+// has spies from before seals existed. A world write, so it runs only where
+// nothing else is writing the world.
+const ensureSpySeal = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  if (isSeal(world.spySeal)) return world.spySeal;
+  const spySeal = newSeal();
+  await writeWorldState({ ...world, spySeal });
+  return spySeal;
+};
+
 export const gatherIntelligence = async (target, { signal } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
   const bundle = await readGameStateBundle({ force: true });
-  const variables = { ...(await buildTemplateVariables(bundle)), targetPolity: name };
+  const player = normalizeString(bundle.game?.country);
+  const spy = normalizeSpies(bundle.world?.spies).find((entry) => entry.owner === player && entry.target === name && (entry.status === "active" || entry.status === "turned"));
+  if (!spy) throw new Error("No agent of yours is in " + name + ".");
+  // A turned agent still "reports" — what the target wants believed. The same
+  // task writes the lie; the player is not told which kind they are reading.
+  const disinformation = spy.status === "turned"
+    ? "IMPORTANT: this agent has been TURNED by " + name + " and now works for them. Everything reported must be DISINFORMATION designed by " + name + " to mislead " + player + ": plausible, specific, consistent with public facts, and wrong about the things that matter — intentions, timing, alignments. Never hint that it is false."
+    : "";
+  const variables = { ...(await buildTemplateVariables(bundle)), targetPolity: name, disinformation };
   const dossier = await buildTargetDossier(bundle, name);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
   const { payload } = await runJsonTask("spyIntercept", {
@@ -1839,11 +1905,29 @@ export const gatherIntelligence = async (target, { signal } = {}) => {
       ...exchange,
       id: `${name}:${bundle.game?.round ?? 0}:${index}`.toLowerCase().replace(/s+/g, "-"),
     }));
-  const entry = { gatheredAt: normalizeString(bundle.game?.gameDate), round: Number(bundle.game?.round) || 0, exchanges };
+  // Stored sealed: the file, the network reply and the React tree hold ciphertext,
+  // so copying the page or opening intercepts.json gives up nothing the player's
+  // service did not decode. Only the renderer and the jump prompt open it.
+  const seal = isSeal(bundle.world?.spySeal) ? bundle.world.spySeal : await ensureSpySeal();
+  const sealed = await Promise.all(exchanges.map((exchange) => sealExchange(seal, exchange)));
+  const entry = { gatheredAt: normalizeString(bundle.game?.gameDate), round: Number(bundle.game?.round) || 0, planted: spy.status === "turned", exchanges: sealed };
   // Re-read at write time: another gather may have landed for a different target.
   const current = normalizeIntercepts(await readInterceptsState({ force: true }));
   await writeInterceptsState({ ...current, [name]: entry });
   return entry;
+};
+
+// Everything the player's agents have brought back, opened — for the simulator
+// and the renderer only. Never written anywhere.
+export const readOpenedIntercepts = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: false }));
+  const intercepts = normalizeIntercepts(await readInterceptsState({ force: false }));
+  if (!isSeal(world.spySeal)) return intercepts;
+  const out = {};
+  for (const [target, entry] of Object.entries(intercepts)) {
+    out[target] = { ...entry, exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))) };
+  }
+  return out;
 };
 
 // After a jump, every active spy reports again. Sequential and best-effort:
@@ -1856,7 +1940,8 @@ export const refreshSpyIntercepts = async () => {
   } catch {
     return;
   }
-  for (const spy of activeSpies(world)) {
+  const player = normalizeString((await readGameData()).country);
+  for (const spy of activeSpies(world, player)) {
     try {
       await gatherIntelligence(spy.target);
     } catch (error) {
