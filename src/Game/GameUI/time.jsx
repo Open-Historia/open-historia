@@ -10,7 +10,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { NO_RESPONSE_BODY_NOTE, loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { NO_RESPONSE_BODY_NOTE, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
@@ -1025,6 +1025,69 @@ const TimelineSkipPanel = ({
             {error}
             </div>
         )}
+
+        {/* A HELD turn, not a failed one: the events are generated and valid but
+            nothing has been written, because the Projects & Operations board
+            could not be brought in step with them. Deliberately amber rather
+            than red, and worded so the player knows their turn still exists —
+            Retry re-runs only the board, which is seconds rather than the
+            minutes regenerating the events would cost. */}
+        {projectsHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>{projectsHeld}</div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                disabled={isRetryingProjects}
+                onClick={onRetryProjects}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isRetryingProjects ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingProjects ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isRetryingProjects ? "Retrying the board…" : "Retry the board"}
+                </button>
+                <button
+                type="button"
+                disabled={isRetryingProjects}
+                onClick={onDiscardProjects}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingProjects ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingProjects ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the turn
+                </button>
+            </div>
+            </div>
+        )}
         </PanelChrome>
     );
 };
@@ -1242,6 +1305,12 @@ const DateWidget = ({
     const [jumpProgress, setJumpProgress] = useState("");
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
+    // A turn that is generated and valid but NOT written, because the Projects &
+    // Operations board could not be brought in step with it. Set means a turn is
+    // waiting: the player retries just the board, or discards and runs the turn
+    // again. Nothing has been saved either way.
+    const [projectsHeld, setProjectsHeld] = useState("");
+    const [isRetryingProjects, setIsRetryingProjects] = useState(false);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
@@ -1501,6 +1570,14 @@ const DateWidget = ({
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
                 logDebugEvent("turn", "Turn cancelled by the player.");
+            } else if (jumpError?.projectsHeld) {
+                // Not a failed turn: the events are generated and valid, and the
+                // whole turn is being HELD unwritten because the Projects board
+                // could not be brought in step with them. Retrying re-runs only
+                // the board call — the events are not regenerated, which on a slow
+                // model is the difference between ten seconds and ten minutes.
+                setError("");
+                setProjectsHeld(jumpError.message || "The Projects & Operations board did not update.");
             } else {
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
@@ -1514,6 +1591,52 @@ const DateWidget = ({
 
     const cancelJump = () => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    };
+
+    // Finish a held turn by re-running ONLY the board call. The events are not
+    // regenerated: they are already valid, and on a slow model regenerating them
+    // is the difference between a few seconds and several minutes.
+    const retryHeldProjects = async () => {
+        if (isRetryingProjects) return;
+        setIsRetryingProjects(true);
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await retryPendingProjectsJump({ signal: controller.signal });
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            setProjectsHeld("");
+            logDebugEvent("turn", `Held turn finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+        } catch (retryError) {
+            if (controller.signal.aborted || retryError?.name === "AbortError") {
+                // Cancelled. The turn is still held and still unwritten, so leave
+                // the notice up rather than implying it was resolved.
+                logDebugEvent("turn", "Board retry cancelled; the turn is still held.");
+            } else if (retryError?.projectsHeld) {
+                setProjectsHeld(retryError.message);
+            } else {
+                // The board worked but the write did not. The held turn is gone
+                // with it, so this is an ordinary turn failure from here.
+                setProjectsHeld("");
+                setError(retryError.message || "Failed to finish the held turn.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsRetryingProjects(false);
+        }
+    };
+
+    // Throw the held turn away. Nothing was ever written, so there is nothing to
+    // undo — the player just loses the generation, as if they had cancelled.
+    const discardHeldProjects = () => {
+        discardPendingProjectsJump();
+        setProjectsHeld("");
     };
 
     // How many turns can be undone (a restore point is captured at the start of
