@@ -53,6 +53,74 @@ export const isBusyErrorPayload = (error) => {
     return BUSY_ERROR_TEXT.test(errorPayloadText(error));
 };
 
+// ---------------------------------------------------------------------------
+// Telling a rate limit apart from a spent quota
+// ---------------------------------------------------------------------------
+//
+// HTTP 429 is two completely different situations wearing the same status code:
+//
+//   Rate limited — too many requests in the last minute. Waiting fixes it. This
+//                  is what a free-tier key hits constantly, and it is the common
+//                  case by a wide margin.
+//   Quota spent  — the daily allowance or the billing balance is gone. Waiting
+//                  fifteen seconds fixes nothing, so failing fast is kinder than
+//                  three retries that cannot possibly succeed.
+//
+// Gemini answered BOTH with the same fatal "your balance or quota appears to be
+// exhausted" and never retried, so a single per-minute trip on the free tier
+// cost the player a whole timeline jump and dropped them to canned events —
+// while every other provider simply retried the same status code.
+//
+// Default to RETRYABLE. A wrong guess here costs one wasted request; the
+// opposite costs a turn.
+
+// Matched against the whole serialized error, because the decisive evidence is
+// often not in `message` at all but in Google's quota id
+// ("GenerateRequestsPerDayPerProjectPerModel-FreeTier"). No trailing \b: the ids
+// are camelCase, so "PerDay" has to match inside "PerDayPerProject".
+const QUOTA_SPENT_TEXT =
+    /per\s*-?\s*day|\bdaily\b|billing|payment|credit balance|insufficient[_ ]?quota|plan and billing/i;
+const RATE_LIMITED_TEXT =
+    /per\s*-?\s*minute|per\s*-?\s*second|\brpm\b|too many requests|rate.?limit/i;
+
+const errorHaystack = (error) => {
+    if (!error) return "";
+    if (typeof error === "string") return error;
+    try {
+        return JSON.stringify(error.error ?? error);
+    } catch {
+        return errorPayloadText(error.error ?? error);
+    }
+};
+
+// Is this 429 the kind that waiting will NOT fix? Only then is it worth failing
+// the turn over.
+export const isQuotaExhaustedPayload = (error) => {
+    const haystack = errorHaystack(error);
+    if (!haystack) return false;
+    // A per-minute limit that also happens to mention billing boilerplate ("check
+    // your plan and billing details" is in Gemini's generic 429 blurb) is still a
+    // per-minute limit, so the retryable signal wins the tie.
+    if (RATE_LIMITED_TEXT.test(haystack)) return false;
+    return QUOTA_SPENT_TEXT.test(haystack);
+};
+
+// Google answers a 429 with a RetryInfo telling you exactly how long to wait:
+//   {"error":{"details":[{"@type":".../google.rpc.RetryInfo","retryDelay":"35s"}]}}
+// Honouring it beats a fixed 15s guess in both directions. Returns null when the
+// provider did not say, so the caller keeps its own default.
+export const retryDelayMsFromPayload = (error) => {
+    const haystack = errorHaystack(error);
+    if (!haystack) return null;
+    const match = /"retry(?:_?delay|-?after)"\s*:\s*"?(\d+(?:\.\d+)?)s?"?/i.exec(haystack);
+    if (!match) return null;
+    const seconds = Number(match[1]);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    // Cap it: a provider asking for an hour is telling you to give up, not to
+    // hold a jump open that long.
+    return Math.min(Math.round(seconds * 1000), 120000);
+};
+
 // Says whose fault it is, which is the whole point: the previous message sent
 // the player off to shorten their question and check their model was healthy,
 // and none of that would have helped.

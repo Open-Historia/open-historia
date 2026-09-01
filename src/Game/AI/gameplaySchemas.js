@@ -616,21 +616,27 @@ const projectSchema = {
         + "project or a campaign of influence finishes narratively and takes none. "
         + "Attach one only when completion causes a specific, nameable change of "
         + "territory or of a polity's identity.",
+      // Described by reference rather than re-embedded. These three schemas are
+      // already spelled out in full under impacts in the very same payload, and
+      // repeating them here cost ~6.3 KB of every jump prompt to say the same
+      // thing a second time. normalizeProjectOnComplete (runtime/gameState.js)
+      // normalizes whatever arrives, so the loose shape costs nothing at the
+      // ingest end either.
       properties: {
         polityChanges: {
           type: "array",
-          description: "Polity identity changes enacted on completion.",
-          items: polityChangeSchema,
+          description: "Polity identity changes enacted on completion. Same entry shape as impacts.polityChanges.",
+          items: { type: "object" },
         },
         regionTransfers: {
           type: "array",
-          description: "Map ownership changes enacted on completion.",
-          items: regionTransferSchema,
+          description: "Map ownership changes enacted on completion. Same entry shape as impacts.regionTransfers.",
+          items: { type: "object" },
         },
         regionClaims: {
           type: "array",
-          description: "Claims asserted or dropped on completion.",
-          items: regionClaimSchema,
+          description: "Claims asserted or dropped on completion. Same entry shape as impacts.regionClaims.",
+          items: { type: "object" },
         },
       },
       additionalProperties: false,
@@ -640,100 +646,80 @@ const projectSchema = {
   additionalProperties: false,
 };
 
+// ONE flat op, discriminated by `op`, rather than six overlapping anyOf variants.
+//
+// Why: the six-variant version was 41.5 KB serialized — 66% of the ENTIRE jump
+// tool schema, three times what every other impact branch cost put together —
+// because three of its variants (nested create, flat create, update) each
+// restated projectSchema's twenty properties in full. It was ~10k tokens sent on
+// every jump, and on a segmented jump, once per segment.
+//
+// Collapsing it is not only cheaper, it is more reliable. A six-branch anyOf is
+// one of the worst constructs for Gemini's OpenAPI subset (see geminiSchema.js)
+// and for small local models, which routinely pick the wrong branch or emit a
+// blend of two. One object with an op enum is what they handle well.
+//
+// Nothing is lost at the ingest end: normalizeProjectOp (runtime/gameState.js)
+// already resolves every op name and alias, already reads a create written flat
+// OR nested (`operation.project ?? operation`), and already merges a create that
+// names an existing project into an update of only the fields it carried. The
+// old schema was describing tolerance the reducer had all along.
 const projectOpSchema = {
+  type: "object",
   description:
-    "A change to the player's Projects & Operations board. Use op create, update, "
-    + "milestone, complete, or remove, and fill the fields that op needs.",
-  anyOf: [
-    {
-      type: "object",
-      properties: {
-        op: { type: "string", enum: ["create"] },
-        project: projectSchema,
-      },
-      required: ["op", "project"],
-      additionalProperties: false,
+    "A change to the player's Projects & Operations board. Set op, name the project, "
+    + "and send ONLY the fields that op needs — everything omitted keeps its current value. "
+    + "op create opens a new effort (give it a summary too); update moves an existing one; "
+    + "milestone records a checkpoint; complete, cancel or fail close it while keeping it on "
+    + "the board; remove erases an entry that should never have been opened, which is NOT how "
+    + "a project ends.",
+  properties: {
+    op: {
+      type: "string",
+      description: "Which change this is.",
+      enum: ["create", "update", "milestone", "complete", "cancel", "fail", "remove"],
     },
-    // The same create, written flat. markerOpSchema learned this the hard way:
-    // models routinely put the payload's fields beside `op` instead of nesting
-    // them, the engine has always read that shape (normalizeProjectOp falls back
-    // to the entry itself), and only the schema refused it — throwing away the
-    // WHOLE turn over one flattened op. Accept what we already understand.
-    {
+    projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list. Omit when opening something new."),
+    name: nonEmptyTextSchema(
+      "The project's name — the new name when opening one, otherwise its CURRENT name copied "
+      + "exactly from the running-projects list, which is how it is found when no id is given.",
+    ),
+    newName: textSchema("A new name, only when the project is being renamed."),
+    milestone: projectMilestoneSchema,
+    // Every descriptive field a project has, all optional. `name` is redefined
+    // above (a create names a new project, an update identifies an existing
+    // one), and `id` is spelled projectId here.
+    kind: projectSchema.properties.kind,
+    ownerCode: projectSchema.properties.ownerCode,
+    summary: textSchema("What this is and what it is meant to achieve. Required when opening one; on an update send it only if it changed."),
+    status: projectSchema.properties.status,
+    priority: projectSchema.properties.priority,
+    progress: projectSchema.properties.progress,
+    tags: projectSchema.properties.tags,
+    secrecy: projectSchema.properties.secrecy,
+    startedAt: projectSchema.properties.startedAt,
+    ongoing: projectSchema.properties.ongoing,
+    targetDate: projectSchema.properties.targetDate,
+    milestones: projectSchema.properties.milestones,
+    lastUpdate: projectSchema.properties.lastUpdate,
+    linkedUnitIds: projectSchema.properties.linkedUnitIds,
+    linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
+    focus: projectSchema.properties.focus,
+    note: textSchema("Anything else worth keeping, or — when closing one — a sentence on how it ended."),
+    onComplete: projectSchema.properties.onComplete,
+    // The nested spelling of a create, kept permissive rather than re-embedding
+    // projectSchema for the third time. The model is no longer TOLD to nest, so
+    // this is pure tolerance for one that does anyway: additionalProperties is
+    // false, so without this key a nested create would fail schema validation and
+    // cost the whole turn, which is exactly the failure the flat variant was
+    // added to prevent. normalizeProjectOp reads it either way.
+    project: {
       type: "object",
-      properties: {
-        op: { type: "string", enum: ["create"] },
-        ...projectSchema.properties,
-      },
-      required: ["op", "name", "summary"],
-      additionalProperties: false,
+      description: "Legacy nested form of a create. Prefer the flat fields above.",
     },
-    {
-      type: "object",
-      description: "Change an existing project. Send only the fields that actually change.",
-      properties: {
-        op: { type: "string", enum: ["update"] },
-        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
-        name: nonEmptyTextSchema("The project's current name, used to find it when no id is given."),
-        newName: textSchema("A new name, only when the project is being renamed."),
-        kind: projectSchema.properties.kind,
-        ownerCode: projectSchema.properties.ownerCode,
-        summary: textSchema("Replacement summary, only when it changes."),
-        status: projectSchema.properties.status,
-        priority: projectSchema.properties.priority,
-        progress: projectSchema.properties.progress,
-        tags: projectSchema.properties.tags,
-        secrecy: projectSchema.properties.secrecy,
-        startedAt: projectSchema.properties.startedAt,
-        ongoing: projectSchema.properties.ongoing,
-        targetDate: projectSchema.properties.targetDate,
-        lastUpdate: projectSchema.properties.lastUpdate,
-        linkedUnitIds: projectSchema.properties.linkedUnitIds,
-        linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
-        focus: projectSchema.properties.focus,
-        note: projectSchema.properties.note,
-        onComplete: projectSchema.properties.onComplete,
-      },
-      required: ["op", "name"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      description: "Add a checkpoint to a project, or mark an existing one reached or missed.",
-      properties: {
-        op: { type: "string", enum: ["milestone"] },
-        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
-        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
-        milestone: projectMilestoneSchema,
-      },
-      required: ["op", "name", "milestone"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      description: "End a project. complete = it succeeded; cancel = it was called off; fail = it was defeated. All three keep it on the board under Closed.",
-      properties: {
-        op: { type: "string", enum: ["complete", "cancel", "fail"] },
-        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
-        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
-        note: textSchema("One sentence on how it ended."),
-      },
-      required: ["op", "name"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      description: "Erase a project from the board entirely, for an entry that should never have been opened. This is NOT how a project ends: use op cancel or op fail for that, so it stays on the board as a record of what happened.",
-      properties: {
-        op: { type: "string", enum: ["remove"] },
-        projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list."),
-        name: nonEmptyTextSchema("The project's name, used to find it when no id is given."),
-        note: textSchema("Brief explanation."),
-      },
-      required: ["op", "name"],
-      additionalProperties: false,
-    },
-  ],
+  },
+  required: ["op", "name"],
+  additionalProperties: false,
 };
 
 const impactsSchema = {

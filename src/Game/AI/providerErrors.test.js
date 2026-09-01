@@ -6,9 +6,11 @@ import {
   busyProviderMessage,
   errorPayloadText,
   isBusyErrorPayload,
+  isQuotaExhaustedPayload,
   isStreamingRefusal,
   isStreamingRequired,
   providerErrorReplyMessage,
+  retryDelayMsFromPayload,
 } from "./providerErrors.js";
 
 // The frame that started this: an OpenAI-compatible gateway answering HTTP 200
@@ -40,6 +42,61 @@ test("a real configuration error is not mistaken for load", () => {
   assert.equal(isBusyErrorPayload({ message: "context length exceeded", code: "context_length_exceeded" }), false);
   assert.equal(isBusyErrorPayload(null), false);
   assert.equal(isBusyErrorPayload(undefined), false);
+});
+
+// The field report: Gemini answered a per-minute free-tier trip with the same
+// fatal "quota appears to be exhausted" as a spent balance, so one 429 cost the
+// player a whole timeline jump. A per-minute limit must be retryable.
+test("a per-minute rate limit is retryable, not a spent quota", () => {
+  // What the free tier actually sends: the decisive evidence is the quota id,
+  // not the message, and the message carries billing boilerplate regardless.
+  const perMinute = {
+    error: {
+      code: 429,
+      status: "RESOURCE_EXHAUSTED",
+      message: "You exceeded your current quota, please check your plan and billing details.",
+      details: [{
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        violations: [{ quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier" }],
+      }],
+    },
+  };
+  assert.equal(isQuotaExhaustedPayload(perMinute), false);
+
+  assert.equal(isQuotaExhaustedPayload({ error: { code: 429, message: "Too many requests" } }), false);
+  assert.equal(isQuotaExhaustedPayload({ message: "Rate limit reached for requests per minute" }), false);
+  // The older, vaguer body. Nothing says the allowance is gone for the day, so
+  // it retries — a wasted request is cheaper than a lost turn.
+  assert.equal(isQuotaExhaustedPayload({
+    error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Resource has been exhausted (e.g. check quota)." },
+  }), false);
+});
+
+test("a spent daily allowance or balance is fatal, because waiting cannot fix it", () => {
+  assert.equal(isQuotaExhaustedPayload({
+    error: {
+      code: 429,
+      details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }],
+    },
+  }), true);
+  assert.equal(isQuotaExhaustedPayload({ error: { message: "You have exceeded your daily quota." } }), true);
+  assert.equal(isQuotaExhaustedPayload({ error: { message: "Your credit balance is too low." } }), true);
+  assert.equal(isQuotaExhaustedPayload({ code: "insufficient_quota", message: "Please check your billing." }), true);
+
+  assert.equal(isQuotaExhaustedPayload(null), false);
+  assert.equal(isQuotaExhaustedPayload({}), false);
+});
+
+test("the provider's own RetryInfo beats a fixed guess", () => {
+  assert.equal(retryDelayMsFromPayload({
+    error: { details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "35s" }] },
+  }), 35000);
+  assert.equal(retryDelayMsFromPayload({ error: { details: [{ retryDelay: "1.5s" }] } }), 1500);
+  // No RetryInfo: the caller keeps its own default rather than inventing one.
+  assert.equal(retryDelayMsFromPayload({ error: { code: 429 } }), null);
+  assert.equal(retryDelayMsFromPayload(null), null);
+  // A provider asking for an hour is saying give up, not hold the turn open.
+  assert.equal(retryDelayMsFromPayload({ error: { details: [{ retryDelay: "3600s" }] } }), 120000);
 });
 
 test("the payload text survives every shape a gateway sends", () => {
