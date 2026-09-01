@@ -331,7 +331,7 @@
       <div class="step">
         <div class="n">I</div>
         <h3>Download</h3>
-        <p>Pick the download for your system: an installer on Windows, a zip on macOS, a single AppImage on Linux.</p>
+        <p>Pick the download for your system: an installer on Windows, a zip on macOS, a .deb package on Linux (AppImage below it for everything else).</p>
       </div>
       <div class="step">
         <div class="n">II</div>
@@ -382,9 +382,10 @@
       <div class="card">
         <div class="ic">🐧</div>
         <h3>Linux</h3>
-        <div class="meta">AppImage · x86_64 · 159 MB</div>
+        <div class="meta">.deb for Debian &amp; Ubuntu · x86_64 · AppImage for other distros</div>
         <p>One portable file that runs on essentially any distribution. Make it executable and launch it — nothing to install, no packages to add.</p>
-        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-x86_64.AppImage">⬇ Download AppImage</a>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/open-historia_amd64.deb">⬇ Download .deb</a>
+        <a class="hero-note" style="display:block;margin-top:0.6rem;font-size:0.85rem" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-x86_64.AppImage">Not on Debian or Ubuntu? Get the AppImage instead.</a>
       </div>
       <div class="card">
         <div class="ic">📱</div>
@@ -502,7 +503,9 @@
   // exception: Apple Silicon and Intel need different builds and the user agent
   // can't tell them apart, so it goes to the downloads section to pick.
   var WIN = "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-Setup.exe";
-  var LINUX = "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-x86_64.AppImage";
+  // The .deb: it installs to /opt with a root-owned chrome-sandbox, so Chromium's
+  // sandbox works instead of being switched off (the AppImage cannot, see #658).
+  var LINUX = "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/open-historia_amd64.deb";
   var href = (os === "android") ? APK
            : (os === "windows") ? WIN
            : (os === "linux") ? LINUX
