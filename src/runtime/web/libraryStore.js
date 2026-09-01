@@ -529,6 +529,7 @@ const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
   if (assetKey === "colors") return record.colors;
   if (assetKey === "flags") return record.flags;
   if (assetKey === "snapshots") return scenarioScope ? undefined : record.snapshots; // snapshots are game-only
+  if (assetKey === "intercepts") return scenarioScope ? undefined : record.json?.intercepts; // spy reports: game-only, plain json slot
   if (JSON_ASSET_KEYS.includes(assetKey)) return record.json?.[assetKey];
   return undefined;
 };

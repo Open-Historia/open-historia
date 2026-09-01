@@ -24,7 +24,7 @@ export const STORAGE_JSON_ASSET_KEYS = ["actions", "advisor", "chat", "events"];
 export const CORE_JSON_ASSET_KEYS = ["game", "prompts", "world"];
 export const JSON_ASSET_KEYS = [...STORAGE_JSON_ASSET_KEYS, ...CORE_JSON_ASSET_KEYS];
 export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags"];
-export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots"];
+export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts"];
 export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions"];
 export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData"];
 // Order matters for assetStatus (Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)).
@@ -38,7 +38,7 @@ export const UPLOADABLE_GAME_ASSET_KEYS = [COVER_IMAGE_ASSET_KEY];
 
 export const JSON_ASSET_DEFAULTS = {
   actions: [], advisor: [], chat: [], colors: {}, events: [],
-  game: {}, prompts: {}, world: {}, snapshots: [],
+  game: {}, prompts: {}, world: {}, snapshots: [], intercepts: {},
 };
 
 export const TEMPLATE_WORLD_OVERRIDE_KEYS = [

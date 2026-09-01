@@ -3,7 +3,12 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker, gatherIntelligence } from "../AI/gameplay.js";
+import {
+    MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
+    recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
+} from "../../runtime/spycraft.js";
+import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
 import {
     JSON_URLS,
@@ -12,7 +17,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
-import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState } from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -766,7 +771,250 @@ export const requestDiplomaticChat = (country) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
 };
 
+// ---- Spy tab ----------------------------------------------------------------
+// The player's intelligence service. Plant a spy in a polity and its private
+// diplomacy with third parties shows up here as intercepts — redacted word by
+// word, with the player's intelligence stat against the target's deciding how
+// much survives. The AI moves that stat like reputation (polityChanges), so a
+// player who builds the service up reads more of the SAME intercepts: redaction
+// is applied at render time, never baked into what was stored.
+
+const spyBtn = (accent) => ({
+    padding: "0.35rem 0.6rem", borderRadius: "8px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif",
+    border: "1px solid " + (accent ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,0.12)"),
+    background: accent ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)", color: accent ? "#e9d5ff" : "rgba(255,255,255,0.8)",
+});
+
+const ClarityMeter = ({ clarity }) => {
+    const pct = Math.round(clarity * 100);
+    return (
+        <div title="How much of the intercept your service could decode">
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem" }}>
+        <span>Signal clarity</span><span data-no-translate style={{ color: "#c4b5fd", fontWeight: 700 }}>{pct}%</span>
+        </div>
+        <div style={{ height: "0.3rem", borderRadius: "999px", background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <div style={{ width: pct + "%", height: "100%", background: "linear-gradient(90deg,#7c3aed,#c4b5fd)" }} />
+        </div>
+        </div>
+    );
+};
+
+const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
+    const [opened, setOpened] = useState(null);
+    useEffect(() => {
+        let live = true;
+        // No seal (a record from before sealing) reads as-is; otherwise open it here
+        // and nowhere else. The plaintext lives in this component's state only for
+        // as long as the view is on screen.
+        (isSeal(seal) ? openExchange(seal, exchange) : Promise.resolve(exchange))
+            .then((value) => { if (live) setOpened(value); })
+            .catch(() => { if (live) setOpened(exchange); });
+        return () => { live = false; };
+    }, [exchange, seal]);
+    const shown = useMemo(() => redactExchange(opened ?? { ...exchange, messages: [] }, clarity), [opened, exchange, clarity]);
+    return (
+        <>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
+        <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>🕵 {target} ↔ {exchange.counterpart}</div>
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</div>
+        </div>
+        </div>
+        <div style={{ padding: "0.6rem 1rem 0.2rem", flexShrink: 0 }}><ClarityMeter clarity={clarity} /></div>
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.6rem 1rem 1rem", display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+        {shown.messages.map((message, index) => {
+            const mine = message.speaker === target;
+            return (
+                <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
+                <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
+                <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none",
+                    background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {message.text}
+                </div>
+                </div>
+            );
+        })}
+        <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", marginTop: "0.4rem", textAlign: "center" }}>
+        Improve your intelligence service to decode more of this exchange.
+        </div>
+        </div>
+        </>
+    );
+};
+
+const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
+    const [world, setWorld]           = useState(null);
+    const [intercepts, setIntercepts] = useState({});
+    const [open, setOpen]             = useState(null); // { target, exchange }
+    const [choosing, setChoosing]     = useState(false);
+    const [busy, setBusy]             = useState(""); // target being gathered
+    const [error, setError]           = useState("");
+
+    const refresh = async () => {
+        try {
+            const [w, i] = await Promise.all([readWorldState({ force: true }), readInterceptsState({ force: true })]);
+            setWorld(w); setIntercepts(normalizeIntercepts(i));
+        } catch { /* keep what we have */ }
+    };
+    useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
+
+    const myIntel = intelligenceOf(world, playerCountry);
+    // Pre-ownership records (no owner) were all the player's.
+    const spies = activeSpies(world).filter((spy) => !spy.owner || spy.owner === playerCountry);
+    const foreign = foreignSpies(world, playerCountry);
+    const history = normalizeSpies(world?.spies).filter((spy) => (!spy.owner || spy.owner === playerCountry) && spy.status === "exposed").slice(-3);
+    const [storyDraft, setStoryDraft] = useState({}); // spy id -> cover story being typed
+
+    const commitSpies = async (next) => {
+        // Re-read at write time so a jump's world write is never clobbered with
+        // the copy this tab happened to load earlier. The seal is minted here, on
+        // the first deployment, so every report ever stored has one to be sealed
+        // under.
+        const fresh = await readWorldState({ force: true });
+        await writeWorldState({ ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() });
+        await refresh();
+    };
+
+    const handleExpel = async (spy) => {
+        setError("");
+        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleTurn = async (spy) => {
+        setError("");
+        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleStory = async (spy) => {
+        setError("");
+        try { await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory)); } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    const handleGather = async (target) => {
+        setError(""); setBusy(target);
+        try { await gatherIntelligence(target); await refresh(); }
+        catch (err) { setError(target + ": " + (err?.message || err)); }
+        finally { setBusy(""); }
+    };
+
+    const handleDeploy = async (selected) => {
+        setChoosing(false); setError("");
+        const target = selected?.[0]?.name;
+        try {
+            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
+            await commitSpies(next);
+            await handleGather(target);
+        } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    const handleRecall = async (spy) => {
+        setError("");
+        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    if (open) {
+        const clarity = signalClarity(myIntel, intelligenceOf(world, open.target));
+        return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
+    }
+
+    const targets = Object.keys(intercepts);
+    const candidates = countries.filter((c) => c.name !== playerCountry && !spies.some((s) => s.target === c.name));
+    const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
+    const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
+    const full = spies.length >= MAX_ACTIVE_SPIES;
+
+    return (
+        <>
+        {choosing && <CountrySelectorModal countries={candidates} loading={loadingCountries} onStart={handleDeploy} onCancel={() => setChoosing(false)} />}
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
+        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
+        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#e9d5ff" }}>{myIntel}/100</span>
+        </div>
+
+        <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Deployed spies · {spies.length}/{MAX_ACTIVE_SPIES}</div>
+        {spies.length === 0 && (
+            <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>No spies in the field. Deploy one to read a country's private diplomacy with others.</div>
+        )}
+        {spies.map((spy) => (
+            <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ possibly compromised</span>}
+            </div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
+            {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
+            </div>
+            </div>
+            <button onClick={() => handleGather(spy.target)} disabled={busy === spy.target} style={{ ...spyBtn(true), opacity: busy === spy.target ? 0.6 : 1 }}>
+            {busy === spy.target ? "Gathering…" : "Gather"}
+            </button>
+            <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+            </div>
+        ))}
+        {history.length > 0 && (
+            <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>
+            {history.map((spy) => "Agent expelled by " + spy.target + (spy.exposedAt ? " on " + spy.exposedAt : "")).join(" · ")}
+            </div>
+        )}
+
+        {/* Agents other polities have in the player. An undiscovered one is not
+            listed — that is what makes the intelligence stat matter on defence.
+            A discovered one waits for a decision; a turned one is fed whatever
+            the player types here. */}
+        {foreign.filter((spy) => spy.status !== "active").length > 0 && (
+            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Foreign agents in {playerCountry}</div>
+        )}
+        {foreign.filter((spy) => spy.status !== "active").map((spy) => (
+            <div key={spy.id} style={{ padding: "0.55rem 0.7rem", borderRadius: "10px", background: spy.status === "discovered" ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (spy.status === "discovered" ? "rgba(251,191,36,0.35)" : "rgba(255,255,255,0.08)") }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{spy.status === "discovered" ? "🚨 " : "🎭 "}{spy.owner}</div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
+            {spy.status === "discovered" ? "agent in custody — decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " — " + spy.owner + " still trusts them"}
+            </div>
+            </div>
+            {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+            {spy.status === "discovered" && <button onClick={() => handleTurn(spy)} style={spyBtn(true)}>Turn</button>}
+            </div>
+            {spy.status !== "exposed" && (
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                <input value={storyOf(spy)} onChange={(e) => setStoryDraft((d) => ({ ...d, [spy.id]: e.target.value }))} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : "What your double agent tells " + spy.owner}
+                    style={inputStyle} />
+                {spy.status === "turned" && <button onClick={() => handleStory(spy)} style={spyBtn(true)}>Save</button>}
+                </div>
+            )}
+            </div>
+        ))}
+
+        {error && <div style={{ fontSize: "0.74rem", color: "#fca5a5", padding: "0.3rem 0.1rem" }}>{error}</div>}
+
+        {targets.length > 0 && (
+            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Intercepts</div>
+        )}
+        {targets.map((target) => intercepts[target].exchanges.map((exchange) => (
+            <button key={exchange.id} onClick={() => setOpen({ target, exchange })}
+                style={{ width: "100%", padding: "0.6rem 0.8rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer", fontFamily: "sans-serif", textAlign: "left", color: "white" }}>
+            <span aria-hidden="true" style={{ fontSize: "1rem" }}>📡</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{target} ↔ {exchange.counterpart}</span>
+            <span style={{ display: "block", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</span>
+            </span>
+            </button>
+        )))}
+        </div>
+        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={() => setChoosing(true)} disabled={full}
+            style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(167,139,250,0.35)", background: "rgba(139,92,246,0.18)", color: "#e9d5ff", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
+        🕵 Deploy a spy
+        </button>
+        </div>
+        </>
+    );
+};
+
 const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
+    // "chats" is the diplomacy the player is party to; "spy" is everyone else's.
+    const [view, setView] = useState("chats");
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -959,11 +1207,22 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <span style={{ fontWeight: 700, fontSize: "1rem" }}>Diplomatic Chats</span>
+                <div style={{ display: "flex", gap: "0.35rem" }}>
+                {[["chats", "Diplomacy"], ["spy", "Spy"]].map(([key, label]) => (
+                    <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
+                        border: "1px solid " + (view === key ? "rgba(167,139,250,0.45)" : "transparent"), background: view === key ? "rgba(139,92,246,0.22)" : "transparent", color: view === key ? "white" : "rgba(255,255,255,0.5)" }}>
+                    {label}
+                    </button>
+                ))}
+                </div>
                 <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
+                {view === "spy" ? (
+                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} />
+                ) : (
+                <>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                 {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
@@ -976,6 +1235,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
+                </>
+                )}
                 </>
             )}
             </div>

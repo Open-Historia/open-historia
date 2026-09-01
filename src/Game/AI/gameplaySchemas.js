@@ -187,6 +187,13 @@ const polityChangeSchema = {
       description:
         "International reputation 0-100, only when it changes. 0 is a pariah state, 100 is universally trusted.",
     },
+    intelligence: {
+      type: "number",
+      description:
+        "Intelligence service capability 0-100, only when it changes: a purge, a new bureau, a defector, "
+        + "funding, a foreign penetration exposed. Decides how much of others' diplomacy this polity can "
+        + "read, and how much of its own it can keep secret.",
+    },
     tags: stringArraySchema(
       "The country's defining traits after this change — ideology, alignment, posture "
       + "(e.g. socialist, authoritarian, anti-nato). Only when they change: send the "
@@ -735,7 +742,49 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
   additionalProperties: false,
 };
 
+// What a deployed spy reports: the target's diplomatic traffic with THIRD parties.
+// Redaction happens on the player's side, by their intelligence stat — the model
+// writes the whole exchange, the game decides how much of it the player can read.
+const SPY_INTERCEPT_SCHEMA = {
+  type: "object",
+  description: "Intercepted diplomatic exchanges between the target polity and other polities.",
+  properties: {
+    exchanges: {
+      type: "array",
+      minItems: 1,
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          counterpart: nonEmptyTextSchema("The OTHER polity in this exchange. Never the target itself, never the player's polity."),
+          date: nonEmptyTextSchema("When the exchange took place, YYYY-MM-DD, within the last period."),
+          subject: nonEmptyTextSchema("What the exchange is about, in a few words."),
+          messages: {
+            type: "array",
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: {
+                speaker: nonEmptyTextSchema("The polity speaking — the target or the counterpart."),
+                text: nonEmptyTextSchema("What was said, in that leader's voice: intentions and terms, not public statements."),
+              },
+              required: ["speaker", "text"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["counterpart", "date", "subject", "messages"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["exchanges"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
+  spyIntercept: SPY_INTERCEPT_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -831,7 +880,14 @@ export const PREGAME_HISTORY_TOOL = makeTool(
   PREGAME_HISTORY_SCHEMA,
 );
 
+export const SPY_INTERCEPT_TOOL = makeTool(
+  "submit_spy_intercept",
+  "Submit the diplomatic exchanges a planted spy intercepted between the target polity and others.",
+  SPY_INTERCEPT_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
+  spyIntercept: SPY_INTERCEPT_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,

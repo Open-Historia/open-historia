@@ -277,6 +277,10 @@ const OPTIONAL_JSON_ASSET_FILES = {
 // be large. Read/written only through the /api/runtime/json/snapshots endpoint.
 const RUNTIME_ONLY_JSON_ASSET_FILES = {
   snapshots: "storage/snapshots.json",
+  // What the player's spies have intercepted, keyed by target polity. Its own
+  // file on purpose: it is refreshed AFTER a jump's world write lands, and a
+  // second writer on world.json would race it.
+  intercepts: "storage/intercepts.json",
 };
 
 const PMTILES_ASSET_FILES = {
@@ -334,6 +338,7 @@ const JSON_ASSET_DEFAULTS = {
   prompts: {},
   world: {},
   snapshots: [],
+  intercepts: {},
 };
 
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [

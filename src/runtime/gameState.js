@@ -22,6 +22,20 @@ export const WORLD_DEFAULTS = {
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
   internationalReputation: {},
+  // Per-polity intelligence service (0-100), the same shape and lifecycle as
+  // reputation: moved by the AI through polityChanges.intelligence, absent means
+  // ordinary (see spycraft.js DEFAULT_INTELLIGENCE). It decides how much of an
+  // intercepted exchange the player can read — and how much of the player's own
+  // traffic a rival can.
+  intelligence: {},
+  // Every spy in the world, both directions: [{ id, owner, target, deployedAt,
+  // status, turnedAt, exposedAt, coverStory, suspected }] — see spycraft.js for
+  // the statuses. What the player's spies bring back lives in the intercepts
+  // asset, sealed under spySeal (see readInterceptsState, spySeal.js).
+  spies: [],
+  // Random per-game key the intercepts are sealed with. Minted the first time a
+  // spy exists; 64 hex chars.
+  spySeal: "",
   // Persisted per-country stat sheets (code -> the full sheet), seeded on first view
   // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
   // stop regenerating/drifting every date change.
@@ -507,6 +521,10 @@ const normalizePolityChange = (entry) => {
   const reputation = Number.isFinite(rawReputation)
     ? Math.max(0, Math.min(100, Math.round(rawReputation)))
     : null;
+  const rawIntelligence = Number(entry.intelligence ?? entry.intelligenceService);
+  const intelligence = Number.isFinite(rawIntelligence)
+    ? Math.max(0, Math.min(100, Math.round(rawIntelligence)))
+    : null;
 
   // The AI sends the complete new list, so an empty array is meaningful ("this
   // country no longer has defining tags") while undefined means "unchanged" —
@@ -526,6 +544,7 @@ const normalizePolityChange = (entry) => {
     code,
     color: normalizeOptionalString(entry.color),
     name: normalizeOptionalString(entry.name || entry.newName),
+    intelligence,
     note: normalizeOptionalString(entry.note || entry.reason),
     reputation,
     stats,
@@ -989,6 +1008,36 @@ export const normalizeWorldState = (world) => {
       .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
   );
 
+  // Same treatment as reputation: name-keyed, integer, 0-100.
+  const intelligence = Object.fromEntries(
+    Object.entries(nextWorld.intelligence ?? {})
+      .map(([polityCode, value]) => [normalizeOptionalString(polityCode), Number(value)])
+      .filter(([polityCode, value]) => polityCode && Number.isFinite(value))
+      .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
+  );
+  const SPY_STATUSES = ["active", "discovered", "turned", "exposed", "recalled"];
+  const spies = normalizeArray(nextWorld.spies)
+    .map((spy, index) => {
+      const target = normalizeOptionalString(spy?.target || spy?.polity);
+      if (!target) return null;
+      return {
+        id: normalizeOptionalString(spy?.id) || `spy-${index + 1}`,
+        // Pre-ownership records were all the player's; the field is filled in
+        // at read time by whoever knows the player's name (spycraft treats an
+        // empty owner as "the player" only when asked to).
+        owner: normalizeOptionalString(spy?.owner),
+        target,
+        deployedAt: normalizeOptionalString(spy?.deployedAt),
+        status: SPY_STATUSES.includes(spy?.status) ? spy.status : "active",
+        turnedAt: normalizeOptionalString(spy?.turnedAt),
+        exposedAt: normalizeOptionalString(spy?.exposedAt),
+        coverStory: normalizeOptionalString(spy?.coverStory),
+        suspected: spy?.suspected === true,
+      };
+    })
+    .filter(Boolean);
+  const spySeal = /^[0-9a-f]{64}$/i.test(String(nextWorld.spySeal ?? "")) ? String(nextWorld.spySeal) : "";
+
   // Keyed by country NAME, verbatim — same namespace as internationalReputation
   // above, polityOverrides and colors. This used to uppercase while its neighbours
   // did not, so one applyEventImpacts change.code landed under two different keys
@@ -1016,6 +1065,9 @@ export const normalizeWorldState = (world) => {
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     internationalReputation,
+    intelligence,
+    spies,
+    spySeal,
     labelFont: normalizeOptionalString(nextWorld.labelFont),
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),
@@ -1185,6 +1237,17 @@ export const writeEventsState = async (events, options = {}) => {
   return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
 };
 
+// Spy intercepts live in their own asset rather than in world.json: they are
+// refreshed after a jump, in the wake of the turn's own world write, and a
+// second writer on world.json would race it (desktop: last file write wins).
+export const readInterceptsState = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.intercepts, { defaultValue: {}, force });
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+};
+
+export const writeInterceptsState = async (intercepts, options = {}) =>
+  writeJson(JSON_URLS.intercepts, intercepts && typeof intercepts === "object" ? intercepts : {}, { pretty: true, ...options });
+
 export const readChatsState = async ({ force = false } = {}) =>
   normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
 
@@ -1244,6 +1307,13 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
             Number.parseInt(hex.slice(4, 6), 16),
           ];
         }
+      }
+
+      // An intelligence rating the AI set this turn — a purge, a new bureau, a
+      // defector — becomes the polity's authoritative value.
+      if (Number.isFinite(change.intelligence)) {
+        if (!nextWorld.intelligence || typeof nextWorld.intelligence !== "object") nextWorld.intelligence = {};
+        nextWorld.intelligence[change.code] = change.intelligence;
       }
 
       // Reputation the AI set this turn becomes the polity's authoritative value.
