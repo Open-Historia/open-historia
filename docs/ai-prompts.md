@@ -288,7 +288,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 ### 7.12 `countryStatSheet` — structured national stats
 - **Purpose:** Compile a full stat sheet for a selected polity for the Stats tab.
 - **Prompt:** `tasks.countryStatSheet`. **Entry:** `generateCountryStatSheet({code, name})` `gameplay.js:1580` (userMessage carries a `buildTargetDossier` (`1498`) + era slice).
-- **Tool/schema:** `submit_country_stat_sheet` / `COUNTRY_STAT_SHEET_SCHEMA` (`569`): `capital, continent, government, leader, stability(0–100), indices{sovereignty,foodAutonomy,energyAutonomy,economicIndependence,internalSecurity,internationalReputation}, economy{gdp,gdpGrowth,gdpPerCapita,currency,inflation,unemployment,publicDebt,budgetBalance}, gdpBreakdown{agriculture,industry,services}`.
+- **Tool/schema:** `submit_country_stat_sheet` / `COUNTRY_STAT_SHEET_SCHEMA` (`569`): `capital, continent, government, leader, stability(0–100), indices{sovereignty,foodAutonomy,energyAutonomy,economicIndependence,internalSecurity,internationalReputation — replaced by the scenario's own indices when its stats.json defines them, and named to the model in the appended [Stat Sheet Indices] block}, economy{gdp,gdpGrowth,gdpPerCapita,currency,inflation,unemployment,publicDebt,budgetBalance}, gdpBreakdown{agriculture,industry,services}`.
 - **Validation:** all strings non-blank; all indices 0–100 integers; `agriculture+industry+services === 100` (`gameplaySchemas.js:940`). No fallback.
 
 ### 7.13 `idleDiplomacy` — unprompted note drip

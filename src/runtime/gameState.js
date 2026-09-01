@@ -1249,8 +1249,12 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // Reputation the AI set this turn becomes the polity's authoritative value.
       if (Number.isFinite(change.reputation)) {
         nextWorld.internationalReputation[change.code] = change.reputation;
-        // Keep the persisted sheet's reputation index in sync with the authoritative value.
-        if (nextWorld.countryStats?.[change.code]?.indices) {
+        // Keep the persisted sheet's reputation index in sync with the authoritative
+        // value — but only where the sheet HAS that index. A scenario that defines its
+        // own indices has no internationalReputation row, and writing one would put a
+        // field on the sheet that nothing ever renders. The world's own
+        // internationalReputation store above stays authoritative either way.
+        if ("internationalReputation" in (nextWorld.countryStats?.[change.code]?.indices ?? {})) {
           nextWorld.countryStats[change.code] = {
             ...nextWorld.countryStats[change.code],
             indices: { ...nextWorld.countryStats[change.code].indices, internationalReputation: change.reputation },

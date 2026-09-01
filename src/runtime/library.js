@@ -263,6 +263,21 @@ export const downloadScenarioJsonAsset = async (scenarioId, assetKey) => {
   }
 };
 
+// The same read for a game. A game keeps its own copy of the optional JSON
+// assets once it has one, and falls back to its scenario's until then — so the
+// editor has to ask the game, not the scenario it came from.
+export const downloadGameJsonAsset = async (gameId, assetKey) => {
+  try {
+    const response = await fetch(
+      `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
 export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,

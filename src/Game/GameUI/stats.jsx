@@ -1,5 +1,6 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { DEFAULT_INDEX_ROWS, loadIndexRows } from "../../runtime/statsSheet.js";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
@@ -60,14 +61,8 @@ const storeSheet = (key, entry) => {
 
 const clamp01 = (value) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 
-const INDEX_ROWS = [
-    { key: "sovereignty", label: "Sovereignty", icon: "⚑", color: "#8b5cf6" },
-    { key: "foodAutonomy", label: "Food autonomy", icon: "🌾", color: "#22c55e" },
-    { key: "energyAutonomy", label: "Energy autonomy", icon: "⚡", color: "#eab308" },
-    { key: "economicIndependence", label: "Economic independence", icon: "🏦", color: "#06b6d4" },
-    { key: "internalSecurity", label: "Internal security", icon: "🛡", color: "#f43f5e" },
-    { key: "internationalReputation", label: "International reputation", icon: "🤝", color: "#3b82f6" },
-];
+// Rows come from the scenario (stats.json) and fall back to the stock six —
+// see runtime/statsSheet.js, which the editor's builder and the AI prompt read too.
 
 const sectionTitleStyle = {
     color: "rgba(255,255,255,0.45)",
@@ -127,6 +122,16 @@ const StatsPane = ({ active }) => {
     const [player, setPlayer] = useState({ code: "", date: "", gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
+    // The scenario's index rows. Starts as the stock six so the panel renders
+    // immediately, then swaps if this scenario defines its own.
+    const [indexRows, setIndexRows] = useState(DEFAULT_INDEX_ROWS);
+    // Keyed on the asset URL, which carries the scenario's cache token — so
+    // switching scenarios re-reads and everything else does not.
+    useEffect(() => {
+        let active = true;
+        loadIndexRows().then((rows) => { if (active) setIndexRows(rows); }).catch(() => {});
+        return () => { active = false; };
+    }, [JSON_URLS.stats]);
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
     // Is the PLAYER stateless (holds no territory)? A landless player's code may
@@ -384,7 +389,7 @@ const StatsPane = ({ active }) => {
                 {/* Strategic indices */}
                 <div style={sectionTitleStyle}>⚑ Strategic indices</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
-                {INDEX_ROWS.map((row) => {
+                {indexRows.map((row) => {
                     const value = clamp01(sheet.indices?.[row.key]);
                     return (
                         <div key={row.key} style={cardStyle}>

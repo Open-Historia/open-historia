@@ -75,6 +75,7 @@ export const JSON_URLS = {
   citiesGeojson: "",
   backgroundData: "",
   world: "",
+  stats: "",
 };
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
@@ -264,6 +265,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.colors = withRuntimeToken("/api/runtime/json/colors");
   JSON_URLS.flags = withRuntimeToken("/api/runtime/json/flags");
   JSON_URLS.tags = withRuntimeToken("/api/runtime/json/tags");
+  JSON_URLS.stats = withRuntimeToken("/api/runtime/json/stats");
   JSON_URLS.events = withRuntimeToken("/api/runtime/json/events");
   JSON_URLS.game = withRuntimeToken("/api/runtime/json/game");
   JSON_URLS.prompts = withRuntimeToken("/api/runtime/json/prompts");

@@ -140,7 +140,10 @@ const statsUpdateSchema = {
         internalSecurity: statPct("Internal security."),
         internationalReputation: statPct("International reputation / standing."),
       },
-      additionalProperties: false,
+      // A scenario can define its own indices (stats.json) — Radiation, Water,
+      // Legitimacy — and the panel renders those instead of the six above. The
+      // keys are open so the model can write them; the value shape is not.
+      additionalProperties: statPct("A scenario-defined index, 0-100."),
     },
     economy: {
       type: "object",
@@ -702,8 +705,11 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         internalSecurity: percentageSchema("Internal security."),
         internationalReputation: percentageSchema("International reputation / standing (0-100)."),
       },
-      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
-      additionalProperties: false,
+      // Not "required": a scenario that defines its own indices asks for those
+      // instead, and the prompt names whichever set applies. The sheet still has
+      // to carry at least one index — checked in validateGameplayPayload, since
+      // this validator has no minProperties.
+      additionalProperties: percentageSchema("A scenario-defined index, 0-100."),
     },
     economy: {
       type: "object",
@@ -922,6 +928,12 @@ const validateAgainstSchema = (schema, value, path) => {
         if (schema.additionalProperties === false) {
           return `${propertyPath(path, key)} is not allowed.`;
         }
+        // A schema-valued additionalProperties constrains the keys it does not
+        // name — that is how a scenario's own stat indices are checked.
+        if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+          const error = validateAgainstSchema(schema.additionalProperties, entry, propertyPath(path, key));
+          if (error) return error;
+        }
         continue;
       }
 
@@ -978,6 +990,10 @@ export const validateGameplayPayload = (taskKey, value) => {
   const error = validateAgainstSchema(schema, value, "$");
   if (error) {
     return { valid: false, error };
+  }
+
+  if (taskKey === "countryStatSheet" && Object.keys(value.indices).length === 0) {
+    return { valid: false, error: "$.indices must contain at least one index." };
   }
 
   if (taskKey === "jumpForward" || taskKey === "autoJumpForward") {
