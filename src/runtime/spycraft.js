@@ -152,7 +152,8 @@ export const suspicionChance = (ownerIntelligence, targetIntelligence) => {
 // limit (MAX_FOREIGN_SPIES), and higher per-roll odds just reach it sooner.
 export const foreignDeployChance = (polityIntelligence, { hostile = false, hostility = null } = {}) => {
   // Accept the graded form already, so wiring it is a one-line change upstream.
-  const h = Number.isFinite(Number(hostility)) ? clamp01(Number(hostility)) : (hostile ? 0.75 : 0);
+  // typeof, not Number(): Number(null) is 0, which would silently drop the boolean path.
+  const h = typeof hostility === "number" && Number.isFinite(hostility) ? clamp01(hostility) : (hostile ? 0.75 : 0);
   return clamp01(clampPct(polityIntelligence) / 100 * 0.12 + h * 0.2, 0, 0.4);
 };
 
