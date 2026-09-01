@@ -363,31 +363,43 @@ const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
     );
 };
 
-const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
+const CountrySelectorModal = ({
+    countries, loading, onStart, onCancel,
+    title = "Start New Diplomatic Chat",
+    subtitle = "Select countries to invite to the conversation",
+    selectedLabel = "Selected Countries",
+    emptyLabel = "No countries selected yet",
+    confirmLabel = (n) => `Chat with ${n} ${n === 1 ? "country" : "countries"}`,
+    single = false,
+}) => {
     const [search, setSearch]     = React.useState("");
     const [selected, setSelected] = React.useState([]);
     const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
     const filteredFlags = useCountryFlags(filtered);
     const selectedFlags = useCountryFlags(selected);
     const isSelectedName = (name) => selected.some(s => s.name === name);
-    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name) ? prev.filter(s => s.name !== name) : [...prev, { name, code }]);
+    // single: a spy goes to ONE country, so picking another replaces the pick
+    // rather than adding to it, and picking the same one again clears it.
+    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name)
+        ? prev.filter(s => s.name !== name)
+        : single ? [{ name, code }] : [...prev, { name, code }]);
 
     return (
         <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(17,24,39,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
         <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
-        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>Start New Diplomatic Chat</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Select countries to invite to the conversation</div>
+        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
+        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
         </div>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
         </div>
         <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>Selected Countries ({selected.length}):</div>
+        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
         <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem" }}>
-        {selected.length === 0 ? "No countries selected yet" : selected.map(c => `${selectedFlags[c.name] ?? "🏳"} ${c.name}`).join(", ")}
+        {selected.length === 0 ? emptyLabel : selected.map(c => `${selectedFlags[c.name] ?? "🏳"} ${c.name}`).join(", ")}
         </div>
         </div>
         <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
@@ -412,7 +424,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "#3b82f6" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
-        Chat with {selected.length} {selected.length === 1 ? "country" : "countries"}
+        {confirmLabel(selected.length)}
         </button>
         </div>
         </div>
@@ -924,7 +936,20 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
     return (
         <>
-        {choosing && <CountrySelectorModal countries={candidates} loading={loadingCountries} onStart={handleDeploy} onCancel={() => setChoosing(false)} />}
+        {choosing && (
+            <CountrySelectorModal
+                countries={candidates}
+                loading={loadingCountries}
+                onStart={handleDeploy}
+                onCancel={() => setChoosing(false)}
+                single
+                title="Deploy a Spy"
+                subtitle="Choose the country to plant an agent in"
+                selectedLabel="Target"
+                emptyLabel="No target chosen yet"
+                confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
+            />
+        )}
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
