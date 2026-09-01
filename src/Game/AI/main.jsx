@@ -25,6 +25,7 @@ import {
     retryDelayMsFromPayload,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
+import { createModeObserver, startingStructuredMode } from "./structuredMode.js";
 import { createFirstByteTimer, normalizeUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
@@ -273,6 +274,56 @@ function isLocallyServed() {
     if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
     return false;
 }
+
+// What the structured-output ladder has learned about the endpoints in use this
+// session (structuredMode.js). Session-scoped on purpose: it is an observation
+// about how a gateway behaved just now, not a setting — the SETTING is the thing
+// the player is offered once the evidence is consistent, and only they can
+// change it.
+const structuredModeObserver = createModeObserver();
+
+// A call that started at one rung and succeeded lower down. Only a genuine drop
+// teaches anything; succeeding where it began is the expected case.
+function noteStructuredModeLanding(key, startedAt, landedAt, configured) {
+    if (!key) return;
+    const seen = structuredModeObserver.record(key, startedAt, landedAt);
+    if (!seen) return;
+    logDebugEvent("ai", `Structured output fell back to ${landedAt} for ${key}.`, {
+        startedAt,
+        timesSeen: seen.count,
+    }, { verbose: true });
+    // Announced, not acted on. The UI decides whether and how to ask; nothing
+    // changes until the player says so.
+    if (structuredModeObserver.shouldSuggest(key, configured)) {
+        try {
+            window.dispatchEvent(new CustomEvent("ai:structured-mode-suggestion", {
+                detail: { key, mode: landedAt, provider: key.split("|")[0] },
+            }));
+        } catch { /* no window (tests, workers) — the observation still stands */ }
+    }
+}
+
+// Asked by the UI when it wants to know whether there is anything to offer.
+export const getStructuredModeSuggestion = () => {
+    const provider = getStoredProvider();
+    const settings = getProviderSettings(provider);
+    const key = `${provider}|${settings.model || ""}`;
+    const mode = structuredModeObserver.shouldSuggest(key, settings.structuredMode);
+    return mode ? { key, mode, provider } : null;
+};
+
+// "No thanks" — remembered for the session so it does not ask again every turn.
+export const declineStructuredModeSuggestion = (key, mode) => {
+    structuredModeObserver.decline(key, mode);
+};
+
+// "Yes" — write the setting, then forget the evidence so a later change in the
+// endpoint's behaviour is learned fresh rather than judged against stale data.
+export const acceptStructuredModeSuggestion = (key, mode, provider) => {
+    setProviderField(provider || getStoredProvider(), "structuredMode", mode);
+    structuredModeObserver.clear(key);
+    logDebugEvent("ai", `Structured output set to ${mode} for ${provider}.`, { key });
+};
 
 const PAGE_IS_LOCAL = isLocallyServed();
 // Endpoints that have already proven they need the relay (no browser CORS) —
@@ -809,10 +860,17 @@ async function callOpenAIStyleChatCompletions({
     onChunk,
     onUsage,
     allowJsonSchemaFallback = false,
+    configuredStructuredMode = "auto",
+    observerKey = "",
     maxTokens,
     tokenLimitField = "max_tokens",
 }) {
-    let structuredMode = tool ? "tool" : "text";
+    // Where to BEGIN on the ladder. "auto" (the default) starts at the strongest
+    // method; a configured mode starts lower, skipping rungs this endpoint has
+    // already been shown not to honour. Either way the ladder can still walk
+    // down from here — a setting is a starting point, never a lock.
+    const startedStructuredMode = startingStructuredMode(configuredStructuredMode);
+    let structuredMode = tool ? startedStructuredMode : "text";
     let disableToolReasoning = false;
     // Set once the model has proved it needs more room than the caller asked for
     // (see the all-reasoning retry below). Lifting the cap entirely hands the
@@ -1109,6 +1167,12 @@ async function callOpenAIStyleChatCompletions({
             }
 
             if (structuredMode === "tool") return { rawText: extractOpenAIToolRaw(data, tool) || text, toolInput: null };
+            // Landed below where this call began, with something to show for it.
+            // The ladder only steps down after a failure above, so arriving here
+            // with content is the endpoint telling us which method it honours —
+            // recorded so the player can be offered it after a second sighting
+            // rather than the game re-learning it on every call.
+            if (text) noteStructuredModeLanding(observerKey, startedStructuredMode, structuredMode, configuredStructuredMode);
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
         }
@@ -1177,6 +1241,8 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         providerLabel: "OpenAI",
         customParams: parseCustomParams(settings.customParams, "OpenAI"),
         allowJsonSchemaFallback: false,
+        configuredStructuredMode: settings.structuredMode,
+        observerKey: `${settings.provider}|${model}`,
         tokenLimitField: "max_completion_tokens",
         ...opts,
     });
@@ -1211,6 +1277,8 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         providerLabel: "OpenAI Compatible",
         customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
         allowJsonSchemaFallback: true,
+        configuredStructuredMode: settings.structuredMode,
+        observerKey: `${settings.provider}|${model}`,
         tokenLimitField: "max_tokens",
         ...opts,
     });
