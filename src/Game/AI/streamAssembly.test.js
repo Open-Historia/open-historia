@@ -7,12 +7,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyAnthropicFrame,
+  applyGeminiFrame,
   applyOpenAIFrame,
   createAnthropicStreamState,
+  createGeminiStreamState,
   createOpenAIStreamState,
   finishAnthropicStream,
+  finishGeminiStream,
   finishOpenAIStream,
   readAnthropicStreamedResponse,
+  readGeminiStreamedResponse,
   readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 
@@ -166,4 +170,72 @@ test("anthropic: reads a real SSE body end to end", async () => {
   ], { done: false }));
 
   assert.deepEqual(data.content[0].input, { summary: "A quiet year." });
+});
+
+// ---------------------------------------------------------------------------
+// Gemini
+
+const runGemini = (frames) => frames.reduce(applyGeminiFrame, createGeminiStreamState());
+
+// The reason the Gemini tool path streams at all: the envelope the jump code
+// reads has to come back out of the frames unchanged, or every jump on the
+// DEFAULT provider silently loses its structured output and falls back to canned
+// events.
+test("gemini: a streamed function call rebuilds the envelope the extractors read", () => {
+  const state = runGemini([
+    { candidates: [{ content: { parts: [{ text: "Simulating " }] } }] },
+    { candidates: [{ content: { parts: [{ text: "the year." }] } }] },
+    { candidates: [{
+      content: { parts: [{ functionCall: { name: "submit_jump_result", args: { events: [{ title: "A war" }] } } }] },
+      finishReason: "STOP",
+    }] },
+  ]);
+
+  const data = finishGeminiStream(state);
+  const parts = data.candidates[0].content.parts;
+  assert.deepEqual(parts[0], { text: "Simulating the year." });
+  assert.equal(parts[1].functionCall.name, "submit_jump_result");
+  assert.deepEqual(parts[1].functionCall.args, { events: [{ title: "A war" }] });
+  assert.equal(data.candidates[0].finishReason, "STOP");
+});
+
+// Trimming per frame would run words together across a chunk boundary — the same
+// bug the advisor's geminiStreamDelta comment warns about.
+test("gemini: text frames are joined verbatim, spaces and all", () => {
+  const state = runGemini([
+    { candidates: [{ content: { parts: [{ text: "the treaty" }] } }] },
+    { candidates: [{ content: { parts: [{ text: " was signed" }] } }] },
+  ]);
+  assert.equal(finishGeminiStream(state).candidates[0].content.parts[0].text, "the treaty was signed");
+});
+
+test("gemini: an error frame on a 200 stream is surfaced", () => {
+  const state = runGemini([{ error: { code: 503, message: "The model is overloaded." } }]);
+  assert.equal(finishGeminiStream(state).error.code, 503);
+});
+
+// A prompt refused before generation starts carries no candidates at all, so
+// without this the caller sees only an empty answer and has to guess why.
+test("gemini: a blocked prompt reports why instead of looking empty", () => {
+  const state = runGemini([{ promptFeedback: { blockReason: "SAFETY" } }]);
+  assert.match(finishGeminiStream(state).error.message, /SAFETY/);
+});
+
+// A cut-off stream must leave no function call behind, for the same reason as
+// Anthropic's: half a turn applied is worse than a turn that plainly failed.
+test("gemini: a stream cut before the call yields text but no tool input", () => {
+  const state = runGemini([{ candidates: [{ content: { parts: [{ text: "The year opens" }] } }] }]);
+  const parts = finishGeminiStream(state).candidates[0].content.parts;
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].functionCall, undefined);
+});
+
+test("gemini: reads a real SSE body end to end", async () => {
+  const data = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "ok" }] } }] },
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_event_consolidation", args: { summary: "A quiet year." } } }] }, finishReason: "STOP" }] },
+  ], { done: false }));
+
+  const call = data.candidates[0].content.parts.find((part) => part.functionCall)?.functionCall;
+  assert.deepEqual(call.args, { summary: "A quiet year." });
 });

@@ -219,3 +219,73 @@ export async function readAnthropicStreamedResponse(response) {
     await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk));
     return finishAnthropicStream(state);
 }
+
+// ---------------------------------------------------------------------------
+// Gemini generateContent
+//
+// Gemini was the last provider whose TOOL calls were still sent buffered — and
+// it is the default provider, so a timeline jump on a stock install was the one
+// request in the game that sent nothing over the wire for the whole generation.
+// That is precisely what a proxy or an API edge cuts (reason 2 at the top of
+// this file), and the player cannot tell that cut apart from the "Limit AI
+// generation" setting doing its job.
+//
+// Unlike Anthropic's, a Gemini functionCall is not streamed as partial JSON: it
+// arrives whole, in one part, with `args` already an object. So there is nothing
+// to reassemble for it — only the text parts accumulate — and a stream that ends
+// early yields no call at all rather than half of one, which is the outcome
+// finishAnthropicStream goes to some length to guarantee.
+
+export const createGeminiStreamState = () => ({
+    text: "",
+    calls: [],
+    finishReason: null,
+    streamError: null,
+});
+
+export function applyGeminiFrame(state, chunk) {
+    // Gemini reports an overloaded model or a safety refusal INSIDE an otherwise
+    // fine 200 stream, exactly as the other two do; keep the first one.
+    if (chunk?.error && !state.streamError) state.streamError = chunk.error;
+    // A prompt blocked before generation starts carries no candidates at all —
+    // without this the caller would only see an empty answer and guess.
+    if (chunk?.promptFeedback?.blockReason && !state.streamError) {
+        state.streamError = { message: `Gemini blocked the prompt (${chunk.promptFeedback.blockReason}).` };
+    }
+    const candidate = chunk?.candidates?.[0];
+    if (!candidate) return state;
+    for (const part of candidate.content?.parts ?? []) {
+        // NOT trimmed: the parts are joined verbatim and only trimmed once at the
+        // end, or a chunk boundary that falls on a space runs two words together.
+        if (typeof part?.text === "string") state.text += part.text;
+        if (part?.functionCall) state.calls.push(part.functionCall);
+    }
+    if (candidate.finishReason) state.finishReason = candidate.finishReason;
+    return state;
+}
+
+// Rebuilds the generateContent envelope. joinGeminiParts and
+// extractGeminiToolInput (main.jsx) read `candidates[0].content.parts`, so both
+// work on this unchanged — which is the whole point: the jump path does not
+// learn that it streamed.
+export function finishGeminiStream(state) {
+    return {
+        candidates: [{
+            content: {
+                role: "model",
+                parts: [
+                    ...(state.text ? [{ text: state.text }] : []),
+                    ...state.calls.map((functionCall) => ({ functionCall })),
+                ],
+            },
+            finishReason: state.finishReason,
+        }],
+        ...(state.streamError ? { error: state.streamError } : {}),
+    };
+}
+
+export async function readGeminiStreamedResponse(response) {
+    const state = createGeminiStreamState();
+    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk));
+    return finishGeminiStream(state);
+}

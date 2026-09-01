@@ -21,7 +21,7 @@ import {
     providerErrorReplyMessage,
 } from "./providerErrors.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { readAnthropicStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
+import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
 import {
     buildPromptContext,
     renderTemplate,
@@ -235,6 +235,12 @@ function extractAnthropicToolInput(data, tool) {
 
 function getGeminiUrl(model, apiKey) {
     return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${apiKey}`;
+}
+
+// The same call as an event stream. Used for the advisor (tokens to the UI) and
+// for tool calls (keep-alive) — see the streaming comment in callGemini.
+function getGeminiStreamUrl(model, apiKey) {
+    return getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
 }
 
 // AI calls go straight from the browser to the provider so the player's API key
@@ -614,7 +620,7 @@ async function callGemini(systemPrompt, history, {
     // caps this reply at the requested budget — the buffered jump path below
     // deliberately sends NO cap so long simulations are never truncated.
     if (onChunk && !tool) {
-        const streamUrl = getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
+        const streamUrl = getGeminiStreamUrl(model, apiKey);
         // Two passes at most: the second only ever happens when the first came
         // back with an overloaded/unavailable error INSIDE the stream, which
         // arrives as an HTTP 200 and so never reaches the status-code retry.
@@ -651,8 +657,21 @@ async function callGemini(systemPrompt, history, {
         }
     }
 
+    let retriedAfterOverload = false;
+
     for (let attempt = 1; attempt <= retries; attempt++) {
-        const response = await fetch(getGeminiUrl(model, apiKey), {
+        // Tool calls stream, for the same reason they do on the other three
+        // providers: a timeline jump is the longest request the game makes, and
+        // a buffered one sends nothing over the wire for the whole generation,
+        // which is what an API edge or a proxy cuts. Gemini was the last
+        // provider still sending its tool calls buffered — and it is the
+        // DEFAULT provider, so a jump on a stock install was the one request
+        // most exposed to that. readGeminiStreamedResponse rebuilds the exact
+        // envelope the extractors below already read, so nothing downstream
+        // changes. (The advisor's own streaming is handled above, where the
+        // tokens go to the UI as they arrive.)
+        const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
+        const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -699,11 +718,33 @@ async function callGemini(systemPrompt, history, {
             throw new Error(extractErrorMessage(payload, `Gemini API request failed (${response.status})`));
         }
 
-        const data = await response.json();
+        // Branch on what actually came back, not on what was asked for: an edge
+        // or proxy that ignored alt=sse still answers plain JSON, and that must
+        // keep working exactly as it did.
+        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
+            ? await readGeminiStreamedResponse(response)
+            : await response.json();
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
-            return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null };
+
+            // Now that tool calls stream, an overloaded model can refuse INSIDE
+            // the stream — HTTP 200, an error frame, no function call — where the
+            // same refusal used to arrive as a 503 and be retried by status code
+            // above. Without this, a hiccup would cost the player a whole turn to
+            // the canned fallback, which is what the buffered path protected them
+            // from. (Mirrors the OpenAI-compatible path.)
+            const streamedError = data?.error;
+            const streamedText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
+            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload
+                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
+                retriedAfterOverload = true;
+                console.warn(`[ai] Gemini reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
+                await sleep(OVERLOADED_RETRY_DELAY, signal);
+                continue;
+            }
+
+            return { rawText: streamedText, toolInput: null };
         }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
 
