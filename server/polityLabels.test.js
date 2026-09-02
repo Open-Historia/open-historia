@@ -43,7 +43,7 @@ test("Map vNext polity labels use the scenario name and remain inside a concave 
   )));
 });
 
-test("Map vNext emits one atomic whole-word line label without glyph duplicates", () => {
+test("Map vNext emits one native curved label whose glyphs share one geographic anchor", () => {
   const result = buildPolityLabelCollections({
     type: "FeatureCollection",
     features: [surface("Arc", [[[
@@ -58,6 +58,20 @@ test("Map vNext emits one atomic whole-word line label without glyph duplicates"
   assert.equal(result.lineLabelData.features[0].properties.hasCurvedLabel, true);
   assert.equal(result.pointLabelData.features.length, 0);
   assert.equal(result.curvedLabelData.features.length, 0);
+  assert.equal(
+    result.glyphLabelData.features.map((feature) => feature.properties.glyph).join(""),
+    "ARCREPUBLIC",
+  );
+  const anchors = result.glyphLabelData.features.map((feature) => feature.geometry.coordinates);
+  assert.ok(anchors.length > 1);
+  assert.ok(anchors.every((anchor) => (
+    anchor[0] === anchors[0][0] && anchor[1] === anchors[0][1]
+  )));
+  assert.ok(result.glyphLabelData.features.every((feature) => (
+    feature.properties.owner === "Arc"
+    && feature.properties.priorityScale > 0
+    && Array.isArray(feature.properties.textOffset)
+  )));
 });
 
 test("Map vNext keeps giant polity geometry stable when the viewport changes", () => {

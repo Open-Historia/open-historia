@@ -526,7 +526,12 @@ const buildCurvedLabelGlyphFeatures = (
   if (usableLength <= 0) return null;
 
   const advance = usableLength / totalUnits;
-  const sizeScale = clamp(advance / 52, 0.6, 0.92);
+  // Curved spines need a little more breathing room than straight ones. A mild
+  // size reduction keeps edge cases such as France and Spain inside their live
+  // shapes without making broad, gently curved labels look timid.
+  const totalTurn = getTotalTurnDegrees(pathInfo.points);
+  const curvatureScale = clamp(1 - Math.max(0, totalTurn - 42) / 520, 0.84, 1);
+  const sizeScale = clamp(advance / 52, 0.6, 0.92) * curvatureScale;
   const anchorSample = getPointAlongPolyline(pathInfo.points, pathInfo.length / 2);
   if (!anchorSample) return null;
 
@@ -556,7 +561,24 @@ const buildCurvedLabelGlyphFeatures = (
     const sample = getPointAlongPolyline(pathInfo.points, centerDistance);
     if (!sample) continue;
 
-    let rotation = sample.angle;
+    // Average the tangent around each letter instead of inheriting the angle of
+    // one short spine segment. This removes sharp per-letter kinks while the
+    // label remains fully map-native and therefore camera-synchronous.
+    const tangentSpan = Math.max(advance * 0.72, pathInfo.length * 0.012);
+    const before = getPointAlongPolyline(
+      pathInfo.points,
+      Math.max(0, centerDistance - tangentSpan),
+    );
+    const after = getPointAlongPolyline(
+      pathInfo.points,
+      Math.min(pathInfo.length, centerDistance + tangentSpan),
+    );
+    let rotation = before && after
+      ? Math.atan2(
+          after.point[1] - before.point[1],
+          after.point[0] - before.point[0],
+        ) * (180 / Math.PI)
+      : sample.angle;
     if (rotation > 90) rotation -= 180;
     if (rotation < -90) rotation += 180;
 
@@ -730,6 +752,7 @@ export const buildPolityLabelCollections = (
   const pointFeatures = [];
   const curvedFeatures = [];
   const lineFeatures = [];
+  const glyphFeatures = [];
   const features = Array.isArray(politySurfaces?.features) ? politySurfaces.features : [];
 
   for (let featureIndex = 0; featureIndex < features.length; featureIndex += 1) {
@@ -797,6 +820,15 @@ export const buildPolityLabelCollections = (
     const shapeHeight = Math.max(0, maxY - minY);
     const pathInfo = buildCurvedLabelPath(bestOuterTile, upperName, { allowStraight: true });
     if (pathInfo?.points?.length >= 4) {
+      const liveGlyphs = buildCurvedLabelGlyphFeatures(
+        pathInfo,
+        extent,
+        upperName,
+        areaScale,
+        `${featureId}-live`,
+        { owner, priorityScale, name: upperName },
+      );
+      if (liveGlyphs) glyphFeatures.push(...liveGlyphs);
       const centerSample = getPointAlongPolyline(pathInfo.points, pathInfo.length / 2);
       const centerLngLat = centerSample
         ? tileToLngLat(centerSample.point[0], centerSample.point[1], extent)
@@ -851,6 +883,7 @@ export const buildPolityLabelCollections = (
     curvedLabelData: { type: "FeatureCollection", features: curvedFeatures },
     lineLabelData: { type: "FeatureCollection", features: lineFeatures },
     pointLabelData: { type: "FeatureCollection", features: pointFeatures },
+    glyphLabelData: { type: "FeatureCollection", features: glyphFeatures },
   };
 };
 

@@ -29,12 +29,56 @@ import { buildPolityLabelCollections, loadCountryLabelCollections } from "../../
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
-import PolityLabelsCanvas from "./PolityLabelsCanvas.jsx";
 import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
 import { resolveContextualPolityLabels } from "./vnext/polityNaming.js";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
+
+// One source, a handful of native symbol tiers. At whole-world scale only the
+// largest landmasses earn a label; progressively smaller polities enter as the
+// camera approaches. This keeps Europe/Africa readable without a per-frame JS
+// visibility pass, and MapLibre moves every glyph in the same render frame as
+// its fill and border.
+const LIVE_POLITY_LABEL_TIERS = [
+  {
+    id: "continental",
+    minzoom: 2.25,
+    filter: [">=", ["get", "priorityScale"], 205000],
+  },
+  {
+    id: "major",
+    minzoom: 2.9,
+    filter: [
+      "all",
+      [">=", ["get", "priorityScale"], 82000],
+      ["<", ["get", "priorityScale"], 205000],
+    ],
+  },
+  {
+    id: "regional",
+    minzoom: 3.8,
+    filter: [
+      "all",
+      [">=", ["get", "priorityScale"], 25000],
+      ["<", ["get", "priorityScale"], 82000],
+    ],
+  },
+  {
+    id: "small",
+    minzoom: 4.9,
+    filter: [
+      "all",
+      [">=", ["get", "priorityScale"], 8000],
+      ["<", ["get", "priorityScale"], 25000],
+    ],
+  },
+  {
+    id: "local",
+    minzoom: 5.8,
+    filter: ["<", ["get", "priorityScale"], 8000],
+  },
+];
 
 // Globe projection renders a label's own high-latitude countries oversized
 // relative to their outline — confirmed (issue #6) to be text-only (fills
@@ -666,6 +710,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         pointLabelData: EMPTY_FEATURE_COLLECTION,
         curvedLabelData: EMPTY_FEATURE_COLLECTION,
         lineLabelData: EMPTY_FEATURE_COLLECTION,
+        glyphLabelData: EMPTY_FEATURE_COLLECTION,
       };
     }
     return measureMapWork("live polity labels", () => buildPolityLabelCollections(
@@ -685,7 +730,8 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
 
   const useLivePolityLabels = vNext && polityLabelCollections.pointLabelData.features.length
     + polityLabelCollections.curvedLabelData.features.length
-    + polityLabelCollections.lineLabelData.features.length > 0;
+    + polityLabelCollections.lineLabelData.features.length
+    + polityLabelCollections.glyphLabelData.features.length > 0;
 
   // Start a campaign with its player polity inside the composition instead of
   // blindly centring longitude zero (which wastes half a wide screen on the
@@ -702,6 +748,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         polityLabelCollections.pointLabelData.features.length
         + polityLabelCollections.curvedLabelData.features.length
         + polityLabelCollections.lineLabelData.features.length
+        + polityLabelCollections.glyphLabelData.features.length
       )
       || !mapInstance?.jumpTo
     ) return undefined;
@@ -731,6 +778,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         });
       const focus = [
         ...polityLabelCollections.pointLabelData.features,
+        ...polityLabelCollections.glyphLabelData.features,
         ...polityLabelCollections.lineLabelData.features,
       ]
         .find((feature) => feature?.properties?.owner === owner);
@@ -763,27 +811,22 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   // Keyed on the FLAG (not customActive): while a custom world's geometry is
   // still loading, and before the world is known at all, stock labels must
   // not flash in.
-  const useCanvasPolityLabels = worldKnown && customFlag && useLivePolityLabels && !isGlobe;
   const activePointLabelData = !worldKnown
     ? EMPTY_FEATURE_COLLECTION
     : customFlag
       ? useLivePolityLabels
-        ? useCanvasPolityLabels
-          ? EMPTY_FEATURE_COLLECTION
-          : polityLabelCollections.pointLabelData
+        ? polityLabelCollections.pointLabelData
         : ownerLabelData
       : pointLabelData;
-  const activeCurvedLabelData = !worldKnown
-    ? EMPTY_FEATURE_COLLECTION
-    : customFlag && useLivePolityLabels
-      ? polityLabelCollections.curvedLabelData
-      : !customFlag
-        ? curvedLabelData
-        : EMPTY_FEATURE_COLLECTION;
-  const activeLineLabelData = worldKnown && customFlag && useLivePolityLabels
-    ? useCanvasPolityLabels
-      ? EMPTY_FEATURE_COLLECTION
-      : polityLabelCollections.lineLabelData
+  const activeCurvedLabelData = worldKnown && !customFlag
+    ? curvedLabelData
+    : EMPTY_FEATURE_COLLECTION;
+  // Live labels are rendered as native, anchored glyph symbols below. Retain
+  // the line collection in the generator for compatibility/tests, but never
+  // ask MapLibre to lay out a competing whole-word label on the same polity.
+  const activeLineLabelData = EMPTY_FEATURE_COLLECTION;
+  const activeGlyphLabelData = worldKnown && customFlag && useLivePolityLabels
+    ? polityLabelCollections.glyphLabelData
     : EMPTY_FEATURE_COLLECTION;
 
   const handleRegionClick = useCallback((event) => {
@@ -1801,11 +1844,27 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         />
       </Source>
 
+      <Source id="polity-glyph-label-source" type="geojson" data={activeGlyphLabelData}>
+        {LIVE_POLITY_LABEL_TIERS.map(({ id, minzoom, filter }) => (
+          <Layer
+            key={id}
+            id={`polity-glyph-labels-${id}`}
+            type="symbol"
+            minzoom={minzoom}
+            maxzoom={7.1}
+            filter={filter}
+            layout={curvedLabelLayerLayout}
+            paint={integratedLabelLayerPaint}
+          />
+        ))}
+      </Source>
+
       <Source id="country-point-label-source" type="geojson" data={activePointLabelData}>
         {vNext && customFlag && useLivePolityLabels ? (
           <Layer
             id="country-labels-live"
             type="symbol"
+            minzoom={5.2}
             maxzoom={7.1}
             layout={overviewPointLabelLayerLayout}
             paint={integratedLabelLayerPaint}
@@ -1820,18 +1879,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
           />
         )}
       </Source>
-
-      {useCanvasPolityLabels && (
-        <PolityLabelsCanvas
-          map={map}
-          lineData={polityLabelCollections.lineLabelData}
-          pointData={polityLabelCollections.pointLabelData}
-          fontStack={labelFontStack}
-          fillColor={labelTextColor || "rgba(247, 246, 240, 0.94)"}
-          haloColor={labelHaloColor || "rgba(7, 10, 14, 0.78)"}
-          visible={!mapDisplaySettings.hideCountryLabels}
-        />
-      )}
     </>
   );
 };
