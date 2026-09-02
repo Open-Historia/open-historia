@@ -11,7 +11,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { UNIT_CONTRACT_MARKER, templateAlreadySays } from "./promptDedupe.js";
+import {
+  DEDUPE_MIN_BLOCK_CHARS,
+  UNIT_CONTRACT_MARKER,
+  collapseRepeatedBlock,
+  templateAlreadySays,
+} from "./promptDedupe.js";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
 
 test("a rule already in the prompt is recognised", () => {
@@ -71,4 +76,57 @@ test("the bundled template does not carry the newer levers, so ACTIONS_REFERENCE
       `${lever} is now in the template — re-check whether ACTIONS_REFERENCE can be de-duplicated too`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Collapsing a block the prompt carries twice
+//
+// The real case: a 107,870-character scenario briefing rendered both by the task
+// text's own placeholder and again inside the world summary, on eight of the
+// sixteen prompts. About a third of a jump prompt, spent saying it twice.
+
+const BRIEFING = `# HISTORIA TIMELINE\n${"The United Kingdom expands into Sierra Leone. ".repeat(30)}`;
+const POINTER = "(reproduced earlier)";
+
+test("a repeated block keeps its first copy and points at it thereafter", () => {
+  const prompt = `RULES\n\n${BRIEFING}\n\nWORLD SNAPSHOT\n\n${BRIEFING}\n\nEND`;
+  const out = collapseRepeatedBlock(prompt, BRIEFING, POINTER);
+  assert.equal(out.split(BRIEFING).length - 1, 1, "the block should survive exactly once");
+  assert.ok(out.includes(POINTER));
+  // The surviving copy must be the FIRST, where the prose introduces it.
+  assert.ok(out.indexOf(BRIEFING) < out.indexOf(POINTER));
+  // Nearly the whole second copy is gone. Deliberately not an exact arithmetic
+  // check: the block is trimmed before matching, so an exact figure would be
+  // brittle about surrounding whitespace without testing anything real.
+  assert.ok(out.length < prompt.length - BRIEFING.length + 100, `only saved ${prompt.length - out.length} chars`);
+});
+
+test("three copies collapse to one", () => {
+  const prompt = `${BRIEFING}\nA\n${BRIEFING}\nB\n${BRIEFING}`;
+  const out = collapseRepeatedBlock(prompt, BRIEFING, POINTER);
+  assert.equal(out.split(BRIEFING).length - 1, 1);
+  assert.equal(out.split(POINTER).length - 1, 2);
+});
+
+// Safe to call unconditionally: a prompt that only had it once must be untouched,
+// or a task that reaches the briefing by ONE route would silently lose it.
+test("a prompt carrying the block once is returned unchanged", () => {
+  const prompt = `RULES\n\n${BRIEFING}\n\nEND`;
+  assert.equal(collapseRepeatedBlock(prompt, BRIEFING, POINTER), prompt);
+});
+
+test("nothing is collapsed when there is nothing to collapse", () => {
+  assert.equal(collapseRepeatedBlock("just rules", BRIEFING, POINTER), "just rules");
+  assert.equal(collapseRepeatedBlock("", BRIEFING, POINTER), "");
+  assert.equal(collapseRepeatedBlock(null, BRIEFING, POINTER), "");
+  assert.equal(collapseRepeatedBlock("abc", null, POINTER), "abc");
+});
+
+// A short placeholder repeated twice is not bulk, and replacing it with a
+// pointer would read as though something had been left out.
+test("a short repeated string is left alone", () => {
+  const placeholder = "No pre-game world briefing was provided.";
+  assert.ok(placeholder.length < DEDUPE_MIN_BLOCK_CHARS);
+  const prompt = `A ${placeholder} B ${placeholder} C`;
+  assert.equal(collapseRepeatedBlock(prompt, placeholder, POINTER), prompt);
 });
