@@ -497,7 +497,15 @@ const readRuntimeJsonAsset = async (assetKey) => {
     }
     // Web build: the default scenario's regions.geojson isn't in the seed (too
     // big), so pull it from the content origin — otherwise its political map is blank.
-    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario && scenario.id === DEFAULT_SCENARIO_ID) {
+    //
+    // NOT gated on being the default scenario. A CLONE of Modern Day has its own
+    // id and no geometry of its own, so it fell through the borrow branch above
+    // into default's record — which, in the web build, is exactly the record that
+    // does not carry the file. The clone then rendered an empty FeatureCollection
+    // and showed no political map at all, while the scenario it was copied from
+    // looked fine. This is the last resort for ANY scenario that has ended up
+    // without region geometry, which is precisely the case the borrow was for.
+    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario) {
       value = await fetchDefaultRegionsGeojson();
     }
     // geojson may be a raw uploaded string; parse-with-fallback like readJsonFile.
