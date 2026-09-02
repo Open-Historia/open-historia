@@ -260,6 +260,18 @@ const rowTitleStyle = {
   margin: "0 0 0.55rem",
 };
 
+const searchInputStyle = {
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: "999px",
+  color: "#fff",
+  fontSize: "0.8rem",
+  height: "2rem",
+  minWidth: "12rem",
+  outline: "none",
+  padding: "0 0.9rem",
+};
+
 const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
   <div
     style={{ ...cardSurface, cursor: "pointer" }}
@@ -349,12 +361,18 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
   </div>
 );
 
-const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText }) => (
+const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll" }) => (
   <div style={{ marginBottom: "1.15rem" }}>
     <div style={rowTitleStyle}>{title}</div>
     {posts.length === 0 ? (
       <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.8rem", padding: "0.3rem 0 0.6rem" }}>
         {emptyText || "Nothing here yet."}
+      </div>
+    ) : layout === "grid" ? (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", paddingBottom: "0.35rem" }}>
+        {posts.map((post) => (
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} />
+        ))}
       </div>
     ) : (
       <div style={{ display: "flex", gap: "0.8rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
@@ -473,6 +491,9 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [notice, setNotice] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
+  // Client-side filter over the already-fetched posts — title, author and
+  // description. No extra network calls; the hub API is only ever hit by load().
+  const [searchQuery, setSearchQuery] = useState("");
 
   // handleImport is async (network + import can take several seconds); by the
   // time it resolves the user may have navigated to a different post or back
@@ -517,22 +538,66 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     load(false);
   }, []);
 
+  // Search filter. Matches title, desc and author
+  const filteredPosts = useMemo(() => {
+    if (!posts) return null;
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return posts;
+    return posts.filter((post) =>
+      post.title.toLowerCase().includes(query) ||
+      post.author.toLowerCase().includes(query) ||
+      post.description.toLowerCase().includes(query),
+    );
+  }, [posts, searchQuery]);
+
+  // Search bar
+  const searchResults = useMemo(() => {
+    if (!filteredPosts) return null;
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return filteredPosts;
+    const countHits = (text) => {
+      if (!text) return 0;
+      let count = 0;
+      let from = 0;
+      const lower = text.toLowerCase();
+      while (true) {
+        const index = lower.indexOf(query, from);
+        if (index === -1) break;
+        count += 1;
+        from = index + query.length;
+      }
+      return count;
+    };
+    const weighted = filteredPosts.map((post) => ({
+      post,
+      // search weight: title > description > author
+      score: countHits(post.title) * 5 + countHits(post.description) * 3 + countHits(post.author),
+    }));
+    weighted.sort((a, b) =>
+      b.score - a.score ||
+      (b.post.installs ?? -1) - (a.post.installs ?? -1) ||
+      b.post.upvotes - a.post.upvotes ||
+      b.post.createdAt.localeCompare(a.post.createdAt),
+    );
+    return weighted.map((entry) => entry.post);
+  }, [filteredPosts, searchQuery]);
+
   // Netflix-style shelves. A post can appear in several rows — that's intended.
   const rows = useMemo(() => {
-    if (!posts) return null;
-    const pinned = posts.filter((post) => post.pinned);
+    if (!filteredPosts) return null;
+    const pinned = filteredPosts.filter((post) => post.pinned);
     // Installs (real download counts) rank first; posts GitHub can't count
     // (attachment bundles) fall back to likes, then recency.
-    const byInstalls = [...posts].sort(
+    const byInstalls = [...filteredPosts].sort(
       (a, b) =>
         (b.installs ?? -1) - (a.installs ?? -1) ||
         b.upvotes - a.upvotes ||
         b.createdAt.localeCompare(a.createdAt),
     );
-    const byLikes = [...posts].sort((a, b) => b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
-    const byRecent = [...posts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const byLikes = [...filteredPosts].sort((a, b) => b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
+    const byRecent = [...filteredPosts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return { pinned, byInstalls, byLikes, byRecent };
-  }, [posts]);
+  }, [filteredPosts]);
 
   const handleImport = async (post) => {
     if (!post.bundleUrl || busyId) return;
@@ -677,6 +742,14 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
               {" "}<span style={{ color: "#c4b5fd" }}>Purple = verified official post.</span>
             </div>
             <div style={{ flex: 1 }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search scenarios…"
+              aria-label="Search community scenarios"
+              style={searchInputStyle}
+            />
             <button type="button" onClick={() => load(true)} style={pillButton}>Refresh</button>
             <button
               type="button"
@@ -715,19 +788,31 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           )}
 
           {rows && (
-            <>
+            searchQuery.trim() ? (
               <ScenarioRow
-                title="📌 Pinned"
-                posts={rows.pinned}
+                title={`🔍 Results (${searchResults.length})`}
+                posts={searchResults}
                 busyId={busyId}
                 onImport={handleImport}
                 onSelect={selectPost}
-                emptyText="No pinned scenarios right now."
+                emptyText="No scenarios match your search."
+                layout="grid"
               />
-              <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
-              <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
-              <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
-            </>
+            ) : (
+              <>
+                <ScenarioRow
+                  title="📌 Pinned"
+                  posts={rows.pinned}
+                  busyId={busyId}
+                  onImport={handleImport}
+                  onSelect={selectPost}
+                  emptyText="No pinned scenarios right now."
+                />
+                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+              </>
+            )
           )}
         </>
       )}
