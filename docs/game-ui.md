@@ -313,7 +313,7 @@ Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game`
 | Activity feed | Expanding a card resolves `project.eventIds` against `readEventsState()`, fetched **once and only after a first expand** — `events.json` is the largest runtime document and most opens never expand anything | `src/runtime/gameState.js` |
 | Empty state | The **backfill path**, not a dead end: a button seeding the advisor with "put my ongoing efforts on the board". An existing campaign's history is already in the advisor's prompt, so it can reconstruct one | — |
 
-Two authors write the board, never the player: events through `impacts.projectOps`, and the advisor through a ```` ```projects ```` block — `applyAdvisorProjects` in `advisor.jsx`, with an `AdvisorProjectsCard` receipt, the same "advisor creates, I review" contract as ```` ```actions ````. The advisor's write does a read-modify-write that spreads the **whole** world back; a shallow patch there would drop `polityOverrides`/`regionOwnershipOverrides` and blank the map.
+Two authors write the board, never the player: events through `impacts.projectOps` — supplied by the separate `projects` AI task after a jump, or inline by the game master — and the advisor through a ```` ```projects ```` block — `applyAdvisorProjects` in `advisor.jsx`, with an `AdvisorProjectsCard` receipt, the same "advisor creates, I review" contract as ```` ```actions ````. The advisor's write does a read-modify-write that spreads the **whole** world back; a shallow patch there would drop `polityOverrides`/`regionOwnershipOverrides` and blank the map.
 
 ## 8. Forces panel — `src/Game/GameUI/forces.jsx`
 
@@ -359,11 +359,12 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | Section | Control | Persists to / calls |
 |---|---|---|
 | AI Provider | `ApiProviderSelector` — searchable catalog of `PROVIDER_OPTIONS` | `onApiProviderChange`→`Main.apiProvider`→`localStorage["api_provider"]` |
-| Provider settings | `ProviderSettingsPanel` — per-provider API key/model/custom-params (gemini, openai, anthropic, openai-compatible, anthropic-compatible) + global **Model reasoning** toggle | `persistProviderSetting` (browser localStorage); `setReasoningEnabled` |
+| Provider settings | `ProviderSettingsPanel` — per-provider API key/model/custom-params (gemini, openai, anthropic, openai-compatible, anthropic-compatible) + global **Model reasoning** toggle, and **How the AI answers** (`StructuredModeSelect`) on the three providers that honour it | `persistProviderSetting` (browser localStorage); `setReasoningEnabled` |
 | Language | `LanguageSelector` — searchable; applying reloads the page | `setStoredLanguage` (server + browser) |
 | Display | **Fullscreen**, **3D Globe**, **3D Terrain** (labeled "Very Experimental") toggles | `Main` toggles / `App.jsx` state |
 | Map | Hide country labels, **Reduce motion** (umbrella over the two below), Disable idle globe rotation, Disable camera movement during events | `setMapSetting(MAP_SETTING_KEYS.*)` (`src/runtime/mapSettings.js`) |
-| AI | **Limit AI generation** (5-min cap then canned fallback vs. wait-as-long-as-needed) | `MAP_SETTING_KEYS.limitAiGeneration` |
+| AI | **Limit AI generation** (silence deadline vs. wait-as-long-as-needed), **Generate long time skips in segments** | `MAP_SETTING_KEYS.limitAiGeneration`, `.chunkLongJumps` |
+| Experimental | **Beta unit system** (stored per save, not per browser), **Reuse prompt between turns** (the cache-friendly prompt layout — off by default) | `applySaveBetaUnits`; `MAP_SETTING_KEYS.cachePromptPrefix` |
 | Diagnostics | `DiagnosticsPanel` — **📋 Copy log** / **💾 Save as file** / **Clear**, a live entry count and size, and two persisted toggles: **Keep a diagnostics log** (default on) and **Detailed logging** (default off) | `buildDebugLogReport`, `debugLogFilename`, `clearDebugLog`, `setDebugLogEnabled`, `setDebugLogVerbose` (`src/runtime/debugLog.js`) |
 | Footer | **🧪 Cheats** (→ `onOpenCheats`), **📖 Guides** (`/guides/`), Discord/Reddit/GitHub links | — |
 
