@@ -42,3 +42,52 @@ export const templateAlreadySays = (renderedPrompt, marker) => {
 // the bundled template and the [Units on the Map] directive share verbatim, and
 // no other directive says it.
 export const UNIT_CONTRACT_MARKER = "Units are EVIDENCE OF YOUR OWN EVENTS";
+
+// ---------------------------------------------------------------------------
+// A large block the prompt carries more than once
+// ---------------------------------------------------------------------------
+//
+// The scenario's pre-round-one briefing reaches the prompt by two routes: the
+// task text renders ${WORLD_BEFORE_ROUND_ONE_TEXT} directly, AND buildWorldSummary
+// embeds the same string in the world snapshot. Eight of the sixteen prompts
+// render both, so both copies go every call. On a real campaign that is 107,870
+// characters sent twice - about 35% of a jump prompt spent saying the same thing
+// a second time.
+//
+// It cannot be fixed by editing the templates: existing campaigns carry frozen
+// copies, and two tasks (countryStatSheet, actions) reach the briefing ONLY
+// through the world summary, so removing it there would take it away from them
+// entirely. Collapsing the repeat after the prompt is assembled fixes every save
+// at once and cannot take anything away from a prompt that only had it once.
+//
+// The FIRST occurrence is the one kept, so the briefing still appears in the
+// position the prompt's own prose introduces it.
+
+// Long enough that a repeat is certainly the same block rather than a coincidence,
+// and short enough to catch a modest briefing. A placeholder like "No pre-game
+// world briefing was provided." must never be de-duplicated: it is not bulk, and
+// replacing it with a pointer would read as though something had been omitted.
+export const DEDUPE_MIN_BLOCK_CHARS = 400;
+
+/**
+ * Keep the first copy of `block`, replace any later copy with `pointer`.
+ *
+ * Returns the prompt unchanged when the block is absent, short, or appears only
+ * once — so this is safe to call unconditionally.
+ */
+export const collapseRepeatedBlock = (prompt, block, pointer) => {
+    const text = String(prompt ?? "");
+    const needle = String(block ?? "").trim();
+    if (!text || needle.length < DEDUPE_MIN_BLOCK_CHARS) return text;
+
+    const first = text.indexOf(needle);
+    if (first === -1) return text;
+    const second = text.indexOf(needle, first + needle.length);
+    if (second === -1) return text;
+
+    // Everything up to and including the first copy is untouched; every later
+    // copy becomes the pointer.
+    const head = text.slice(0, first + needle.length);
+    const tail = text.slice(first + needle.length).split(needle).join(String(pointer ?? ""));
+    return head + tail;
+};

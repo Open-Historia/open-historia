@@ -50,7 +50,9 @@ import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
-import { UNIT_CONTRACT_MARKER, templateAlreadySays } from "./promptDedupe.js";
+import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
+import { PROMPT_LAYOUT_V2, promptLayoutVersion } from "./gameplayPrompts.js";
+import { buildStateBlocks, stablePrefixLength } from "./promptLayout.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -346,10 +348,23 @@ const runJsonTask = async (taskKey, {
 }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
-    ...variables,
-    ...helperValues,
-  });
+  const layout = promptLayoutVersion(prompts);
+
+  // v1 renders campaign state THROUGH the prose, so the first ${...} - 2.7% into
+  // the jump template - ends any prefix a provider could reuse. v2 keeps the task
+  // text entirely static and appends the state as trailing blocks ordered
+  // most-stable-first (promptLayout.js), which on a mature save turns a 801-char
+  // cacheable prefix into roughly 470KB of one.
+  //
+  // Both paths stay forever: a pack is v1 unless it was written for v2, so every
+  // existing campaign keeps exactly the prompt it has today, and a scenario
+  // author who customised their text is never migrated out from under it.
+  let systemPrompt = layout === PROMPT_LAYOUT_V2
+    ? renderTemplate(prompts.tasks[taskKey], {})
+    : renderTemplate(prompts.tasks[taskKey], {
+      ...variables,
+      ...helperValues,
+    });
 
   // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
   try {
@@ -547,6 +562,34 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
     systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
   }
 
+  // v2 only: every value the prompt needs, appended LAST and ordered
+  // most-stable-first. It has to come after the directives above, because those
+  // are static and belong inside the reusable prefix - anything volatile placed
+  // before them would end the prefix there instead.
+  //
+  // This is the whole reason v2 renders its template with no variables: the
+  // values are not lost, they arrive here.
+  let stablePrefixChars = 0;
+  if (layout === PROMPT_LAYOUT_V2) {
+    const merged = { ...variables, ...helperValues };
+    const order = Object.keys(merged);
+    stablePrefixChars = stablePrefixLength(systemPrompt, merged, order);
+    const blocks = buildStateBlocks(merged, order);
+    if (blocks) systemPrompt = `${systemPrompt}\n\n${blocks}`;
+  }
+
+  // The scenario briefing arrives twice on eight of the sixteen prompts: once
+  // from the task text's own placeholder and again inside the world summary.
+  // On a real campaign that is ~108k characters sent twice, about a third of a
+  // jump prompt. Collapsed here rather than in the templates because existing
+  // saves carry frozen copies, and two tasks reach the briefing ONLY through the
+  // world summary - removing it there would take it from them entirely.
+  systemPrompt = collapseRepeatedBlock(
+    systemPrompt,
+    variables?.worldBeforeRoundOne,
+    "(The pre-round-one briefing is reproduced in full earlier in this prompt.)",
+  );
+
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
@@ -577,6 +620,12 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
   logDebugEvent("ai", `Task "${taskKey}" started.`, {
     promptChars: systemPrompt.length,
     userMessageChars: String(userMessage ?? "").length,
+    // How much of this prompt a provider can reuse from the last call. The one
+    // number that says whether the v2 layout is doing anything, and invisible
+    // otherwise until a cache-hit figure comes back from the provider.
+    ...(layout === PROMPT_LAYOUT_V2
+      ? { promptLayout: "v2", stablePrefixChars, stablePrefixPct: `${Math.round((stablePrefixChars / Math.max(1, systemPrompt.length)) * 100)}%` }
+      : { promptLayout: "v1" }),
     tool: tool?.name || "(none — raw JSON expected)",
     idleTimeoutMs: idleMs || "(no deadline — waits as long as the model needs)",
     ...(idleMs ? { firstByteTimeoutMs: AI_FIRST_BYTE_TIMEOUT_MS } : {}),
