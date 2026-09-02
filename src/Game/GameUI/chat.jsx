@@ -390,7 +390,7 @@ const MessageBubble = memo(function MessageBubble({ msg }) {
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible", contentVisibility: "auto", containIntrinsicSize: "0 88px" }}>
+        <div data-oh-chat-message="" style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible", contentVisibility: "auto", containIntrinsicSize: "0 88px" }}>
         <div style={{ position: "relative", maxWidth: "90%", overflow: "visible" }}>
 
         {!isPlayer && (
@@ -645,6 +645,7 @@ const CHAT_INITIAL_RENDER_WINDOW = 4;
 const CHAT_AUTO_RENDER_TARGET = 12;
 const CHAT_RENDER_WINDOW_STEP = 40;
 const CHAT_PROGRESSIVE_RENDER_STEP = 1;
+const CHAT_SEE_LATEST_THRESHOLD = 3;
 const CHAT_AI_HISTORY_WINDOW = 24;
 const CHAT_LIST_INITIAL_WINDOW = 12;
 const CHAT_LIST_WINDOW_STEP = 12;
@@ -679,11 +680,16 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
     const [pendingCountry, setPendingCountry]   = useState(null);
     const [speakingCountry, setSpeakingCountry] = useState(null);
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
+    const [showSeeLatest, setShowSeeLatest]     = useState(false);
 
     const lastPlayerMessage = useRef("");
     const messagesEndRef    = useRef(null);
+    const messagesScrollRef = useRef(null);
     const messagesRef       = useRef(chat.messages ?? []);
     const groupSpeakersThisTurnRef = useRef([]);
+    const followLatestRef   = useRef(true);
+    const programmaticScrollRef = useRef(false);
+    const programmaticScrollTimerRef = useRef(null);
 
     useEffect(() => {
         // Flag images resolve lazily from the shared cached catalog.
@@ -692,6 +698,8 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
     useEffect(() => {
         const saved = chat.messages ?? [];
         setVisibleMessageLimit(Math.min(CHAT_INITIAL_RENDER_WINDOW, Math.max(1, saved.length)));
+        followLatestRef.current = true;
+        setShowSeeLatest(false);
 
         let cancelled = false;
         let idleHandle = null;
@@ -763,9 +771,72 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
         };
     }, [messages.length, visibleMessageLimit]);
 
+        const evaluateLatestFollow = useCallback(() => {
+            const container = messagesScrollRef.current;
+            if (!container || programmaticScrollRef.current) return;
+
+            const viewport = container.getBoundingClientRect();
+            const messageNodes = container.querySelectorAll("[data-oh-chat-message]");
+            let completeMessagesBelow = 0;
+
+            for (const node of messageNodes) {
+                const rect = node.getBoundingClientRect();
+                if (rect.top >= viewport.bottom - 1) {
+                    completeMessagesBelow += 1;
+                }
+            }
+
+            const detached = completeMessagesBelow >= CHAT_SEE_LATEST_THRESHOLD;
+            followLatestRef.current = !detached;
+            setShowSeeLatest((current) => current === detached ? current : detached);
+        }, []);
+
+        const scrollToLatest = useCallback((behavior = "auto") => {
+            if (programmaticScrollTimerRef.current) {
+                window.clearTimeout(programmaticScrollTimerRef.current);
+                programmaticScrollTimerRef.current = null;
+            }
+
+            followLatestRef.current = true;
+            setShowSeeLatest(false);
+            programmaticScrollRef.current = true;
+
+            const finish = () => {
+                programmaticScrollRef.current = false;
+                programmaticScrollTimerRef.current = null;
+                evaluateLatestFollow();
+            };
+
+            window.requestAnimationFrame(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+                programmaticScrollTimerRef.current = window.setTimeout(
+                    finish,
+                    behavior === "smooth" ? 500 : 0,
+                );
+            });
+        }, [evaluateLatestFollow]);
+
         useEffect(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-        }, [messages, isLoading, phase]);
+            if (followLatestRef.current) {
+                scrollToLatest("auto");
+                return undefined;
+            }
+
+            const frame = window.requestAnimationFrame(evaluateLatestFollow);
+            return () => window.cancelAnimationFrame(frame);
+        }, [messages, isLoading, phase, visibleMessageLimit, evaluateLatestFollow, scrollToLatest]);
+
+        useEffect(() => {
+            const handleResize = () => evaluateLatestFollow();
+            window.addEventListener("resize", handleResize);
+            return () => {
+                window.removeEventListener("resize", handleResize);
+                if (programmaticScrollTimerRef.current) {
+                    window.clearTimeout(programmaticScrollTimerRef.current);
+                    programmaticScrollTimerRef.current = null;
+                }
+            };
+        }, [evaluateLatestFollow]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -904,6 +975,7 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
             pushMessages(nextMessages);
             appendDiplomaticPlayerMessage(text, gameDate, playerDisplayName);
             setPlayerInput("");
+            scrollToLatest("auto");
 
             if (!isGroup) {
                 // Bilateral diplomacy remains dependable: the one counterpart answers.
@@ -956,7 +1028,12 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>✕</button>
             </div>
 
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "visible", scrollbarWidth: "none", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+            <div
+                ref={messagesScrollRef}
+                onScroll={evaluateLatestFollow}
+                style={{ height: "100%", overflowY: "auto", overflowX: "visible", scrollbarWidth: "none", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "1rem", boxSizing: "border-box" }}
+            >
             {messages.length === 0 && !isLoading && (
                 <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", textAlign: "center", marginTop: "2rem" }}>
                 Begin the diplomatic conversation.
@@ -995,6 +1072,35 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
             })}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} polityKey={typingSpeaker.polityKey} />}
             <div ref={messagesEndRef} />
+            </div>
+
+            {showSeeLatest && (
+                <button
+                    type="button"
+                    onClick={() => scrollToLatest("smooth")}
+                    title="Jump to the newest diplomatic message"
+                    style={{
+                        position: "absolute",
+                        left: "50%",
+                        bottom: "0.7rem",
+                        transform: "translateX(-50%)",
+                        zIndex: 2,
+                        padding: "0.42rem 0.72rem",
+                        borderRadius: "999px",
+                        border: "1px solid rgba(96,165,250,0.42)",
+                        background: "rgba(15,23,42,0.96)",
+                        color: "#dbeafe",
+                        boxShadow: "0 6px 18px rgba(0,0,0,0.34)",
+                        cursor: "pointer",
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        fontFamily: "sans-serif",
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    See latest ↓
+                </button>
+            )}
             </div>
 
             {phase === "pending" && !isLoading && pendingCountry ? (
@@ -2650,7 +2756,9 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                 <div
                     style={{
                         position: "fixed",
-                        left: "9.7rem",
+                        // Search is anchored at 9.75rem and is 3.3rem wide when collapsed.
+                        // Keep the diplomacy notification immediately to its right.
+                        left: "calc(9.75rem + 3.3rem + 0.5rem)",
                         bottom: FLOATING_UI_EDGE_GAP,
                         zIndex: 10001,
                         fontFamily: "sans-serif",

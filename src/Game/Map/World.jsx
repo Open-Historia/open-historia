@@ -1,24 +1,20 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import Map from "react-map-gl/maplibre";
-import Nations from "./Nations";
 import { useCustomBackground } from "./useCustomBackground.js";
-import GlobeEffects from "./GlobeEffects.jsx";
-import RegionPopup from "../Selection/Regions";
-import CountryInfoPanel from "../Selection/CountryPanel.jsx";
-import Cities from "./Cities";
-import Units from "./Units";
-import UnitPopup from "../Selection/Units";
-import MarkersLayer from "./MarkersLayer.jsx";
-import FeaturePopup from "../Selection/Features.jsx";
+import MapScene from "./MapScene.jsx";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
   basemapProtocolTemplate,
+  buildBasemapRenderKey,
   ensureBasemapProtocol,
   esriTileTemplate,
   reportPerfOperation,
+  isBuiltinBasemapId,
+  resolveBasemapId,
 } from "../../runtime/assets.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -46,6 +42,28 @@ const SATELLITE_PAINT = {
   "raster-brightness-max": 0.72,
 };
 
+const ATLAS_PAINT = {
+  "raster-resampling": "linear",
+  // Preserve the ocean/terrain material in Map vNext. Political colour is now
+  // translucent and relief is re-lit above it, so crushing this raster into the
+  // old near-black range only makes the world look dead.
+  "raster-saturation": 0.08,
+  "raster-contrast": 0.20,
+  "raster-brightness-min": 0.05,
+  "raster-brightness-max": 0.98,
+};
+
+// Purpose-built grade for the political atlas preset. World Ocean Base already
+// contains bathymetry and shaded land relief; this treatment keeps the oceans
+// deep, preserves terrain contrast beneath translucent polity surfaces, and
+// avoids the pale daytime-map appearance of the ungraded service.
+const ATLAS_RELIEF_PAINT = {
+  "raster-resampling": "linear",
+  "raster-saturation": -0.06,
+  "raster-contrast": 0.30,
+  "raster-brightness-min": 0.02,
+  "raster-brightness-max": 0.74,
+};
 // Full-map image corners (TL, TR, BR, BL). The flat mercator map only reaches
 // ±85.0511° (the projection limit), but the globe shows all the way to the poles
 // — so on the globe the image stretches nearly to ±90° to cover the pole caps.
@@ -65,7 +83,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -114,12 +132,17 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       sky: { "atmosphere-blend": 0 },
     };
   }
+  const basemapPaint = vNext
+    ? basemapId === "atlas-relief" ? ATLAS_RELIEF_PAINT : ATLAS_PAINT
+    : SATELLITE_PAINT;
   return {
   version: 8,
   sources: {
     "satellite-lowres": {
       type: "raster",
       // Levels 0-2 always have real data — no placeholder handling needed.
+      // Both sources use the same selected material. The old mismatch at z3
+      // caused the abrupt light/dark flash during wheel and button zooms.
       tiles: [esriTileTemplate(basemapId)],
       tileSize: 256,
       maxzoom: 2,
@@ -145,25 +168,20 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
       id: "satellite-lowres-layer",
       type: "raster",
       source: "satellite-lowres",
-      paint: SATELLITE_PAINT,
+      maxzoom: 3,
+      paint: basemapPaint,
     },
     {
       id: "satellite-layer",
       type: "raster",
       source: "satellite",
-      paint: SATELLITE_PAINT,
+      minzoom: 3,
+      paint: basemapPaint,
     },
-    {
-      id: "hills",
-      type: "hillshade",
-      source: "terrain-source",
-      paint: {
-        "hillshade-exaggeration": 0.035,
-        "hillshade-shadow-color": "rgba(0, 0, 0, 0.55)",
-        "hillshade-highlight-color": "rgba(255, 255, 255, 0.035)",
-        "hillshade-accent-color": "rgba(12, 16, 20, 0.08)",
-      },
-    },
+    // The shaded-relief raster already contains seamless terrain material.
+    // A second DEM hillshade layer used to end at its unwrapped tile coverage
+    // and produced the grey rectangular veil visible at whole-world zoom.
+    // Keep the DEM source for optional 3D terrain, but do not paint it twice.
   ],
   // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
   // surface light instead. Transparent space lets the stars and sun show.
@@ -190,23 +208,47 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
+  const mapVNextEnabled = !useMapSetting(MAP_SETTING_KEYS.disableMapVNext);
+  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
+  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
+  // Runtime choices are player-local and reversible. Empty means the authored
+  // scenario background/basemap remains authoritative.
+  const useScenarioBackground = !validBasemapOverride;
+  const effectiveCustomBg = useScenarioBackground ? customBg : null;
+  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
+  const effectiveBasemap = resolveBasemapId({
+    overrideId: validBasemapOverride,
+    scenarioId: worldBasemap,
+    fallbackId: DEFAULT_BASEMAP_ID,
+  });
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
-  const styleUsesGlobeCoords = customBg?.kind === "image" && isGlobe;
+  const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
-    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords),
-    [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap],
+    () => buildWorldStyle(
+      effectiveBasemap,
+      effectiveCustomBg,
+      effectiveBgDeclared,
+      styleUsesGlobeCoords,
+      mapVNextEnabled,
+    ),
+    [effectiveBasemap, effectiveBgDeclared, effectiveCustomBg, mapVNextEnabled, styleUsesGlobeCoords],
   );
+  const mapInstanceKey = buildBasemapRenderKey({
+    projection,
+    basemapId: effectiveBasemap,
+    backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+  });
   // Globe terrain is unsupported by MapLibre and can leave its shader cache invalid
   // when projections change. Keep the setting enabled and restore it on flat maps.
   const terrain = useMemo(
     () =>
-      terrainEnabled && !isGlobe && !customBg && !bgDeclared
+      terrainEnabled && !isGlobe && !effectiveCustomBg && !effectiveBgDeclared
         ? {
             source: "terrain-source",
-            exaggeration: 15,
+            exaggeration: 1.2,
           }
         : null,
-    [terrainEnabled, isGlobe, customBg, bgDeclared],
+    [terrainEnabled, isGlobe, effectiveCustomBg, effectiveBgDeclared],
   );
   // Render at reduced pixel density when zoomed far out: the whole-world view
   // draws every region, border and label at once. Never go below 1x, though —
@@ -343,7 +385,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       )}
       <React.Profiler id="MapTree" onRender={reportMapReactRender}>
       <Map
-        key={projection}
+        key={mapInstanceKey}
         ref={mapRef}
         initialViewState={viewStateRef.current}
         minZoom={2.25}
@@ -361,7 +403,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         dragPan
         fadeDuration={0}
         collectResourceTiming={false}
-        crossSourceCollisions={false}
+        // VNext gives country, city and feature labels one collision space.
+        // The legacy kill switch restores the previous per-source behaviour.
+        crossSourceCollisions={mapVNextEnabled}
         renderWorldCopies
         // Cap MapLibre's per-source out-of-view tile-retention cache. Left unset it
         // sizes dynamically to ~(ceil(w/tileSize)+1)*(ceil(h/tileSize)+1)*5 tiles PER
@@ -382,15 +426,10 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
       >
-        <Nations isGlobe={isGlobe} />
-        <Cities />
-        <MarkersLayer />
-        <Units />
-        <GlobeEffects active={isGlobe} />
-        <RegionPopup />
-        <CountryInfoPanel />
-        <UnitPopup />
-        <FeaturePopup />
+        <MapScene
+          isGlobe={isGlobe}
+          vNext={mapVNextEnabled}
+        />
       </Map>
       </React.Profiler>
       {isGlobe && (

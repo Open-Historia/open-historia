@@ -25,10 +25,13 @@ import {
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
+import { buildPolityLabelCollections, loadCountryLabelCollections } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
+import PolityLabelsCanvas from "./PolityLabelsCanvas.jsx";
+import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
+import { resolveContextualPolityLabels } from "./vnext/polityNaming.js";
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -41,11 +44,11 @@ const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 // visibly wrong in mercator at high latitude, so never enable it there).
 const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math.PI / 180]];
 
-const buildCountryTextSize = (multiplier = 1, correctForGlobe = false) => {
+const buildCountryTextSize = (multiplier = 1, correctForGlobe = false, maxSize = 254) => {
   const scale = correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier;
   const atZoom = (power) => [
     "min",
-    254,
+    maxSize,
     ["*", scale, ["*", ["get", "areaScale"], ["^", 2, power]]],
   ];
 
@@ -510,7 +513,7 @@ const measureMapWork = (label, fn) => {
   return value;
 };
 
-const WorldMap = ({ isGlobe = false }) => {
+const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const {
@@ -530,6 +533,15 @@ const WorldMap = ({ isGlobe = false }) => {
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionData, setCustomRegionData] = useState(EMPTY_FEATURE_COLLECTION);
+  const [polityBoundaryData, setPolityBoundaryData] = useState(EMPTY_FEATURE_COLLECTION);
+  const [politySurfaceData, setPolitySurfaceData] = useState(EMPTY_FEATURE_COLLECTION);
+  const [labelViewport, setLabelViewport] = useState(null);
+  const polityBoundaryWorkerRef = useRef(null);
+  const initialFramingAppliedRef = useRef(false);
+  const latestBoundaryRequestRef = useRef(0);
+  const initializedBoundaryOwnershipRef = useRef(null);
+  const regionOwnershipOverridesRef = useRef(regionOwnershipOverrides);
+  regionOwnershipOverridesRef.current = regionOwnershipOverrides;
   const countriesUrl = PMTILES_PROTOCOL_URLS.countries;
   const regionsUrl = PMTILES_PROTOCOL_URLS.regions;
   const customActive = customFlag && Array.isArray(customRegionData?.features) && customRegionData.features.length > 0;
@@ -568,6 +580,34 @@ const WorldMap = ({ isGlobe = false }) => {
     window.addEventListener("i18n:updated", onUpdated);
     return () => window.removeEventListener("i18n:updated", onUpdated);
   }, []);
+
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!vNext || !mapInstance?.getBounds) return undefined;
+    const update = () => {
+      const bounds = mapInstance.getBounds();
+      const next = {
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth(),
+        zoom: mapInstance.getZoom?.() ?? 0,
+      };
+      setLabelViewport((current) => (
+        current
+        && Math.abs(current.west - next.west) < 0.02
+        && Math.abs(current.south - next.south) < 0.02
+        && Math.abs(current.east - next.east) < 0.02
+        && Math.abs(current.north - next.north) < 0.02
+        && Math.abs(current.zoom - next.zoom) < 0.02
+          ? current
+          : next
+      ));
+    };
+    update();
+    mapInstance.on("moveend", update);
+    return () => mapInstance.off("moveend", update);
+  }, [map, vNext]);
 
   // Disputed-region stripe tiles, generated the moment the style asks for one.
   // Reactive (rather than pre-registered) so any stripe combination works and
@@ -615,17 +655,136 @@ const WorldMap = ({ isGlobe = false }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customActive, customRegionData, regionOwnershipOverrides, polityOverrides, regionAdjacency, labelEpoch]);
 
+  const contextualPolityLabels = useMemo(
+    () => resolveContextualPolityLabels(politySurfaceData, polityOverrides),
+    [polityOverrides, politySurfaceData],
+  );
+
+  const polityLabelCollections = useMemo(() => {
+    if (!vNext || !politySurfaceData?.features?.length) {
+      return {
+        pointLabelData: EMPTY_FEATURE_COLLECTION,
+        curvedLabelData: EMPTY_FEATURE_COLLECTION,
+        lineLabelData: EMPTY_FEATURE_COLLECTION,
+      };
+    }
+    return measureMapWork("live polity labels", () => buildPolityLabelCollections(
+      politySurfaceData,
+      {
+        nameResolver: (owner) => {
+          const rawName = DISPUTED_TERRITORY_CLAIMANT[owner]
+            ? `Disputed (${DISPUTED_TERRITORY_CLAIMANT[owner]})`
+            : contextualPolityLabels.get(owner) || polityOverrides?.[owner]?.name || owner;
+          return translateLabel(resolveCountryDisplayName(rawName, owner));
+        },
+      },
+    ));
+    // labelEpoch: rebuild once new translations land.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextualPolityLabels, labelEpoch, polityOverrides, politySurfaceData, vNext]);
+
+  const useLivePolityLabels = vNext && polityLabelCollections.pointLabelData.features.length
+    + polityLabelCollections.curvedLabelData.features.length
+    + polityLabelCollections.lineLabelData.features.length > 0;
+
+  // Start a campaign with its player polity inside the composition instead of
+  // blindly centring longitude zero (which wastes half a wide screen on the
+  // Atlantic in European scenarios). This runs only while the camera is still
+  // at the untouched legacy default; an early user pan always wins.
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (
+      !vNext
+      || isGlobe
+      || initialFramingAppliedRef.current
+      || !labelViewport
+      || !(
+        polityLabelCollections.pointLabelData.features.length
+        + polityLabelCollections.curvedLabelData.features.length
+        + polityLabelCollections.lineLabelData.features.length
+      )
+      || !mapInstance?.jumpTo
+    ) return undefined;
+
+    let cancelled = false;
+    const center = mapInstance.getCenter?.();
+    const zoom = mapInstance.getZoom?.() ?? 3.5;
+    if (!center || Math.abs(center.lng) > 0.25 || Math.abs(center.lat) > 0.25 || Math.abs(zoom - 3.5) > 0.12) {
+      initialFramingAppliedRef.current = true;
+      return undefined;
+    }
+
+    readJson(JSON_URLS.game, { defaultValue: {} }).then((game) => {
+      if (cancelled || initialFramingAppliedRef.current) return;
+      const player = String(game?.country ?? "").trim().toLocaleLowerCase();
+      if (!player) {
+        initialFramingAppliedRef.current = true;
+        return;
+      }
+
+      const owner = politySurfaceData.features
+        .map((feature) => String(feature?.properties?.owner ?? "").trim())
+        .find((candidate) => {
+          const override = polityOverrides?.[candidate] ?? {};
+          return [candidate, override.name, ...(Array.isArray(override.aliases) ? override.aliases : [])]
+            .some((value) => String(value ?? "").trim().toLocaleLowerCase() === player);
+        });
+      const focus = [
+        ...polityLabelCollections.pointLabelData.features,
+        ...polityLabelCollections.lineLabelData.features,
+      ]
+        .find((feature) => feature?.properties?.owner === owner);
+      const focusCoordinates = focus?.geometry?.type === "Point"
+        ? focus.geometry.coordinates
+        : [focus?.properties?.anchorLng, focus?.properties?.anchorLat];
+      const [lng, lat] = focusCoordinates ?? [];
+      initialFramingAppliedRef.current = true;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+      const width = mapInstance.getCanvas?.()?.clientWidth || 1440;
+      const responsiveZoom = Math.max(3.5, Math.min(3.92, 3.55 + Math.log2(Math.max(900, width) / 1440) * 0.22));
+      mapInstance.jumpTo({
+        center: [lng, Math.max(-70, Math.min(70, lat - 5))],
+        zoom: responsiveZoom,
+        bearing: 0,
+        pitch: 0,
+      });
+    }).catch(() => {
+      initialFramingAppliedRef.current = true;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isGlobe, labelViewport, map, polityLabelCollections, polityOverrides, politySurfaceData, vNext]);
+
   // On custom maps the stock modern-country labels are replaced wholesale by the
   // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
   // Keyed on the FLAG (not customActive): while a custom world's geometry is
   // still loading, and before the world is known at all, stock labels must
   // not flash in.
+  const useCanvasPolityLabels = worldKnown && customFlag && useLivePolityLabels && !isGlobe;
   const activePointLabelData = !worldKnown
     ? EMPTY_FEATURE_COLLECTION
     : customFlag
-      ? ownerLabelData
+      ? useLivePolityLabels
+        ? useCanvasPolityLabels
+          ? EMPTY_FEATURE_COLLECTION
+          : polityLabelCollections.pointLabelData
+        : ownerLabelData
       : pointLabelData;
-  const activeCurvedLabelData = worldKnown && !customFlag ? curvedLabelData : EMPTY_FEATURE_COLLECTION;
+  const activeCurvedLabelData = !worldKnown
+    ? EMPTY_FEATURE_COLLECTION
+    : customFlag && useLivePolityLabels
+      ? polityLabelCollections.curvedLabelData
+      : !customFlag
+        ? curvedLabelData
+        : EMPTY_FEATURE_COLLECTION;
+  const activeLineLabelData = worldKnown && customFlag && useLivePolityLabels
+    ? useCanvasPolityLabels
+      ? EMPTY_FEATURE_COLLECTION
+      : polityLabelCollections.lineLabelData
+    : EMPTY_FEATURE_COLLECTION;
 
   const handleRegionClick = useCallback((event) => {
     const unitsAt = () =>
@@ -638,16 +797,21 @@ const WorldMap = ({ isGlobe = false }) => {
     // outrank cities when the two overlap. Shared between normal selection and
     // attack targeting, so anything clickable is also attackable.
     const featureAt = () => {
-      const featureLayers = ["markers-shapes", "cities-shapes", "cities-labels"]
+      const featureLayers = [
+        ...V_NEXT_MARKER_SHAPE_LAYER_IDS,
+        "markers-shapes",
+        "cities-shapes",
+        "cities-labels",
+      ]
         .filter((id) => map.getLayer(id));
       const featureHits = featureLayers.length
         ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
         : [];
       if (!featureHits.length) return null;
-      const hit = featureHits.find((entry) => entry.layer.id === "markers-shapes") ?? featureHits[0];
+      const hit = featureHits.find((entry) => entry.layer.id.startsWith("markers-shapes")) ?? featureHits[0];
       const props = hit.properties ?? {};
       const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
-      return hit.layer.id === "markers-shapes"
+      return hit.layer.id.startsWith("markers-shapes")
         ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
         : {
           source: "city",
@@ -842,6 +1006,21 @@ const WorldMap = ({ isGlobe = false }) => {
     [resolveOwnerRgb],
   );
 
+  const enrichedPolitySurfaceData = useMemo(() => ({
+    ...politySurfaceData,
+    features: (politySurfaceData?.features ?? []).map((feature) => {
+      const owner = feature.properties?.owner ?? "";
+      return {
+        ...feature,
+        properties: {
+          ...(feature.properties ?? {}),
+          _fillColor: ownerColorCss(owner),
+        },
+      };
+    }),
+  }), [ownerColorCss, politySurfaceData]);
+  const hasPolitySurfaces = vNext && enrichedPolitySurfaceData.features.length > 0;
+
 
   // Load custom region geometry once, only when the active map declares it. Stock
   // scenarios never hit the network for this. Ownership recolors live via the
@@ -875,6 +1054,92 @@ const WorldMap = ({ isGlobe = false }) => {
       cancelled = true;
     };
   }, [customFlag, regionsGeojsonUrl]);
+
+  // Map vNext derives two complementary products in a worker: a dissolved live
+  // surface per polity (the primary renderer and label geometry) plus a topology
+  // frontier fallback for malformed polygons. The worker receives the heavy
+  // geometry once per scenario and only the small ownership override table when
+  // conquests redraw the political map.
+  useEffect(() => {
+    const previous = polityBoundaryWorkerRef.current;
+    if (previous) previous.terminate();
+    polityBoundaryWorkerRef.current = null;
+    initializedBoundaryOwnershipRef.current = null;
+
+    if (!vNext || !customActive) {
+      setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
+      setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+      return undefined;
+    }
+
+    let worker;
+    try {
+      worker = new Worker(
+        new URL("./vnext/polityBoundariesWorker.js", import.meta.url),
+        { type: "module" },
+      );
+    } catch (error) {
+      console.warn("Map vNext polity-boundary worker is unavailable:", error);
+      setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
+      setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+      return undefined;
+    }
+
+    polityBoundaryWorkerRef.current = worker;
+    const ownershipOverrides = regionOwnershipOverridesRef.current;
+    initializedBoundaryOwnershipRef.current = ownershipOverrides;
+    const requestId = latestBoundaryRequestRef.current + 1;
+    latestBoundaryRequestRef.current = requestId;
+
+    worker.onmessage = ({ data: result }) => {
+      if (worker !== polityBoundaryWorkerRef.current) return;
+      if (result?.requestId !== latestBoundaryRequestRef.current) return;
+      if (result.error) {
+        console.warn("Map vNext polity-boundary derivation failed:", result.error);
+        setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
+        setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+        return;
+      }
+      setPolityBoundaryData(result.data?.features ? result.data : EMPTY_FEATURE_COLLECTION);
+      setPolitySurfaceData(result.polityData?.features ? result.polityData : EMPTY_FEATURE_COLLECTION);
+      if (Number.isFinite(result.stats?.elapsedMs)) {
+        reportPerfOperation("map polity boundary derivation", result.stats.elapsedMs, {
+          warnAt: PERF_MAP_WARN_MS,
+        });
+      }
+    };
+    worker.onerror = (error) => {
+      if (worker !== polityBoundaryWorkerRef.current) return;
+      console.warn("Map vNext polity-boundary worker failed:", error);
+      setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
+      setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+    };
+    worker.postMessage({
+      type: "initialize",
+      requestId,
+      regions: customRegionData,
+      ownershipOverrides,
+    });
+
+    return () => {
+      worker.terminate();
+      if (polityBoundaryWorkerRef.current === worker) polityBoundaryWorkerRef.current = null;
+    };
+  }, [customActive, customRegionData, vNext]);
+
+  useEffect(() => {
+    const worker = polityBoundaryWorkerRef.current;
+    if (!vNext || !customActive || !worker) return;
+    if (initializedBoundaryOwnershipRef.current === regionOwnershipOverrides) return;
+    initializedBoundaryOwnershipRef.current = regionOwnershipOverrides;
+    const requestId = latestBoundaryRequestRef.current + 1;
+    latestBoundaryRequestRef.current = requestId;
+    worker.postMessage({
+      type: "update-ownership",
+      requestId,
+      ownershipOverrides: regionOwnershipOverrides,
+    });
+  }, [customActive, regionOwnershipOverrides, vNext]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1110,11 +1375,20 @@ const WorldMap = ({ isGlobe = false }) => {
     () => customActive
       ? {
           "fill-color": DETAIL_FILL_COLOR,
-          "fill-opacity": TILE_FILL_FADE,
+          "fill-opacity": hasPolitySurfaces ? 0 : TILE_FILL_FADE,
+          // Adjacent same-owner regions must read as one continuous polity.
+          // Their shared administrative edge is drawn separately at local zoom;
+          // antialiasing every polygon edge creates the hairline "pixel gaps"
+          // visible at continental scale even when the geometry is watertight.
+          "fill-antialias": true,
+          ...(vNext ? { "fill-outline-color": DETAIL_FILL_COLOR } : {}),
         }
       : { "fill-opacity": 0 },
-    [customActive],
+    [customActive, hasPolitySurfaces, vNext],
   );
+  const customRegionFillOpacity = customActive
+    ? hasPolitySurfaces ? 0 : vNext ? 1 : BASE_FILL_OPACITY
+    : 0;
 
   // Stock country fills/borders render ONLY once the world is known to be a
   // stock world. Gating on the customRegions FLAG (not customActive, which
@@ -1135,7 +1409,11 @@ const WorldMap = ({ isGlobe = false }) => {
     "line-color": "rgba(7, 10, 14, 0.88)",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.22, 6, 0.32, 8, 0.48, 12, 0.78],
     "line-opacity": worldKnown
-      ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.34, 8, 0.44, 12, 0.56]
+      ? vNext
+        ? customActive
+          ? 0
+          : ["interpolate", ["linear"], ["zoom"], 6.8, 0, 7.4, 0.08, 8.2, 0.16, 10, 0.28, 12, 0.42]
+        : ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.34, 8, 0.44, 12, 0.56]
       : 0,
   };
 
@@ -1145,35 +1423,63 @@ const WorldMap = ({ isGlobe = false }) => {
   // PLAYER's machine works, with the trailing names as fallbacks where the
   // first is not installed.
   const labelFontStack = useMemo(
-    () => [labelFont || "Georgia", "Times New Roman", "serif"],
+    () => [labelFont || "Palatino Linotype", "Book Antiqua", "Georgia", "serif"],
     [labelFont],
   );
 
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(0.86, isGlobe),
+    "text-size": buildCountryTextSize(vNext ? 0.72 : 0.86, isGlobe, vNext ? 64 : 254),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": false,
-    "text-letter-spacing": 0.10,
-    "text-padding": 8,
+    "text-letter-spacing": vNext ? ["coalesce", ["get", "letterSpacing"], 0.12] : 0.10,
+    ...(vNext ? { "text-max-width": 100 } : {}),
+    "text-padding": vNext ? 6 : 8,
+    ...(vNext ? { "symbol-sort-key": ["-", ["coalesce", ["get", "priorityScale"], ["get", "areaScale"]]] } : {}),
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels, vNext]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(0.86, isGlobe),
+    "text-size": buildCountryTextSize(vNext ? 0.78 : 0.86, isGlobe, vNext ? 78 : 254),
     "text-rotate": ["get", "rotation"],
+    "text-offset": ["coalesce", ["get", "textOffset"], ["literal", [0, 0]]],
     "text-anchor": "center",
     "text-allow-overlap": true,
+    "text-ignore-placement": vNext,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
+    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels, vNext]);
+
+  const overviewPointLabelLayerLayout = useMemo(() => ({
+    ...pointLabelLayerLayout,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-padding": 2,
+  }), [pointLabelLayerLayout]);
+
+  const lineLabelLayerLayout = useMemo(() => ({
+    "symbol-placement": "line-center",
+    "text-field": ["get", "name"],
+    "text-font": labelFontStack,
+    "text-size": buildCountryTextSize(0.86, isGlobe, 92),
+    "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.1],
+    "text-max-angle": 42,
+    "text-padding": 5,
+    "text-allow-overlap": false,
+    "text-ignore-placement": false,
+    "symbol-sort-key": ["-", ["coalesce", ["get", "priorityScale"], ["get", "areaScale"]]],
+    "text-pitch-alignment": "map",
+    "text-rotation-alignment": "map",
+    "text-keep-upright": true,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
   }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
@@ -1182,12 +1488,45 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.92)",
     "text-halo-width": 1.1,
     "text-halo-blur": 0.32,
+    "text-opacity": vNext
+      ? [
+          "interpolate", ["linear"], ["zoom"],
+          4, 0.98,
+          5.8, 0.90,
+          6.6, 0.52,
+          7.1, 0,
+        ]
+      : [
+          "interpolate", ["linear"], ["zoom"],
+          4, 0.98,
+          6, 0.92,
+          8, 0.28,
+          9, 0,
+        ],
+  }), [labelHaloColor, labelTextColor, vNext]);
+  const curvedLabelLayerPaint = useMemo(() => ({
+    ...labelLayerPaint,
     "text-opacity": [
       "interpolate", ["linear"], ["zoom"],
-      4, 0.98,
-      6, 0.92,
-      8, 0.28,
-      9, 0,
+      3.85, 0,
+      4.15, 0.98,
+      5.8, 0.90,
+      6.6, 0.52,
+      7.1, 0,
+    ],
+  }), [labelLayerPaint]);
+  const integratedLabelLayerPaint = useMemo(() => ({
+    "text-color": labelTextColor || "rgba(247, 246, 240, 0.94)",
+    "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.78)",
+    "text-halo-width": 0.9,
+    "text-halo-blur": 0.45,
+    "text-opacity": [
+      "interpolate", ["linear"], ["zoom"],
+      2.25, 0.78,
+      3.5, 0.86,
+      5.8, 0.80,
+      6.65, 0.50,
+      7.1, 0,
     ],
   }), [labelHaloColor, labelTextColor]);
 
@@ -1217,6 +1556,22 @@ const WorldMap = ({ isGlobe = false }) => {
           paint={countriesOutlinePaint}
         />
       </Source>
+      )}
+
+      {vNext && (
+        <Source id="polity-surfaces-source" type="geojson" data={enrichedPolitySurfaceData} tolerance={0.25}>
+          <Layer
+            id="polity-surfaces-fill"
+            type="fill"
+            paint={{
+              "fill-color": CUSTOM_FILL_COLOR,
+              "fill-opacity": customActive && worldKnown
+                ? ["interpolate", ["linear"], ["zoom"], 2, 0.47, 4, 0.52, 7, 0.58, 10, 0.64]
+                : 0,
+              "fill-antialias": true,
+            }}
+          />
+        </Source>
       )}
 
       {/* Deliberately NOT gated on customFlag, unlike countries-source above —
@@ -1254,6 +1609,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="regions-outline"
           type="line"
+          minzoom={vNext ? 8.25 : undefined}
           source-layer="regions"
           filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
           paint={regionsOutlinePaint}
@@ -1275,7 +1631,12 @@ const WorldMap = ({ isGlobe = false }) => {
           type="fill"
           beforeId="regions-fill"
           filter={STOCK_GEOMETRY_FILTER}
-          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
+          paint={{
+            "fill-color": CUSTOM_FILL_COLOR,
+            "fill-opacity": customRegionFillOpacity,
+            "fill-antialias": true,
+            ...(vNext ? { "fill-outline-color": CUSTOM_FILL_COLOR } : {}),
+          }}
         />
         {/* Seed hairlines stay beneath the detailed tile outlines through the
             handoff window. A late tile can then lose detail, not the border
@@ -1284,18 +1645,21 @@ const WorldMap = ({ isGlobe = false }) => {
           id="custom-regions-hairline-far"
           type="line"
           beforeId="regions-outline"
+          minzoom={vNext ? 8.25 : undefined}
           maxzoom={9}
           filter={STOCK_GEOMETRY_FILTER}
           paint={{
             "line-color": "rgba(7, 10, 14, 0.88)",
             "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.26, 6.5, 0.42, 9, 0.58],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"],
-                  3, 0.32,
-                  5.5, 0.42,
-                  6.5, 0.30,
-                  8, 0.18,
-                  9, 0]
+              ? vNext
+                ? 0
+                : ["interpolate", ["linear"], ["zoom"],
+                    3, 0.32,
+                    5.5, 0.42,
+                    6.5, 0.30,
+                    8, 0.18,
+                    9, 0]
               : 0,
           }}
         />
@@ -1314,7 +1678,12 @@ const WorldMap = ({ isGlobe = false }) => {
           id="custom-regions-fill"
           type="fill"
           filter={AUTHORED_GEOMETRY_FILTER}
-          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
+          paint={{
+            "fill-color": CUSTOM_FILL_COLOR,
+            "fill-opacity": customRegionFillOpacity,
+            "fill-antialias": true,
+            ...(vNext ? { "fill-outline-color": CUSTOM_FILL_COLOR } : {}),
+          }}
         />
         <Layer
           id="custom-regions-disputed"
@@ -1325,6 +1694,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="custom-regions-outline"
           type="line"
+          minzoom={vNext ? 8.25 : undefined}
           filter={AUTHORED_GEOMETRY_FILTER}
           paint={{
             "line-color": "rgba(7, 10, 14, 0.88)",
@@ -1335,29 +1705,133 @@ const WorldMap = ({ isGlobe = false }) => {
               12, 0.78,
             ],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"], 3, 0.26, 4, 0.34, 8, 0.46, 12, 0.56]
+              ? vNext
+                ? 0
+                : ["interpolate", ["linear"], ["zoom"], 3, 0.26, 4, 0.34, 8, 0.46, 12, 0.56]
               : 0,
           }}
         />
+        {/* Provinces are a local interaction grid, not part of the political
+            silhouette. Use the canonical scenario geometry for one deterministic
+            close-zoom overlay; the stock tile and authored-shape handoff layers
+            stay silent in vNext so two independently simplified outlines cannot
+            produce the doubled/dashed seams seen in the old renderer. */}
+        {vNext && (
+          <Layer
+            id="custom-regions-local-outline"
+            type="line"
+            minzoom={7.85}
+            layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{
+              "line-color": "rgba(8, 12, 18, 0.86)",
+              "line-width": [
+                "interpolate", ["linear"], ["zoom"],
+                7.85, 0.34,
+                10, 0.52,
+                12, 0.70,
+                14, 0.88,
+              ],
+              "line-opacity": customActive && worldKnown
+                ? [
+                    "interpolate", ["linear"], ["zoom"],
+                    7.85, 0,
+                    8.10, 0.12,
+                    8.65, 0.28,
+                    10, 0.38,
+                    12, 0.50,
+                    14, 0.62,
+                  ]
+                : 0,
+            }}
+          />
+        )}
       </Source>
+
+      {vNext && (
+        <Source id="polity-boundaries-source" type="geojson" data={polityBoundaryData} tolerance={0.25}>
+          <Layer
+            id="polity-boundaries-shadow"
+            type="line"
+            layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{
+              "line-color": "rgba(1, 4, 8, 0.72)",
+              "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 3, 2.5, 6, 3.6, 9, 4.7, 12, 5.8],
+              "line-blur": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.15, 12, 1.5],
+              "line-opacity": customActive && worldKnown ? 0.52 : 0,
+            }}
+          />
+          <Layer
+            id="polity-boundaries"
+            type="line"
+            layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{
+              "line-color": "rgba(5, 8, 13, 0.96)",
+              "line-width": [
+                "interpolate", ["linear"], ["zoom"],
+                1, 0.58,
+                3, 0.92,
+                6, 1.34,
+                9, 1.72,
+                12, 2.08,
+              ],
+              "line-opacity": customActive && worldKnown ? 0.94 : 0,
+            }}
+          />
+        </Source>
+      )}
 
       <Source id="country-curved-label-source" type="geojson" data={activeCurvedLabelData}>
         <Layer
           id="country-curved-labels"
           type="symbol"
+          minzoom={vNext && customFlag && useLivePolityLabels ? 3.85 : undefined}
+          maxzoom={vNext ? 7.1 : undefined}
           layout={curvedLabelLayerLayout}
-          paint={labelLayerPaint}
+          paint={vNext && customFlag && useLivePolityLabels ? curvedLabelLayerPaint : labelLayerPaint}
+        />
+      </Source>
+
+      <Source id="country-line-label-source" type="geojson" data={activeLineLabelData}>
+        <Layer
+          id="country-labels-live-curved"
+          type="symbol"
+          maxzoom={7.1}
+          layout={lineLabelLayerLayout}
+          paint={integratedLabelLayerPaint}
         />
       </Source>
 
       <Source id="country-point-label-source" type="geojson" data={activePointLabelData}>
-        <Layer
-          id="country-labels"
-          type="symbol"
-          layout={pointLabelLayerLayout}
-          paint={labelLayerPaint}
-        />
+        {vNext && customFlag && useLivePolityLabels ? (
+          <Layer
+            id="country-labels-live"
+            type="symbol"
+            maxzoom={7.1}
+            layout={overviewPointLabelLayerLayout}
+            paint={integratedLabelLayerPaint}
+          />
+        ) : (
+          <Layer
+            id="country-labels"
+            type="symbol"
+            maxzoom={vNext ? 7.1 : undefined}
+            layout={pointLabelLayerLayout}
+            paint={labelLayerPaint}
+          />
+        )}
       </Source>
+
+      {useCanvasPolityLabels && (
+        <PolityLabelsCanvas
+          map={map}
+          lineData={polityLabelCollections.lineLabelData}
+          pointData={polityLabelCollections.pointLabelData}
+          fontStack={labelFontStack}
+          fillColor={labelTextColor || "rgba(247, 246, 240, 0.94)"}
+          haloColor={labelHaloColor || "rgba(7, 10, 14, 0.78)"}
+          visible={!mapDisplaySettings.hideCountryLabels}
+        />
+      )}
     </>
   );
 };

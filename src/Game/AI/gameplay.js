@@ -111,6 +111,7 @@ import {
   writeWorldState,
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
+import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 
@@ -253,6 +254,131 @@ const parseIsoDate = (value) => {
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return day >= 1 && day <= daysInMonth[month - 1] ? { day, month, year } : null;
+};
+
+const STATS_ACCOUNTING_BASE_YEAR = 2026;
+
+const validateNativeEconomicCalibration = ({
+  calibration,
+  populationCalibration,
+  components,
+  eligibleEvidenceIds,
+  currentDate,
+} = {}) => {
+  if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)) {
+    return "economicCalibration is required for a fresh/hard-audit native Stats baseline.";
+  }
+
+  const allowedModes = new Set(["historical_start", "counterfactual_start", "campaign_reconstruction"]);
+  const mode = normalizeString(calibration?.mode);
+  const cutoff = normalizeString(calibration?.historyAuthorityCutoff);
+  const basis = normalizeString(calibration?.basis);
+  const anchorYear = Math.trunc(Number(calibration?.anchorYear));
+  const anchorCurrency = normalizeString(calibration?.anchorCurrency).toUpperCase();
+  const nominalGdpBillions = Number(calibration?.nominalGdpBillions);
+  const nominalGdpPerCapita = Number(calibration?.nominalGdpPerCapita);
+  const rebasedGdpPerCapita = Number(calibration?.rebasedGdpPerCapita2026Eur);
+  const divergenceEventIds = normalizeArray(calibration?.divergenceEventIds)
+    .map(normalizeString)
+    .filter(Boolean);
+
+  if (!allowedModes.has(mode)) {
+    return `economicCalibration.mode must be historical_start, counterfactual_start, or campaign_reconstruction; received ${mode || "blank"}.`;
+  }
+  if (!cutoff) return "economicCalibration.historyAuthorityCutoff is required.";
+  if (!basis) return "economicCalibration.basis must briefly state the nominal-output evidence used.";
+  if (!Number.isInteger(anchorYear) || anchorYear < 1 || anchorYear > 9999) {
+    return "economicCalibration.anchorYear must be a real integer year.";
+  }
+  if (!new Set(["USD", "EUR"]).has(anchorCurrency)) {
+    return "economicCalibration.anchorCurrency must be USD or EUR so native code can audit the rebasing scale.";
+  }
+  if (!(nominalGdpBillions > 0) || !(nominalGdpPerCapita > 0) || !(rebasedGdpPerCapita > 0)) {
+    return "economicCalibration nominal GDP, nominal GDP/capita, and rebased 2026-EUR GDP/capita anchors must all be positive.";
+  }
+
+  const populationMode = normalizeString(populationCalibration?.mode);
+  if (populationMode && populationMode !== mode) {
+    return `economicCalibration.mode (${mode}) must match populationCalibration.mode (${populationMode}) for the same baseline.`;
+  }
+
+  const eligible = new Set(normalizeArray(eligibleEvidenceIds).map(normalizeString).filter(Boolean));
+  const invalidEvidence = divergenceEventIds.filter((id) => !eligible.has(id));
+  if (invalidEvidence.length) {
+    return `economicCalibration.divergenceEventIds contains event id(s) not present in the bounded fresh economic evidence: ${invalidEvidence.join(", ")}.`;
+  }
+
+  // The rebasing factor is an ACCOUNTING conversion only: contemporaneous nominal
+  // USD/EUR -> constant 2026 EUR. It must never smuggle PPP/international-dollar
+  // purchasing power into the canonical nominal GDP ledger. The modern-era ceiling
+  // is intentionally generous enough for CPI + FX movement while still rejecting
+  // the classic 2x-3x PPP substitution seen in Belarus-style failures.
+  const rebasingFactor = rebasedGdpPerCapita / nominalGdpPerCapita;
+  if (anchorYear >= 2000 && anchorYear <= STATS_ACCOUNTING_BASE_YEAR) {
+    const maxModernFactor = Math.min(
+      3,
+      1 + (STATS_ACCOUNTING_BASE_YEAR - anchorYear) * 0.075,
+    );
+    if (rebasingFactor < 0.45 || rebasingFactor > maxModernFactor) {
+      return (
+        `economicCalibration rebasing factor ${rebasingFactor.toFixed(2)}x is not credible for a ${anchorYear} ${anchorCurrency} nominal anchor ` +
+        `(allowed modern accounting range 0.45x-${maxModernFactor.toFixed(2)}x). Do not substitute PPP/international-dollar output for nominal GDP.`
+      );
+    }
+  }
+
+  const cutoffYearMatch = cutoff.match(/(?:^|\D)(\d{4})(?:\D|$)/);
+  const cutoffYear = cutoffYearMatch ? Number(cutoffYearMatch[1]) : null;
+  if (mode === "historical_start" && Number.isInteger(cutoffYear) && anchorYear > cutoffYear + 1) {
+    return (
+      `economicCalibration.anchorYear ${anchorYear} lies after the shared-history cutoff ${cutoffYear}. ` +
+      "Later real-world economic outcomes are forbidden after scenario divergence."
+    );
+  }
+
+  const rows = normalizeArray(components);
+  const totalPopulation = rows.reduce(
+    (sum, component) => sum + Math.max(0, Number(component?.population) || 0),
+    0,
+  );
+  const totalGdp = rows.reduce(
+    (sum, component) =>
+      sum +
+      Math.max(0, Number(component?.population) || 0) *
+        Math.max(0, Number(component?.gdpPerCapita) || 0),
+    0,
+  );
+  const generatedGdpPerCapita = totalPopulation > 0 ? totalGdp / totalPopulation : 0;
+
+  if (mode === "historical_start" && totalPopulation > 0) {
+    const impliedAnchorPopulation = (nominalGdpBillions * 1e9) / nominalGdpPerCapita;
+    const scopeRatio = impliedAnchorPopulation / totalPopulation;
+    if (scopeRatio < 0.6 || scopeRatio > 1.67) {
+      return (
+        `economicCalibration nominal GDP and GDP/capita imply ${Math.round(impliedAnchorPopulation).toLocaleString()} people, ` +
+        `but the authoritative live baseline contains ${Math.round(totalPopulation).toLocaleString()}. ` +
+        "The nominal economic anchor appears to use the wrong territorial scope."
+      );
+    }
+
+    const currentYear = parseIsoDate(currentDate)?.year;
+    const elapsedYears = Number.isInteger(currentYear) ? Math.max(0, currentYear - anchorYear) : 0;
+    const noEvidenceMultiplier = Math.min(2, 1.35 + elapsedYears * 0.08);
+    const scaleRatio = generatedGdpPerCapita / rebasedGdpPerCapita;
+    const scaleOutsideUnexplainedRange =
+      generatedGdpPerCapita > 0 &&
+      (scaleRatio > noEvidenceMultiplier || scaleRatio < 1 / noEvidenceMultiplier);
+
+    if (scaleOutsideUnexplainedRange && divergenceEventIds.length === 0) {
+      return (
+        `Generated nominal GDP/capita (${Math.round(generatedGdpPerCapita).toLocaleString()} 2026-EUR) is ${scaleRatio.toFixed(2)}x the audited ` +
+        `historical nominal anchor (${Math.round(rebasedGdpPerCapita).toLocaleString()} 2026-EUR) without any cited canonical economic divergence event. ` +
+        "Preserve the nominal historical scale or cite supplied divergenceEventIds that causally justify the departure."
+      );
+    }
+  }
+
+  return "";
 };
 
 const addIsoDays = (value, days) => {
@@ -454,43 +580,65 @@ export const extractJsonPayload = (rawText) => {
 
 
 // Structured-output providers occasionally leak the beginning of the NEXT array
-// object into the preceding event title, e.g.
+// object into a preceding event field, e.g.
 //
-//   "Baltic Working Groups Meet},{date:"
+//   title: "Baltic Working Groups Meet},{date:"
+//   warId: "},{date:"
 //
-// That is transport syntax, not authored history. The jump schema historically
-// accepted it because the title was still a non-empty string, allowing JSON
-// bookkeeping to become canonical event prose.
+// That is provider/tool transport syntax, not authored history or canonical war
+// identity. R2.18 originally repaired only the visible title. A later live turn
+// proved the same boundary fragment can land in optional identifier fields: a
+// routine Baltic technical session then appeared to "reference" a fictional war
+// literally named `},{date:` and the strict war ledger correctly rejected it.
 //
-// Keep this repair deliberately narrow: only strip a suffix that unmistakably
-// looks like a JSON object boundary followed by a `date:` key. Ordinary braces,
-// commas, dates and punctuation inside real titles remain untouched.
+// Keep this repair deliberately narrow. We strip only syntax that unmistakably
+// looks like a JSON object boundary followed by the next event's `date:` key.
+// Genuine unknown war IDs remain untouched and therefore still fail closed.
 const EVENT_TRANSPORT_BOUNDARY_TAIL =
   /\s*["']?\s*}\s*,\s*{\s*["']?\s*date\s*["']?\s*:\s*["']?\s*$/i;
+const EVENT_TRANSPORT_BOUNDARY_VALUE =
+  /^\s*["']?\s*}\s*,\s*{\s*["']?\s*date\s*["']?\s*:\s*["']?\s*$/i;
 
 const repairGeneratedEventTransportArtifacts = (candidate) => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { repaired: 0, indexes: [] };
+    return {
+      repaired: 0,
+      titleIndexes: [],
+      warIdIndexes: [],
+    };
   }
 
   const events = Array.isArray(candidate.events) ? candidate.events : [];
-  const indexes = [];
+  const titleIndexes = [];
+  const warIdIndexes = [];
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
 
     const title = typeof event.title === "string" ? event.title : "";
-    if (!title || !EVENT_TRANSPORT_BOUNDARY_TAIL.test(title)) continue;
+    if (title && EVENT_TRANSPORT_BOUNDARY_TAIL.test(title)) {
+      const repairedTitle = title.replace(EVENT_TRANSPORT_BOUNDARY_TAIL, "").trim();
+      if (repairedTitle && repairedTitle !== title) {
+        event.title = repairedTitle;
+        titleIndexes.push(index);
+      }
+    }
 
-    const repairedTitle = title.replace(EVENT_TRANSPORT_BOUNDARY_TAIL, "").trim();
-    if (!repairedTitle || repairedTitle === title) continue;
-
-    event.title = repairedTitle;
-    indexes.push(index);
+    const warId = typeof event.warId === "string" ? event.warId : "";
+    if (warId && EVENT_TRANSPORT_BOUNDARY_VALUE.test(warId)) {
+      // Optional event.warId means "no war association" when blank. Clear ONLY
+      // the unmistakable transport fragment; do not guess or synthesize a war.
+      event.warId = "";
+      warIdIndexes.push(index);
+    }
   }
 
-  return { repaired: indexes.length, indexes };
+  return {
+    repaired: titleIndexes.length + warIdIndexes.length,
+    titleIndexes,
+    warIdIndexes,
+  };
 };
 
 const loadPromptCatalog = async ({ force = false } = {}) =>
@@ -582,6 +730,24 @@ const buildTerritorialControlContext = async (worldLike) => {
     : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
 };
 
+const buildGameMasterStorylineContext = (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const storylines = normalizeArray(world.storylines)
+    .filter((entry) => entry && typeof entry === "object" && normalizeString(entry.id))
+    .slice(0, 24);
+  if (!storylines.length) return "No persistent world storylines are currently recorded.";
+  return storylines.map((entry) => {
+    const participants = normalizeArray(entry.participants).map(normalizeString).filter(Boolean);
+    return [
+      `- ${normalizeString(entry.id)} | ${normalizeString(entry.status) || "active"} | ` +
+        `pressure ${Math.max(0, Math.min(100, Math.round(Number(entry.pressure) || 0)))}/100 | ` +
+        `momentum ${Math.max(0, Math.min(100, Math.round(Number(entry.momentum) || 0)))}/100`,
+      `  ${normalizeString(entry.title) || "Untitled process"}${participants.length ? ` | participants: ${participants.join(", ")}` : ""}`,
+      `  state: ${normalizeString(entry.state) || "No current semantic state recorded."}`,
+    ].join("\n");
+  }).join("\n");
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const startedAt =
     typeof performance !== "undefined" && typeof performance.now === "function"
@@ -658,6 +824,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       },
     ).text;
   }
+  if (wants("canonicalStorylineContext")) {
+    variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
+  }
   if (wants("unitsSummary")) {
     variables.unitsSummary =
       normalizeString(variables.unitsSummary) +
@@ -721,7 +890,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
 const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — LEGAL SOVEREIGNTY only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final territorial settlement. Shape: {"regionId":"<exact id/name when known; otherwise exact grounded place wording>","regionName":"","fromCode":"<current legal sovereign>","toCode":"<new legal sovereign>"}. Do NOT use regionTransfers for a temporary battlefield capture or occupation.\n\n• regionControlOps — DE-FACTO CONTROL / ACTIVE FRONT state. Three ops:\n    {"op":"contest","regionId":"<region/place>","fromCode":"<current controller>","actorCode":"<challenger>","note":""}\n    {"op":"control","regionId":"<region/place>","fromCode":"<previous controller>","toCode":"<new controller>","note":""}\n    {"op":"clear_contest","regionId":"<region/place>","fromCode":"<current controller>","claimantCode":"<claimant to remove>","clearAll":false,"note":""}\n  Use contest when fighting makes a named region actively disputed without a decisive control change. Use control for wartime capture/occupation/liberation/retaking. Use clear_contest when withdrawal, ceasefire or settlement ends the active contest. ALWAYS set fromCode when you know the current controller so the geography resolver is bounded to that side's actual regions. The existing map stripes regionClaimants automatically; do not fake a legal treaty just to make the front move.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won in wartime, pair the advance with regionControlOps control; use regionTransfers only if that same event also legally settles sovereignty.\n\n• markerOps — Persistent PHYSICAL world features. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase: factory / naval yard / logistics hub / laboratory / base / port / embassy / airfield / city / etc.>\",\"ownerCode\":\"\",\"status\":\"planned|under_construction|active|damaged|inactive|abandoned|destroyed\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"update\",\"markerId\":\"<EXISTING stable id>\",\"status\":\"active\",\"note\":\"<new current state>\"}\n    {\"op\":\"rename\",\"markerId\":\"<existing stable id when known>\",\"name\":\"<fallback current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"remove\",\"markerId\":\"<existing id>\",\"name\":\"<fallback name>\",\"note\":\"<canonical cleanup only>\"}\n  BUILD only a genuinely new, significant, named, geographically concrete feature likely to matter again. Do NOT mint map clutter for routine activity and do NOT rebuild an existing feature. When CURRENT MAP STRUCTURES supplies an id, REUSE that id with update/rename. Expansion, completion, capture/change of operator, conversion, damage, abandonment, reconstruction and destruction are updates to the SAME object. Destruction normally means update status=destroyed — it remains historical canon; remove is for correcting/deleting something that should no longer exist in canon. Existing features may participate in events without being updated: when relevant, naturally use their exact canonical name in the event prose. Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.
-  PHYSICAL-WORLD COMPLETENESS AUDIT — REQUIRED FOR EVERY EVENT: before finalizing each event, silently ask whether the event (a) establishes a significant persistent physical facility/place, or (b) materially changes one already supplied in CURRENT MAP STRUCTURES. Qualifying changes include major expansion/completion, conversion, capture/change of operator, damage, abandonment, reconstruction or destruction. If YES, the matching markerOps mutation is REQUIRED in that same event; do not leave the physical consequence only in prose. If an existing feature merely participates without changing, mention its exact canonical name naturally but emit no markerOp. If NO significant persistent physical feature is created or changed, emit no markerOp. This is a completeness rule, NOT a quota and NOT a reason to invent an event.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWAR EVENT METADATA:\n• warId — REQUIRED on an event that declares/joins/ends a war OR depicts actual battlefield combat. It must identify the canonical conflict in world.wars.\n• combatants — REQUIRED for actual battle/offensive/invasion/bombardment/front-combat events. List the polity names directly fighting; at least one must come from each opposing side of warId.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• warUpdates — AUTHORITATIVE BELLIGERENCY changes. This is NOT a storyline and NOT optional when war status changes. One compact record per line:\n    warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note\n  ops: start | join-a | join-b | leave | ceasefire | resume | end\n  start: actors=Side A and opponents=Side B. join-a/join-b: actors are the joining polities. leave: actors are the leaving polities.\n  eventNumbersCSV is a compatibility hint only. Leave it blank (keep the positional ~~ separators) unless convenient; native Javascript binds the war update to the causal event from event.warId and transition semantics. Every war transition must still have a real causal event. A defensive alliance, mobilization, storyline, historical expectation, or hostile rhetoric does NOT itself create belligerency.\n• relationUpdates — MATERIAL BILATERAL POLITICAL CLIMATE changes only. The ledger is sparse: do NOT create neutral-zero rows for untouched countries and do NOT update a pair merely because diplomats met. One compact record per line:\n    polityA~polityB~absoluteScore~status~eventNumbersCSV~summary\n  absoluteScore is -100..100; status is friendly | cordial | neutral | cautious | strained | hostile | rival. eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the update to the unique causal event from the actors and summary. Formal alliance status is NOT encoded here; that lives in agreementUpdates. An alliance can be politically strained, and friendly states can have no alliance.\n• agreementUpdates — FORMAL TREATY / ALLIANCE / GUARANTEE lifecycle. One compact record per line:\n    agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms\n  ops: start | update | suspend | resume | end | expire\n  types: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other\n  eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the agreement lifecycle change to the unique causal event from its parties/title/terms. A NEW signed/ratified/concluded formal commitment MUST use start and have a real establishing event. BEFORE using start, inspect CURRENT FORMAL AGREEMENTS: if that stable agreementId already exists and is active, NEVER start it again. If a later event merely implements, discusses, staffs, exercises, or administratively follows an existing pact without changing its formal terms/status, emit NO agreementUpdates row. Use update only for a genuine formal amendment/terms change; suspend/resume/end/expire only for those actual lifecycle changes. Negotiations/proposals alone create NO agreement. For guarantee, partiesCSV order is guarantor first, beneficiary second. For later operations reuse the stable agreementId; unchanged type/parties/title may be blank where runtime preserves them.\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.`;
+  PHYSICAL-WORLD COMPLETENESS AUDIT — REQUIRED FOR EVERY EVENT: before finalizing each event, silently ask whether the event (a) establishes a significant persistent physical facility/place, or (b) materially changes one already supplied in CURRENT MAP STRUCTURES. Qualifying changes include major expansion/completion, conversion, capture/change of operator, damage, abandonment, reconstruction or destruction. If YES, the matching markerOps mutation is REQUIRED in that same event; do not leave the physical consequence only in prose. If an existing feature merely participates without changing, mention its exact canonical name naturally but emit no markerOp. If NO significant persistent physical feature is created or changed, emit no markerOp. This is a completeness rule, NOT a quota and NOT a reason to invent an event.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWAR EVENT METADATA:\n• warId — REQUIRED on an event that declares/joins/ends a war OR depicts actual battlefield combat. It must identify the canonical conflict in world.wars.\n• combatants — REQUIRED ONLY for actual battle/offensive/invasion/bombardment/front-combat events. List the polity names DIRECTLY FIGHTING EACH OTHER; at least one must come from each opposing side of warId.\n• Force-description vocabulary is NOT combat. Phrases such as combat battlegroup, combat-ready unit, combat capability, deployment, forward presence, deterrence, exercise, training, readiness, reinforcement, air policing, or allied military cooperation do NOT authorize warId/combatants/warUpdates unless the same event explicitly says the named sides are fighting one another.\n• A new war must have an explicit causal event that narrates declaration/commencement of hostilities or direct adversarial battlefield action. Never infer belligerency merely because two armed allied/rival polities appear in the same military event.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• warUpdates — AUTHORITATIVE BELLIGERENCY changes. This is NOT a storyline and NOT optional when war status changes. One compact record per line:\n    warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note\n  ops: start | join-a | join-b | leave | ceasefire | resume | end\n  start: actors=Side A and opponents=Side B. join-a/join-b: actors are the joining polities. leave: actors are the leaving polities.\n  eventNumbersCSV is a compatibility hint only. Leave it blank (keep the positional ~~ separators) unless convenient; native Javascript binds the war update to the causal event from event.warId and transition semantics. Every war transition must still have a real causal event. A defensive alliance, mobilization, storyline, historical expectation, or hostile rhetoric does NOT itself create belligerency.\n• relationUpdates — MATERIAL BILATERAL POLITICAL CLIMATE changes only. The ledger is sparse: do NOT create neutral-zero rows for untouched countries and do NOT update a pair merely because diplomats met. One compact record per line:\n    polityA~polityB~absoluteScore~status~eventNumbersCSV~summary\n  absoluteScore is -100..100; status is friendly | cordial | neutral | cautious | strained | hostile | rival. eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the update to the unique causal event from the actors and summary. Formal alliance status is NOT encoded here; that lives in agreementUpdates. An alliance can be politically strained, and friendly states can have no alliance.\n• agreementUpdates — FORMAL TREATY / ALLIANCE / GUARANTEE lifecycle. One compact record per line:\n    agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms\n  ops: start | update | suspend | resume | end | expire\n  types: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other\n  eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the agreement lifecycle change to the unique causal event from its parties/title/terms. A NEW signed/ratified/concluded formal commitment MUST use start and have a real establishing event. BEFORE using start, inspect CURRENT FORMAL AGREEMENTS: if that stable agreementId already exists and is active, NEVER start it again. If a later event merely implements, discusses, staffs, exercises, or administratively follows an existing pact without changing its formal terms/status, emit NO agreementUpdates row. Use update only for a genuine formal amendment/terms change; suspend/resume/end/expire only for those actual lifecycle changes. Negotiations/proposals alone create NO agreement. For guarantee, partiesCSV order is guarantor first, beneficiary second. For later operations reuse the stable agreementId; unchanged type/parties/title may be blank where runtime preserves them.\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.`;
 
 const CANONICAL_UPDATE_ENVELOPE_TASKS = new Set(["pregameHistory"]);
 
@@ -899,7 +1068,7 @@ CONTINUITY CONTRACT — REQUIRED:
 SCALE / HISTORY AUTHORITY — REQUIRED:
 ${normalizeString(variables?.statsCalibrationContext) || "Use the persistent campaign ledger and supplied canon as the numeric authority. Real-world history may fill genuinely unresolved initial conditions, but it must never overwrite established campaign state or import later historical outcomes that did not occur in this timeline."}
 
-SCENARIO / DIVERGENCE CANON FOR POPULATION SCALE:
+SCENARIO / DIVERGENCE CANON FOR BASELINE SCALE:
 ${normalizeString(variables?.statsScenarioCalibrationCanon) || "No extra scenario-start canon was supplied. The live territorial basis and persistent campaign state still outrank same-date real-world history."}
 
 POPULATION / REGIONAL CALIBRATION CONTRACT — NATIVE CONTROLLED:
@@ -914,6 +1083,20 @@ ${variables?.statsPopulationCalibrationRequested ? `
 - This is a one-time bootstrap/reconstruction anchor. It does NOT create a historical attractor for future turns.` : `
 - CAUSAL CALIBRATION PROVENANCE IS NOT REQUESTED for this call. Omit populationCalibration. The existing persistent component ledger is the numeric authority; assess only bounded changes to the macro buckets.`}
 
+NOMINAL ECONOMIC BASELINE CALIBRATION — NATIVE CONTROLLED:
+${variables?.statsEconomicCalibrationRequested ? `
+- ECONOMIC CALIBRATION IS REQUIRED for this fresh baseline/hard audit. Return economicCalibration.
+- The canonical GDP ledger is NOMINAL economic output expressed in a common constant-2026-EUR accounting unit. It is NOT PPP, purchasing-power parity, international dollars, real living-standard output, or a modernization/productivity adjustment.
+- Start from a historically/causally legitimate NOMINAL GDP and NOMINAL GDP/capita anchor at or before the shared-history frontier. economicCalibration.anchorCurrency must be USD or EUR and the two nominal anchor values must be contemporaneous nominal values for anchorYear.
+- economicCalibration.rebasedGdpPerCapita2026Eur is ONLY the monetary rebasing of that nominal GDP/capita into constant 2026 EUR. It may reflect ordinary inflation and USD/EUR conversion. It MUST NOT incorporate PPP or make a poorer historical country look like a 2026 rich-country economy.
+- economicCalibration.nominalGdpBillions and nominalGdpPerCapita must describe the SAME territorial scope. Native code audits their implied population against the authoritative live baseline when mode=historical_start.
+- If the current generated GDP/capita materially departs from the rebased nominal anchor, cite ONLY canonical IDs from this bounded list in economicCalibration.divergenceEventIds: ${normalizeArray(variables?.statsEconomicEvidenceIds).join(", ") || "(none)"}.
+- An empty divergenceEventIds array means no supplied campaign event justifies a large departure from the nominal baseline. Do not invent a boom, convergence miracle, collapse, sanctions shock, reform dividend, or productivity leap.
+- mode/historyAuthorityCutoff must obey the same scenario-causality frontier as populationCalibration when both are present. Real-world economic outcomes after divergence are forbidden unless scenario canon explicitly preserves them.
+- GDP growth is REAL annual growth, separate from the nominal GDP level. For a historical-start baseline, preserve the inherited macro-cycle direction unless supplied post-cutoff campaign evidence causally changes it; do not smooth a recession into generic +1% growth merely because it seems plausible.
+- economicCalibration is audit provenance only. Native JavaScript still derives national GDP from exact territorial population × gdpPerCapita rows.` : `
+- ECONOMIC CALIBRATION PROVENANCE IS NOT REQUESTED for this call. Omit economicCalibration. The existing persistent nominal component ledger is the economic scale authority; do not re-anchor it to PPP or same-date real-world headlines.`}
+
 BOUNDED REGIONAL METHOD — REQUIRED:
 - Native code retains EVERY exact live-map province/component internally, but it has grouped them into a SMALL set of spatial demographic macro buckets for this AI call. This is a performance boundary only.
 - Return territorialMacroComponentsText with EXACTLY ONE row for EVERY [M#] macro bucket, in this exact transport format: index~group~population~gdpPerCapita
@@ -926,7 +1109,7 @@ BOUNDED REGIONAL METHOD — REQUIRED:
 - The SUM of macro-bucket populations becomes the national population. Native JavaScript expands each macro estimate deterministically back across ALL exact live-map components, preserving prior local proportions where a campaign ledger already exists.
 - Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
 - group is only an economic/display bucket. It is NOT a sovereignty, alliance, customs-union, recognition, or constitutional judgment.
-- gdpPerCapita inside each macro bucket is expressed in 2026-EUR-equivalent purchasing-value/accounting terms ONLY so components and eras can be aggregated. It does NOT import 2026 technology, institutions, productivity, or living standards.
+- gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-EUR accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED by native JavaScript after regional expansion.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
 - economy.currency is the polity's actual current domestic currency/medium, even though GDP accounting uses 2026-EUR-equivalent values.
@@ -1463,10 +1646,14 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
       // repair only; it does not rewrite event meaning.
       const eventTransportRepair = repairGeneratedEventTransportArtifacts(parsed);
       if (eventTransportRepair.repaired) {
+        const repairedFields = [
+          ...eventTransportRepair.titleIndexes.map((index) => `event${index + 1}.title`),
+          ...eventTransportRepair.warIdIndexes.map((index) => `event${index + 1}.warId`),
+        ];
         console.warn(
           `[OH event transport repair] stripped leaked JSON boundary syntax from ` +
-          `${eventTransportRepair.repaired} event title(s): ` +
-          eventTransportRepair.indexes.map((index) => `event${index + 1}`).join(", "),
+          `${eventTransportRepair.repaired} generated event field(s): ` +
+          repairedFields.join(", "),
         );
       }
       // A single mistyped optional field must not discard the whole turn to the
@@ -1506,6 +1693,7 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
       // AI latency therefore stays roughly constant as province count grows.
       let statsCoverageError = "";
       let statsCalibrationError = "";
+      let statsEconomicCalibrationError = "";
       if (taskKey === "countryStatSheet" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const macroPlan = normalizeArray(variables?.statsTerritorialMacroPlan);
         const decoded = decodeCountryStatMacroEstimates(
@@ -1551,10 +1739,45 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
           }
         }
 
+        const economicCalibrationRequested = Boolean(variables?.statsEconomicCalibrationRequested);
+        const economicCalibration = parsed.economicCalibration;
+        if (economicCalibrationRequested && !statsCoverageError) {
+          statsEconomicCalibrationError = validateNativeEconomicCalibration({
+            calibration: economicCalibration,
+            populationCalibration: calibration,
+            components,
+            eligibleEvidenceIds: variables?.statsEconomicEvidenceIds,
+            currentDate: variables?.statsEconomicCalibrationCurrentDate,
+          });
+          if (!statsEconomicCalibrationError) {
+            const totalPopulation = components.reduce(
+              (sum, component) => sum + Math.max(0, Number(component?.population) || 0),
+              0,
+            );
+            const totalGdp = components.reduce(
+              (sum, component) =>
+                sum +
+                Math.max(0, Number(component?.population) || 0) *
+                  Math.max(0, Number(component?.gdpPerCapita) || 0),
+              0,
+            );
+            const generatedPc = totalPopulation > 0 ? totalGdp / totalPopulation : 0;
+            console.info(
+              `[stats nominal baseline] ${normalizeString(variables?.statsCalibrationTargetName) || "polity"}: ` +
+                `${normalizeString(economicCalibration?.mode)} anchor ${economicCalibration?.anchorYear} ` +
+                `${normalizeString(economicCalibration?.anchorCurrency).toUpperCase()} nominal GDP/capita ` +
+                `${Math.round(Number(economicCalibration?.nominalGdpPerCapita) || 0).toLocaleString()} -> ` +
+                `${Math.round(Number(economicCalibration?.rebasedGdpPerCapita2026Eur) || 0).toLocaleString()} 2026-EUR; ` +
+                `generated ${Math.round(generatedPc).toLocaleString()} 2026-EUR.`,
+            );
+          }
+        }
+
         // Calibration/macro transport fields are generation-only. The save keeps the
-        // exact expanded component ledger plus a native calibration-version stamp.
+        // exact expanded component ledger plus native continuity/calibration stamps.
         const {
           populationCalibration: _populationCalibration,
+          economicCalibration: _economicCalibration,
           territorialMacroComponentsText: _territorialMacroComponentsText,
           territorialComponentsText: _territorialComponentsText,
           ...statFields
@@ -1577,10 +1800,10 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
         : parsed
           ? validateGameplayPayload(taskKey, parsed)
           : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
-      if (validation.valid && (statsCoverageError || statsCalibrationError)) {
+      if (validation.valid && (statsCoverageError || statsCalibrationError || statsEconomicCalibrationError)) {
         validation = {
           valid: false,
-          error: [statsCoverageError, statsCalibrationError].filter(Boolean).join(" "),
+          error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError].filter(Boolean).join(" "),
         };
       }
 
@@ -4044,7 +4267,7 @@ const directedEvents = await directGeneratedUnitOps({
 // prose/front state into the native disputed-region machinery without pretending
 // that every occupation is suddenly international law.
 await yieldToUiFrame(signal);
-const territoryEvents = await directGeneratedTerritoryOps({
+let territoryEvents = await directGeneratedTerritoryOps({
   events: directedEvents,
   world: baseWorld,
   analyzeBatch: async ({ candidates, territorialState }) =>
@@ -4095,6 +4318,25 @@ if (unsupportedDirectedAttacks.length) {
       .map((entry) => `"${entry.title || `event ${entry.eventIndex + 1}`}"`)
       .join(", "),
   );
+}
+
+// Canonical timeline identity is assigned only after every semantic/native event
+// post-processor has finished, but before any ledger validation or persistence.
+// Hidden-pass ids such as world-pass-1-event-1 are intentionally temporary and
+// may repeat on later turns; canonical ids are round-scoped so future history
+// references are globally unambiguous. Existing save history is NEVER rewritten
+// here because legacy duplicate ids may already be referenced ambiguously.
+const canonicalEventIdentity = allocateCanonicalTurnEventIds({
+  existingEvents: priorEvents,
+  newEvents: territoryEvents,
+  round: (baseGame.round || 1) + 1,
+});
+territoryEvents = canonicalEventIdentity.events;
+result.warUpdates = remapLedgerEventIds(normalizeArray(result.warUpdates), canonicalEventIdentity.idMap);
+result.relationUpdates = remapLedgerEventIds(normalizeArray(result.relationUpdates), canonicalEventIdentity.idMap);
+result.agreementUpdates = remapLedgerEventIds(normalizeArray(result.agreementUpdates), canonicalEventIdentity.idMap);
+if (canonicalEventIdentity.idMap.size) {
+  console.info(`[OH event identity] assigned ${canonicalEventIdentity.idMap.size} canonical round-scoped event id(s).`);
 }
 
 // Genuine combat can also be introduced/modified after the main payload by the
@@ -5422,7 +5664,7 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
       event.directStatImpact ? "event carries explicit stats impact" : "",
       event.legalTerritoryImpact ? "legal-territory change" : "",
     ].filter(Boolean).join(", ");
-    return `- ${event.date || "undated"} — ${event.title}${flags ? ` [${flags}]` : ""}${detail ? `: ${detail}` : ""}`;
+    return `- [${event.id}] ${event.date || "undated"} — ${event.title}${flags ? ` [${flags}]` : ""}${detail ? `: ${detail}` : ""}`;
   });
   if (deferredCount > 0) {
     lines.unshift(`- ${deferredCount} earlier fresh relevant economic event(s) are intentionally deferred by the bounded evidence window; do not invent their details.`);
@@ -6639,6 +6881,11 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     hasAuthoritativeTerritorialFingerprint &&
     (!previousComplete || rebuildNumericBaseline)
   );
+  // Economic nominal-scale calibration is deliberately narrower than the population
+  // migration. Fresh baselines and explicit hard audits get an auditable nominal
+  // anchor; established campaign ledgers remain canon and are never silently pulled
+  // back toward real history merely because this feature was added later.
+  const economicCalibrationRequested = Boolean(!previousComplete || forceReassess);
 
   // Legacy 7A.1 sheets can be complete while carrying no continuity fingerprint.
   // On a mapped polity we MUST NOT stamp today's border fingerprint onto that old
@@ -6876,6 +7123,10 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       statsCalibrationContext,
       statsScenarioCalibrationCanon,
       statsPopulationCalibrationRequested: populationCalibrationRequested,
+      statsEconomicCalibrationRequested: economicCalibrationRequested,
+      statsEconomicEvidenceIds: normalizeArray(rawEconomicEvidence?.selectedFreshIds),
+      statsEconomicCalibrationStartDate: campaignStartDate,
+      statsEconomicCalibrationCurrentDate: currentDate,
       statsCalibrationTargetName: statCode || target,
     },
   });
@@ -8114,12 +8365,9 @@ const buildWorldPassWindows = ({ originDate, targetDate, dateStep, days, mode })
   return windows;
 };
 
-const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = "pass") => {
-  const resultEvents = normalizeArray(events).map((event, index) => ({
+const attachStorylineIdsByIndexes = (events, decodedStorylineUpdates) => {
+  const resultEvents = normalizeArray(events).map((event) => ({
     ...(event && typeof event === "object" ? event : {}),
-    // Unique internal ids prevent same-index events from different passes from
-    // collapsing into one generated-event-N during the final canonical apply.
-    id: `${passLabel}-${normalizeString(event?.id) || `event-${index + 1}`}`,
     storylineIds: normalizeArray(event?.storylineIds),
   }));
 
@@ -8137,6 +8385,17 @@ const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = 
 
   return resultEvents;
 };
+
+const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = "pass") =>
+  attachStorylineIdsByIndexes(
+    normalizeArray(events).map((event, index) => ({
+      ...(event && typeof event === "object" ? event : {}),
+      // Unique internal ids prevent same-index events from different passes from
+      // collapsing into one generated-event-N during the final canonical apply.
+      id: `${passLabel}-${normalizeString(event?.id) || `event-${index + 1}`}`,
+    })),
+    decodedStorylineUpdates,
+  );
 
 const filterBoundLedgerUpdatesToKeptEvents = (updates, allEvents, keptEvents) => {
   const allIds = normalizeArray(allEvents)
@@ -8623,17 +8882,32 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
           );
           if (worldChangeError) return worldChangeError;
 
-          // Semantic combat is stronger evidence than missing bookkeeping.
-          // If the event explicitly names opposing combatants, native code binds
-          // it to the matching war or materializes the missing canonical war
-          // lifecycle record. Ambiguous combat still fails closed.
+          // A unit attack mutation may not manufacture semantic combat that the
+          // event itself never narrates. Apply the same guard used after native
+          // post-processing before war reconciliation, including model-authored
+          // unitOps in the main world payload.
+          const unsupportedMainPassAttacks = stripUnsupportedUnitAttackOps(candidate?.events);
+          if (unsupportedMainPassAttacks.length) {
+            console.warn(
+              `[OH unit-op semantic guard] dropped ${unsupportedMainPassAttacks.length} unsupported main-pass attack op(s) ` +
+              `from non-combat event(s): ` +
+              unsupportedMainPassAttacks
+                .map((entry) => `"${entry.title || `event ${entry.eventIndex + 1}`}"`)
+                .join(", "),
+            );
+          }
+
+          // Semantic combat is stronger evidence than missing bookkeeping, but a
+          // NEW war additionally requires direct adversarial evidence in the
+          // event prose. Two names, a warId, or military vocabulary alone cannot
+          // create belligerency.
           const combatWarRepair = reconcileCombatWarState(candidate, {
             world: workingBundle.world,
           });
           if (combatWarRepair.unresolved.length && strict) {
             const first = combatWarRepair.unresolved[0];
             return `Combat event "${first.title || `event ${first.index + 1}`}" could not be canonically bound: ${first.reason}. ` +
-              "Provide event.combatants with exactly two direct opponents, or supply the correct event.warId / warUpdates lifecycle.";
+              "If this is real battlefield combat, name the direct opposing combatants and supply/bind the correct war lifecycle. If it is deployment, readiness, exercise, deterrence, military cooperation, or other non-combat activity, remove warId/combatants/warUpdates rather than inventing belligerency.";
           }
 
           // Bookkeeping hardening: the model decides WHAT happened; native code
@@ -8652,8 +8926,44 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
           // canonical-war violations remain errors.
           if (warError && !strict && combatWarRepair.unresolved.length) {
             const dropIndexes = new Set(combatWarRepair.unresolved.map((entry) => entry.index));
+
+            // R2.45: war lifecycle bookkeeping is causal with the event(s) that
+            // establish it. Snapshot the native-bound links BEFORE removing an
+            // ambiguous combat event. If every establishing event for a same-pass
+            // war update is being discarded, discard that orphan update too.
+            //
+            // This is deliberately index-causal rather than warId-heuristic:
+            // unrelated updates for the same war survive, existing canonical
+            // world.wars are untouched, and genuine ledger violations still fail
+            // the strict validator below.
+            const boundWarUpdatesBeforeSalvage = decodeWarUpdates(candidate?.warUpdates);
+            const orphanedWarUpdateIndexes = new Set();
+            const orphanedWarUpdateLabels = [];
+            boundWarUpdatesBeforeSalvage.forEach((update, updateIndex) => {
+              const eventIndexes = normalizeArray(update?.eventIndexes)
+                .map(Number)
+                .filter((index) => Number.isInteger(index) && index >= 0);
+              if (!eventIndexes.length || !eventIndexes.every((index) => dropIndexes.has(index))) {
+                return;
+              }
+              orphanedWarUpdateIndexes.add(updateIndex);
+              orphanedWarUpdateLabels.push(
+                `${normalizeString(update?.id) || "unknown-war"} (${normalizeString(update?.op) || "update"})`,
+              );
+            });
+
             candidate.events = normalizeArray(candidate.events)
               .filter((_, index) => !dropIndexes.has(index));
+
+            if (orphanedWarUpdateIndexes.size) {
+              candidate.warUpdates = boundWarUpdatesBeforeSalvage
+                .filter((_, index) => !orphanedWarUpdateIndexes.has(index));
+              console.warn(
+                `[OH war ledger salvage R2.45] dropped ${orphanedWarUpdateIndexes.size} orphaned war lifecycle update(s) ` +
+                `whose establishing event was removed: ${orphanedWarUpdateLabels.join(", ")}.`,
+              );
+            }
+
             if (dropIndexes.size) {
               console.warn(
                 `[OH war ledger salvage] dropped ${dropIndexes.size} ambiguous hard-combat event(s) ` +
@@ -9012,6 +9322,80 @@ const normalizeGameMasterStatPatches = (patches, world) => {
         .filter((value) => Number.isInteger(value) && value >= 0),
     };
   });
+};
+
+const GAME_MASTER_PERSISTENT_PROCESS_HINT = /\b(?:crisis|collapse|revolution|uprising|insurgency|civil\s+war|succession|regime\s+rupture|banking\s+emergency|sovereign\s+debt|mass\s+unrest|nationwide\s+strike|general\s+strike|standoff|confrontation|instability|tension|escalat(?:e|es|ed|ing|ion)|de-escalat(?:e|es|ed|ing|ion)|prolonged|ongoing)\b/i;
+
+const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game, request = "" } = {}) => {
+  // Native semantic binding owns the causal event links; model-supplied indexes are
+  // hints. This mutates only the preview candidate and therefore remains visible
+  // before Apply can ever persist it.
+  normalizeWorldStorylineEventLinks(candidate, { world });
+
+  const normalizedWorld = normalizeWorldState(world);
+  const currentDate = normalizeString(game?.gameDate || game?.startDate);
+  const validationError = validateWorldStorylinePayload(candidate, {
+    existingStorylines: normalizedWorld.storylines,
+    selectedStorylines: [],
+    deferredStorylines: [],
+    originDate: currentDate,
+    stopDate: currentDate,
+    enforceAntiStasis: false,
+    enforceSelectedCoverage: false,
+    world: normalizedWorld,
+  });
+  if (validationError) return validationError;
+
+  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  if (mode === "world-intervention" && GAME_MASTER_PERSISTENT_PROCESS_HINT.test(normalizeString(request)) && !updates.length) {
+    return "World Intervention describes an unresolved or changing multi-turn process, but $.storylineUpdates is empty. Persist that crisis/process in canonical world.storylines (or update/resolve the existing storyline) so the normal World Director inherits it on later turns.";
+  }
+
+  const currentPolities = new Map(
+    (await buildCurrentCanonicalPolityVocabulary(normalizedWorld))
+      .map((name) => normalizeString(name))
+      .filter(Boolean)
+      .map((name) => [name.toLowerCase(), name]),
+  );
+  // A world intervention may establish a new/restored polity and a persistent
+  // crisis involving it in the SAME preview. Lifecycle validation runs first, so
+  // those event-driven identities are safe to admit here even though they do not
+  // exist in the pre-transaction world yet.
+  for (const event of normalizeArray(candidate?.events)) {
+    for (const change of normalizeArray(event?.impacts?.polityChanges)) {
+      const operation = normalizeString(change?.operation).toLowerCase();
+      if (!["create", "restore", "rename", "update"].includes(operation)) continue;
+      for (const token of [change?.name, change?.code]) {
+        const name = normalizeString(token);
+        if (name) currentPolities.set(name.toLowerCase(), name);
+      }
+    }
+  }
+
+  for (let index = 0; index < updates.length; index += 1) {
+    const update = updates[index];
+    if (mode !== "direct" && normalizeArray(update?.eventIndexes).length === 0) {
+      return `$.storylineUpdates record ${index + 1} must link to at least one authored GM event in ${mode} mode.`;
+    }
+    for (let participantIndex = 0; participantIndex < normalizeArray(update?.participants).length; participantIndex += 1) {
+      const raw = normalizeString(normalizeArray(update.participants)[participantIndex]);
+      const resolution = resolvePolityIdentity(raw, normalizedWorld, {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+      });
+      const resolved = normalizeString(resolution?.resolved || raw);
+      const canonical = currentPolities.get(resolved.toLowerCase()) || currentPolities.get(raw.toLowerCase()) || "";
+      if (!canonical) {
+        return `$.storylineUpdates record ${index + 1} participant ${participantIndex + 1} could not resolve to a current or same-transaction canonical polity: "${raw}".`;
+      }
+      update.participants[participantIndex] = canonical;
+    }
+  }
+
+  candidate.storylineUpdates = updates;
+  return "";
 };
 
 const gameMasterPolityKey = (value) => normalizeString(value).toLowerCase();
@@ -9421,6 +9805,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex));
 
   return linked(candidate?.countryStatPatches)
+    || linked(candidate?.storylineUpdates)
     || linked(candidate?.warUpdates)
     || linked(candidate?.relationUpdates)
     || linked(candidate?.agreementUpdates);
@@ -9483,6 +9868,14 @@ const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, 
 
   const breakawaySovereigntyError = validateGameMasterBreakawaySovereignty(candidate);
   if (breakawaySovereigntyError) return breakawaySovereigntyError;
+
+  const storylineError = await validateGameMasterStorylineUpdates(candidate, {
+    mode,
+    world,
+    game,
+    request,
+  });
+  if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
   // Resolve/validate map, unit, marker and chat operations now, while this is
   // still a preview. This may conservatively resolve a grounded place label to
@@ -9638,6 +10031,7 @@ const gameMasterStateFingerprint = ({ game = {}, world = {}, events = [], colors
       units: normalizedWorld.units,
       markers: normalizedWorld.markers,
       cityRenames: normalizedWorld.cityRenames,
+      storylines: normalizedWorld.storylines,
       wars: normalizedWorld.wars,
       relations: normalizedWorld.relations,
       agreements: normalizedWorld.agreements,
@@ -9651,6 +10045,7 @@ const gameMasterTransactionCandidate = (transaction) => ({
   summary: normalizeString(transaction?.summary),
   events: cloneValue(normalizeArray(transaction?.events)),
   countryStatPatches: cloneValue(normalizeArray(transaction?.countryStatPatches)),
+  storylineUpdates: cloneValue(normalizeArray(transaction?.storylineUpdates)),
   warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
   relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
   agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
@@ -9674,6 +10069,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
     }
   }
   normalizeArray(transaction?.countryStatPatches).forEach((entry, index) => labels.push(`stats:${index}:${normalizeString(entry?.country)}`));
+  normalizeArray(transaction?.storylineUpdates).forEach((entry, index) => labels.push(`storyline:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
   normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
@@ -9773,13 +10169,17 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
     });
 
     const transactionId = createGameMasterTransactionId();
-    const events = normalizeArray(payload?.events)
-      .map((entry, index) => normalizeGeneratedEvent({
-        ...entry,
-        id: `event-manual-${transactionId}-${index + 1}`,
-        source: "game-master",
-      }, index))
-      .filter(Boolean);
+    const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+    const events = attachStorylineIdsByIndexes(
+      normalizeArray(payload?.events)
+        .map((entry, index) => normalizeGeneratedEvent({
+          ...entry,
+          id: `event-manual-${transactionId}-${index + 1}`,
+          source: "game-master",
+        }, index))
+        .filter(Boolean),
+      storylineUpdates,
+    );
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
@@ -9799,6 +10199,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         summary: normalizeString(payload?.summary),
         events,
         countryStatPatches,
+        storylineUpdates,
         warUpdates,
         relationUpdates,
         agreementUpdates,
@@ -9934,6 +10335,18 @@ export const applyGameMasterPreview = async (preview) => {
     }
     nextWorld = diplomaticMerge.world;
 
+    const storylineMerge = applyWorldStorylineUpdates({
+      world: nextWorld,
+      updates: normalizeArray(transaction.storylineUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (storylineMerge.appliedIds.length !== normalizeArray(transaction.storylineUpdates).length) {
+      throw new Error("A canonical storyline operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = storylineMerge.world;
+
     const generatedChats = [];
     for (const event of events) {
       for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
@@ -9968,6 +10381,7 @@ export const applyGameMasterPreview = async (preview) => {
       nextEvents,
     );
     const eventIds = events.map((event) => normalizeString(event?.id)).filter(Boolean);
+    const storylineIds = [...new Set(storylineMerge.appliedIds.map(normalizeString).filter(Boolean))];
     const warIds = [...new Set(warMerge.appliedIds.map(normalizeString).filter(Boolean))];
     const relationIds = [...new Set(diplomaticMerge.appliedRelationIds.map(normalizeString).filter(Boolean))];
     const agreementIds = [...new Set(diplomaticMerge.appliedAgreementIds.map(normalizeString).filter(Boolean))];
@@ -9996,6 +10410,7 @@ export const applyGameMasterPreview = async (preview) => {
       acceptedOperations: gameMasterAcceptedOperationLabels(transaction),
       rejectedOperations: [],
       eventIds,
+      storylineIds,
       warIds,
       relationIds,
       agreementIds,
@@ -10055,6 +10470,7 @@ export const applyGameMasterPreview = async (preview) => {
       round: bundle.game.round || 0,
       summary,
       eventIds,
+      storylineIds,
       warIds,
       relationIds,
       agreementIds,

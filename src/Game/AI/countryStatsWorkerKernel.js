@@ -439,7 +439,7 @@ const buildTargetEconomicEvidenceKernel = ({ bundle, statCode, previous, world }
       event.directStatImpact ? "event carries explicit stats impact" : "",
       event.legalTerritoryImpact ? "legal-territory change" : "",
     ].filter(Boolean).join(", ");
-    return `- ${event.date || "undated"} — ${event.title}${flags ? ` [${flags}]` : ""}${detail ? `: ${detail}` : ""}`;
+    return `- [${event.id}] ${event.date || "undated"} — ${event.title}${flags ? ` [${flags}]` : ""}${detail ? `: ${detail}` : ""}`;
   });
   if (deferredCount > 0) {
     lines.unshift(`- ${deferredCount} earlier fresh relevant economic event(s) are intentionally deferred by the bounded evidence window; do not invent their details.`);

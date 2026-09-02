@@ -1060,6 +1060,25 @@ const gmEventIndexesSchema = {
   items: { type: "integer", minimum: 0 },
 };
 
+const gmStorylineUpdateSchema = {
+  type: "object",
+  description: "One authoritative persistent world.storylines semantic update.",
+  properties: {
+    id: nonEmptyTextSchema("Stable storyline id. Reuse the existing id when advancing an existing process."),
+    status: { type: "string", enum: ["active", "dormant", "resolved"] },
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
+    kind: nonEmptyTextSchema("Short process category such as crisis, politics, economy, war, revolution, or diplomacy."),
+    title: nonEmptyTextSchema("Concise persistent process title."),
+    participants: stringArraySchema("Current canonical polity participants. Full polity names only."),
+    eventIndexes: gmEventIndexesSchema,
+    state: nonEmptyTextSchema("What is true now and why the process remains active/dormant/resolved through the current game date."),
+  },
+  required: ["id", "status", "pressure", "momentum", "kind", "title", "participants", "eventIndexes", "state"],
+  additionalProperties: false,
+};
+
 const gmWarUpdateSchema = {
   type: "object",
   description: "One authoritative world.wars lifecycle operation.",
@@ -1220,6 +1239,12 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 12,
       items: gmCountryStatPatchSchema,
     },
+    storylineUpdates: {
+      type: "array",
+      description: "Persistent unresolved world-process updates using the canonical world.storylines owner.",
+      maxItems: 16,
+      items: gmStorylineUpdateSchema,
+    },
     warUpdates: {
       type: "array",
       description: "Structured canonical belligerency changes. Never encode these as strings.",
@@ -1250,6 +1275,7 @@ export const GAME_MASTER_SCHEMA = {
     "summary",
     "events",
     "countryStatPatches",
+    "storylineUpdates",
     "warUpdates",
     "relationUpdates",
     "agreementUpdates",
@@ -1277,6 +1303,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
+    storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
@@ -1287,6 +1314,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "summary",
     "eventsJson",
     "countryStatPatchesJson",
+    "storylineUpdatesJson",
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
@@ -1319,6 +1347,7 @@ export const decodeGameMasterTransportPayload = (value) => {
   const transportFields = [
     "eventsJson",
     "countryStatPatchesJson",
+    "storylineUpdatesJson",
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
@@ -1337,6 +1366,7 @@ export const decodeGameMasterTransportPayload = (value) => {
         summary: String(value.summary ?? "").trim(),
         events: parseGameMasterTransportArray(value.eventsJson, "eventsJson"),
         countryStatPatches: parseGameMasterTransportArray(value.countryStatPatchesJson, "countryStatPatchesJson"),
+        storylineUpdates: parseGameMasterTransportArray(value.storylineUpdatesJson, "storylineUpdatesJson"),
         warUpdates: parseGameMasterTransportArray(value.warUpdatesJson, "warUpdatesJson"),
         relationUpdates: parseGameMasterTransportArray(value.relationUpdatesJson, "relationUpdatesJson"),
         agreementUpdates: parseGameMasterTransportArray(value.agreementUpdatesJson, "agreementUpdatesJson"),
@@ -1411,11 +1441,77 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       required: ["mode", "historyAuthorityCutoff", "basis"],
       additionalProperties: false,
     },
+    economicCalibration: {
+      type: "object",
+      description:
+        "Audit provenance for a fresh/hard-audit NOMINAL economic baseline. Return this ONLY when the live Stats prompt says ECONOMIC CALIBRATION REQUIRED. This explicitly forbids PPP/international-dollar substitution in the canonical GDP ledger.",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["historical_start", "counterfactual_start", "campaign_reconstruction"],
+          description:
+            "Use the same scenario-causality mode as the population baseline when both are present.",
+        },
+        historyAuthorityCutoff: nonEmptyTextSchema(
+          "Latest date/era through which real-world economic history is causally shared enough to anchor nominal output. Later real-world outcomes are forbidden after divergence.",
+        ),
+        basis: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description:
+            "Concise audit basis naming the nominal GDP/GDP-per-capita scale and scenario evidence used. Do not provide hidden reasoning.",
+        },
+        anchorYear: {
+          type: "integer",
+          minimum: 1,
+          maximum: 9999,
+          description: "Year of the contemporaneous nominal GDP anchor; it must not lie beyond the shared-history frontier.",
+        },
+        anchorCurrency: {
+          type: "string",
+          enum: ["USD", "EUR"],
+          description:
+            "Currency unit of the contemporaneous nominal anchor. Use current USD or current EUR only; do not use PPP/international dollars or local-currency amounts here.",
+        },
+        nominalGdpBillions: statNumberSchema(
+          "Whole-polity NOMINAL GDP at anchorYear in billions of anchorCurrency, for the same territorial scope as nominalGdpPerCapita. Never use PPP GDP.",
+          { minimum: 0.000001 },
+        ),
+        nominalGdpPerCapita: statNumberSchema(
+          "Contemporaneous NOMINAL GDP per capita at anchorYear in anchorCurrency. Never use PPP/international-dollar GDP per capita.",
+          { minimum: 1 },
+        ),
+        rebasedGdpPerCapita2026Eur: statNumberSchema(
+          "The same nominal GDP-per-capita anchor expressed in constant 2026 EUR using monetary inflation/FX rebasing only. This is NOT PPP, purchasing power, or a productivity/living-standard adjustment.",
+          { minimum: 1 },
+        ),
+        divergenceEventIds: {
+          type: "array",
+          maxItems: 12,
+          description:
+            "Canonical IDs from the bounded fresh economic evidence that causally justify a large current departure from the rebased nominal anchor. Empty when no supplied event supports such a departure.",
+          items: nonEmptyTextSchema("Canonical economic event id supplied by the live Stats prompt."),
+        },
+      },
+      required: [
+        "mode",
+        "historyAuthorityCutoff",
+        "basis",
+        "anchorYear",
+        "anchorCurrency",
+        "nominalGdpBillions",
+        "nominalGdpPerCapita",
+        "rebasedGdpPerCapita2026Eur",
+        "divergenceEventIds",
+      ],
+      additionalProperties: false,
+    },
     territorialMacroComponentsText: {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. Compatibility fallback without a native macro plan may use group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive number in 2026-EUR-equivalent accounting terms.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. Compatibility fallback without a native macro plan may use group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
     },
     economy: {
       type: "object",
@@ -1530,7 +1626,7 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
           },
           population: { type: "integer", minimum: 0, description: "Current inhabitants in THIS geography only." },
           gdpPerCapita: statNumberSchema(
-            "THIS component's GDP per capita in 2026-EUR-equivalent purchasing-value terms. This is an accounting unit only; do not import 2026 technology/productivity.",
+            "THIS component's NOMINAL GDP per capita expressed in constant 2026-EUR accounting terms. This is not PPP/international-dollar purchasing power and does not import 2026 technology/productivity.",
             { minimum: 1 },
           ),
         },
@@ -1541,11 +1637,11 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
     economy: {
       type: "object",
       properties: {
-        gdp: statNumberSchema("Derived whole-polity GDP in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        gdp: statNumberSchema("Derived whole-polity NOMINAL GDP in constant 2026-EUR accounting terms.", { minimum: 1 }),
         gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
-        gdpPerCapita: statNumberSchema("Derived whole-polity GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
-        coreGdpPerCapita: statNumberSchema("Derived core/integrated GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
-        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent GDP per capita in 2026-EUR-equivalent terms.", { minimum: 1 }),
+        gdpPerCapita: statNumberSchema("Derived whole-polity NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
         inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),

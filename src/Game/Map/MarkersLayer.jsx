@@ -3,6 +3,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
+import {
+  getMarkerPresentation,
+  MARKER_VISIBILITY_TIER,
+} from "./vnext/presentationPolicy.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -51,7 +55,31 @@ const ownerColorString = (colorMap, code) => {
 // bunkers, missile silos, embassies…). Rendered in the visual language of the
 // city layer (glyph + haloed label) but colored by owner so a forward base
 // reads as belonging to someone.
-const MarkersLayer = () => {
+const V_NEXT_TIER_LAYERS = [
+  {
+    tier: MARKER_VISIBILITY_TIER.strategic,
+    shapeId: "markers-shapes-strategic",
+    labelId: "markers-labels-strategic",
+    shapeMinZoom: 3.0,
+    labelMinZoom: 3.8,
+  },
+  {
+    tier: MARKER_VISIBILITY_TIER.regional,
+    shapeId: "markers-shapes-regional",
+    labelId: "markers-labels-regional",
+    shapeMinZoom: 4.2,
+    labelMinZoom: 5.0,
+  },
+  {
+    tier: MARKER_VISIBILITY_TIER.local,
+    shapeId: "markers-shapes-local",
+    labelId: "markers-labels-local",
+    shapeMinZoom: 5.8,
+    labelMinZoom: 6.6,
+  },
+];
+
+const MarkersLayer = ({ vNext = false }) => {
   const { markers } = useWorldState();
   const [colorMap, setColorMap] = useState({});
 
@@ -70,6 +98,7 @@ const MarkersLayer = () => {
         .map((marker) => {
           const status = normalizeMarkerStatus(marker.status);
           const statusLabel = MARKER_STATUS_LABEL[status];
+          const presentation = getMarkerPresentation(marker);
           return {
             type: "Feature",
             id: marker.id,
@@ -77,19 +106,84 @@ const MarkersLayer = () => {
             properties: {
               id: marker.id,
               name: marker.name,
-              displayName: status === "active" ? marker.name : `${marker.name} · ${statusLabel}`,
+              // Lifecycle is encoded by opacity and remains fully described in
+              // the feature popup. VNext does not make every map label longer.
+              displayName: vNext || status === "active" ? marker.name : `${marker.name} · ${statusLabel}`,
               kind: marker.kind || "landmark",
               ownerCode: marker.ownerCode || "",
               status,
               statusLabel,
               statusOpacity: markerStatusOpacity(status),
-              glyph: glyphForKind(String(marker.kind || "")),
+              family: presentation.family,
+              priority: presentation.priority,
+              sortKey: presentation.sortKey,
+              visibilityTier: presentation.visibilityTier,
+              glyph: vNext ? presentation.glyph : glyphForKind(String(marker.kind || "")),
               rgb: ownerColorString(colorMap, marker.ownerCode),
             },
           };
         }),
     };
-  }, [markers, colorMap]);
+  }, [markers, colorMap, vNext]);
+
+  if (vNext) {
+    return (
+      <Source id="markers-source" type="geojson" data={data}>
+        {V_NEXT_TIER_LAYERS.map((entry) => (
+          <Layer
+            key={entry.shapeId}
+            id={entry.shapeId}
+            type="symbol"
+            beforeId="country-curved-labels"
+            minzoom={entry.shapeMinZoom}
+            filter={["==", ["get", "visibilityTier"], entry.tier]}
+            layout={{
+              "symbol-sort-key": ["get", "sortKey"],
+              "text-field": ["get", "glyph"],
+              "text-allow-overlap": true,
+              "text-ignore-placement": false,
+              "text-padding": 3,
+              "text-size": ["interpolate", ["linear"], ["zoom"], 3, 9, 7, 13, 11, 17],
+            }}
+            paint={{
+              "text-color": ["get", "rgb"],
+              "text-halo-color": "rgba(5, 8, 12, 0.92)",
+              "text-halo-width": 1.4,
+              "text-halo-blur": 0.25,
+              "text-opacity": ["get", "statusOpacity"],
+            }}
+          />
+        ))}
+        {V_NEXT_TIER_LAYERS.map((entry) => (
+          <Layer
+            key={entry.labelId}
+            id={entry.labelId}
+            type="symbol"
+            beforeId="country-curved-labels"
+            minzoom={entry.labelMinZoom}
+            filter={["==", ["get", "visibilityTier"], entry.tier]}
+            layout={{
+              "symbol-sort-key": ["get", "sortKey"],
+              "text-field": ["get", "displayName"],
+              "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
+              "text-padding": 6,
+              "text-radial-offset": 0.8,
+              "text-size": ["interpolate", ["linear"], ["zoom"], 4, 8.5, 10, 10.5],
+              "text-variable-anchor": ["top", "bottom", "left", "right"],
+              "text-max-width": 16,
+            }}
+            paint={{
+              "text-color": "rgba(247, 246, 240, 0.96)",
+              "text-halo-color": "rgba(5, 8, 12, 0.92)",
+              "text-halo-width": 1.35,
+              "text-halo-blur": 0.35,
+              "text-opacity": ["get", "statusOpacity"],
+            }}
+          />
+        ))}
+      </Source>
+    );
+  }
 
   return (
     <Source id="markers-source" type="geojson" data={data}>

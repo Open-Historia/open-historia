@@ -82,6 +82,9 @@ export const JSON_URLS = {
 // path under .../rest/services/; `maxZoom` is that layer's deepest native level
 // (past it MapLibre overscales instead of requesting tiles that 404).
 export const ESRI_BASEMAPS = [
+  // Relief-first political canvas: World Ocean Base carries ocean bathymetry
+  // plus shaded land relief; World.jsx applies a darker dedicated grade.
+  { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
@@ -97,7 +100,25 @@ export const DEFAULT_BASEMAP_ID = "ocean";
 // Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
 const BASEMAP_STORAGE_KEY = "map_basemap_style";
 
-const basemapById = (id) => ESRI_BASEMAPS.find((b) => b.id === id) ?? ESRI_BASEMAPS[0];
+export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
+export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
+  if (isBuiltinBasemapId(overrideId)) return overrideId;
+  if (isBuiltinBasemapId(scenarioId)) return scenarioId;
+  return isBuiltinBasemapId(fallbackId) ? fallbackId : DEFAULT_BASEMAP_ID;
+};
+
+// react-map-gl can diff a style whose source id stays the same without
+// re-instantiating that raster source. Give the map shell a semantic key so a
+// runtime basemap change reliably creates fresh tile sources while preserving
+// the camera through World.jsx's viewStateRef.
+export const buildBasemapRenderKey = ({
+  projection = "mercator",
+  basemapId = DEFAULT_BASEMAP_ID,
+  backgroundKind = "builtin",
+} = {}) => `${projection}:${basemapId}:${backgroundKind}`;
+
+const basemapById = (id) => ESRI_BASEMAPS.find((b) => b.id === id)
+  ?? ESRI_BASEMAPS.find((b) => b.id === DEFAULT_BASEMAP_ID);
 const esriServiceTemplate = (service) =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/${service}/MapServer/tile/{z}/{y}/{x}`;
 
@@ -113,7 +134,7 @@ export const basemapProtocolTemplate = (id) => `ohbase://${basemapById(id).id}/{
 // React mounts (mapSettings.js drives it reactively once mounted).
 export const selectedBasemapId = () => {
   try {
-    return localStorage.getItem(BASEMAP_STORAGE_KEY) || DEFAULT_BASEMAP_ID;
+    return resolveBasemapId({ overrideId: localStorage.getItem(BASEMAP_STORAGE_KEY) });
   } catch {
     return DEFAULT_BASEMAP_ID;
   }

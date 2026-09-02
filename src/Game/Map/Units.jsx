@@ -29,7 +29,7 @@ const ownerColorString = (colorMap, code) => {
   return `rgb(${72 + a * 5}, ${72 + c * 5}, ${72 + b * 5})`;
 };
 
-const Units = () => {
+const Units = ({ vNext = false }) => {
   const [units, setUnits] = useState(getUnits());
   const [colorMap, setColorMap] = useState({});
 
@@ -77,8 +77,11 @@ const Units = () => {
       <Layer
         id="units-fill"
         type="circle"
+        beforeId={vNext ? "country-curved-labels" : undefined}
         paint={{
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 7, 6, 11, 12, 16],
+          "circle-radius": vNext
+            ? ["interpolate", ["linear"], ["zoom"], 2, 5.5, 6, 9, 12, 14]
+            : ["interpolate", ["linear"], ["zoom"], 2, 7, 6, 11, 12, 16],
           "circle-color": ["get", "rgb"],
           // Pending (player-requested, not yet AI-resolved) units are translucent.
           "circle-opacity": ["case", ["==", ["get", "status"], "pending"], 0.32, 0.92],
@@ -97,6 +100,7 @@ const Units = () => {
       <Layer
         id="units-icons"
         type="symbol"
+        beforeId={vNext ? "country-curved-labels" : undefined}
         layout={{
           "symbol-sort-key": ["-", ["get", "strength"]],
           "text-field": ["get", "glyph"],
@@ -115,13 +119,14 @@ const Units = () => {
       <Layer
         id="units-strength"
         type="symbol"
-        minzoom={3}
+        beforeId={vNext ? "country-curved-labels" : undefined}
+        minzoom={vNext ? 5 : 3}
         layout={{
           "symbol-sort-key": ["-", ["get", "strength"]],
           "text-field": ["to-string", ["get", "strength"]],
           "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
+          "text-allow-overlap": !vNext,
+          "text-ignore-placement": !vNext,
           "text-offset": [0, 1.35],
           "text-size": ["interpolate", ["linear"], ["zoom"], 3, 9, 8, 11, 12, 13],
         }}

@@ -98,6 +98,119 @@ const tileToLngLat = (px, py, extent = 4096) => {
 const ringToLngLat = (ring, extent = 4096) =>
   ring.map(([px, py]) => tileToLngLat(px, py, extent));
 
+const lngLatToTile = (lng, lat, extent = 4096) => {
+  const safeLat = clamp(Number(lat) || 0, -85.05112878, 85.05112878);
+  const latRad = safeLat * (Math.PI / 180);
+  return [
+    ((Number(lng) + 180) / 360) * extent,
+    ((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * extent,
+  ];
+};
+
+// Keep an antimeridian-crossing ring locally continuous. The dissolve normally
+// splits there, but author-drawn scenarios are allowed to use an unwrapped
+// polygon and a 358-degree edge would make its principal axis meaningless.
+const ringLngLatToTile = (ring, extent = 4096) => {
+  const points = [];
+  let previousLng = null;
+  let longitudeOffset = 0;
+
+  for (const coordinate of ring ?? []) {
+    if (!Array.isArray(coordinate) || coordinate.length < 2) continue;
+    let lng = Number(coordinate[0]);
+    const lat = Number(coordinate[1]);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+
+    if (previousLng !== null) {
+      const shifted = lng + longitudeOffset;
+      if (shifted - previousLng > 180) longitudeOffset -= 360;
+      if (shifted - previousLng < -180) longitudeOffset += 360;
+    }
+    lng += longitudeOffset;
+    previousLng = lng;
+    points.push(lngLatToTile(lng, lat, extent));
+  }
+
+  return points;
+};
+
+const wrapLongitude = (lng) => ((((lng + 180) % 360) + 360) % 360) - 180;
+
+const compactNameUnits = (name) => Array.from(String(name ?? "")).reduce(
+  (sum, glyph) => sum + (glyph === " " ? 0.48 : 1),
+  0,
+);
+
+// Estimate how much of the live shape the word can occupy at the reference
+// strategy zoom. MapLibre scales both geometry and text exponentially after
+// that point, so this remains visually stable through the atlas zoom range.
+const labelLetterSpacing = (pathLength, areaScale, name) => {
+  const units = compactNameUnits(name);
+  if (!Number.isFinite(pathLength) || pathLength <= 0 || units <= 1) return 0.12;
+  const fontPixelsAtZoom4 = Math.max(7, Math.min(72, areaScale * 0.74 / 4096));
+  const pathPixelsAtZoom4 = pathLength * 2;
+  const availableEms = pathPixelsAtZoom4 * 0.76 / fontPixelsAtZoom4;
+  const baseTextEms = units * 0.56;
+  return Number(clamp((availableEms - baseTextEms) / Math.max(1, units - 1), 0.06, 0.26).toFixed(3));
+};
+
+// A polygon centroid can sit outside a concave polity. Search several central
+// scanlines and use the midpoint of the widest inside interval instead; this
+// keeps point-label fallbacks on land without bringing a heavyweight polylabel
+// pass onto the render thread.
+const getInteriorLabelPoint = (polygonRings) => {
+  const outer = polygonRings?.[0];
+  if (!outer?.length) return null;
+
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const point of outer) {
+    minY = Math.min(minY, point[1]);
+    maxY = Math.max(maxY, point[1]);
+  }
+  if (!Number.isFinite(minY) || !Number.isFinite(maxY) || maxY <= minY) return null;
+
+  const centroid = getCentroid(outer);
+  const span = maxY - minY;
+  const centerY = clamp(centroid.cy, minY, maxY);
+  const candidates = [
+    centerY,
+    minY + span * 0.5,
+    minY + span * 0.38,
+    minY + span * 0.62,
+    minY + span * 0.26,
+    minY + span * 0.74,
+  ];
+  let best = null;
+
+  for (const rawY of candidates) {
+    // Avoid a scanline lying exactly on a horizontal vertex/edge.
+    const y = rawY + span * 1e-7;
+    const intersections = [];
+    for (const ring of polygonRings) {
+      for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+        const a = ring[previous];
+        const b = ring[index];
+        if (!((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y))) continue;
+        intersections.push(a[0] + ((y - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
+      }
+    }
+    intersections.sort((a, b) => a - b);
+    for (let index = 0; index + 1 < intersections.length; index += 2) {
+      const left = intersections[index];
+      const right = intersections[index + 1];
+      const width = right - left;
+      const centerPenalty = Math.abs(y - centerY) / span;
+      const score = width * (1 - centerPenalty * 0.12);
+      if (!best || score > best.score) {
+        best = { point: [(left + right) / 2, y], score };
+      }
+    }
+  }
+
+  return best?.point ?? [centroid.cx, centroid.cy];
+};
+
 const getPolylineLength = (points) => {
   let length = 0;
 
@@ -261,7 +374,7 @@ const smoothSamples = (samples, passes = 2) => {
   return current;
 };
 
-const buildCurvedLabelPath = (ring, name) => {
+const buildCurvedLabelPath = (ring, name, { allowStraight = false } = {}) => {
   if (!ring || ring.length < 3) return null;
 
   const { cx, cy } = getCentroid(ring);
@@ -360,13 +473,15 @@ const buildCurvedLabelPath = (ring, name) => {
     rawSamples.reduce((sum, sample) => sum + sample.width, 0) / rawSamples.length;
   const widthRatio = averageWidth / usableSpan;
   const compactNameLength = name.replace(/\s+/g, "").length;
-  const minPathLength = Math.max(80, compactNameLength * 20);
+  const minPathLength = allowStraight
+    ? Math.max(36, compactNameLength * 4)
+    : Math.max(80, compactNameLength * 20);
 
   if (
     directLength <= 0 ||
     pathLength < minPathLength ||
-    widthRatio > 0.22 ||
-    (pathLength / directLength <= 1.04 && turnDegrees <= 55)
+    widthRatio > (allowStraight ? 0.92 : 0.22) ||
+    (!allowStraight && pathLength / directLength <= 1.04 && turnDegrees <= 55)
   ) {
     return null;
   }
@@ -385,6 +500,7 @@ const buildCurvedLabelPath = (ring, name) => {
   return {
     points: tilePath,
     length: pathLength,
+    width: averageWidth,
   };
 };
 
@@ -394,6 +510,7 @@ const buildCurvedLabelGlyphFeatures = (
   name,
   areaScale,
   featureId,
+  extraProperties = {},
 ) => {
   if (!pathInfo?.points?.length) return null;
 
@@ -410,6 +527,21 @@ const buildCurvedLabelGlyphFeatures = (
 
   const advance = usableLength / totalUnits;
   const sizeScale = clamp(advance / 52, 0.6, 0.92);
+  const anchorSample = getPointAlongPolyline(pathInfo.points, pathInfo.length / 2);
+  if (!anchorSample) return null;
+
+  // Keep every glyph attached to one geographic anchor and express the curve
+  // in font-relative offsets. Separate geographic glyph anchors looked correct
+  // at their reference zoom, but zooming closer enlarged the distance between
+  // them even after text-size reached its cap, tearing CHINA into C H I N A.
+  // Em offsets scale with the glyphs and stop when the glyphs stop, preserving
+  // both the word and its live-shape curve at every camera zoom.
+  const offsetUnit = Math.max(advance, 1);
+  const [anchorLng, anchorLat] = tileToLngLat(
+    anchorSample.point[0],
+    anchorSample.point[1],
+    extent,
+  );
   const features = [];
 
   let cursorUnits = 0;
@@ -428,22 +560,27 @@ const buildCurvedLabelGlyphFeatures = (
     if (rotation > 90) rotation -= 180;
     if (rotation < -90) rotation += 180;
 
-    const [glyphLng, glyphLat] = tileToLngLat(sample.point[0], sample.point[1], extent);
+    const textOffset = [
+      Number(((sample.point[0] - anchorSample.point[0]) / offsetUnit).toFixed(3)),
+      Number(((sample.point[1] - anchorSample.point[1]) / offsetUnit).toFixed(3)),
+    ];
 
     features.push({
       type: "Feature",
       id: `${featureId}-glyph-${glyphIndex}`,
       geometry: {
         type: "Point",
-        coordinates: [glyphLng, glyphLat],
+        coordinates: [anchorLng, anchorLat],
       },
       properties: {
+        ...extraProperties,
         glyph,
         areaScale: areaScale * sizeScale,
         rotation,
-        // Each glyph's own latitude — Nations.jsx uses this to correct globe
-        // projection's text-size inflation at high latitude (see issue #6).
-        lat: glyphLat,
+        textOffset,
+        // All glyphs now share the label anchor, so the same globe correction
+        // applies to the entire word instead of subtly resizing its letters.
+        lat: anchorLat,
       },
     });
 
@@ -576,6 +713,144 @@ const buildCountryLabelCollections = async (tileData, ownedCodes = null) => {
       type: "FeatureCollection",
       features: pointFeatures,
     },
+  };
+};
+
+// Map vNext labels are generated from the same live dissolved polity surfaces
+// that paint the political map. A conquest therefore changes the fill, border,
+// and label geometry as one atomic presentation update. Broad polities emit one
+// whole-word LINE-CENTRED symbol along an interior spine. MapLibre bends the
+// complete word along that spine, so it reads as part of the landmass without
+// the zoom/pan instability of separately anchored glyphs. Tiny or pathological
+// shapes retain one interior point label as a safe fallback.
+export const buildPolityLabelCollections = (
+  politySurfaces,
+  { nameResolver = (owner) => owner, extent = 4096 } = {},
+) => {
+  const pointFeatures = [];
+  const curvedFeatures = [];
+  const lineFeatures = [];
+  const features = Array.isArray(politySurfaces?.features) ? politySurfaces.features : [];
+
+  for (let featureIndex = 0; featureIndex < features.length; featureIndex += 1) {
+    const feature = features[featureIndex];
+    const owner = String(feature?.properties?.owner ?? "").trim();
+    const name = String(nameResolver(owner, feature) ?? owner).trim();
+    if (!owner || !name) continue;
+
+    const allPolygons = feature?.geometry?.type === "Polygon"
+      ? [feature.geometry.coordinates]
+      : feature?.geometry?.type === "MultiPolygon"
+        ? feature.geometry.coordinates
+        : [];
+    // Label geometry is derived from the full polity and never from the
+    // currently visible slice. Viewport-clipping a continental polity caused
+    // every pan to rebuild its axis, spacing and curve, producing isolated or
+    // reordered glyphs at the screen edge.
+    const polygons = allPolygons;
+
+    const fullAreaLngLat = allPolygons.reduce((sum, polygon) => {
+      const outer = calculateArea(polygon?.[0] ?? []);
+      const holes = (polygon ?? []).slice(1).reduce((holeSum, ring) => holeSum + calculateArea(ring), 0);
+      return sum + Math.max(0, outer - holes);
+    }, 0);
+    const priorityScale = Math.sqrt(Math.max(fullAreaLngLat, 1e-8)) * 17500;
+
+    // One authoritative label per polity. Picking the largest live landmass
+    // prevents archipelagos/colonies from printing the same country name over
+    // every island while still following the polity's current shape.
+    let bestPolygon = null;
+    let bestOuterTile = null;
+    let bestAreaTile = -1;
+    for (const polygon of polygons) {
+      const outerTile = ringLngLatToTile(polygon?.[0], extent);
+      const areaTile = calculateArea(outerTile);
+      if (outerTile.length < 4 || areaTile <= bestAreaTile) continue;
+      bestPolygon = polygon;
+      bestOuterTile = outerTile;
+      bestAreaTile = areaTile;
+    }
+    if (!bestPolygon || !bestOuterTile) continue;
+
+    const polygonTile = bestPolygon
+      .map((ring) => ringLngLatToTile(ring, extent))
+      .filter((ring) => ring.length >= 4);
+    const outerArea = calculateArea(bestPolygon[0]);
+    const holesArea = bestPolygon
+      .slice(1)
+      .reduce((sum, ring) => sum + calculateArea(ring), 0);
+    const areaLngLat = Math.max(outerArea - holesArea, 1e-8);
+    const areaScale = Math.sqrt(areaLngLat) * 17500;
+    const upperName = name.toUpperCase();
+    const featureId = `polity-label-${featureIndex}`;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const point of bestOuterTile) {
+      minX = Math.min(minX, point[0]);
+      minY = Math.min(minY, point[1]);
+      maxX = Math.max(maxX, point[0]);
+      maxY = Math.max(maxY, point[1]);
+    }
+    const shapeWidth = Math.max(0, maxX - minX);
+    const shapeHeight = Math.max(0, maxY - minY);
+    const pathInfo = buildCurvedLabelPath(bestOuterTile, upperName, { allowStraight: true });
+    if (pathInfo?.points?.length >= 4) {
+      const centerSample = getPointAlongPolyline(pathInfo.points, pathInfo.length / 2);
+      const centerLngLat = centerSample
+        ? tileToLngLat(centerSample.point[0], centerSample.point[1], extent)
+        : [0, 0];
+      const coordinates = pathInfo.points.map(([x, y]) => tileToLngLat(x, y, extent));
+      lineFeatures.push({
+        type: "Feature",
+        id: `${featureId}-line`,
+        geometry: { type: "LineString", coordinates },
+        properties: {
+          name: upperName,
+          owner,
+          areaScale,
+          priorityScale,
+          letterSpacing: labelLetterSpacing(pathInfo.length, areaScale, upperName),
+          pathLength: pathInfo.length,
+          pathWidth: pathInfo.width,
+          anchorLng: wrapLongitude(centerLngLat[0]),
+          anchorLat: centerLngLat[1],
+          lat: centerLngLat[1],
+          hasCurvedLabel: true,
+        },
+      });
+      continue;
+    }
+
+    // One atomic point fallback. This only handles shapes too small or broken to
+    // produce a usable interior spine; it is not used for continental polities.
+    const pointTile = getInteriorLabelPoint(polygonTile);
+    if (!pointTile) continue;
+    const [rawLng, lat] = tileToLngLat(pointTile[0], pointTile[1], extent);
+    pointFeatures.push({
+      type: "Feature",
+      id: `${featureId}-point`,
+      geometry: { type: "Point", coordinates: [wrapLongitude(rawLng), lat] },
+      properties: {
+        name: upperName,
+        owner,
+        areaScale,
+        priorityScale,
+        letterSpacing: 0.08,
+        shapeWidth,
+        shapeHeight,
+        rotation: getPrincipalAxisAngle(bestOuterTile),
+        hasCurvedLabel: false,
+        lat,
+      },
+    });
+  }
+
+  return {
+    curvedLabelData: { type: "FeatureCollection", features: curvedFeatures },
+    lineLabelData: { type: "FeatureCollection", features: lineFeatures },
+    pointLabelData: { type: "FeatureCollection", features: pointFeatures },
   };
 };
 

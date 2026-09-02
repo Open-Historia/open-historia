@@ -2058,6 +2058,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const gmApplied = Boolean(gmApplyResult?.applied);
         const events = Array.isArray(transaction?.events) ? transaction.events : [];
         const statPatches = Array.isArray(transaction?.countryStatPatches) ? transaction.countryStatPatches : [];
+        const storylineUpdates = Array.isArray(transaction?.storylineUpdates) ? transaction.storylineUpdates : [];
         const warUpdates = Array.isArray(transaction?.warUpdates) ? transaction.warUpdates : [];
         const relationUpdates = Array.isArray(transaction?.relationUpdates) ? transaction.relationUpdates : [];
         const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
@@ -2126,7 +2127,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             {
                 id: "world-intervention",
                 title: "World Intervention",
-                description: "Orchestrate a coherent multi-event, cross-system change.",
+                description: "Orchestrate a coherent multi-event, cross-system change with persistent storylines when the process remains unresolved.",
             },
         ];
 
@@ -2253,6 +2254,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("territory", impactCounts.territory)}
                             {countChip("polities", impactCounts.polities)}
                             {countChip("stats", statPatches.length)}
+                            {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
                             {countChip("markers", impactCounts.markers)}
                             {countChip("wars", warUpdates.length)}
@@ -2418,6 +2420,28 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         if (entry.op === "rename") detail += ` → ${entry.newName || "unnamed"}`;
                                         return <div key={`marker-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}><strong style={{ color: "rgba(255,255,255,0.88)" }}>{detail}</strong><span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>{patch.note || entry.marker?.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{patch.note || entry.marker?.note}</div> : null}</div>;
                                     })}
+                                </div>
+                            )}
+
+                            {storylineUpdates.length > 0 && (
+                                <div>
+                                    {subsectionTitle("Persistent storylines", storylineUpdates.length, "world.storylines")}
+                                    {storylineUpdates.map((entry, index) => (
+                                        <div key={`storyline-${entry.id}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                {String(entry.status || "active").toUpperCase()} · {entry.id || "unnamed-storyline"}
+                                            </strong>
+                                            <span style={{ color: "rgba(255,255,255,0.46)" }}>
+                                                {` · pressure ${Number.isFinite(Number(entry.pressure)) ? Number(entry.pressure) : "—"} · momentum ${Number.isFinite(Number(entry.momentum)) ? Number(entry.momentum) : "—"}`}
+                                            </span>
+                                            {entry.title ? <div style={{ marginTop: "0.12rem", color: "rgba(255,255,255,0.68)" }}>{entry.title}</div> : null}
+                                            <div style={{ color: "rgba(255,255,255,0.38)", marginTop: "0.1rem" }}>
+                                                Participants: {entry.participants?.join(", ") || "—"} · Events: {entry.eventIndexes?.join(", ") || "—"}
+                                                {entry.startedDate ? ` · Started: ${entry.startedDate}` : ""}
+                                            </div>
+                                            {entry.state ? <div style={{ color: "rgba(255,255,255,0.48)", marginTop: "0.12rem", lineHeight: 1.35 }}>{entry.state}</div> : null}
+                                        </div>
+                                    ))}
                                 </div>
                             )}
 

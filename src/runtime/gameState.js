@@ -1919,6 +1919,10 @@ const normalizePolityOverride = (key, value) => {
     code,
     color: normalizeOptionalString(value.color),
     ...(gadm0.length ? { mapRefs: { ...rawMapRefs, gadm0 } } : {}),
+    ...(normalizeOptionalString(value.mapLabel) ? { mapLabel: normalizeOptionalString(value.mapLabel) } : {}),
+    ...(normalizeOptionalString(value.mapDistinctLabel)
+      ? { mapDistinctLabel: normalizeOptionalString(value.mapDistinctLabel) }
+      : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
     ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
@@ -2808,6 +2812,8 @@ const mergePolityMetadata = ({ change, current = {}, canonicalName }) => ({
   ],
   code: canonicalName,
   ...(change.color ? { color: change.color } : {}),
+  ...(change.mapLabel ? { mapLabel: change.mapLabel } : {}),
+  ...(change.mapDistinctLabel ? { mapDistinctLabel: change.mapDistinctLabel } : {}),
   ...(change.name ? { name: change.name } : {}),
   ...(change.note ? { note: change.note } : {}),
 });

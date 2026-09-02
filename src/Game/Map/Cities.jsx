@@ -62,12 +62,13 @@ const cityLabelExpr = (renames) => {
     return expr;
 };
 
-const StockCities = ({ label }) => (
+const StockCities = ({ label, vNext }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
     id="cities-shapes"
     type="symbol"
     source-layer="cities"
+    beforeId={vNext ? "country-curved-labels" : undefined}
     minzoom={3.4}
     filter={populationFilter}
     layout={{
@@ -111,6 +112,7 @@ const StockCities = ({ label }) => (
     id="cities-labels"
     type="symbol"
     source-layer="cities"
+    beforeId={vNext ? "country-curved-labels" : undefined}
     minzoom={3.4}
     filter={populationFilter}
     layout={{
@@ -140,11 +142,12 @@ const StockCities = ({ label }) => (
 
 // Same visual language as the stock layers (★/◆/■ markers, haloed labels), but
 // fed from the scenario's cities.geojson and gated by the authored tier.
-const CustomCities = ({ data, label }) => (
+const CustomCities = ({ data, label, vNext }) => (
     <Source id="cities-source" type="geojson" data={data}>
     <Layer
     id="cities-shapes"
     type="symbol"
+    beforeId={vNext ? "country-curved-labels" : undefined}
     minzoom={3.1}
     filter={customTierFilter}
     layout={{
@@ -178,6 +181,7 @@ const CustomCities = ({ data, label }) => (
     <Layer
     id="cities-labels"
     type="symbol"
+    beforeId={vNext ? "country-curved-labels" : undefined}
     minzoom={3.1}
     filter={customTierFilter}
     layout={{
@@ -209,7 +213,7 @@ const CustomCities = ({ data, label }) => (
     </Source>
 );
 
-const Cities = () => {
+const Cities = ({ vNext = false }) => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
     // so the map doesn't fire its own independent 5s poll.
@@ -254,9 +258,9 @@ const Cities = () => {
     // the custom set is still loading, show nothing rather than flash modern names.
     if (customFlag) {
         if (!customData || !customData.features.length) return null;
-        return <CustomCities data={customData} label={label} />;
+        return <CustomCities data={customData} label={label} vNext={vNext} />;
     }
-    return <StockCities label={label} />;
+    return <StockCities label={label} vNext={vNext} />;
 };
 
 export default Cities;

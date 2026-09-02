@@ -10,7 +10,7 @@
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 
-export const WAR_LEDGER_VERSION = "0.1.3-contextual-combat-terms";
+export const WAR_LEDGER_VERSION = "0.1.4-adversarial-war-start";
 
 const WAR_UPDATE_SEPARATOR = "~";
 const MAX_WAR_UPDATES_PER_PASS = 16;
@@ -338,11 +338,13 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
   return { error: `Unsupported war operation "${op}" for ${id}.` };
 };
 
-const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|attack(?:s|ed|ing)?|raid(?:s|ed|ing)?|siege|clash(?:es|ed)?|combat|fighting|repuls(?:e|es|ed)|captures?|recaptures?|liberat(?:es|ed|ion)|front\b.*\b(stalemate|fighting)|stalemate\b.*\bfront)\b/i;
+const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|attack(?:s|ed|ing)?|raid(?:s|ed|ing)?|siege|clash(?:es|ed)?|fighting|repuls(?:e|es|ed)|captures?|recaptures?|liberat(?:es|ed|ion)|front\b.*\b(stalemate|fighting)|stalemate\b.*\bfront)\b/i;
 // Strong battlefield terms that are safe even if `kind` was imperfectly tagged.
-// Generic "attack" / "capture" are intentionally excluded because they are
-// common in political and economic prose.
-const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|combat|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
+// Bare "combat" is intentionally NOT sufficient: in military prose it is often
+// adjectival ("combat battlegroup", "combat-ready", "combat capability") rather
+// than evidence that two polities are fighting one another.
+const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
+const DIRECT_COMBAT_CONTEXT_RE = /\b(?:engag(?:e|es|ed|ing)|locked)\b.{0,80}\bcombat\b|\bcombat\b.{0,80}\b(?:against|between|with)\b|\bcombat operations?\b.{0,80}\b(?:against|targeting)\b/i;
 const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b/i;
 const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities)\b/i;
 const CEASEFIRE_RE = /\b(ceasefire (?:takes effect|begins|signed|agreed|declared)|armistice (?:takes effect|signed|agreed)|truce (?:takes effect|signed|agreed))\b/i;
@@ -369,13 +371,27 @@ const NON_BATTLEFIELD_COMBAT_TERMS_RE = new RegExp(
     String.raw`\bcombat capability\b`,
     String.raw`\bcombat capabilities\b`,
     String.raw`\bcombat support\b`,
+    String.raw`\bcombat battlegroups?\b`,
+    String.raw`\bcombat[- ]ready\b`,
+    String.raw`\bcombat deployments?\b`,
+    String.raw`\bcombat formations?\b`,
+    String.raw`\bcombat units?\b`,
+  ].join("|"),
+  "gi",
+);
+
+const NON_BATTLEFIELD_ACTION_TERMS_RE = new RegExp(
+  [
+    String.raw`\b(?:simulated|mock|training|exercise)\s+(?:attack|assault|invasion|raid|battle|combat)\b`,
+    String.raw`\b(?:attack|assault|invasion|raid|battle|combat)\s+(?:scenario|scenarios|drill|drills|exercise|exercises)\b`,
   ].join("|"),
   "gi",
 );
 
 const combatSemanticText = (event) =>
   `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
-    .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ");
+    .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ")
+    .replace(NON_BATTLEFIELD_ACTION_TERMS_RE, " military-exercise ");
 
 // Semantic WHAT: does the event itself actually describe battlefield combat?
 // This deliberately ignores impacts.unitOps. A post-processor may implement
@@ -389,9 +405,28 @@ export const eventNarratesHardCombat = (event) => {
   const hasControl = normalizeArray(impacts.regionControlOps)
     .some((op) => ["contest", "control"].includes(normalizeString(op?.op).toLowerCase()));
 
-  if (UNAMBIGUOUS_COMBAT_RE.test(text) || ACTIVE_OFFENSIVE_RE.test(text)) return true;
+  if (
+    UNAMBIGUOUS_COMBAT_RE.test(text) ||
+    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
+    ACTIVE_OFFENSIVE_RE.test(text)
+  ) return true;
   if (military && HARD_COMBAT_RE.test(text)) return true;
   return hasControl && HARD_COMBAT_RE.test(text);
+};
+
+// Creating a NEW canonical war is a higher-stakes mutation than binding an
+// event to a war that already exists. New-war creation therefore requires
+// direct adversarial evidence in the causal event itself. A model-supplied
+// combatants[] pair, warId, unit attack op, alliance deployment, exercise,
+// readiness measure or the adjective "combat" is never sufficient by itself.
+const eventSupportsNewWarStart = (event) => {
+  const text = combatSemanticText(event);
+  return (
+    WAR_START_RE.test(text) ||
+    UNAMBIGUOUS_COMBAT_RE.test(text) ||
+    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
+    ACTIVE_OFFENSIVE_RE.test(text)
+  );
 };
 
 const eventHasHardCombat = (event) => {
@@ -483,6 +518,14 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
     const eventUpdates = byEventId.get(eventId) || [];
 
     for (const update of eventUpdates) {
+      const op = normalizeString(update?.op).toLowerCase();
+      if (op === "start" && !eventSupportsNewWarStart(event)) {
+        return `War update ${update.id} (start) cannot create a canonical war from "${normalizeString(event.title)}": the causal event does not narrate a war declaration, commencement of hostilities, or direct adversarial battlefield combat. Military cooperation, deployments, exercises, readiness, deterrence, and force labels such as "combat battlegroup" are not belligerency.`;
+      }
+      if (op === "resume" && !eventSupportsNewWarStart(event)) {
+        return `War update ${update.id} (resume) cannot resume hostilities from "${normalizeString(event.title)}": the causal event lacks direct adversarial combat or explicit renewed-hostilities semantics.`;
+      }
+
       const result = applyUpdateToWarMap({
         map: working,
         update,
@@ -619,7 +662,7 @@ const deriveGeneratedWarId = ({ combatants, event, world, updates }) => {
  */
 export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { bound: 0, started: 0, resumed: 0, unresolved: [] };
+    return { bound: 0, started: 0, resumed: 0, sanitized: 0, unresolved: [] };
   }
 
   const events = Array.isArray(candidate.events) ? candidate.events : [];
@@ -628,12 +671,45 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
   let bound = 0;
   let started = 0;
   let resumed = 0;
+  let sanitized = 0;
   const unresolved = [];
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
-    if (!eventHasHardCombat(event)) continue;
+
+    const hardCombat = eventHasHardCombat(event);
+    if (!hardCombat) {
+      const explicitWarId = normalizeString(event.warId);
+      const matchingUpdate = explicitWarId
+        ? updates.find((update) => normalizeString(update?.id) === explicitWarId)
+        : null;
+      const knownWar = explicitWarId
+        ? wars.find((war) => war.id === explicitWarId)
+        : null;
+      const transition = eventTransitionExpectation(event);
+
+      // combatants[] is reserved for direct battlefield opponents. Clear stray
+      // model metadata on non-combat prose so a cooperative military event cannot
+      // seed later war inference merely by naming two allied participants.
+      if (!transition && normalizeArray(event.combatants).length) {
+        event.combatants = [];
+        sanitized += 1;
+      }
+
+      // Unknown war metadata on a non-combat, non-transition event is unsupported
+      // bookkeeping, not history. Preserve the event itself and fail closed on
+      // belligerency by stripping only that impossible link.
+      if (explicitWarId && !knownWar && !matchingUpdate && !transition) {
+        event.warId = "";
+        sanitized += 1;
+        console.warn(
+          `[OH war metadata guard] stripped unsupported warId ${explicitWarId} from non-combat event ` +
+          `"${normalizeString(event.title)}".`,
+        );
+      }
+      continue;
+    }
 
     const combatants = uniquePolities(event.combatants, 8);
     if (combatants.length < 2) {
@@ -651,8 +727,18 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       const matchingUpdate = updates.find((update) => normalizeString(update?.id) === explicitWarId);
       if (known || matchingUpdate) continue;
 
-      // The model supplied a stable war id and two explicit opponents but omitted
-      // the lifecycle row. That is unambiguous bookkeeping, so materialize start.
+      // A model-supplied id + two names is NOT enough to create belligerency.
+      // The causal event must independently narrate direct opposition or an
+      // explicit war start. Otherwise fail closed and request correction.
+      if (combatants.length === 2 && !eventSupportsNewWarStart(event)) {
+        unresolved.push({
+          index,
+          title: normalizeString(event.title),
+          reason: `unknown warId ${explicitWarId} has two combatants but lacks direct adversarial evidence sufficient to start a new canonical war`,
+        });
+        continue;
+      }
+
       if (combatants.length === 2) {
         const note = compactWarField(
           `Native bootstrap from hard-combat event: ${normalizeString(event.title)}`,
@@ -752,9 +838,18 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       continue;
     }
 
-    // Exactly two explicit combatants carries its own side partition: because
-    // event.combatants means DIRECT OPPONENTS, one is Side A and one is Side B.
-    // That is enough semantic evidence to create the missing canonical ledger row.
+    // Exactly two names still do not prove belligerency. event.combatants is a
+    // model claim; a NEW war additionally requires direct adversarial evidence
+    // in the event's own title/description.
+    if (combatants.length === 2 && !eventSupportsNewWarStart(event)) {
+      unresolved.push({
+        index,
+        title: normalizeString(event.title),
+        reason: "two combatants were supplied, but the event lacks direct adversarial evidence sufficient to create a new canonical war",
+      });
+      continue;
+    }
+
     if (combatants.length === 2) {
       const warId = deriveGeneratedWarId({
         combatants,
@@ -786,7 +881,7 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
     });
   }
 
-  return { bound, started, resumed, unresolved };
+  return { bound, started, resumed, sanitized, unresolved };
 };
 
 export const validateWarLedgerPayload = (candidate, { world = {} } = {}) => {

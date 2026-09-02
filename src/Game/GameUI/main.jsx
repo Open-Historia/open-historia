@@ -1,8 +1,9 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { SettingsButton, SettingsMenu } from "./settings";
-import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
+import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
@@ -154,7 +155,8 @@ const Main = ({
 
   const [apiProvider, setApiProvider] = useState(() => getStoredProvider());
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettingsFormState());
-  const { games, loaded } = useLibraryState();
+  const { activeGame, games, loaded, runtimeScenario } = useLibraryState();
+  const activeCountryName = useCountryDisplayName(activeGame?.country || "");
   // No games -> nothing to simulate (the main menu covers the empty world).
   const hasNoGames = loaded && (games?.length ?? 0) === 0;
 
@@ -360,10 +362,19 @@ const Main = ({
           discordUrl="https://discord.gg/C3AVwHacZ4"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
           githubUrl="https://github.com/Open-Historia/open-historia"
+          reportBugUrl="https://github.com/Open-Historia/open-historia/issues/new"
+          context={{
+            gameName: activeGame?.name || "",
+            scenarioName: runtimeScenario?.name || "",
+            countryName: activeCountryName || activeGame?.country || "",
+            date: activeGame?.currentDate || "",
+          }}
+          onClose={() => setIsSettingsOpen(false)}
+          onOpenGameManagement={() => openLibraryTab("games")}
+          onOpenEvents={() => setActiveBottomPanel("history")}
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);
-            setIsSettingsOpen(false);
           }}
           topOffset={TOP_BAR_OFFSET}
           isFullscreenEnabled={isFullscreenEnabled}

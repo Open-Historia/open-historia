@@ -1517,6 +1517,105 @@ const buildDiplomaticCanonicalGrounding = ({ diplomaticContext = "", warContext 
     warContext || "No active or ceasefire canonical wars are currently recorded.",
 ].join("\n");
 
+const advisorStatsString = (value) => String(value ?? "").trim();
+
+const advisorStatsNumber = (value) => {
+    if (value == null) return null;
+    if (typeof value === "string" && !value.trim()) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+};
+
+const buildAdvisorCanonicalStatsContext = ({ gameData, worldData } = {}) => {
+    const playerPolity = advisorStatsString(gameData?.country);
+    const statsLedger =
+        worldData?.countryStats &&
+        typeof worldData.countryStats === "object" &&
+        !Array.isArray(worldData.countryStats)
+            ? worldData.countryStats
+            : {};
+
+    // Stats are normally keyed by the same canonical polity string as game.country.
+    // The case-insensitive fallback protects older saves without exposing any
+    // non-player sheet to the Advisor.
+    const directKey = playerPolity && Object.prototype.hasOwnProperty.call(statsLedger, playerPolity)
+        ? playerPolity
+        : "";
+    const foldedPlayerKey = playerPolity.toLowerCase();
+    const caseFoldedKey = directKey || (
+        foldedPlayerKey
+            ? Object.keys(statsLedger).find(
+                (key) => advisorStatsString(key).toLowerCase() === foldedPlayerKey
+            ) || ""
+            : ""
+    );
+    const sheet = caseFoldedKey ? statsLedger[caseFoldedKey] : null;
+
+    const lines = [
+        "[Canonical Player Stats — binding]",
+        `Player polity: ${playerPolity || "Unknown"}`,
+        "This section is read directly from the player's persisted world.countryStats sheet. It is canonical campaign state, not an estimate generated for this chat.",
+        "When a numeric value is supplied here, it outranks generic real-world knowledge, historical expectations, older Advisor claims, and narrative inference.",
+        "Do not claim that the campaign ledger lacks a supplied figure. Do not replace a supplied figure with a real-history estimate.",
+        "Do not infer a precise missing number. If no canonical sheet or field exists, say that precise value is not currently available in canonical Stats.",
+        "GDP and GDP per capita use the campaign Stats accounting basis: nominal output expressed in constant 2026-EUR accounting terms for cross-era aggregation. This accounting basis does not import 2026 technology, productivity, institutions, or living standards into the campaign date.",
+    ];
+
+    if (!sheet || typeof sheet !== "object") {
+        lines.push(
+            "",
+            "Canonical Stats sheet: NOT INITIALIZED for the player polity.",
+            "The Advisor may discuss qualitative campaign evidence, but must not invent precise Stats-panel numbers."
+        );
+        return lines.join("\n");
+    }
+
+    const addNumber = (label, value, suffix = "") => {
+        const number = advisorStatsNumber(value);
+        if (number != null) lines.push(`${label}: ${number}${suffix}`);
+    };
+    const addText = (label, value) => {
+        const text = advisorStatsString(value);
+        if (text) lines.push(`${label}: ${text}`);
+    };
+
+    lines.push("", `Canonical Stats key: ${caseFoldedKey}`);
+    addText("Assessment date", sheet?.continuity?.assessedDate);
+    const assessedRound = advisorStatsNumber(sheet?.continuity?.assessedRound);
+    if (assessedRound != null) lines.push(`Assessment round: ${assessedRound}`);
+
+    lines.push("", "Population:");
+    addNumber("Total population", sheet?.population?.total);
+    addNumber("Core/integrated population", sheet?.population?.coreIntegrated);
+    addNumber("Other-territories population", sheet?.population?.otherTerritories);
+
+    lines.push("", "Economy:");
+    addNumber("GDP (constant-2026-EUR accounting units)", sheet?.economy?.gdp);
+    addNumber("GDP per capita (constant-2026-EUR accounting units)", sheet?.economy?.gdpPerCapita);
+    addNumber("GDP growth", sheet?.economy?.gdpGrowth, "%");
+    addNumber("Inflation", sheet?.economy?.inflation, "%");
+    addNumber("Unemployment", sheet?.economy?.unemployment, "%");
+    addNumber("Public debt", sheet?.economy?.publicDebt, "%");
+    addNumber("Budget balance", sheet?.economy?.budgetBalance, "%");
+    addText("Currency", sheet?.economy?.currency);
+
+    lines.push("", "GDP sector shares:");
+    addNumber("Agriculture", sheet?.gdpBreakdown?.agriculture, "%");
+    addNumber("Industry", sheet?.gdpBreakdown?.industry, "%");
+    addNumber("Services", sheet?.gdpBreakdown?.services, "%");
+
+    lines.push("", "Strategic / state indices (0-100):");
+    addNumber("Stability", sheet?.stability);
+    addNumber("Sovereignty", sheet?.indices?.sovereignty);
+    addNumber("Food autonomy", sheet?.indices?.foodAutonomy);
+    addNumber("Energy autonomy", sheet?.indices?.energyAutonomy);
+    addNumber("Economic independence", sheet?.indices?.economicIndependence);
+    addNumber("Internal security", sheet?.indices?.internalSecurity);
+    addNumber("International reputation", sheet?.indices?.internationalReputation);
+
+    return lines.join("\n");
+};
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [gameData, actionData, chatData, worldData, eventData, advisorData] = await Promise.all([
@@ -1537,10 +1636,14 @@ async function buildAdvisorSystemPrompt() {
         worldData,
     });
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
-    const systemPrompt = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    const advisorCanonicalStats = buildAdvisorCanonicalStatsContext({ gameData, worldData });
+    const systemPrompt = [
+        renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
+        advisorCanonicalStats,
+    ].filter(Boolean).join("\n\n");
 
-    // Phase 9.3A does not change advisor context; diagnostics remain observational
-    // for this path while focused production context is limited to diplomacy.
+    // R2.46: Advisor receives the player's already-persisted canonical Stats sheet.
+    // Context only: no Stats generation, no extra AI request, no duplicate ledger.
     logContextDiagnostics({
         stage: "prompt-build",
         systemPrompt,
