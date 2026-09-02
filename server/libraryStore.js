@@ -2405,7 +2405,17 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
   // forever, which looks exactly like "my game saved nothing". Refusing is safe —
   // writeJson throws on a non-ok response, so the caller sees a real failure
   // instead of silently corrupting a save.
-  const expectsArray = assetKey in STORAGE_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES;
+  //
+  // The expectation comes from the asset's DECLARED DEFAULT, not from which
+  // registry it sits in. This used to read "storage or runtime-only means an
+  // array", which was only accidentally true: every asset in those two sets
+  // happened to be an array until `intercepts` — an object keyed by polity —
+  // joined the runtime-only set, at which point every write of it was rejected
+  // with a 400 and the Spy tab could not save what a spy had gathered.
+  // JSON_ASSET_DEFAULTS already states each asset's shape, so deriving it there
+  // cannot drift apart again. A key with no declared default (flags, tags) is an
+  // object, which is what it was before.
+  const expectsArray = Array.isArray(JSON_ASSET_DEFAULTS[assetKey]);
   const shapeOk = expectsArray
     ? Array.isArray(value)
     : Boolean(value) && typeof value === "object" && !Array.isArray(value);
