@@ -25,7 +25,7 @@ import {
     retryDelayMsFromPayload,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
-import { createModeObserver, startingStructuredMode } from "./structuredMode.js";
+import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createFirstByteTimer, normalizeUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
@@ -1162,12 +1162,12 @@ async function callOpenAIStyleChatCompletions({
             // as a perfectly good 200 full of prose. Advance it on "no tool call"
             // too. Each rung transitions at most once, so this terminates.
             if (looksLikeDeliberation(text) && canRetryBeforeDeadline(deadline, 0)) {
-                const nextMode = structuredMode === "tool" && allowJsonSchemaFallback ? "json_schema"
-                    : structuredMode === "json_schema" ? "json_object"
-                    : structuredMode === "json_object" ? "text_json"
-                    : null;
-                // Native OpenAI enforces tool_choice, so a deliberating model there
-                // is a different problem and keeps the old one-shot insistence.
+                // The rung order lives in structuredMode.js, with the tests that
+                // pin it. Native OpenAI enforces tool_choice, so it never steps
+                // down out of tool mode - a deliberating model there is a
+                // different problem, handled by the insistence retry below.
+                const canStepDown = structuredMode !== "tool" || allowJsonSchemaFallback;
+                const nextMode = canStepDown ? nextStructuredMode(structuredMode) : null;
                 if (nextMode) {
                     console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
                     structuredMode = nextMode;
