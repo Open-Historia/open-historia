@@ -4,6 +4,7 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
@@ -2601,10 +2602,32 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
     const variables = await buildTemplateVariables(bundle);
+    const openChats = normalizeChats(bundle.chats);
+    // The prompt template shows only ONE line per chat (chatSummary: the last
+    // message, prefixed by its speaker), and a note sent to a polity the player
+    // is already talking to gets APPENDED to that thread. So the model was asked
+    // for an opener while its note became a reply, with almost none of the
+    // conversation in view — which is how a polity ended up answering a hostile
+    // message with an unrelated pleasantry, and how it ended up repeating the
+    // player's own line back at them.
+    const conversationContext = [
+      "",
+      "These are the conversations already open with the player, oldest message first:",
+      "",
+      renderOpenChatsForPrompt(openChats),
+      "",
+      "A note addressed to a polity the player is ALREADY talking to is appended to that"
+      + " conversation, so it must read as the next thing that polity says: answer what was"
+      + " actually said, never restate or quote it back, and never open as though the exchange"
+      + " were new. If nothing there warrants a reply and no polity has a fresh reason to"
+      + " write, return {\"chat\": null}.",
+    ].join("\n");
     const { payload } = await runJsonTask("idleDiplomacy", {
       timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
       userMessage:
-        "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now. Return JSON only.",
+        "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now."
+        + conversationContext
+        + "\n\nReturn JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
@@ -2641,6 +2664,11 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
     if (existing) {
       const note = built.messages[0];
       if (!note) return null;
+      // Even told not to, a model hands back the line it was just shown. Posting
+      // it would have the polity parrot the player in their own thread, which is
+      // worse than saying nothing — and silence is what this whole path defaults
+      // to anyway.
+      if (echoesExistingMessage(note.text, existing.messages)) return null;
       nextChats = chats.map((chat) => (chat === existing
         ? { ...chat, messages: [...chat.messages, { ...note, time: normalizeString(bundle.game?.gameDate) }] }
         : chat));
