@@ -52,7 +52,7 @@ import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../run
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { PROMPT_LAYOUT_V2, promptLayoutVersion } from "./gameplayPrompts.js";
-import { buildStateBlocks, stablePrefixLength } from "./promptLayout.js";
+import { buildStateBlocks, stablePrefixLength, staticiseTemplate } from "./promptLayout.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -359,8 +359,11 @@ const runJsonTask = async (taskKey, {
   // Both paths stay forever: a pack is v1 unless it was written for v2, so every
   // existing campaign keeps exactly the prompt it has today, and a scenario
   // author who customised their text is never migrated out from under it.
-  let systemPrompt = layout === PROMPT_LAYOUT_V2
-    ? renderTemplate(prompts.tasks[taskKey], {})
+  const v2 = layout === PROMPT_LAYOUT_V2
+    ? staticiseTemplate(prompts.tasks[taskKey], prompts.helpers, { ...variables, ...helperValues })
+    : null;
+  let systemPrompt = v2
+    ? v2.text
     : renderTemplate(prompts.tasks[taskKey], {
       ...variables,
       ...helperValues,
@@ -572,7 +575,7 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
   let stablePrefixChars = 0;
   if (layout === PROMPT_LAYOUT_V2) {
     const merged = { ...variables, ...helperValues };
-    const order = Object.keys(merged);
+    const order = v2.order;
     stablePrefixChars = stablePrefixLength(systemPrompt, merged, order);
     const blocks = buildStateBlocks(merged, order);
     if (blocks) systemPrompt = `${systemPrompt}\n\n${blocks}`;
