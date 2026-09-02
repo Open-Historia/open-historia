@@ -787,6 +787,7 @@ const TimelineSkipPanel = ({
     onUndo,
     progressLabel,
     projectsHeld,
+    projectsRetries,
     topOffset,
     undoCount,
 }) => {
@@ -1056,6 +1057,16 @@ const TimelineSkipPanel = ({
             }}
             >
             <div>{projectsHeld}</div>
+            {/* A failed retry otherwise re-renders the identical message, so the
+                button reads as dead even though it ran. Say plainly that it was
+                tried and did not work. */}
+            {projectsRetries > 0 && !isRetryingProjects && (
+                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+                Tried {projectsRetries === 1 ? "once" : `${projectsRetries} times`} — the board still
+                did not update. Retrying again may help if the problem was temporary;
+                otherwise discard the turn and run it again.
+                </div>
+            )}
             <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                 type="button"
@@ -1384,6 +1395,10 @@ const DateWidget = ({
     // again. Nothing has been saved either way.
     const [projectsHeld, setProjectsHeld] = useState("");
     const [isRetryingProjects, setIsRetryingProjects] = useState(false);
+    // How many times the board has been retried for the turn currently held.
+    // Without it a failed retry re-renders the identical message and reads as a
+    // dead button - which is exactly how it read in testing.
+    const [projectsRetries, setProjectsRetries] = useState(0);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
@@ -1656,6 +1671,7 @@ const DateWidget = ({
                 // model is the difference between ten seconds and ten minutes.
                 setError("");
                 setProjectsHeld(jumpError.message || "The Projects & Operations board did not update.");
+                setProjectsRetries(0);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
@@ -1680,6 +1696,7 @@ const DateWidget = ({
     const retryHeldProjects = async () => {
         if (isRetryingProjects) return;
         setIsRetryingProjects(true);
+        setProjectsRetries((count) => count + 1);
         const startedAt = Date.now();
         const controller = new AbortController();
         jumpAbortRef.current = controller;
@@ -1690,6 +1707,7 @@ const DateWidget = ({
             setWorldState(result.world);
             setVisibleEventCount(1);
             setProjectsHeld("");
+            setProjectsRetries(0);
             logDebugEvent("turn", `Held turn finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
                 round: result.game?.round ?? 0,
                 events: result.events?.length ?? 0,
@@ -1718,6 +1736,7 @@ const DateWidget = ({
     const discardHeldProjects = () => {
         discardPendingProjectsJump();
         setProjectsHeld("");
+        setProjectsRetries(0);
     };
 
     const acceptModeSuggestion = () => {
@@ -2108,6 +2127,7 @@ const DateWidget = ({
         onUndo={runUndo}
         progressLabel={jumpProgress}
         projectsHeld={projectsHeld}
+        projectsRetries={projectsRetries}
         topOffset={topOffset}
         undoCount={undoCount}
         />
