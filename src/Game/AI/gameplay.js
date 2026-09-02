@@ -48,7 +48,7 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { PROMPT_LAYOUT_V2, promptLayoutVersion } from "./gameplayPrompts.js";
@@ -348,7 +348,12 @@ const runJsonTask = async (taskKey, {
 }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  const layout = promptLayoutVersion(prompts);
+  // Two ways in: a pack written for v2, or the experimental setting, which lets a
+  // player try the layout on the campaign they already have. The transform works
+  // on any pack (AI/promptLayout.js), so no migration is needed for either.
+  const layout = getMapSetting(MAP_SETTING_KEYS.cachePromptPrefix)
+    ? PROMPT_LAYOUT_V2
+    : promptLayoutVersion(prompts);
 
   // v1 renders campaign state THROUGH the prose, so the first ${...} - 2.7% into
   // the jump template - ends any prefix a provider could reuse. v2 keeps the task

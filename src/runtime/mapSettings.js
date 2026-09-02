@@ -57,6 +57,23 @@ export const MAP_SETTING_KEYS = {
     // setting moved, and what makes a newly created game start the way the last
     // one did. See resolveBetaUnits() below.
     betaUnits: "beta_unit_system",
+    // EXPERIMENTAL. Reorders the prompt so everything that rarely changes comes
+    // first and this turn's state comes last, letting a provider reuse the
+    // opening instead of re-reading it (AI/promptLayout.js). On a mature save
+    // that turns an 801-character reusable prefix into roughly 470,000 - about
+    // 73% of the prompt - which every provider exploits: automatically on OpenAI
+    // and Gemini, via a cache breakpoint on Anthropic, and as KV-cache reuse on a
+    // local llama.cpp/Ollama server, where skipping prompt evaluation is the
+    // difference between a minute of silence and answering straight away.
+    //
+    // OFF by default - read with getMapSetting, NOT getMapSettingDefaultOn.
+    // Nothing is summarised or dropped and every rule survives byte-for-byte, but
+    // the model does READ a differently shaped prompt: dates and the world
+    // snapshot arrive in labelled blocks at the end rather than inline in the
+    // prose. That cannot change what it is told, but it can change how it writes,
+    // and no turn has been generated this way yet. It ships off until side-by-side
+    // turns say it is at least as good, and is meant to become the default.
+    cachePromptPrefix: "ai_cache_prompt_prefix",
 };
 
 export function getMapSetting(key) {
@@ -90,6 +107,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.betaUnits]: "Beta unit system",
+    [MAP_SETTING_KEYS.cachePromptPrefix]: "Reuse prompt between turns",
 };
 
 export function setMapSetting(key, value) {

@@ -1171,6 +1171,7 @@ const SettingsMenu = ({
         // profile (see mapSettings.js). resolveBetaUnits falls back to the
         // localStorage key for a save that has never chosen.
         betaUnits: resolveBetaUnits(),
+        cachePromptPrefix: getMapSetting(MAP_SETTING_KEYS.cachePromptPrefix),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -1343,6 +1344,14 @@ const SettingsMenu = ({
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing. Set per save: it is stored with this campaign, so it survives a restart and follows a copy of the save.
+        </div>
+        <Toggle
+        label="Reuse prompt between turns"
+        enabled={mapSettings.cachePromptPrefix}
+        onToggle={() => updateMapSetting("cachePromptPrefix", MAP_SETTING_KEYS.cachePromptPrefix, !mapSettings.cachePromptPrefix)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        On: the prompt is reordered so everything that rarely changes comes first and only this turn's situation comes last, letting your AI skip re-reading the rest. Long turns get faster, most of all on a local model. Nothing is left out and no rule changes — but the AI reads a differently arranged prompt, so its writing may shift. Off (default) while that is being checked.
         </div>
         {/* The running session is pinned to what THIS SAVE said when it was opened
             (see isBetaUnits), so a flip only means something after the page is
