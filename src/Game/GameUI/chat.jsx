@@ -3,7 +3,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, gatherIntelligence } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker } from "../AI/gameplay.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -961,7 +961,6 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
     const [intercepts, setIntercepts] = useState({});
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
-    const [busy, setBusy]             = useState(""); // target being gathered
     const [error, setError]           = useState("");
 
     const refresh = async () => {
@@ -1002,20 +1001,12 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         try { await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory)); } catch (err) { setError(err?.message || String(err)); }
     };
 
-    const handleGather = async (target) => {
-        setError(""); setBusy(target);
-        try { await gatherIntelligence(target); await refresh(); }
-        catch (err) { setError(target + ": " + (err?.message || err)); }
-        finally { setBusy(""); }
-    };
-
     const handleDeploy = async (selected) => {
         setChoosing(false); setError("");
         const target = selected?.[0]?.name;
         try {
             const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
             await commitSpies(next);
-            await handleGather(target);
         } catch (err) { setError(err?.message || String(err)); }
     };
 
@@ -1030,7 +1021,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
     }
 
     const targets = Object.keys(intercepts);
-    const candidates = countries.filter((c) => c.name !== playerCountry && !spies.some((s) => s.target === c.name));
+    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+    const candidates = countries.filter((c) =>
+        !sameCountry(c.name, playerCountry) && !spies.some((s) => sameCountry(s.target, c.name)));
     const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
     const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
@@ -1071,9 +1064,6 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
             </div>
             </div>
-            <button onClick={() => handleGather(spy.target)} disabled={busy === spy.target} style={{ ...spyBtn(true), opacity: busy === spy.target ? 0.6 : 1 }}>
-            {busy === spy.target ? "Gathering…" : "Gather"}
-            </button>
             <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
             </div>
         ))}

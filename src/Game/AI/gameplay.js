@@ -1933,13 +1933,16 @@ export const gatherIntelligence = async (target, { signal } = {}) => {
   const exchanges = normalizeArray(payload?.exchanges)
     // The schema forbids it, but a model that names the target or the player as
     // the counterpart has produced a chat the player already has or nonsense.
+    // A spy reports on what the target says to OTHERS; the player's own dealings
+    // with them are already in the player's inbox. Case- and space-insensitive,
+    // because the model writes a display name and the old comparison was exact.
     .filter((exchange) => {
-      const counterpart = normalizeString(exchange?.counterpart);
-      return counterpart && counterpart !== name && counterpart !== normalizeString(bundle.game?.country);
+      const counterpart = regionKey(exchange?.counterpart);
+      return counterpart && counterpart !== regionKey(name) && counterpart !== regionKey(bundle.game?.country);
     })
     .map((exchange, index) => ({
       ...exchange,
-      id: `${name}:${bundle.game?.round ?? 0}:${index}`.toLowerCase().replace(/s+/g, "-"),
+      id: `${name}:${bundle.game?.round ?? 0}:${index}`.toLowerCase().replace(/\s+/g, "-"),
     }));
   // Stored sealed: the file, the network reply and the React tree hold ciphertext,
   // so copying the page or opening intercepts.json gives up nothing the player's
@@ -1969,6 +1972,37 @@ export const readOpenedIntercepts = async () => {
 // After a jump, every active spy reports again. Sequential and best-effort:
 // a failed report never fails the turn, and the writes go to the intercepts
 // asset only — never to world.json, whose turn write has just landed.
+// One roll per real-world minute, so an agent reports roughly every 20 minutes
+// the game is open. Deliberately slow: each report is a full AI call, and the
+// point of an agent is a steady trickle rather than something the player farms
+// by pressing a button. The player-facing Gather button is gone for the same
+// reason.
+const SPY_REPORT_CHANCE = 1 / 20;
+let spyReportInFlight = false;
+
+// Called on a timer by the UI. Picks ONE live agent and has it report, or does
+// nothing at all — every failure is silent, exactly like the diplomacy drip.
+export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {}) => {
+  if (spyReportInFlight || isSimulationBusy()) return null;
+  if (Math.random() >= chance) return null;
+  spyReportInFlight = true;
+  try {
+    const world = normalizeWorldState(await readWorldState({ force: true }));
+    const player = normalizeString((await readGameData()).country);
+    if (!player) return null;
+    const agents = activeSpies(world, player);
+    if (agents.length === 0) return null;
+    const agent = agents[Math.floor(Math.random() * agents.length)];
+    if (isSimulationBusy()) return null;
+    await gatherIntelligence(agent.target);
+    return agent.target;
+  } catch {
+    return null; // silence is the safe outcome
+  } finally {
+    spyReportInFlight = false;
+  }
+};
+
 export const refreshSpyIntercepts = async () => {
   let world;
   try {

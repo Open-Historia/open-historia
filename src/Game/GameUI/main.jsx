@@ -170,6 +170,23 @@ const Main = ({
     return () => clearInterval(iv);
   }, [hasNoGames]);
 
+  // Spy reports, on the same rhythm and with the same guards: a roll each
+  // minute the tab is visible, at odds that work out to roughly one report
+  // every twenty minutes per deployed agent. Agents also report after every
+  // time skip (refreshSpyIntercepts, in the jump itself); this is what makes
+  // them tick while the player is simply playing, and it is why there is no
+  // Gather button — an agent is a trickle of intelligence, not a thing to farm.
+  useEffect(() => {
+    if (hasNoGames) return undefined;
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      import("../AI/gameplay.js")
+        .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
+        .catch(() => {});
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [hasNoGames]);
+
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);

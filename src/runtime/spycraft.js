@@ -94,10 +94,14 @@ export const deploySpy = (world, target, { date = "", playerPolity = "", owner =
   const name = String(target ?? "").trim();
   const who = String(owner ?? "").trim();
   if (!name) throw new Error("Choose a country to deploy to.");
-  if (who && name === who) throw new Error("You cannot spy on yourself.");
+  // Case- and padding-insensitive: the picker offers DISPLAY names while the
+  // game's country is stored verbatim, and an exact comparison let a player
+  // deploy an agent into their own capital when the two differed at all.
+  const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (who && same(name, who)) throw new Error("You cannot spy on yourself.");
   const spies = normalizeSpies(world?.spies);
   const mine = spies.filter((spy) => spy.owner === who && isLive(spy));
-  if (mine.some((spy) => spy.target === name)) throw new Error(`A spy is already deployed in ${name}.`);
+  if (mine.some((spy) => same(spy.target, name))) throw new Error(`A spy is already deployed in ${name}.`);
   if (mine.length >= MAX_ACTIVE_SPIES) {
     throw new Error(`Your service can run at most ${MAX_ACTIVE_SPIES} spies at once. Recall one first.`);
   }
