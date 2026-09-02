@@ -364,7 +364,7 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | Display | **Fullscreen**, **3D Globe**, **3D Terrain** (labeled "Very Experimental") toggles | `Main` toggles / `App.jsx` state |
 | Map | Hide country labels, **Reduce motion** (umbrella over the two below), Disable idle globe rotation, Disable camera movement during events | `setMapSetting(MAP_SETTING_KEYS.*)` (`src/runtime/mapSettings.js`) |
 | AI | **Limit AI generation** (silence deadline vs. wait-as-long-as-needed), **Generate long time skips in segments** | `MAP_SETTING_KEYS.limitAiGeneration`, `.chunkLongJumps` |
-| Experimental | **Beta unit system** (stored per save, not per browser), **Reuse prompt between turns** (the cache-friendly prompt layout — off by default) | `applySaveBetaUnits`; `MAP_SETTING_KEYS.cachePromptPrefix` |
+| Experimental | **Beta unit system** (stored per save, not per browser) | `applySaveBetaUnits` |
 | Diagnostics | `DiagnosticsPanel` — **📋 Copy log** / **💾 Save as file** / **Clear**, a live entry count and size, and two persisted toggles: **Keep a diagnostics log** (default on) and **Detailed logging** (default off) | `buildDebugLogReport`, `debugLogFilename`, `clearDebugLog`, `setDebugLogEnabled`, `setDebugLogVerbose` (`src/runtime/debugLog.js`) |
 | Footer | **🧪 Cheats** (→ `onOpenCheats`), **📖 Guides** (`/guides/`), Discord/Reddit/GitHub links | — |
 
