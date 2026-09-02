@@ -250,11 +250,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         : null,
     [terrainEnabled, isGlobe, effectiveCustomBg, effectiveBgDeclared],
   );
-  // Render at reduced pixel density when zoomed far out: the whole-world view
-  // draws every region, border and label at once. Never go below 1x, though —
-  // sub-native rendering visibly blurred borders and labels. HiDPI screens still
-  // get a substantial cap at 1.25x. Hysteresis (re-sharpen at 5, soften below
-  // 4.5) prevents flapping at the boundary.
+  // Render the whole-world/continental view at exactly 1x. On a 125% desktop
+  // display the previous 1.25 cap made MapLibre shade 56% more framebuffer
+  // pixels while the extra samples were scarcely visible at this scale. Never
+  // go below 1x; restore the display's native density for close inspection.
+  // Hysteresis (re-sharpen at 5, soften below 4.5) prevents threshold flapping.
   const pixelRatioModeRef = useRef(null);
   const applyDynamicPixelRatio = useCallback((zoom) => {
     const map = mapRef?.current?.getMap?.();
@@ -263,7 +263,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     if (!mode || mode === pixelRatioModeRef.current) return;
     pixelRatioModeRef.current = mode;
     const native = window.devicePixelRatio || 1;
-    map.setPixelRatio(mode === "low" ? Math.max(1, Math.min(native, 1.25)) : native);
+    map.setPixelRatio(mode === "low" ? 1 : native);
   }, [mapRef]);
 
   const emitMapMotion = useCallback((active) => {

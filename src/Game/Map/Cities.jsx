@@ -113,7 +113,7 @@ const StockCities = ({ label, vNext }) => (
     type="symbol"
     source-layer="cities"
     beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={3.4}
+    minzoom={vNext ? 4.2 : 3.4}
     filter={populationFilter}
     layout={{
         "symbol-sort-key": ["-", ["get", "population"]],
@@ -148,7 +148,7 @@ const CustomCities = ({ data, label, vNext }) => (
     id="cities-shapes"
     type="symbol"
     beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={3.1}
+    minzoom={vNext ? 3.4 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
@@ -182,7 +182,7 @@ const CustomCities = ({ data, label, vNext }) => (
     id="cities-labels"
     type="symbol"
     beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={3.1}
+    minzoom={vNext ? 4.2 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
