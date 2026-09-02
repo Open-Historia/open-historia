@@ -1,5 +1,6 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
@@ -468,7 +469,15 @@ const CountrySelectorModal = ({
 }) => {
     const [search, setSearch]     = React.useState("");
     const [selected, setSelected] = React.useState([]);
-    const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
+    // Deduped before anything is rendered: the tiles and the selection are both
+    // keyed by name, so a repeated name collides React keys — the same country
+    // appears several times, a search misses what it matched, and clicking one
+    // tile marks another selected without highlighting it. countryList.js fixes
+    // the source of the duplicates; this makes the picker safe from any source.
+    const filtered = useMemo(
+        () => dedupeByName(countries).filter(c => c.name.toLowerCase().includes(search.toLowerCase())),
+        [countries, search],
+    );
     const filteredFlagUrls = useCountryFlagUrls(filtered);
     const selectedFlagUrls = useCountryFlagUrls(selected);
     const isSelectedName = (name) => selected.some(s => s.name === name);

@@ -1,5 +1,6 @@
 /*! Open Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import mapLibreGl from "maplibre-gl";
+import { mergeCountryOverrides } from "./countryList.js";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
 
@@ -1002,24 +1003,11 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 
       try {
         const world = await readJson(JSON_URLS.world, { defaultValue: {} });
-        const merged = new Map(countries.map((entry) => [entry.code || entry.name, entry]));
-
-        for (const [code, polity] of Object.entries(world?.polityOverrides ?? {})) {
-          const resolvedCode = polity?.code || code;
-          // A nameless polity override must NOT degrade an existing proper
-          // name to a bare code.
-          const resolvedName = polity?.name || merged.get(resolvedCode)?.name || resolvedCode;
-          if (!resolvedCode || !resolvedName) {
-            continue;
-          }
-
-          merged.set(resolvedCode, {
-            code: resolvedCode,
-            name: resolvedName,
-          });
-        }
-
-        return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name));
+        // world.polityOverrides is keyed by country NAME, not by code, and its
+        // entries carry no code of their own — so treating the key as a code
+        // added a SECOND entry per override instead of updating the tile's.
+        // See countryList.js: duplicate names break the pickers outright.
+        return mergeCountryOverrides(countries, world?.polityOverrides);
       } catch {
         return countries;
       }
