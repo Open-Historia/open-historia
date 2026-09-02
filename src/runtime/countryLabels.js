@@ -819,7 +819,12 @@ export const buildPolityLabelCollections = (
     const shapeWidth = Math.max(0, maxX - minX);
     const shapeHeight = Math.max(0, maxY - minY);
     const pathInfo = buildCurvedLabelPath(bestOuterTile, upperName, { allowStraight: true });
-    if (pathInfo?.points?.length >= 4) {
+    // Large landmasses benefit from an organic curved word. Compact countries
+    // read more cleanly as one rotated word: bending six separately rendered
+    // letters across France/Spain/Germany made them look fragmented at the
+    // exact continental zoom where they first become visible.
+    const useCurvedGlyphs = priorityScale >= 135000 && pathInfo?.points?.length >= 4;
+    if (useCurvedGlyphs) {
       const liveGlyphs = buildCurvedLabelGlyphFeatures(
         pathInfo,
         extent,
@@ -860,6 +865,8 @@ export const buildPolityLabelCollections = (
     const pointTile = getInteriorLabelPoint(polygonTile);
     if (!pointTile) continue;
     const [rawLng, lat] = tileToLngLat(pointTile[0], pointTile[1], extent);
+    const compactNameLength = Math.max(1, upperName.replace(/\s+/g, "").length);
+    const nameFitScale = clamp(10 / compactNameLength, 0.56, 1);
     pointFeatures.push({
       type: "Feature",
       id: `${featureId}-point`,
@@ -867,7 +874,7 @@ export const buildPolityLabelCollections = (
       properties: {
         name: upperName,
         owner,
-        areaScale,
+        areaScale: areaScale * nameFitScale,
         priorityScale,
         letterSpacing: 0.08,
         shapeWidth,

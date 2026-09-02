@@ -1502,8 +1502,11 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
   }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels, vNext]);
 
-  const overviewPointLabelLayerLayout = useMemo(() => ({
+  const livePointLabelLayerLayout = useMemo(() => ({
     ...pointLabelLayerLayout,
+    // Polity names outrank city/marker collision boxes. Zoom tiers already
+    // keep compact states out of the overview, so allowing the surviving whole
+    // words to render is both steadier during motion and more legible.
     "text-allow-overlap": true,
     "text-ignore-placement": true,
     "text-padding": 2,
@@ -1861,14 +1864,18 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
 
       <Source id="country-point-label-source" type="geojson" data={activePointLabelData}>
         {vNext && customFlag && useLivePolityLabels ? (
-          <Layer
-            id="country-labels-live"
-            type="symbol"
-            minzoom={5.2}
-            maxzoom={7.1}
-            layout={overviewPointLabelLayerLayout}
-            paint={integratedLabelLayerPaint}
-          />
+          LIVE_POLITY_LABEL_TIERS.map(({ id, minzoom, filter }) => (
+            <Layer
+              key={id}
+              id={`country-labels-live-${id}`}
+              type="symbol"
+              minzoom={minzoom}
+              maxzoom={7.1}
+              filter={filter}
+              layout={livePointLabelLayerLayout}
+              paint={integratedLabelLayerPaint}
+            />
+          ))
         ) : (
           <Layer
             id="country-labels"

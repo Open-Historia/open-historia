@@ -152,5 +152,6 @@ test("live polity labels expand when ownership transfers add territory", () => {
   );
 
   assert.ok(after.properties.priorityScale > before.properties.priorityScale);
-  assert.ok(after.properties.pathLength > before.properties.pathLength);
+  assert.ok(after.properties.areaScale > before.properties.areaScale);
+  assert.ok(after.properties.shapeWidth > before.properties.shapeWidth);
 });
