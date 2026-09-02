@@ -821,14 +821,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const activeCurvedLabelData = worldKnown && !customFlag
     ? curvedLabelData
     : EMPTY_FEATURE_COLLECTION;
-  // Live labels are rendered as native, anchored glyph symbols below. Retain
-  // the line collection in the generator for compatibility/tests, but never
-  // ask MapLibre to lay out a competing whole-word label on the same polity.
-  const activeLineLabelData = EMPTY_FEATURE_COLLECTION;
-  const activeGlyphLabelData = worldKnown && customFlag && useLivePolityLabels
-    ? polityLabelCollections.glyphLabelData
-    : EMPTY_FEATURE_COLLECTION;
-
   const handleRegionClick = useCallback((event) => {
     const unitsAt = () =>
       map.getLayer("units-fill")
@@ -1512,23 +1504,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     "text-padding": 2,
   }), [pointLabelLayerLayout]);
 
-  const lineLabelLayerLayout = useMemo(() => ({
-    "symbol-placement": "line-center",
-    "text-field": ["get", "name"],
-    "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(0.86, isGlobe, 92),
-    "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.1],
-    "text-max-angle": 42,
-    "text-padding": 5,
-    "text-allow-overlap": false,
-    "text-ignore-placement": false,
-    "symbol-sort-key": ["-", ["coalesce", ["get", "priorityScale"], ["get", "areaScale"]]],
-    "text-pitch-alignment": "map",
-    "text-rotation-alignment": "map",
-    "text-keep-upright": true,
-    visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
-
   const labelLayerPaint = useMemo(() => ({
     "text-color": labelTextColor || "rgba(247, 246, 240, 0.98)",
     "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.92)",
@@ -1835,31 +1810,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
           layout={curvedLabelLayerLayout}
           paint={vNext && customFlag && useLivePolityLabels ? curvedLabelLayerPaint : labelLayerPaint}
         />
-      </Source>
-
-      <Source id="country-line-label-source" type="geojson" data={activeLineLabelData}>
-        <Layer
-          id="country-labels-live-curved"
-          type="symbol"
-          maxzoom={7.1}
-          layout={lineLabelLayerLayout}
-          paint={integratedLabelLayerPaint}
-        />
-      </Source>
-
-      <Source id="polity-glyph-label-source" type="geojson" data={activeGlyphLabelData}>
-        {LIVE_POLITY_LABEL_TIERS.map(({ id, minzoom, filter }) => (
-          <Layer
-            key={id}
-            id={`polity-glyph-labels-${id}`}
-            type="symbol"
-            minzoom={minzoom}
-            maxzoom={7.1}
-            filter={filter}
-            layout={curvedLabelLayerLayout}
-            paint={integratedLabelLayerPaint}
-          />
-        ))}
       </Source>
 
       <Source id="country-point-label-source" type="geojson" data={activePointLabelData}>

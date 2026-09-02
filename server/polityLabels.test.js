@@ -43,7 +43,7 @@ test("Map vNext polity labels use the scenario name and remain inside a concave 
   )));
 });
 
-test("Map vNext emits one native curved label whose glyphs share one geographic anchor", () => {
+test("Map vNext emits one native whole-word label without detached glyphs", () => {
   const result = buildPolityLabelCollections({
     type: "FeatureCollection",
     features: [surface("Arc", [[[
@@ -53,25 +53,16 @@ test("Map vNext emits one native curved label whose glyphs share one geographic 
     ]]])],
   }, { nameResolver: () => "Arc Republic" });
 
-  assert.equal(result.lineLabelData.features.length, 1);
-  assert.equal(result.lineLabelData.features[0].properties.name, "ARC REPUBLIC");
-  assert.equal(result.lineLabelData.features[0].properties.hasCurvedLabel, true);
-  assert.equal(result.pointLabelData.features.length, 0);
+  assert.equal(result.lineLabelData.features.length, 0);
+  assert.equal(result.pointLabelData.features.length, 1);
+  assert.equal(result.pointLabelData.features[0].properties.name, "ARC REPUBLIC");
+  assert.equal(result.pointLabelData.features[0].properties.hasCurvedLabel, false);
   assert.equal(result.curvedLabelData.features.length, 0);
-  assert.equal(
-    result.glyphLabelData.features.map((feature) => feature.properties.glyph).join(""),
-    "ARCREPUBLIC",
-  );
-  const anchors = result.glyphLabelData.features.map((feature) => feature.geometry.coordinates);
-  assert.ok(anchors.length > 1);
-  assert.ok(anchors.every((anchor) => (
-    anchor[0] === anchors[0][0] && anchor[1] === anchors[0][1]
-  )));
-  assert.ok(result.glyphLabelData.features.every((feature) => (
-    feature.properties.owner === "Arc"
-    && feature.properties.priorityScale > 0
-    && Array.isArray(feature.properties.textOffset)
-  )));
+  assert.equal(result.glyphLabelData.features.length, 0);
+  assert.equal(result.pointLabelData.features[0].geometry.type, "Point");
+  assert.equal(result.pointLabelData.features[0].properties.owner, "Arc");
+  assert.ok(result.pointLabelData.features[0].properties.priorityScale > 0);
+  assert.ok(result.pointLabelData.features[0].properties.pathLength > 0);
 });
 
 test("Map vNext keeps giant polity geometry stable when the viewport changes", () => {
@@ -93,7 +84,7 @@ test("Map vNext keeps giant polity geometry stable when the viewport changes", (
   assert.ok(label.properties.letterSpacing >= 0.08);
 });
 
-test("Map vNext emits one non-repeating line-centred feature for a continental polity", () => {
+test("Map vNext emits one non-repeating whole-word feature for a continental polity", () => {
   const result = buildPolityLabelCollections({
     type: "FeatureCollection",
     features: [surface("Canada", [[[
@@ -101,11 +92,11 @@ test("Map vNext emits one non-repeating line-centred feature for a continental p
     ]]])],
   });
 
-  assert.equal(result.lineLabelData.features.length, 1);
-  assert.equal(result.lineLabelData.features[0].properties.name, "CANADA");
-  assert.ok(result.lineLabelData.features[0].properties.pathLength > 0);
-  assert.ok(result.lineLabelData.features[0].properties.pathWidth > 0);
-  assert.equal(result.pointLabelData.features.length, 0);
+  assert.equal(result.lineLabelData.features.length, 0);
+  assert.equal(result.pointLabelData.features.length, 1);
+  assert.equal(result.pointLabelData.features[0].properties.name, "CANADA");
+  assert.ok(result.pointLabelData.features[0].properties.pathLength > 0);
+  assert.ok(result.pointLabelData.features[0].properties.pathWidth > 0);
 });
 
 test("compact and continental polities both stay one whole-word feature", () => {

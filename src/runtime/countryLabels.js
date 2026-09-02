@@ -741,10 +741,10 @@ const buildCountryLabelCollections = async (tileData, ownedCodes = null) => {
 // Map vNext labels are generated from the same live dissolved polity surfaces
 // that paint the political map. A conquest therefore changes the fill, border,
 // and label geometry as one atomic presentation update. Broad polities emit one
-// whole-word LINE-CENTRED symbol along an interior spine. MapLibre bends the
-// complete word along that spine, so it reads as part of the landmass without
-// the zoom/pan instability of separately anchored glyphs. Tiny or pathological
-// shapes retain one interior point label as a safe fallback.
+// whole-word point symbol anchored from an interior spine. The spine gives the
+// word a stable, shape-aware centre while MapLibre treats the full name as one
+// atomic native label, avoiding both per-letter fragmentation and line-layout
+// rejection during zoom/pan.
 export const buildPolityLabelCollections = (
   politySurfaces,
   { nameResolver = (owner) => owner, extent = 4096 } = {},
@@ -818,55 +818,21 @@ export const buildPolityLabelCollections = (
     }
     const shapeWidth = Math.max(0, maxX - minX);
     const shapeHeight = Math.max(0, maxY - minY);
+    const compactNameLength = Math.max(1, upperName.replace(/\s+/g, "").length);
+    const nameFitScale = clamp(12 / compactNameLength, 0.58, 1);
+    const fittedAreaScale = areaScale * nameFitScale;
     const pathInfo = buildCurvedLabelPath(bestOuterTile, upperName, { allowStraight: true });
-    // Large landmasses benefit from an organic curved word. Compact countries
-    // read more cleanly as one rotated word: bending six separately rendered
-    // letters across France/Spain/Germany made them look fragmented at the
-    // exact continental zoom where they first become visible.
-    const useCurvedGlyphs = priorityScale >= 135000 && pathInfo?.points?.length >= 4;
-    if (useCurvedGlyphs) {
-      const liveGlyphs = buildCurvedLabelGlyphFeatures(
-        pathInfo,
-        extent,
-        upperName,
-        areaScale,
-        `${featureId}-live`,
-        { owner, priorityScale, name: upperName },
-      );
-      if (liveGlyphs) glyphFeatures.push(...liveGlyphs);
-      const centerSample = getPointAlongPolyline(pathInfo.points, pathInfo.length / 2);
-      const centerLngLat = centerSample
-        ? tileToLngLat(centerSample.point[0], centerSample.point[1], extent)
-        : [0, 0];
-      const coordinates = pathInfo.points.map(([x, y]) => tileToLngLat(x, y, extent));
-      lineFeatures.push({
-        type: "Feature",
-        id: `${featureId}-line`,
-        geometry: { type: "LineString", coordinates },
-        properties: {
-          name: upperName,
-          owner,
-          areaScale,
-          priorityScale,
-          letterSpacing: labelLetterSpacing(pathInfo.length, areaScale, upperName),
-          pathLength: pathInfo.length,
-          pathWidth: pathInfo.width,
-          anchorLng: wrapLongitude(centerLngLat[0]),
-          anchorLat: centerLngLat[1],
-          lat: centerLngLat[1],
-          hasCurvedLabel: true,
-        },
-      });
-      continue;
-    }
-
-    // One atomic point fallback. This only handles shapes too small or broken to
-    // produce a usable interior spine; it is not used for continental polities.
-    const pointTile = getInteriorLabelPoint(polygonTile);
+    // One atomic native word for every polity. The fitted spine still supplies
+    // the best interior anchor when available, but the word itself is a single
+    // point symbol. MapLibre's line placement can silently reject a valid polity
+    // at some zooms, while per-glyph symbols fragment; a point symbol guarantees
+    // stable visibility and camera-synchronous movement.
+    const centerSample = pathInfo?.points?.length >= 4
+      ? getPointAlongPolyline(pathInfo.points, pathInfo.length / 2)
+      : null;
+    const pointTile = centerSample?.point ?? getInteriorLabelPoint(polygonTile);
     if (!pointTile) continue;
     const [rawLng, lat] = tileToLngLat(pointTile[0], pointTile[1], extent);
-    const compactNameLength = Math.max(1, upperName.replace(/\s+/g, "").length);
-    const nameFitScale = clamp(10 / compactNameLength, 0.56, 1);
     pointFeatures.push({
       type: "Feature",
       id: `${featureId}-point`,
@@ -874,12 +840,16 @@ export const buildPolityLabelCollections = (
       properties: {
         name: upperName,
         owner,
-        areaScale: areaScale * nameFitScale,
+        areaScale: fittedAreaScale,
         priorityScale,
-        letterSpacing: 0.08,
+        letterSpacing: pathInfo
+          ? labelLetterSpacing(pathInfo.length, fittedAreaScale, upperName)
+          : 0.08,
         shapeWidth,
         shapeHeight,
         rotation: getPrincipalAxisAngle(bestOuterTile),
+        pathLength: pathInfo?.length ?? 0,
+        pathWidth: pathInfo?.width ?? 0,
         hasCurvedLabel: false,
         lat,
       },
