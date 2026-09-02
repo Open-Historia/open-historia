@@ -10,7 +10,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { NO_RESPONSE_BODY_NOTE, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -775,6 +775,7 @@ const TimelineSkipPanel = ({
     isLoading,
     isOpen,
     isRetryingProjects,
+    isRetryingSegment,
     modeSuggestion,
     onAcceptModeSuggestion,
     onAutoJump,
@@ -782,12 +783,16 @@ const TimelineSkipPanel = ({
     onClose,
     onDeclineModeSuggestion,
     onDiscardProjects,
+    onDiscardSegment,
     onJump,
     onRetryProjects,
+    onRetrySegment,
     onUndo,
     progressLabel,
     projectsHeld,
     projectsRetries,
+    segmentHeld,
+    segmentRetries,
     topOffset,
     undoCount,
 }) => {
@@ -1032,6 +1037,79 @@ const TimelineSkipPanel = ({
             }}
             >
             {error}
+            </div>
+        )}
+
+        {/* A HELD jump, not a failed one: one segment of a split jump did not
+            come back, the segments before it are still in hand, and nothing has
+            been written — the game is still on its old date. Amber rather than
+            red for that reason, and Retry re-runs ONLY the segment that failed,
+            so the minutes already spent on the earlier ones are not spent
+            again. */}
+        {segmentHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>{segmentHeld}</div>
+            {/* A failed retry otherwise re-renders the identical message, so the
+                button reads as dead even though it ran. Say plainly that it was
+                tried and did not work. */}
+            {segmentRetries > 0 && !isRetryingSegment && (
+                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+                Tried {segmentRetries === 1 ? "once" : `${segmentRetries} times`} — that segment still
+                did not come back. Retrying again may help if the problem was temporary;
+                otherwise discard the turn and run it again, perhaps as a shorter skip.
+                </div>
+            )}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                disabled={isRetryingSegment}
+                onClick={onRetrySegment}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isRetryingSegment ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingSegment ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isRetryingSegment ? (progressLabel || "Retrying the segment…") : "Retry the segment"}
+                </button>
+                <button
+                type="button"
+                disabled={isRetryingSegment}
+                onClick={onDiscardSegment}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingSegment ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingSegment ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the turn
+                </button>
+            </div>
             </div>
         )}
 
@@ -1399,6 +1477,15 @@ const DateWidget = ({
     // Without it a failed retry re-renders the identical message and reads as a
     // dead button - which is exactly how it read in testing.
     const [projectsRetries, setProjectsRetries] = useState(0);
+    // A jump whose segments are part-generated: one segment failed and the rest
+    // of the round was never asked for. Set means a turn is waiting — the player
+    // retries that one segment, or discards. Nothing has been written either way,
+    // so there is no rollback to run: the game is still on its pre-jump date.
+    const [segmentHeld, setSegmentHeld] = useState("");
+    const [isRetryingSegment, setIsRetryingSegment] = useState(false);
+    // How many times the failed segment has been retried for the jump currently
+    // held — same reason as projectsRetries.
+    const [segmentRetries, setSegmentRetries] = useState(0);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
@@ -1585,6 +1672,12 @@ const DateWidget = ({
         setJumpProgress("");
         setError("");
         setFallbackWarning("");
+        // simulateTimelineJump abandons any held turn when it starts, so a notice
+        // left on screen would offer buttons with nothing behind them.
+        setSegmentHeld("");
+        setSegmentRetries(0);
+        setProjectsHeld("");
+        setProjectsRetries(0);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -1663,6 +1756,15 @@ const DateWidget = ({
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
                 logDebugEvent("turn", "Turn cancelled by the player.");
+            } else if (jumpError?.segmentHeld) {
+                // Not a failed turn: a long skip is generated in segments and one
+                // of them did not come back. The finished segments are still held,
+                // unwritten, so retrying re-runs only the segment that failed
+                // rather than the whole round.
+                setError("");
+                setSegmentHeld(jumpError.message || "A segment of this jump failed.");
+                setSegmentRetries(0);
+                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s: segment ${(jumpError.segmentIndex ?? 0) + 1} of ${jumpError.segmentCount ?? 0} failed; nothing was written.`);
             } else if (jumpError?.projectsHeld) {
                 // Not a failed turn: the events are generated and valid, and the
                 // whole turn is being HELD unwritten because the Projects board
@@ -1729,6 +1831,71 @@ const DateWidget = ({
             jumpAbortRef.current = null;
             setIsRetryingProjects(false);
         }
+    };
+
+    // Finish a held jump by re-running ONLY the segment that failed and the ones
+    // after it. The segments already generated are not regenerated: they are
+    // valid, and on a slow model each one may have cost minutes.
+    const retryHeldSegment = async () => {
+        if (isRetryingSegment) return;
+        setIsRetryingSegment(true);
+        setSegmentRetries((count) => count + 1);
+        setJumpProgress("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await retryPendingJumpSegment({
+                signal: controller.signal,
+                onProgress: ({ segment, segmentCount }) =>
+                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+            });
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            setSegmentHeld("");
+            setSegmentRetries(0);
+            logDebugEvent("turn", `Held jump finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (retryError) {
+            if (controller.signal.aborted || retryError?.name === "AbortError") {
+                // Cancelled. The turn is still held and still unwritten, so leave
+                // the notice up rather than implying it was resolved.
+                logDebugEvent("turn", "Segment retry cancelled; the turn is still held.");
+            } else if (retryError?.segmentHeld) {
+                setSegmentHeld(retryError.message);
+            } else if (retryError?.projectsHeld) {
+                // The segments finished; the BOARD is what is holding the turn
+                // now. One notice at a time, or the player is offered two retries
+                // for one turn and only one of them does anything.
+                setSegmentHeld("");
+                setSegmentRetries(0);
+                setProjectsHeld(retryError.message);
+                setProjectsRetries(0);
+            } else {
+                // The segments finished but the write did not. The held jump is
+                // gone with it, so this is an ordinary turn failure from here.
+                setSegmentHeld("");
+                setError(retryError.message || "Failed to finish the held jump.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsRetryingSegment(false);
+            setJumpProgress("");
+        }
+    };
+
+    // Throw the held jump away. Nothing was ever written, so there is nothing to
+    // undo and no rollback to run — the game is still on its pre-jump date and
+    // the player simply loses the segments generated so far.
+    const discardHeldSegment = () => {
+        discardPendingJumpSegment();
+        setSegmentHeld("");
+        setSegmentRetries(0);
     };
 
     // Throw the held turn away. Nothing was ever written, so there is nothing to
@@ -2115,6 +2282,7 @@ const DateWidget = ({
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
         isRetryingProjects={isRetryingProjects}
+        isRetryingSegment={isRetryingSegment}
         modeSuggestion={modeSuggestion}
         onAcceptModeSuggestion={acceptModeSuggestion}
         onAutoJump={() => runJump(365, "auto")}
@@ -2122,12 +2290,16 @@ const DateWidget = ({
         onClose={() => setPanel(null)}
         onDeclineModeSuggestion={declineModeSuggestion}
         onDiscardProjects={discardHeldProjects}
+        onDiscardSegment={discardHeldSegment}
         onJump={(days) => runJump(days, "jump")}
         onRetryProjects={retryHeldProjects}
+        onRetrySegment={retryHeldSegment}
         onUndo={runUndo}
         progressLabel={jumpProgress}
         projectsHeld={projectsHeld}
         projectsRetries={projectsRetries}
+        segmentHeld={segmentHeld}
+        segmentRetries={segmentRetries}
         topOffset={topOffset}
         undoCount={undoCount}
         />
