@@ -15,7 +15,9 @@ import {
   CAMPAIGN_VARS,
   ERA_VARS,
   buildStateBlocks,
+  expandVariableOrder,
   stablePrefixLength,
+  staticiseTemplate,
   tierOf,
 } from "./promptLayout.js";
 
@@ -97,4 +99,53 @@ test("the prefix covers the rules and everything stable, and stops at the turn",
 test("a prompt with no stable content still works", () => {
   assert.equal(stablePrefixLength("", {}, []), 0);
   assert.equal(buildStateBlocks(null, null), "");
+});
+
+// ---------------------------------------------------------------------------
+// Turning a real template static
+
+test("campaign-fixed values stay inline; volatile ones move to the end", () => {
+  const helpers = { PLAYER_POLITY: "${playerPolity}", ORIGIN_ROUND_DATE: "${date}" };
+  const vars = { playerPolity: "United Kingdom", date: "2037-03-07", language: "English" };
+  const { text, order } = staticiseTemplate(
+    "You are ${PLAYER_POLITY}. As of ${ORIGIN_ROUND_DATE}. Write in ${language}.",
+    helpers,
+    vars,
+  );
+  // Readable prose for the stable ones — a pointer would be longer than the value.
+  assert.ok(text.includes("You are United Kingdom."));
+  assert.ok(text.includes("Write in English."));
+  // ...and the volatile one is a pointer, because inlining it would end the prefix.
+  assert.ok(!text.includes("2037-03-07"), "a volatile value was left inline");
+  assert.ok(text.includes('see "date"'));
+  assert.deepEqual(order, ["date"]);
+});
+
+// Blanking is the tempting shortcut and it damages the prose at 29 sites.
+test("no placeholder is left behind, and no hole is left in a sentence", () => {
+  const { text } = staticiseTemplate("as of the Origin Date, ${ORIGIN_ROUND_DATE}:", { ORIGIN_ROUND_DATE: "${date}" }, {});
+  assert.ok(!/\$\{/.test(text), "an unresolved placeholder survived");
+  assert.ok(!text.includes(", :"), "the sentence was left with a hole");
+});
+
+// A campaign value that is missing must not leave a gap either.
+test("a missing campaign value falls back to a pointer", () => {
+  const { text, order } = staticiseTemplate("You are ${PLAYER_POLITY}.", { PLAYER_POLITY: "${playerPolity}" }, {});
+  assert.ok(text.includes('see "player polity"'));
+  assert.deepEqual(order, ["playerPolity"]);
+});
+
+// The 258KB consolidated history only moves every ~5 rounds, but it is shipped
+// glued to the last 24 events. Tiered as one, a quarter of the prompt falls out
+// of the prefix purely because of how it is packaged.
+test("the campaign history is split so its stable half can be reused", () => {
+  assert.deepEqual(expandVariableOrder(["recentEventsLong"]), ["consolidatedHistory", "recentEvents"]);
+  assert.equal(tierOf("consolidatedHistory"), "era");
+  assert.equal(tierOf("recentEvents"), "now");
+  // Order is preserved and repeats collapse.
+  assert.deepEqual(
+    expandVariableOrder(["date", "recentEventsLong", "consolidatedHistory", "date"]),
+    ["date", "consolidatedHistory", "recentEvents"],
+  );
+  assert.deepEqual(expandVariableOrder(null), []);
 });

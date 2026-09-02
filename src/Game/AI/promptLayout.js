@@ -64,6 +64,33 @@ export const ERA_VARS = [
     "consolidatedHistory",
 ];
 
+// Some variables are two different things concatenated, and tiering them as one
+// wastes the stable half.
+//
+// recentEventsLong is the worst case: buildCampaignHistoryText joins the
+// consolidated "story so far" - 258KB on a mature save, rewritten only when the
+// consolidator runs every ~5 rounds - onto the last 24 events, which change every
+// turn. Glued together it can only be volatile, so a quarter of the whole prompt
+// falls out of the prefix because of how it is packaged.
+//
+// Both halves already exist as their own variables, so v2 asks for them
+// separately. Nothing new is computed and nothing is dropped - the same text
+// goes, in two blocks instead of one.
+export const DECOMPOSES_INTO = {
+    recentEventsLong: ["consolidatedHistory", "recentEvents"],
+};
+
+// Expand any variable that is really two, preserving order and dropping repeats.
+export const expandVariableOrder = (order) => {
+    const out = [];
+    for (const name of Array.isArray(order) ? order : []) {
+        for (const part of DECOMPOSES_INTO[name] ?? [name]) {
+            if (!out.includes(part)) out.push(part);
+        }
+    }
+    return out;
+};
+
 // Everything else is assumed to change every turn. Deliberately a fallback
 // rather than a list: a variable added later and forgotten lands in NOW, which
 // costs cache but is always CORRECT. The reverse — a volatile variable wrongly
@@ -123,4 +150,71 @@ export const stablePrefixLength = (staticPrompt, variables, order) => {
         renderBlock("=== THE STORY SO FAR ===", stable.filter((n) => tierOf(n) === "era"), variables),
     ].filter(Boolean).join("\n\n");
     return head.length;
+};
+
+// ---------------------------------------------------------------------------
+// Turning an existing template into a static one
+// ---------------------------------------------------------------------------
+//
+// v2 needs task text with no values in it, so the whole thing can sit inside the
+// reusable prefix. The obvious route — hand-write a second copy of every
+// template — is the worst one available: ~30 KB of carefully tuned rules per
+// task, retyped, with every chance to change what the model is told, and then a
+// migration to get it to existing saves.
+//
+// This does it mechanically instead. Each `${...}` becomes a short pointer to the
+// labelled block the value now lives in, and every other character of the rules
+// survives byte-for-byte. It runs on whatever pack a save already has, so a
+// frozen campaign gets the same treatment as a fresh one and there is nothing to
+// migrate.
+//
+// Simply blanking the placeholders is NOT good enough, which is worth stating
+// because it is the tempting shortcut: renderTemplate with no variables turns
+// "the world as of the Origin Date, ${ORIGIN_ROUND_DATE}:" into "the world as of
+// the Origin Date, :" — prose the model has to work around, at 29 sites.
+
+const POINTER = (labelText) => `(see "${labelText}" at the end of this prompt)`;
+
+// `${FOO}` is a helper placeholder that maps to `${someVar}`; `${someVar}` is a
+// variable named directly. Both appear in the shipped templates.
+// Both spellings the shipped templates use: `${FOO}` (a helper placeholder) and
+// `${someVar}` (a variable named directly).
+const PLACEHOLDER_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+const resolveVariableName = (name, helpers) => {
+    const mapped = String(helpers?.[name] ?? "").trim();
+    const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(mapped);
+    return match ? match[1] : name;
+};
+
+/**
+ * Rewrite a template so nothing VOLATILE is left in it, and report what moved.
+ *
+ * Campaign-tier values stay inline. They are fixed for the life of the save, so
+ * they cost the prefix nothing, and leaving them where the prose put them keeps
+ * sentences readable - "Write in English" beats "Write in (see language at the
+ * end)", which matters most for the short ones a pointer would be longer than.
+ *
+ * Everything else becomes a pointer to its labelled block. Those are the values
+ * that change between calls, and one left inline near the top would end the
+ * reusable prefix right there.
+ *
+ * Returns `{ text, order }` - the stable head, and the variables that moved, in
+ * the order the prose first mentions them, so the trailing blocks follow the
+ * same sequence the rules introduce them in.
+ */
+export const staticiseTemplate = (templateText, helpers, variables) => {
+    const moved = [];
+    const text = String(templateText ?? "").replace(PLACEHOLDER_PATTERN, (match, name) => {
+        const variable = resolveVariableName(name, helpers);
+        if (tierOf(variable) === "campaign") {
+            const value = String(variables?.[variable] ?? "").trim();
+            // Fall through to a pointer when the value is missing, rather than
+            // leaving a hole in the middle of a sentence.
+            if (value) return value;
+        }
+        if (!moved.includes(variable)) moved.push(variable);
+        return POINTER(label(variable));
+    });
+    return { text, order: expandVariableOrder(moved) };
 };
