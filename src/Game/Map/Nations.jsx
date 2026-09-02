@@ -210,13 +210,15 @@ const GADM_GEOMETRY_FILTER = [">=", ["index-of", ".", ["get", "id"]], 0];
 // dot test — stock and author-only maps render identically to before.
 const AUTHORED_GEOMETRY_FILTER = ["any", CUSTOM_GEOMETRY_FILTER, ["==", ["get", "edited"], true]];
 const STOCK_GEOMETRY_FILTER = ["all", GADM_GEOMETRY_FILTER, ["!=", ["get", "edited"], true]];
-// Crossfade bands. Detail now steps UP twice on the way in, and each step is a
-// crossfade so no border ever pops: the grid-snapped tier (coarseGeometry.js) holds
-// world view, the seed geometry takes over through the middle, and the stock vector
-// tiles take the close range. Seed geometry was extracted at tile-zoom 5, so it hands
-// off to the tiles just past that.
-const FAR_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.72, 6.5, 0];
-const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.72];
+// keep the seed fill under the close-up tiles instead of crossfading it away.
+// if a vector tile is late (or gets evicted while panning), the coarse geometry is
+// still there rather than briefly revealing the basemap. the tile layer becomes
+// fully opaque once it takes over, so the fallback does not soften its borders.
+const BASE_FILL_OPACITY = 0.72;
+const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 1];
+// Dispute stripes are an overlay, so unlike the solid seed fallback they still
+// hand off to the tile-native stripe layer instead of stacking at close zoom.
+const FAR_OVERLAY_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.72, 6.5, 0];
 
 // ---- Owner labels for custom maps -----------------------------------------
 // The stock label pipeline labels modern countries from countries.pmtiles, which
@@ -652,11 +654,12 @@ const WorldMap = ({ isGlobe = false }) => {
     // Custom (editor) regions render on top of the stock regions. On a map with its
     // OWN drawn/generated geometry, query only the custom layers — a click on empty
     // sea must resolve to nothing, not the leftover Earth country underneath. On a
-    // re-ownership map (stock GADM geometry), keep querying regions-fill: it IS the
-    // map, and its high-zoom hit-testing has no custom-layer equivalent.
+    // re-ownership map (stock GADM geometry), prefer regions-fill but keep the
+    // seed layer queryable too. a visible fallback should not become an unclickable
+    // patch just because its detail tile is still loading.
     const queryLayers = (hasDrawnGeometry
       ? ["custom-regions-fill", "custom-regions-fill-far"]
-      : ["custom-regions-fill", "regions-fill"]
+      : ["custom-regions-fill", "regions-fill", "custom-regions-fill-far"]
     ).filter((id) => map.getLayer(id));
     const features = map.queryRenderedFeatures(event.point, { layers: queryLayers });
     if (!features.length) return;
@@ -980,14 +983,12 @@ const WorldMap = ({ isGlobe = false }) => {
     if (!stops.length) return { "fill-opacity": 0 };
     return {
       "fill-color": ["match", ["get", "GID_1"], ...stops, NEUTRAL_LAND_COLOR],
-      // Fades in as the seed-geometry far layer fades out — but never for a reshaped
-      // region: its tile still holds the original shape, so painting it here would
-      // double-fill the edited area over the GeoJSON that now owns it.
-      "fill-opacity": editedStockIds.length
-        ? ["case", ["in", ["get", "GID_1"], ["literal", editedStockIds]], 0, TILE_FILL_FADE]
-        : TILE_FILL_FADE,
+      // close-up tiles sharpen the seed geometry. edited regions are filtered at
+      // the layer level below; keeping zoom at the top of this expression also keeps
+      // maplibre happy (it rejects zoom hidden inside a case expression).
+      "fill-opacity": TILE_FILL_FADE,
     };
-  }, [customActive, ownerByRegionId, colorMap, ownerColorCss, editedStockIds]);
+  }, [customActive, ownerByRegionId, colorMap, ownerColorCss]);
 
   // Stock country fills/borders render ONLY once the world is known to be a
   // stock world. Gating on the customRegions FLAG (not customActive, which
@@ -1001,10 +1002,9 @@ const WorldMap = ({ isGlobe = false }) => {
     "line-opacity": showStockCountries ? 1 : 0,
   };
   // Region hairlines serve both map kinds, but nothing renders pre-worldKnown.
-  // Tile hairlines only fade in alongside the tile FILLS (z5.5-6.5): below
-  // that the fills come from the seed geometry, and hairlines from the
-  // simplified low-zoom tiles sit visibly off those fills — disconnected
-  // borders. The far hairlines come from the seed geometry itself instead.
+  // Tile hairlines fade in alongside the tile fills. The seed hairlines stay
+  // underneath for a little longer as a safety net: if a vector tile is late,
+  // the fallback fill should not turn into one borderless slab while panning.
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
@@ -1089,20 +1089,17 @@ const WorldMap = ({ isGlobe = false }) => {
       )}
 
       {/* Deliberately NOT gated on customFlag, unlike countries-source above —
-          this source is not decoration on a custom map, it IS the map. On a
-          re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry,
-          nothing hand-drawn) regions-fill is the ONLY thing painting owners
-          above z6.5, because custom-regions-fill-far stops at maxzoom 7 and
-          FAR_FILL_FADE has already faded it to 0 by 6.5 — the crossfade hands
-          off to these tiles by design. Unmounting it here left every such map
-          blank past 6.5 and, via the getLayer() filter at the click handler,
-          unclickable too. The hairlines are needed on stock maps as well:
-          regionsOutlinePaint is gated on worldKnown, not on customActive. */}
+          this source is not decoration on a custom map, it is the close-detail
+          political layer for re-ownership scenarios. The seed GeoJSON now stays
+          underneath as a fallback if a vector tile is late, while regions-fill
+          sharpens the map once the tile is present. Keeping this source mounted
+          also preserves high-zoom hit-testing and the stock-region hairlines. */}
       <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8}>
         <Layer
           id="regions-fill"
           type="fill"
           source-layer="regions"
+          filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
           paint={stockRegionsFillPaint}
         />
         {/* Striped fill for disputed GADM regions on the crisp tile geometry —
@@ -1135,35 +1132,44 @@ const WorldMap = ({ isGlobe = false }) => {
       {/* Author-DRAWN geometry only (splits/new regions) — GADM regions paint the
           stock tiles above for crisp borders at every zoom. Empty (and inert)
           unless world.customRegions is set. */}
-      {/* tolerance 0: GeoJSON sources simplify geometry per zoom by default,
-          and each region simplifies independently — shared borders drift
-          apart at low zoom. Full resolution keeps them connected everywhere;
-          the seed geometry is coarse enough that this stays cheap. */}
-      <Source id="custom-regions-source" type="geojson" data={enrichedCustomRegionData} tolerance={0.6}>
-        {/* Zoomed-out fill for GADM regions from the seed geometry — the stock
-            tiles are too simplified at low zoom and show sliver gaps there. */}
+      {/* cap source tiling at the editor-safe z8 tier, but keep simplification
+          disabled there. otherwise overzooming a simplified z8 tile makes the
+          close-up borders look like they were cut out with safety scissors. */}
+      <Source
+        id="custom-regions-source"
+        type="geojson"
+        data={enrichedCustomRegionData}
+        maxzoom={8}
+        tolerance={0}
+      >
+        {/* coarse seed geometry sits underneath the tile layer as a safety net.
+            black holes are a worse fallback than slightly soft borders. */}
         <Layer
           id="custom-regions-fill-far"
           type="fill"
-          maxzoom={7}
+          beforeId="regions-fill"
           filter={STOCK_GEOMETRY_FILTER}
-          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+          paint={{ "fill-color": CUSTOM_FILL_COLOR, "fill-opacity": customActive ? BASE_FILL_OPACITY : 0 }}
         />
-        {/* Far hairlines from the SAME seed geometry as the far fills, so
-            zoomed-out region borders sit exactly on the colored areas. They
-            hand off to the stock-tile hairlines with the fill crossfade. */}
+        {/* Seed hairlines stay beneath the detailed tile outlines through the
+            handoff window. A late tile can then lose detail, not the border
+            itself; once close-detail tiles are established this fades away. */}
         <Layer
           id="custom-regions-hairline-far"
           type="line"
-          maxzoom={7}
+          beforeId="regions-outline"
+          maxzoom={9}
           filter={STOCK_GEOMETRY_FILTER}
           paint={{
             "line-color": "#000",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
-            // Fades in over the same 3->4 band as the fill above, handing off from the
-            // ultra tier's hairlines so borders never double up or blink.
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6, 9, 0.8],
             "line-opacity": customActive
-              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              ? ["interpolate", ["linear"], ["zoom"],
+                  3, 0.35,
+                  5.5, 0.55,
+                  6.5, 0.4,
+                  8, 0.25,
+                  9, 0]
               : 0,
           }}
         />
@@ -1176,7 +1182,7 @@ const WorldMap = ({ isGlobe = false }) => {
           type="fill"
           maxzoom={7}
           filter={["all", STOCK_GEOMETRY_FILTER, ["has", "_stripes"]]}
-          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_FILL_FADE : 0 }}
+          paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_OVERLAY_FADE : 0 }}
         />
         <Layer
           id="custom-regions-fill"
