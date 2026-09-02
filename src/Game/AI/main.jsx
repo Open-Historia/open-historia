@@ -487,6 +487,14 @@ function streamFailureError(providerLabel, streamResult, { retried = false, fall
 // rather than stalling the turn.
 const OVERLOADED_RETRY_DELAY = 5000;
 
+// Transient gateway failures worth another go. 502 and 504 are here because a
+// proxy or edge having a bad moment is exactly as temporary as a 503, and
+// providerErrors.js has ALWAYS treated all four as "busy" when they arrive
+// inside a stream — this just makes the HTTP status agree with the stream frame.
+// Without it a 502 threw immediately while an identical 502 delivered as a frame
+// got three attempts, and a single gateway hiccup cost a chat reply or a turn.
+const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+
 async function streamTextSSE(response, extractDelta, onChunk) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -783,7 +791,9 @@ async function callGemini(systemPrompt, history, {
             continue;
         }
 
-        if (response.status === 503) {
+        // 429 is handled above (a rate limit and a spent quota need different
+        // answers). This is every other transient gateway failure.
+        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
             if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 throw new Error(`Gemini is temporarily unavailable after ${retries} attempts. Try again in a minute.`);
             }
@@ -1030,7 +1040,7 @@ async function callOpenAIStyleChatCompletions({
             throw new Error(errorMessage);
         }
 
-        if (response.status === 429 || response.status === 503) {
+        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
             if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, `${providerLabel} is busy right now. Try again in a moment.`));
@@ -1368,7 +1378,7 @@ async function callAnthropic(systemPrompt, history, {
             signal,
         });
 
-        if (response.status === 429 || response.status === 503) {
+        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
             if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, "Anthropic is busy right now. Try again in a moment."));
@@ -1569,7 +1579,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         };
         const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
 
-        if (response.status === 429 || response.status === 503) {
+        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
             if (attempt === retries || !canRetryBeforeDeadline(deadline, retryDelay)) {
                 const payload = await readErrorPayload(response);
                 throw new Error(extractErrorMessage(payload, "The Anthropic-compatible endpoint is busy right now. Try again in a moment."));
