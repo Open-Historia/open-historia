@@ -41,6 +41,17 @@ test("deploying a spy: limits, duplicates, self, and ownership", () => {
   assert.equal(foreignSpies(withForeign, P).length, 1);
 });
 
+test("you cannot spy on your own country, however it is spelled", () => {
+  // The picker shows display names; the game stores its country verbatim. An
+  // exact comparison let the two drift apart and a player plant an agent at home.
+  for (const spelling of ["France", "france", "  FRANCE  "]) {
+    assert.throws(() => deploySpy({}, spelling, { playerPolity: P }), /yourself/, spelling);
+  }
+  // And the same tolerance for a second agent in one country.
+  const world = { spies: deploySpy({}, "Germany", { playerPolity: P }) };
+  assert.throws(() => deploySpy(world, "  germany ", { playerPolity: P }), /already deployed/);
+});
+
 test("recall keeps the record, frees the slot, and a redeploy gets a new id", () => {
   let world = { spies: deploySpy({}, "Germany", { playerPolity: P }) };
   const [first] = activeSpies(world, P);
