@@ -244,32 +244,12 @@ export const PROMPT_SECTION_BY_KEY = Object.fromEntries(
 
 export const PROMPT_TASK_KEYS = Object.keys(PROMPT_TASK_DEFAULTS);
 
-// Which LAYOUT a pack's task text is written for.
-//
-//   1  state is interpolated through the prose (${...}). Every pack that exists
-//      today, and the shape every frozen campaign carries.
-//   2  the task text is entirely static and the campaign state arrives in
-//      trailing blocks, most-stable first (promptLayout.js), so a provider can
-//      reuse the prefix instead of re-reading ~470KB every call.
-//
-// Absent means 1. That is what keeps an existing save on exactly the behaviour
-// it has today: a pack cannot become v2 by accident, only by being written that
-// way or by an explicit, player-confirmed migration.
-export const PROMPT_LAYOUT_V1 = 1;
-export const PROMPT_LAYOUT_V2 = 2;
-
-export const promptLayoutVersion = (pack) => {
-  const version = Number(pack?.promptsVersion);
-  return version === PROMPT_LAYOUT_V2 ? PROMPT_LAYOUT_V2 : PROMPT_LAYOUT_V1;
-};
-
 export const normalizePromptPack = (rawPrompts) => {
   const prompts = rawPrompts && typeof rawPrompts === "object" ? rawPrompts : {};
   const tasks = prompts.tasks && typeof prompts.tasks === "object" ? prompts.tasks : {};
   const helpers = prompts.helpers && typeof prompts.helpers === "object" ? prompts.helpers : {};
 
   return {
-    promptsVersion: promptLayoutVersion(prompts),
     advisor: normalizeString(prompts.advisor) || PROMPT_ADVISOR_DEFAULT,
     helpers: Object.fromEntries(
       Object.entries(PROMPT_HELPER_DEFAULTS).map(([key, fallback]) => [

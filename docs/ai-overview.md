@@ -18,7 +18,6 @@ This page documents the plumbing. For the prompt templates and how they are asse
 | `src/Game/AI/chatVisibility.js` | Which diplomatic chats a given polity is allowed to have read. Keeps a leader out of conversations it was not in. |
 | `src/Game/AI/structuredMode.js` | The structured-output ladder (`tool → json_schema → json_object → text_json`), the per-provider setting, and the observer that offers it to the player. |
 | `src/Game/AI/promptDedupe.js` | Skipping a call-time directive the template already carries, and collapsing a large block the prompt would otherwise send twice. |
-| `src/Game/AI/promptLayout.js` | The optional cache-friendly prompt layout: tiers values by how often they change and moves the volatile ones to the end. |
 | `src/Game/AI/usageStats.js` | Token counts and time-to-first-byte, normalized across the three providers' reporting shapes. |
 | `src/Game/AI/jsonSalvage.js` | Tolerant parsing of a model's answer: think-block stripping, the answer sentinel, fenced and balanced-brace recovery. |
 | `src/Game/AI/providerErrors.js` | Reading what a provider sent INSTEAD of an answer: busy vs rate-limited vs spent quota, streaming refusals, and deliberation-instead-of-tool-call. |

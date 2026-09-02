@@ -62,3 +62,6 @@ electron/build-id.json
 
 # generated per build by scripts/stamp-channel.mjs (see dist:*:beta)
 electron/channel.json
+
+# Claude Code session settings (per-machine permission allowlist, not project config)
+.claude/
