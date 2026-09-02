@@ -922,11 +922,18 @@ async function callOpenAIStyleChatCompletions({
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
         // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
-        // they arrive; and a buffered TOOL call sends nothing for the length of the
-        // generation, which is what let a hosted gateway close a timeline jump with
-        // a 502 at 301.7s. Reassembled by readOpenAIStreamedResponse below, so
-        // everything downstream still sees one buffered envelope.
-        const streamThisRequest = (streamLocalEndpoint || onChunk || Boolean(tool)) && !streamingDisabled;
+        // EVERY request streams unless the gateway has refused to. The reason is
+        // keep-alive, not rendering: a buffered request sends zero bytes for the
+        // whole generation, which is indistinguishable from a dead one, and a
+        // gateway closes it (the 502 at 301.7s behind streamAssembly.js).
+        //
+        // Diplomatic chat was the last buffered path in the game, being the only
+        // call with neither a tool nor an onChunk. It failed on exactly this: an
+        // NVIDIA endpoint 502ing every leader reply after ~38s of silence, while
+        // the ADVISOR - a BIGGER prompt on the same endpoint - worked fine, because
+        // it renders tokens and therefore streamed. Nothing downstream changes: the
+        // readers reassemble the provider's normal envelope.
+        const streamThisRequest = !streamingDisabled;
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
@@ -1349,9 +1356,18 @@ async function callAnthropic(systemPrompt, history, {
     delete customParams.max_tokens;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-        // The advisor (tokens to the UI) and tool calls (keep-alive, and the
-        // long-request refusal above). A plain buffered call stays buffered.
-        const streamThisRequest = Boolean(onChunk || tool) && !streamingDisabled;
+        // EVERY request streams unless the gateway has refused to. The reason is
+        // keep-alive, not rendering: a buffered request sends zero bytes for the
+        // whole generation, which is indistinguishable from a dead one, and a
+        // gateway closes it (the 502 at 301.7s behind streamAssembly.js).
+        //
+        // Diplomatic chat was the last buffered path in the game, being the only
+        // call with neither a tool nor an onChunk. It failed on exactly this: an
+        // NVIDIA endpoint 502ing every leader reply after ~38s of silence, while
+        // the ADVISOR - a BIGGER prompt on the same endpoint - worked fine, because
+        // it renders tokens and therefore streamed. Nothing downstream changes: the
+        // readers reassemble the provider's normal envelope.
+        const streamThisRequest = !streamingDisabled;
         const body = {
             model,
             system: systemPrompt,
@@ -1555,9 +1571,18 @@ async function callAnthropicCompatible(systemPrompt, history, {
         const requestSystemPrompt = tool && structuredMode === "text_json"
             ? `${systemPrompt}\n\nReturn only one JSON object matching this JSON Schema. Do not use markdown or prose outside the object.\n${JSON.stringify(tool.schema)}\n\n${ANSWER_SENTINEL_DIRECTIVE}`
             : systemPrompt;
-        // The advisor (tokens to the UI) and tool calls (keep-alive, and the
-        // long-request refusal above). A plain buffered call stays buffered.
-        const streamThisRequest = Boolean(onChunk || tool) && !streamingDisabled;
+        // EVERY request streams unless the gateway has refused to. The reason is
+        // keep-alive, not rendering: a buffered request sends zero bytes for the
+        // whole generation, which is indistinguishable from a dead one, and a
+        // gateway closes it (the 502 at 301.7s behind streamAssembly.js).
+        //
+        // Diplomatic chat was the last buffered path in the game, being the only
+        // call with neither a tool nor an onChunk. It failed on exactly this: an
+        // NVIDIA endpoint 502ing every leader reply after ~38s of silence, while
+        // the ADVISOR - a BIGGER prompt on the same endpoint - worked fine, because
+        // it renders tokens and therefore streamed. Nothing downstream changes: the
+        // readers reassemble the provider's normal envelope.
+        const streamThisRequest = !streamingDisabled;
         const body = {
             model,
             system: requestSystemPrompt,
