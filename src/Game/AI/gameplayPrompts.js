@@ -50,6 +50,19 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "root",
   },
   {
+    description: "What a planted spy intercepts: the target's private diplomacy with other polities.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "spyIntercept",
+    label: "Spy Intercept",
+    type: "task",
+  },
+  {
     description: "Structured national statistics for the selected polity.",
     helpers: [
       "PLAYER_POLITY",

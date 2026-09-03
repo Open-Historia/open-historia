@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
-import { useWorldState } from "./useWorldState.js";
+import { useWorldMarkers } from "./useWorldState.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -26,7 +26,7 @@ const ownerColorString = (colorMap, code) => {
 // city layer (glyph + haloed label) but colored by owner so a forward base
 // reads as belonging to someone.
 const MarkersLayer = () => {
-  const { markers } = useWorldState();
+  const markers = useWorldMarkers();
   const [colorMap, setColorMap] = useState({});
 
   useEffect(() => {

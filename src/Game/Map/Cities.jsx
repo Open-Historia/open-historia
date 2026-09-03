@@ -7,7 +7,7 @@ import {
     ensurePmtilesProtocol,
     readJson,
 } from "../../runtime/assets.js";
-import { useWorldState } from "./useWorldState.js";
+import { useWorldCities } from "./useWorldState.js";
 
 ensurePmtilesProtocol();
 
@@ -204,7 +204,7 @@ const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
     // so the map doesn't fire its own independent 5s poll.
-    const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
+    const { customCities: customFlag, cityRenames, cityPopulations } = useWorldCities();
     const [customData, setCustomData] = useState(null);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);

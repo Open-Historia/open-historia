@@ -2,11 +2,12 @@
   "name": "open-historia-mobile",
   "private": true,
   "version": "1.0.0",
-  "description": "Thin Android app for Open Historia: a WebView that connects to a running Open Historia server (Termux on the same phone, or any host on your network).",
+  "description": "Android shell for Open Historia. It packages the WEB build, so the app connects to a community content node exactly like openhistoria.com — no server on the phone, no Termux.",
   "scripts": {
+    "www": "node ./scripts/stage-www.mjs",
     "sync": "cap sync android",
     "open": "cap open android",
-    "apk": "cap sync android && cd android && gradlew assembleDebug"
+    "apk": "npm run www && cap sync android && cd android && gradlew assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

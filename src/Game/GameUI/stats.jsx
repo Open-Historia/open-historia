@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState } from "../../runtime/gameState.js";
+import { intelligenceOf } from "../../runtime/spycraft.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -127,6 +128,8 @@ const StatsPane = ({ active }) => {
     const [player, setPlayer] = useState({ code: "", date: "", gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
+    // world.intelligence[target] — the AI moves it like reputation; absent = ordinary.
+    const [intelligence, setIntelligence] = useState(null);
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
     const [flagFailed, setFlagFailed] = useState(false);
     // Is the PLAYER stateless (holds no territory)? A landless player's code may
@@ -258,6 +261,7 @@ const StatsPane = ({ active }) => {
         readWorldState({ force: false })
             .then((world) => {
                 setPolity(world?.polityOverrides?.[targetCountry] ?? null);
+                setIntelligence(intelligenceOf(world, targetCountry));
                 setPlayerLandless(isPolityLandless(world, player.code));
             })
             .catch(() => { setPolity(null); setPlayerLandless(false); });
@@ -380,6 +384,24 @@ const StatsPane = ({ active }) => {
                 </div>
                 <Bar value={sheet.stability} color={stabilityColor(clamp01(sheet.stability))} />
                 </div>
+
+                {/* Intelligence service — not part of the AI-written sheet: it is an
+                    authoritative world field (like reputation), so it renders from the
+                    world, and the same number governs what this country's spies see
+                    and what a spy planted here can read. */}
+                {intelligence !== null && (
+                <div style={{ ...cardStyle, marginTop: "0.6rem" }}>
+                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.45rem" }}>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                🕵 Intelligence service
+                </span>
+                <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>
+                {intelligence}/100
+                </span>
+                </div>
+                <Bar value={intelligence} color="#a78bfa" />
+                </div>
+                )}
 
                 {/* Strategic indices */}
                 <div style={sectionTitleStyle}>⚑ Strategic indices</div>

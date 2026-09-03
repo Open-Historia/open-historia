@@ -7,7 +7,9 @@
 }
 
 html {
-  font-size: 16px;
+  /* Fluid root size, matching the landing page: the guides are sized in rem, so
+     this scales them as one. Unchanged at/below ~90rem. */
+  font-size: clamp(16px, 0.536vw + 8.29px, 24px);
   scroll-behavior: smooth;
 }
 
@@ -29,17 +31,17 @@ a:hover {
 }
 
 .page {
-  max-width: 800px;
+  max-width: 50rem;
   margin: 0 auto;
   padding: 3rem 1.5rem 5rem;
 }
 
 .logo {
   display: block;
-  width: 64px;
-  height: 64px;
+  width: 4rem;
+  height: 4rem;
   margin: 0 auto 1.5rem;
-  border-radius: 12px;
+  border-radius: 0.75rem;
 }
 
 h1 {
@@ -84,7 +86,7 @@ p {
 .card {
   background: #121a2e;
   border: 1px solid #1e2a44;
-  border-radius: 10px;
+  border-radius: 0.625rem;
   padding: 1.5rem;
   margin-bottom: 1.2rem;
 }
@@ -102,7 +104,7 @@ p {
 .step {
   background: #121a2e;
   border: 1px solid #1e2a44;
-  border-radius: 10px;
+  border-radius: 0.625rem;
   padding: 1.2rem 1.5rem;
   margin-bottom: 1rem;
 }
@@ -123,7 +125,7 @@ code {
   background: #1a2440;
   color: #b8d8ff;
   padding: 0.15em 0.4em;
-  border-radius: 4px;
+  border-radius: 0.25rem;
   font-size: 0.9em;
   font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
 }
@@ -131,7 +133,7 @@ code {
 pre {
   background: #0a1020;
   border: 1px solid #1e2a44;
-  border-radius: 8px;
+  border-radius: 0.5rem;
   padding: 1rem 1.2rem;
   overflow-x: auto;
   margin: 0.8rem 0 1.2rem;
@@ -155,7 +157,7 @@ li {
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem;
   margin: 1.2rem 0 1.8rem;
 }
@@ -163,7 +165,7 @@ li {
 .feature-tag {
   background: #121a2e;
   border: 1px solid #1e2a44;
-  border-radius: 6px;
+  border-radius: 0.375rem;
   padding: 0.65rem 1rem;
   font-size: 0.9rem;
   color: #b0c0e0;
@@ -183,7 +185,7 @@ li {
   font-weight: 600;
   padding: 0.7rem 1rem;
   text-align: left;
-  border-bottom: 2px solid #2a3a5c;
+  border-bottom: 0.125rem solid #2a3a5c;
 }
 
 .comparison-table td {
@@ -202,7 +204,7 @@ li {
   font-weight: 600;
   font-size: 1rem;
   padding: 0.75rem 2rem;
-  border-radius: 8px;
+  border-radius: 0.5rem;
   margin-top: 1rem;
   transition: background 0.2s;
 }
@@ -215,7 +217,7 @@ li {
 
 .cta-secondary {
   background: transparent;
-  border: 2px solid #2a5cdb;
+  border: 0.125rem solid #2a5cdb;
   color: #7cb8ff;
 }
 

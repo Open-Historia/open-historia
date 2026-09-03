@@ -6,6 +6,7 @@
 // Web build only.
 
 import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPut, idbPutPair, idbDelete, kvGet, kvPut } from "./idb.js";
+import { serializeWrite } from "./writeQueue.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
   parseJsonValue, serializeJsonValue,
@@ -402,6 +403,58 @@ const fetchDefaultRegionsGeojson = () => {
   return defaultRegionsGeojsonPromise;
 };
 
+// Raw region-seed delivery for the worker-backed indexer (src/runtime/regionSeed.js).
+// Returns the scenario's regions.geojson in its STORED form — an uploaded string
+// stays a string, the default scenario's CDN copy arrives as BYTES — so the
+// 55-220 MB JSON.parse runs in the worker, not on the main thread, and the
+// json(text)->parse(json) round-trip the fetch interceptor would otherwise
+// perform never happens. Mirrors the SCENARIO_GEOJSON_ASSET_KEYS branch of
+// readRuntimeJsonAsset (including the Modern-Day borrow and the owner-schema
+// migration triggers) but skips every parse. Null = no geometry stored.
+export const readRuntimeGeojsonRaw = async (assetKey = "regionsGeojson") => {
+  if (!SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) return null;
+  // Same migration triggers as readRuntimeJsonAsset's geojson branch: a legacy
+  // record must be owner-migrated BEFORE its raw geojson is handed out, or the
+  // map would paint code-space owners against a name-space world.
+  const activeForMigration = await getActiveGameRecord();
+  if (activeForMigration && ensureOwnerSchema(activeForMigration, "game")) {
+    await idbPut(STORES.games, activeForMigration);
+  }
+  const scenario = await getActiveRuntimeScenarioRecord();
+  if (scenario && ensureOwnerSchema(scenario, "scenario")) await idbPut(STORES.scenarios, scenario);
+  let value = scenario?.geojson?.[assetKey];
+  if (value === undefined && assetKey === "regionsGeojson" && scenario && scenario.id !== DEFAULT_SCENARIO_ID) {
+    const fallback = await getScenario(DEFAULT_SCENARIO_ID);
+    if (fallback && ensureOwnerSchema(fallback, "scenario")) await idbPut(STORES.scenarios, fallback);
+    value = fallback?.geojson?.[assetKey];
+  }
+  if (typeof value === "string") {
+    return value.length ? { kind: "text", payload: value } : null;
+  }
+  if (value && Array.isArray(value.features)) {
+    return { kind: "object", payload: value };
+  }
+  if (assetKey === "regionsGeojson" && scenario?.id === DEFAULT_SCENARIO_ID) {
+    // Same CDN fallback as fetchDefaultRegionsGeojson, but read as bytes so the
+    // parse stays in the worker; HTTP-cached per session like that path.
+    const response = await fetch(`${CONTENT_BASE}/default-regions.geojson`, { cache: "force-cache" });
+    if (!response.ok) return null;
+    return { kind: "bytes", payload: await response.arrayBuffer() };
+  }
+  return null;
+};
+
+const inferRecordCustomGeometry = (record) => {
+  const value = record?.geojson?.regionsGeojson;
+  if (typeof value === "string") {
+    return /"edited"\s*:\s*true|"id"\s*:\s*"reg_/i.test(value);
+  }
+  return Array.isArray(value?.features) && value.features.some((feature) => {
+    const props = feature?.properties ?? {};
+    return props.edited === true || String(props.id ?? feature?.id ?? "").startsWith("reg_");
+  });
+};
+
 // --- Owner schema migration (mirror of the server's ensureOwnerSchema) ---
 // Rewrites a record whose owners are GADM codes into one whose owners are country
 // names. Imports server/ownerMigration.js rather than restating it: that module is
@@ -496,7 +549,15 @@ const readRuntimeJsonAsset = async (assetKey) => {
     }
     // Web build: the default scenario's regions.geojson isn't in the seed (too
     // big), so pull it from the content origin — otherwise its political map is blank.
-    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario && scenario.id === DEFAULT_SCENARIO_ID) {
+    //
+    // NOT gated on being the default scenario. A CLONE of Modern Day has its own
+    // id and no geometry of its own, so it fell through the borrow branch above
+    // into default's record — which, in the web build, is exactly the record that
+    // does not carry the file. The clone then rendered an empty FeatureCollection
+    // and showed no political map at all, while the scenario it was copied from
+    // looked fine. This is the last resort for ANY scenario that has ended up
+    // without region geometry, which is precisely the case the borrow was for.
+    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario) {
       value = await fetchDefaultRegionsGeojson();
     }
     // geojson may be a raw uploaded string; parse-with-fallback like readJsonFile.
@@ -505,11 +566,25 @@ const readRuntimeJsonAsset = async (assetKey) => {
 
   const activeGame = await getActiveGameRecord();
   const gameValue = activeGame ? runtimeValueFromRecord(activeGame, assetKey) : undefined;
-  if (gameValue !== undefined) return normalizeRuntimeWorld(assetKey, coerceRuntimeValue(assetKey, gameValue));
+  if (gameValue !== undefined) {
+    const value = coerceRuntimeValue(assetKey, gameValue);
+    let scenarioCustomGeometry;
+    if (assetKey === "world" && value?.customGeometry == null) {
+      const scenario = await getActiveRuntimeScenarioRecord();
+      scenarioCustomGeometry = scenario?.json?.world?.customGeometry ?? inferRecordCustomGeometry(scenario);
+    }
+    return normalizeRuntimeWorld(assetKey, value, scenarioCustomGeometry);
+  }
 
   const scenario = await getActiveRuntimeScenarioRecord();
   const scenarioValue = scenario ? runtimeValueFromRecord(scenario, assetKey, /*scenarioScope*/ true) : undefined;
-  if (scenarioValue !== undefined) return normalizeRuntimeWorld(assetKey, coerceRuntimeValue(assetKey, scenarioValue));
+  if (scenarioValue !== undefined) {
+    const value = coerceRuntimeValue(assetKey, scenarioValue);
+    const scenarioCustomGeometry = assetKey === "world" && value?.customGeometry == null
+      ? inferRecordCustomGeometry(scenario)
+      : undefined;
+    return normalizeRuntimeWorld(assetKey, value, scenarioCustomGeometry);
+  }
 
   if (assetKey === "colors") {
     // Server falls back to the immutable app palette (public/assets/colors.json),
@@ -528,6 +603,7 @@ const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
   if (assetKey === "colors") return record.colors;
   if (assetKey === "flags") return record.flags;
   if (assetKey === "snapshots") return scenarioScope ? undefined : record.snapshots; // snapshots are game-only
+  if (assetKey === "intercepts") return scenarioScope ? undefined : record.json?.intercepts; // spy reports: game-only, plain json slot
   if (JSON_ASSET_KEYS.includes(assetKey)) return record.json?.[assetKey];
   return undefined;
 };
@@ -537,7 +613,15 @@ const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
 const coerceRuntimeValue = (assetKey, value) =>
   (assetKey === "colors" || assetKey === "flags" ? parseJsonValue(value, {}) : value);
 
-const writeRuntimeJsonAsset = async (assetKey, value) => {
+// Serialized: this is a read-modify-write of the WHOLE game record (every runtime
+// JSON asset lives in one), and the end of a turn fires six of these at once. Run
+// concurrently they each read the record before any has written, and the last to
+// finish restores its stale copy of the other five — which is how the new game
+// date got reverted on the website but never in the app. See writeQueue.js.
+const writeRuntimeJsonAsset = (assetKey, value) =>
+  serializeWrite(() => writeRuntimeJsonAssetLocked(assetKey, value));
+
+const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
   if (!JSON_ASSET_KEYS.includes(assetKey) && !OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) && !RUNTIME_ONLY_JSON_ASSET_KEYS.includes(assetKey)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }

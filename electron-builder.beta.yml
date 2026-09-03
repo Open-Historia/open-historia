@@ -122,8 +122,16 @@ mac:
   artifactName: Open-Historia-SeventhDread-Beta-mac-${arch}.${ext}
 
 linux:
+  # This file REPLACES package.json's `build` block (it is passed with --config,
+  # not merged), so the .deb target and its maintainer have to be restated here.
+  # Without them the beta channel would quietly ship AppImage-only while stable
+  # ships both — the same build, two different Linux stories.
+  maintainer: Arkniem <nichojkrol@gmail.com>
   target:
     - target: AppImage
+      arch:
+        - x64
+    - target: deb
       arch:
         - x64
   icon: electron/beta-assets/icon-beta.png

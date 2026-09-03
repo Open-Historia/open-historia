@@ -34,6 +34,7 @@ import {
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
+import { foreignAgentBrief } from "../../runtime/spycraft.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -861,6 +862,7 @@ async function callOpenAIStyleChatCompletions({
     history,
     providerLabel,
     customParams = {},
+    toolStrict = false,
     retries = 3,
     retryDelay = 15000,
     deadline,
@@ -976,6 +978,12 @@ async function callOpenAIStyleChatCompletions({
                         name: tool.name,
                         description: tool.description,
                         parameters: tool.schema,
+                    // Opt-in only. OpenAI rejects strict:true unless every property
+                    // is named in required, which these schemas deliberately do not
+                    // do; self-hosted grammar backends (SGLang/xgrammar, vLLM) take
+                    // the schema as-is and constrain generation with it, which is
+                    // what stops a model emitting an unbalanced or mistyped argument.
+                    ...(toolStrict ? { strict: true } : {}),
                     } }],
                     // The string form, NOT OpenAI's {type:"function",function:{name}}
                     // object: llama.cpp-based servers (LM Studio, Jan, local Qwen et
@@ -1293,6 +1301,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         history,
         providerLabel: "OpenAI Compatible",
         customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
+        toolStrict: settings.toolStrict === true,
         allowJsonSchemaFallback: true,
         configuredStructuredMode: settings.structuredMode,
         observerKey: `${settings.provider}|${model}`,
@@ -2132,11 +2141,20 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
+    // A leader only knows the conversations they are actually in. The leader
+    // prompt carries the recent chat history, and this used to hand it EVERY
+    // chat — so the polity answering here could see, and react to, what the
+    // player had said to someone else. Diplomacy with others is private; the
+    // only way to learn it is the spy the game now lets the player plant.
+    const isParticipant = (chat) => (Array.isArray(chat?.countries) ? chat.countries : [])
+        .some((country) => [country?.name, country?.code].map((v) => String(v ?? "").trim().toUpperCase())
+            .includes(String(speakingAs).trim().toUpperCase()));
+    const ownChats = Array.isArray(chatData) ? chatData.filter(isParticipant) : [];
     const variables = {
         ...(await buildPromptVariables({
             actionData,
             advisorData,
-            chatData,
+            chatData: ownChats,
             eventData,
             gameData,
             speakingAs: speakingAs || countries.find((country) => country !== playerCountry) || "",
@@ -2146,8 +2164,25 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
+    // The other direction of the leak fix: a polity that has planted an agent in
+    // the player DOES get to see the player's private material — the chats the
+    // player has with everyone else, and the player's queued plans — redacted by
+    // that polity's service against the player's. A polity whose agent has been
+    // turned gets the cover story the player wrote instead, and believes it.
+    const otherChats = Array.isArray(chatData) ? chatData.filter((chat) => !isParticipant(chat)) : [];
+    const stolen = [
+        ...otherChats.slice(-4).map((chat) => {
+            const who = (chat.countries || []).map((c) => c?.name).filter(Boolean).join(", ");
+            const last = (chat.messages || []).slice(-4).map((m) => (m.speaker || m.role) + ": " + m.text).join(" | ");
+            return last ? "Talks between " + who + ": " + last : "";
+        }),
+        ...(Array.isArray(actionData) ? actionData : []).filter((a) => a?.status === "planned").slice(-5).map((a) => "Planned by " + (playerCountry || "the player") + ": " + (a.title || a.text || a.description || "")),
+    ].filter(Boolean).join("\n");
+    const agent = foreignAgentBrief(worldData, speakingAs, { playerPolity: playerCountry || gameData?.country || "", material: stolen });
+    const espionage = agent ? "\n\n[Your Intelligence]\n" + agent : "";
+
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}${espionage}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];

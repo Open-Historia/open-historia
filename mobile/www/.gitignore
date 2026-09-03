@@ -1,0 +1,4 @@
+# The Android app IS the web build (npm run build:web), copied here by the APK
+# workflow. Nothing in it is authored, so nothing in it is committed.
+*
+!.gitignore

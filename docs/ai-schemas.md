@@ -43,6 +43,7 @@ Each task is identified by a **task key**. `GAMEPLAY_SCHEMAS` maps the key to it
 | `idleDiplomacy` | `IDLE_DIPLOMACY_SCHEMA` | `submit_idle_diplomacy` | idle inbox drip |
 | `pregameHistory` | `PREGAME_HISTORY_SCHEMA` | `submit_pregame_history` | pre-game backstory |
 | `projects` | `PROJECTS_SCHEMA` | `submit_project_ops` | Projects & Operations board, following a jump |
+| `spyIntercept` | `SPY_INTERCEPT_SCHEMA` | `submit_spy_intercept` | what a planted agent intercepted this period |
 
 `getGameplayTool` returns `null` for an unknown key; `validateGameplayPayload` returns `{ valid: false, error: "Unknown gameplay task key: …" }`.
 
@@ -117,6 +118,7 @@ A creation/rename/recolor/metadata change. Only `code` is required; send other f
 | `color` | string | New six-digit hex color, only when it changes | no |
 | `aliases` | `string[]` | Alternative names | no |
 | `reputation` | number | International reputation 0–100, only when it changes (0 = pariah, 100 = universally trusted) | no |
+| `intelligence` | number | Intelligence-service capability 0–100, only when it changes: a purge, a new bureau, a defector, funding, a foreign penetration exposed. Decides how much of others' diplomacy this polity can read and how much of its own it can keep secret | no |
 | `tags` | `string[]` | Complete new trait list (ideology/alignment/posture) — send the whole list, not a delta | no |
 | `note` | string | Brief reason | no |
 

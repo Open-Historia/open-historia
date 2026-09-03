@@ -146,9 +146,16 @@
       "artifactName": "Open-Historia-mac-${arch}.${ext}"
     },
     "linux": {
+      "maintainer": "Arkniem <nichojkrol@gmail.com>",
       "target": [
         {
           "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
           "arch": [
             "x64"
           ]

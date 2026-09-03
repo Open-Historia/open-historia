@@ -80,44 +80,81 @@ export function useWorldState() {
     };
   }, []);
 
+  const prev = prevRef.current;
+
+  // Preserve sub-object referential identity when content has not changed.
+  // This prevents consumer useMemos (such as in Nations.jsx) from re-evaluating
+  // when an unrelated field (e.g. markers or units) changes.
+  const regionOwnershipOverrides =
+    prev && areEqualShallow(prev.regionOwnershipOverrides, state?.regionOwnershipOverrides ?? {})
+      ? prev.regionOwnershipOverrides
+      : state?.regionOwnershipOverrides ?? {};
+
+  const regionClaimants =
+    prev && JSON.stringify(prev.regionClaimants) === JSON.stringify(state?.regionClaimants ?? {})
+      ? prev.regionClaimants
+      : state?.regionClaimants ?? {};
+
+  const polityOverrides =
+    prev && areEqualShallow(prev.polityOverrides, state?.polityOverrides ?? {})
+      ? prev.polityOverrides
+      : state?.polityOverrides ?? {};
+
+  const markers =
+    prev && JSON.stringify(prev.markers) === JSON.stringify(state?.markers ?? EMPTY_MARKERS)
+      ? prev.markers
+      : Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS;
+
+  const cityRenames =
+    prev && JSON.stringify(prev.cityRenames) === JSON.stringify(state?.cityRenames ?? {})
+      ? prev.cityRenames
+      : state?.cityRenames ?? {};
+
+  // AI population overrides (main) — same content-compare, same identity rule.
+  const cityPopulations =
+    prev && JSON.stringify(prev.cityPopulations) === JSON.stringify(state?.cityPopulations ?? {})
+      ? prev.cityPopulations
+      : state?.cityPopulations ?? {};
+
   const derived = {
     worldState: state,
     worldKnown: Boolean(state && Object.keys(state).length > 0),
     customRegions: Boolean(state?.customRegions),
+    customGeometry: Boolean(
+      state?.customGeometry ??
+      Object.keys(regionOwnershipOverrides).some((id) => !String(id).includes(".")),
+    ),
     customCities: Boolean(state?.customCities),
     basemap: state?.basemap || null,
     background: state?.background ?? null,
-    regionOwnershipOverrides: state?.regionOwnershipOverrides ?? {},
-    regionClaimants: state?.regionClaimants ?? {},
-    polityOverrides: state?.polityOverrides ?? {},
-    markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
-    cityRenames: state?.cityRenames ?? {},
-    cityPopulations: state?.cityPopulations ?? {},
+    regionOwnershipOverrides,
+    regionClaimants,
+    polityOverrides,
+    markers,
+    cityRenames,
+    cityPopulations,
     labelFont: state?.labelFont ?? "",
     labelHaloColor: state?.labelHaloColor ?? "",
     labelTextColor: state?.labelTextColor ?? "",
   };
 
-  const prev = prevRef.current;
   const output =
     prev &&
     prev.worldKnown === derived.worldKnown &&
     prev.customRegions === derived.customRegions &&
+    prev.customGeometry === derived.customGeometry &&
     prev.customCities === derived.customCities &&
     prev.basemap === derived.basemap &&
     prev.background === derived.background &&
     prev.labelFont === derived.labelFont &&
     prev.labelHaloColor === derived.labelHaloColor &&
     prev.labelTextColor === derived.labelTextColor &&
-    areEqualShallow(prev.regionOwnershipOverrides, derived.regionOwnershipOverrides) &&
-    // Claimant values are ARRAYS (fresh objects every poll), so reference
-    // equality would churn every 5s — compare content. The map is tiny.
-    JSON.stringify(prev.regionClaimants) === JSON.stringify(derived.regionClaimants) &&
-    // Markers are an array of small objects; same content-compare reasoning.
-    JSON.stringify(prev.markers) === JSON.stringify(derived.markers) &&
-    JSON.stringify(prev.cityRenames) === JSON.stringify(derived.cityRenames) &&
-    JSON.stringify(prev.cityPopulations) === JSON.stringify(derived.cityPopulations) &&
-    areEqualShallow(prev.polityOverrides, derived.polityOverrides)
+    prev.regionOwnershipOverrides === derived.regionOwnershipOverrides &&
+    prev.regionClaimants === derived.regionClaimants &&
+    prev.markers === derived.markers &&
+    prev.cityRenames === derived.cityRenames &&
+    prev.cityPopulations === derived.cityPopulations &&
+    prev.polityOverrides === derived.polityOverrides
       ? prev
       : derived;
 
@@ -126,4 +163,103 @@ export function useWorldState() {
   }, [output]);
 
   return output;
+}
+
+export function useWorldMarkers() {
+  const [markers, setMarkers] = useState(() => {
+    const s = effectiveState();
+    return Array.isArray(s?.markers) ? s.markers : EMPTY_MARKERS;
+  });
+  const prevRef = useRef(markers);
+
+  useEffect(() => {
+    startPolling();
+    const handler = (data) => {
+      const next = Array.isArray(data?.markers) ? data.markers : EMPTY_MARKERS;
+      if (JSON.stringify(prevRef.current) !== JSON.stringify(next)) {
+        prevRef.current = next;
+        setMarkers(next);
+      }
+    };
+    subscribers.add(handler);
+    return () => {
+      subscribers.delete(handler);
+      if (subscribers.size === 0) stopPolling();
+    };
+  }, []);
+
+  return markers;
+}
+
+export function useWorldCities() {
+  const [citiesState, setCitiesState] = useState(() => {
+    const s = effectiveState();
+    return {
+      customCities: Boolean(s?.customCities),
+      cityRenames: s?.cityRenames ?? {},
+      cityPopulations: s?.cityPopulations ?? {},
+    };
+  });
+  const prevRef = useRef(citiesState);
+
+  useEffect(() => {
+    startPolling();
+    const handler = (data) => {
+      const customCities = Boolean(data?.customCities);
+      const cityRenames = data?.cityRenames ?? {};
+      const cityPopulations = data?.cityPopulations ?? {};
+      const prev = prevRef.current;
+      if (
+        prev.customCities !== customCities ||
+        JSON.stringify(prev.cityRenames) !== JSON.stringify(cityRenames) ||
+        JSON.stringify(prev.cityPopulations) !== JSON.stringify(cityPopulations)
+      ) {
+        const next = { customCities, cityRenames, cityPopulations };
+        prevRef.current = next;
+        setCitiesState(next);
+      }
+    };
+    subscribers.add(handler);
+    return () => {
+      subscribers.delete(handler);
+      if (subscribers.size === 0) stopPolling();
+    };
+  }, []);
+
+  return citiesState;
+}
+
+export function useWorldBackground() {
+  const [bgState, setBgState] = useState(() => {
+    const s = effectiveState();
+    return {
+      background: s?.background ?? null,
+      basemap: s?.basemap || null,
+    };
+  });
+  const prevRef = useRef(bgState);
+
+  useEffect(() => {
+    startPolling();
+    const handler = (data) => {
+      const background = data?.background ?? null;
+      const basemap = data?.basemap || null;
+      const prev = prevRef.current;
+      const bgSame =
+        prev.background === background ||
+        JSON.stringify(prev.background) === JSON.stringify(background);
+      if (!bgSame || prev.basemap !== basemap) {
+        const next = { background, basemap };
+        prevRef.current = next;
+        setBgState(next);
+      }
+    };
+    subscribers.add(handler);
+    return () => {
+      subscribers.delete(handler);
+      if (subscribers.size === 0) stopPolling();
+    };
+  }, []);
+
+  return bgState;
 }

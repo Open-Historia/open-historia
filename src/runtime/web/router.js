@@ -6,7 +6,7 @@
 // /api/* (AI providers, GitHub, ESRI tiles, static assets) passes straight
 // through to the real fetch.
 
-import { errorResponse } from "./util.js";
+import { errorResponse, jsonResponse } from "./util.js";
 import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
 import { handleFlags } from "./flagStore.js";
@@ -33,6 +33,39 @@ const readBody = async (request, forceRaw) => {
 
 const isAssetUpload = (domain, segments, method) =>
   (domain === "scenarios" || domain === "games") && segments.includes("assets") && method === "PUT";
+
+// Same manifests the desktop server proxies (server/server.js APP_UPDATE_MANIFESTS).
+const APP_UPDATE_MANIFESTS = {
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
+};
+
+// Native HTTP when Capacitor provides it — the WebView's own fetch is subject to
+// CORS and this is a cross-origin GitHub asset. Falls back to fetch elsewhere.
+const fetchJsonUnrestricted = async (target) => {
+  const native = window.Capacitor?.Plugins?.CapacitorHttp;
+  if (native) {
+    const res = await native.request({ url: target, method: "GET", connectTimeout: 6000, readTimeout: 6000 });
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res?.status}`);
+    return typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  }
+  const res = await fetch(target, { signal: AbortSignal.timeout(6000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+};
+
+// Normalized exactly like the server's route, so AppUpdateBanner cannot tell the
+// two apart. `current` is omitted: that field means "a desktop app is asking",
+// and this build is never that.
+const readAppUpdateManifest = async (target) => {
+  const raw = await fetchJsonUnrestricted(target);
+  const str = (value) => (typeof value === "string" ? value : "");
+  return {
+    build: Number(raw && raw.build) || 0,
+    apk: str(raw && raw.apk),
+    notes: str(raw && raw.notes),
+  };
+};
 
 // Route an /api/* request to the right store handler. Returns a Response.
 const route = async (request, url) => {
@@ -105,6 +138,26 @@ const route = async (request, url) => {
   // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
   // browser can't download bundles directly). Listing still hits api.github.com
   // directly (it sends CORS) and passes through the interceptor untouched.
+  // The Android app is this same web build packaged with Capacitor, so it has no
+  // on-device server to answer /api/app-update — but it is the ONE build that can
+  // actually self-update (it ships as an APK). Answer it here instead.
+  //
+  // Straight to the release manifest rather than through the registry Worker: a
+  // Capacitor WebView can issue native HTTP that is not subject to CORS, and the
+  // manifest is a CDN asset with no rate limit. Everywhere else this is a plain
+  // fetch, which is why the reply is fail-open — a browser that CORS-blocks it
+  // simply sees no update, exactly as it does today.
+  if (domain === "app-update") {
+    const track = url.searchParams.get("track") || "stable";
+    const manifest = APP_UPDATE_MANIFESTS[track];
+    if (!manifest) return jsonResponse({});
+    try {
+      return jsonResponse(await readAppUpdateManifest(manifest));
+    } catch {
+      return jsonResponse({}); // offline, blocked, or malformed -> no banner
+    }
+  }
+
   if (domain === "hub") {
     const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
     // Community bundle downloads (/api/hub/file?url=…): prefer the connected

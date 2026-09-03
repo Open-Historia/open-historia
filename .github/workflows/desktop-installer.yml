@@ -97,6 +97,7 @@ jobs:
             release/*.exe
             release/*-mac-*.zip
             release/*.AppImage
+            release/*.deb
           if-no-files-found: error
 
       - name: Attach to the release
@@ -118,7 +119,7 @@ jobs:
           # latest.yml (win) / latest-mac.yml / latest-linux.yml from this release
           # and compares the version in it against the running app. One per
           # platform, so the three jobs cannot overwrite each other's.
-          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/latest*.yml)
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/*.deb release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot
           # each publish a different view of the same release.
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -128,7 +129,8 @@ jobs:
             "build": "${{ github.run_id }}",
             "windows": "$B/Open-Historia-Setup.exe",
             "mac": "$B/Open-Historia-mac-arm64.zip",
-            "linux": "$B/Open-Historia-x86_64.AppImage"
+            "linux": "$B/Open-Historia-x86_64.AppImage",
+            "linuxDeb": "$B/open-historia_amd64.deb"
           }
           JSON
             files+=(latest.json)
