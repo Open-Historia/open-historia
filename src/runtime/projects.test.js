@@ -627,3 +627,15 @@ test("an entry nobody doubts is never offered for settling", () => {
   assert.deepEqual(pending, []);
   assert.equal(describeDoubtedForPrompt(pending), "");
 });
+
+test("the operation the agent IS is never doubted, only what it reported", () => {
+  // spyOperationOps links the covert operation to the same spy, so without a
+  // guard the card representing the agent would be marked Doubtful alongside the
+  // intelligence it sent. The operation is not in question: the agent really is
+  // there. Only what they have been sending back can be a fabrication.
+  const ownOperation = { id: "op1", name: "Agent in Prussia", ownerCode: "", status: "active", verification: "", linkedSpyIds: ["spy-france-prussia-1"] };
+  const foreign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const ops = spyIntelDoubtOps([spy({ suspected: true })], [ownOperation, foreign], { playerPolity: "France" });
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].id, "f1", "only the foreign entry is doubted");
+});
