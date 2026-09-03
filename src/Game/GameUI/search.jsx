@@ -141,7 +141,7 @@ const getIcon = (suggestion) => {
   return ICON_PIN;
 };
 
-const Search = memo(({ mapRef }) => {
+const Search = memo(({ mapRef, placement = "bottom-left" }) => {
   const isMobile = useIsMobile();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
@@ -268,17 +268,16 @@ const Search = memo(({ mapRef }) => {
   };
 
   const hasSuggestions = expanded && suggestions.length > 0;
+  const topRight = placement === "top-right";
 
   return (
     <div
       style={{
         position: "fixed",
-        // Desktop: sits right of the bottom toolbar and expands rightward.
-        // Phones: the expanded box wouldn't fit there, so it opens as a
-        // full-width bar just above the toolbar instead.
-        bottom: expanded && isMobile ? "5rem" : "1rem",
-        // Clear of the bottom toolbar (0.5rem + 8.75rem wide).
-        left: expanded && isMobile ? "0.5rem" : "9.75rem",
+        top: topRight ? "0.65rem" : undefined,
+        right: topRight ? "0.65rem" : undefined,
+        bottom: topRight ? undefined : (expanded && isMobile ? "5rem" : "1rem"),
+        left: topRight ? undefined : (expanded && isMobile ? "0.5rem" : "9.75rem"),
         height: "3rem",
         width: expanded ? (isMobile ? "calc(100vw - 1rem)" : "17rem") : "3rem",
         overflow: "visible",
@@ -287,11 +286,11 @@ const Search = memo(({ mapRef }) => {
         display: "flex",
         alignItems: "center",
         zIndex: 9999,
-        borderRadius: hasSuggestions ? "0 0 12px 12px" : "12px",
-        backgroundColor: "rgba(17, 24, 39, 0.9)",
-        backdropFilter: "blur(4px)",
-        border: "1px solid rgba(255,255,255,0.1)",
-        boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+        borderRadius: hasSuggestions ? (topRight ? "12px 12px 0 0" : "0 0 12px 12px") : "12px",
+        backgroundColor: "var(--oh-hud-bg)",
+        backdropFilter: "var(--oh-hud-blur)",
+        border: "1px solid var(--oh-hud-border)",
+        boxShadow: "var(--oh-hud-shadow-soft)",
         color: "white",
         fontFamily: "sans-serif",
       }}
@@ -403,15 +402,17 @@ const Search = memo(({ mapRef }) => {
         <div
           style={{
             position: "absolute",
-            bottom: "calc(3rem - 1px)",
+            top: topRight ? "calc(3rem - 1px)" : undefined,
+            bottom: topRight ? undefined : "calc(3rem - 1px)",
             left: "-1px",
             right: "-1px",
-            backgroundColor: "rgba(17, 24, 39, 0.97)",
-            backdropFilter: "blur(4px)",
-            borderRadius: "12px 12px 0 0",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderBottom: "none",
-            boxShadow: "0 -6px 16px rgba(0,0,0,0.3)",
+            backgroundColor: "var(--oh-hud-bg-strong)",
+            backdropFilter: "var(--oh-hud-blur)",
+            borderRadius: topRight ? "0 0 12px 12px" : "12px 12px 0 0",
+            border: "1px solid var(--oh-hud-border)",
+            borderTop: topRight ? "none" : undefined,
+            borderBottom: topRight ? undefined : "none",
+            boxShadow: topRight ? "0 10px 26px rgba(0,0,0,0.34)" : "0 -6px 16px rgba(0,0,0,0.3)",
             overflow: "hidden",
           }}
         >

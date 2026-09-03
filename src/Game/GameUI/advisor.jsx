@@ -185,6 +185,27 @@ const TabButton = ({ icon, label, active, onClick }) => (
 );
 
 const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
+    // Shared floating UI (notably diplomatic message toasts) needs to know how
+    // much of the right edge is occupied by the Advisor/Stats drawer. Publish
+    // the live resizable width instead of hard-coding another panel size.
+    useEffect(() => {
+        if (typeof document === "undefined") return undefined;
+
+        const root = document.documentElement;
+        if (isAdvisorOpen) {
+            const safeOffset = typeof width === "number"
+                ? `${Math.max(0, width) + 16}px`
+                : `calc(${ADVISOR_PANEL_WIDTH} + 1rem)`;
+            root.style.setProperty("--oh-right-drawer-safe-offset", safeOffset);
+        } else {
+            root.style.setProperty("--oh-right-drawer-safe-offset", "0px");
+        }
+
+        return () => {
+            root.style.setProperty("--oh-right-drawer-safe-offset", "0px");
+        };
+    }, [isAdvisorOpen, width]);
+
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -330,23 +351,16 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
     return (
         <>
         <MarkdownStyleInjector />
-        <div style={{
-            position: "fixed", bottom: 0, right: 0,
-            // Slide via transform: the old right: calc(-min(...) - 1rem) was
-            // INVALID CSS (a min() can't be negated like that), so the closed
-            // position was silently dropped and the drawer never slid away.
+        <div className="oh-hud-panel" style={{
+            position: "fixed", bottom: "0.5rem", right: "0.5rem",
             transform: isAdvisorOpen ? "translateX(0)" : "translateX(calc(100% + 2rem))",
-            // Full height now the in-game top bar is gone — it used to stop 64px
-            // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
-            // above, so height: 100vh reaches the top edge.
-            width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH, height: "100vh",
-            backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
-            // Above every HUD button/panel (toolbar 9999, forces 10000,
-            // library panels 10031) so nothing covers the open drawer on
-            // phones; below the editor (10050) and server-down (10060) overlays.
-            zIndex: 10040, borderLeft: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
-            transition: "transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+            width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH,
+            height: "calc(100vh - 1rem)",
+            backgroundColor: "var(--oh-hud-bg-strong)", backdropFilter: "var(--oh-hud-blur)",
+            zIndex: 10040,
+            border: "1px solid var(--oh-hud-border)", borderRadius: "18px",
+            boxShadow: "var(--oh-hud-shadow)",
+            transition: "transform 0.32s cubic-bezier(0.4, 0, 0.2, 1)",
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>
@@ -373,7 +387,7 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
             </div>
         )}
         {/* Header: tabs to flip between the advisor chat and national stats. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
+        <div style={{ alignItems: "center", background: "rgba(255,255,255,0.018)", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", padding: "0.15rem 0.75rem 0.15rem 0.35rem" }}>
         <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
         <TabButton icon="📊" label="Stats" active={activeTab === "stats"} onClick={() => setActiveTab("stats")} />
         <div style={{ flex: 1 }} />

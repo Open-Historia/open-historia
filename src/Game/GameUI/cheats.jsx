@@ -324,19 +324,20 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     return (
         <>
         {clickMode && (
-            <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(17,24,39,0.97)", border: "1px solid rgba(139,92,246,0.5)", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,0.5)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
+            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "var(--oh-hud-bg-strong)", border: "1px solid rgba(139,92,246,0.32)", borderRadius: 12, boxShadow: "var(--oh-hud-shadow-soft)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
             <span>{clickMode.label}</span>
             <button type="button" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
             </div>
         )}
 
         <div
+        className="oh-hud-panel"
         style={{
-            background: "rgba(17, 24, 39, 0.96)",
-            backdropFilter: "blur(8px)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 16,
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
+            background: "var(--oh-hud-bg-strong)",
+            backdropFilter: "var(--oh-hud-blur)",
+            border: "1px solid var(--oh-hud-border)",
+            borderRadius: 18,
+            boxShadow: "var(--oh-hud-shadow)",
             color: "white",
             display: clickMode ? "none" : "flex",
             flexDirection: "column",
@@ -345,7 +346,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             overflow: "hidden",
             padding: "0.9rem",
             position: "fixed",
-            right: "0.5rem",
+            right: "0.65rem",
             top: PANEL_TOP,
             width: ["edit-country", "events", "edit-feature", "add-feature"].includes(tool) ? "min(31rem, calc(100vw - 1rem))" : "min(25.5rem, calc(100vw - 1rem))",
             zIndex: 10045,

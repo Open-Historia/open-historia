@@ -1,4 +1,5 @@
-// OpenHistoria Continuum — Native World Integrity v0.8.6-native-audit
+import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
+// OpenHistoria Continuum — Native World Integrity v0.13.1-crisis-seam-repair
 //
 // This module is deliberately separate from the World Director and Timeline
 // Curator. Responsibilities:
@@ -13,10 +14,23 @@
 // It does NOT decide which plausible event is historically interesting. That
 // remains the semantic Timeline Curator's job.
 
-export const WORLD_INTEGRITY_VERSION = "0.8.6-native-audit";
+export const WORLD_INTEGRITY_VERSION = "0.13.1-crisis-seam-repair";
 
-const EXPLORATION_ACTOR_SLOTS = 6;
-const EXPLORATION_GLOBAL_SLOTS = 2;
+// R3.6: keep the 10-lane attention slate structurally balanced rather than
+// hoping actor availability happens to produce 50/50. Up to five independent
+// PLAYER-SPHERE actor lanes and three independent WIDER-WORLD actor lanes are used
+// when available. If selected-storyline exclusion leaves one side sparse, cheap
+// regional/system evaluation lanes fill that side instead of borrowing actors from
+// the other side. Two protected wider-world global lanes (crisis discovery +
+// cross-border system) complete the normal 5/5 layout. Evaluation only, no quota.
+const EXPLORATION_PLAYER_SPHERE_ACTOR_SLOTS = 5;
+const EXPLORATION_WIDER_EVIDENCE_ACTOR_SLOTS = 1;
+const EXPLORATION_WIDER_LATENT_ACTOR_SLOTS = 2;
+const EXPLORATION_WIDER_ACTOR_SLOTS =
+  EXPLORATION_WIDER_EVIDENCE_ACTOR_SLOTS + EXPLORATION_WIDER_LATENT_ACTOR_SLOTS;
+const EXPLORATION_ACTOR_SLOTS =
+  EXPLORATION_PLAYER_SPHERE_ACTOR_SLOTS + EXPLORATION_WIDER_ACTOR_SLOTS;
+const EXPLORATION_TARGET_PER_SCOPE = 5;
 
 const EXPLORATION_DOMAINS = Object.freeze([
   "diplomacy / foreign policy / commercial relations",
@@ -27,12 +41,14 @@ const EXPLORATION_DOMAINS = Object.freeze([
   "military readiness / doctrine / procurement (not routine battlefield continuation)",
   "regional / colonial / minority governance where applicable",
   "third-party reaction to wars, crises, treaties, and balance-of-power changes",
+  "political rupture / elite fracture / mass unrest / coup or constitutional risk when current pressures support it",
+  "strategic risk / coercive escalation / mobilization / brinkmanship / miscalculation when current interests support it",
 ]);
 
 const WORLD_SWEEP_AUDIT_RE = /\[\[WORLD_SWEEP:([^\]]*)\]\]/i;
 
 const ROUTINE_MILITARY_CUE_RE =
-  /\b(skirmish(?:es)?|reconnaissance|patrol(?:s|ling)?|prob(?:e|es|ing)|artillery(?:\s+(?:fire|exchange|exchanges|bombardment|bombardments))?|counter[- ]battery|sporadic\s+(?:fire|clashes|fighting)|trench\s+(?:raid|raids)|outpost\s+(?:clash|clashes)|localized\s+(?:fighting|clashes|attacks?))\b/i;
+  /\b(skirmish(?:es)?|reconnaissance|patrol(?:s|ling)?|prob(?:e|es|ing)|artillery(?:\s+(?:fire|exchange|exchanges|bombardment|bombardments))?|counter[- ]battery|sporadic\s+(?:fire|clashes|fighting)|trench\s+(?:raid|raids)|outpost\s+(?:clash|clashes)|localized\s+(?:fighting|clashes|attacks?)|readiness\s+(?:remains?|stays?|continues?)\s+(?:elevated|heightened|high)|(?:elevated|heightened)\s+(?:military\s+)?readiness\s+(?:remains?|continues?)|maintain(?:s|ed|ing)?\s+(?:a\s+)?(?:heavy\s+|heightened\s+|elevated\s+)?(?:military\s+|security\s+)?posture|continued\s+(?:vigilance|monitoring|surveillance|alert\s+status)|security\s+posture\s+(?:remains?|continues?)|forces?\s+remain(?:s|ed)?\s+on\s+(?:heightened|high)\s+alert)\b/i;
 
 const STRONG_MILITARY_CONSEQUENCE_RE =
   /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
@@ -58,6 +74,114 @@ const PROCESS_ONLY_POLITY_UPDATE_RE =
 
 const CONCRETE_POLITY_OUTCOME_RE =
   /\b(pass(?:es|ed)?|adopt(?:s|ed)?|enact(?:s|ed)?|approv(?:e|es|ed)|implement(?:s|ed)?|appoint(?:s|ed)?|resign(?:s|ed)?|dismiss(?:es|ed)?|dissolv(?:e|es|ed)|reorganiz(?:e|es|ed)|reform(?:s|ed)?|establish(?:es|ed)|abolish(?:es|ed)|ratif(?:y|ies|ied)|decree(?:s|d)?|takes?\s+office|government\s+(?:falls|forms)|constitution(?:al)?\s+(?:change|reform)|coup|law\s+(?:passes|is\s+enacted))\b/i;
+
+
+const ROUTINE_ADMINISTRATIVE_CUE_RE =
+  /\b(?:technical review|committee review|working group|administrative implementation|implementation review|compliance review|compliance tracking|inspection protocol|inspection standards|regulatory harmonization|protocol refinement|procedural update|standards update|monitoring framework|coordination mechanism|advisory committee|streamlined (?:procedures|protocols|standards)|finaliz(?:e|es|ed) (?:technical|administrative|inspection|compliance|procedural|regulatory)|publishes? (?:a )?(?:routine )?(?:review|assessment|report)|reports? on implementation)\b/i;
+
+const ADMINISTRATIVE_MATERIAL_OUTCOME_RE =
+  /\b(?:law (?:passes|is enacted)|tax (?:raised|cut|introduced)|ban (?:takes effect|imposed)|resign(?:s|ed|ation)|appoint(?:s|ed|ment)|government (?:falls|forms)|election|referendum|strike|protest|riot|shortage|shutdown|bank failure|default|market crash|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment)|sanction(?:s|ed)|embargo|treaty|agreement (?:signed|reached)|ceasefire|martial law|state of emergency|opens? (?:a )?(?:factory|plant|facility)|enters service|production begins|becomes operational|disaster|accident)\b/i;
+
+// A crisis-discovery lane is satisfied only by a genuinely NEW persistent
+// unstable process, not by another administrative card that happens to use the
+// word "crisis". The model still decides whether such a process exists.
+const CRISIS_DISCOVERY_KIND_RE =
+  /\b(crisis|revolution|uprising|insurgency|secession|constitutional|succession|financial|banking|government|political|security|standoff|coup)\b/i;
+
+// R3.6 — native trajectory value. This is intentionally cheap and conservative:
+// it does not decide history or force drama. It only tells candidate selection that
+// a grounded process with several materially different future branches is normally
+// more valuable than another isolated administrative success when both are valid.
+const TRAJECTORY_BREAKPOINT_RE =
+  /\b(coup(?: attempt)?|mutiny|uprising|rebellion|insurgency|secession|civil war|government falls?|cabinet collapses?|banking panic|bank run|sovereign default|currency crash|constitutional crisis|succession crisis|martial law|state of emergency|mobiliz(?:e|es|ed|ation)|ultimatum|blockade|border clash|armed clash|incursion|direct clash|nuclear alert)\b/i;
+const TRAJECTORY_INSTABILITY_RE =
+  /\b(reject(?:s|ed|ion)?|refus(?:e|es|ed|al)|schism|split(?:s|ting)?|breakaway|autonomy|federal tension|regional defiance|mass protest|general strike|nationwide strike|industrial dispute|leadership challenge|confidence vote|impeach(?:ment)?|sanction(?:s|ed)?|missile test|ends? (?:the )?moratorium|withdraw(?:s|al)? from|deadlock|talks? (?:fail|collapse|break down)|credit crunch|liquidity crisis|debt crisis|shortage|rationing|separatist|ethnic tension|communal violence)\b/i;
+const TRAJECTORY_CAPABILITY_RE =
+  /\b(enters? service|commission(?:s|ed)?|deploy(?:s|ed|ment)|production begins|factory opens?|plant opens?|law (?:passes|is enacted|is signed)|signs? (?:a |the )?(?:treaty|accord|agreement)|ratif(?:y|ies|ied)|election result|resign(?:s|ed|ation)|appoint(?:s|ed|ment)|reorganiz(?:e|es|ed)|restructur(?:e|es|ed)|merger|launches? (?:a )?(?:major )?(?:programme|program|facility)|operational)\b/i;
+const TRAJECTORY_SETTLED_RE =
+  /\b(avert(?:s|ed|ing)|settlement reached|agreement reached|deal reached|resolved|stabiliz(?:e|es|ed|ation)|stands? down|de[- ]?escalat(?:e|es|ed|ion)|ceasefire|armistice)\b/i;
+
+const TRAJECTORY_REPORTING_RE =
+  /\b(quarterly|annual|monthly)\s+(?:trade |economic |industrial |export |market )?(?:outlook|assessment|review|report)|publishes? (?:its |a )?(?:quarterly |annual |monthly )?(?:outlook|assessment|review|report)|releases? (?:its |a )?(?:quarterly |annual |monthly )?(?:outlook|assessment|review|report)\b/i;
+
+// R3.7 — low-trajectory feed saturation guard. This is intentionally narrower
+// than "administrative event": one concrete technical/implementation milestone is
+// fine. What we suppress is a cluster of low-branch cards monopolising scarce
+// visible slots while the recent feed is already full of the same texture.
+const LOW_TRAJECTORY_INSTITUTIONAL_RE =
+  /\b(?:technical (?:dialogue|consultations?|talks?|working sessions?|coordination)|working[- ]level consultations?|bilateral working sessions?|regulatory sandbox|administrative network|municipal data network|compliance framework|coordination framework|coordination mechanism|implementation framework|quarterly (?:outlook|assessment|review|report)|refinancing (?:facility|window)|customs efficiency|procedural harmonization|standards alignment)\b/i;
+const LOW_TRAJECTORY_RECENT_WINDOW = 12;
+const LOW_TRAJECTORY_RECENT_SATURATION = 4;
+const LOW_TRAJECTORY_BATCH_TRIGGER = 3;
+
+export const deriveWorldTrajectoryValue = (record = {}) => {
+  const text = `${normalizeString(record?.title)} ${normalizeString(record?.description || record?.detail || record?.state)}`;
+  const hardImpacts = hardImpactKeysForEvent(record).length;
+  if (TRAJECTORY_BREAKPOINT_RE.test(text)) return 5;
+  if (TRAJECTORY_INSTABILITY_RE.test(text) && !TRAJECTORY_SETTLED_RE.test(text)) return 4;
+  if (hardImpacts >= 2) return 4;
+  if (hardImpacts === 1 || TRAJECTORY_CAPABILITY_RE.test(text)) return 3;
+  if (TRAJECTORY_REPORTING_RE.test(text)) return 0;
+  if (ROUTINE_ADMINISTRATIVE_CUE_RE.test(text) && !ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text)) return 0;
+  if (TRAJECTORY_SETTLED_RE.test(text)) return 2;
+  return 1;
+};
+
+const latentCrisisConsequenceChannels = (text) => {
+  const channels = new Set(["persistent storyline"]);
+  if (/\b(border|military|missile|mobiliz|security|clash|incursion|blockade|armed)\b/i.test(text)) {
+    channels.add("relations");
+    channels.add("units / readiness");
+    channels.add("war or territorial control if belligerency actually crosses the threshold");
+  }
+  if (/\b(secession|autonomy|federal|constitutional|government|coup|succession|leadership)\b/i.test(text)) {
+    channels.add("polity/government state");
+    channels.add("relations");
+  }
+  if (/\b(bank|credit|debt|currency|financial|shortage|strike|labou?r|industry)\b/i.test(text)) {
+    channels.add("Stats / economic-social state");
+  }
+  return [...channels].slice(0, 5);
+};
+
+const deriveLatentCrisisDiscoveryCandidate = ({
+  causalCandidates = [],
+  actorResolver,
+  playerSphereKeys = new Set(),
+} = {}) => {
+  const rows = [];
+  for (const candidate of normalizeArray(causalCandidates)) {
+    if (normalizeArray(candidate?.storylineIds).length) continue;
+    const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
+    const trajectoryValue = deriveWorldTrajectoryValue(candidate);
+    if (trajectoryValue < 4 || TRAJECTORY_SETTLED_RE.test(text)) continue;
+
+    const actors = actorResolver.mentionedPolities(text)
+      .map((actor) => actorResolver.canonical(actor))
+      .filter(Boolean);
+    if (!actors.length) continue;
+
+    const widerActors = actors.filter((actor) => !playerSphereKeys.has(actor.toLowerCase()));
+    if (!widerActors.length) continue;
+
+    rows.push({
+      actor: widerActors[0],
+      actors: uniqueStrings(actors).slice(0, 4),
+      sourceCandidateId: normalizeString(candidate?.id),
+      sourceTitle: normalizeString(candidate?.title),
+      sourceDetail: normalizeString(candidate?.detail),
+      trajectoryValue,
+      score: (Number(candidate?.score) || 0) + trajectoryValue * 3,
+      consequenceChannels: latentCrisisConsequenceChannels(text),
+    });
+  }
+
+  return rows.sort((a, b) =>
+    (b.score - a.score) ||
+    (b.trajectoryValue - a.trajectoryValue) ||
+    a.actor.localeCompare(b.actor)
+  )[0] || null;
+};
 
 const normalizeString = (value) =>
   String(value ?? "").replace(/\s+/g, " ").trim();
@@ -150,9 +274,16 @@ const polityAliasRecords = (world, gameCountry = "") => {
       ...normalizeArray(aliases),
     ]);
 
+    const stockCodes = uniqueStrings(
+      expandedAliases
+        .map((alias) => resolveStockCountryCode(alias))
+        .filter(Boolean),
+    );
+
     records.push({
       canonical,
       aliases: expandedAliases,
+      stockCodes,
     });
   };
 
@@ -166,6 +297,16 @@ const polityAliasRecords = (world, gameCountry = "") => {
   }
 
   for (const key of Object.keys(world?.countryStats || {})) add(key);
+
+  // Territory ownership is identity provenance too. A bounded/normalized world
+  // view may omit full polityOverrides while still carrying exact active owner
+  // names. Admit those names so stock short aliases such as "North Korea" can
+  // resolve back to the campaign identity "Democratic People's Republic of Korea".
+  for (const owner of uniqueStrings(Object.values(world?.regionOwnershipOverrides || {}))) add(owner);
+  for (const owner of uniqueStrings(Object.values(world?.regionSovereigntyOverrides || {}))) add(owner);
+  for (const actor of uniqueStrings(
+    Object.values(world?.regionClaimants || {}).flatMap((claimants) => normalizeArray(claimants)),
+  )) add(actor);
 
   for (const war of normalizeArray(world?.wars)) {
     for (const actor of [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]) {
@@ -198,26 +339,138 @@ const polityAliasRecords = (world, gameCountry = "") => {
         ...(prior?.aliases || []),
         ...record.aliases,
       ]),
+      stockCodes: uniqueStrings([
+        ...(prior?.stockCodes || []),
+        ...normalizeArray(record.stockCodes),
+      ]),
     });
   }
 
   return [...byCanonical.values()];
 };
 
-export const canonicalWorldActor = (actor, world, gameCountry = "") => {
-  const raw = normalizeString(actor);
-  if (!raw) return "";
+export const createWorldActorResolver = (world, gameCountry = "") => {
+  const records = polityAliasRecords(world, gameCountry);
+  const byAlias = new Map();
+  const byCanonical = new Map();
+  const stockToCanonicals = new Map();
 
-  const key = raw.toLowerCase();
-  const record = polityAliasRecords(world, gameCountry).find((entry) =>
-    entry.canonical.toLowerCase() === key ||
-    normalizeArray(entry.aliases).some((alias) =>
-      normalizeString(alias).toLowerCase() === key
-    )
-  );
+  for (const record of records) {
+    const canonical = normalizeString(record?.canonical);
+    if (!canonical) continue;
+    byCanonical.set(canonical.toLowerCase(), record);
+    for (const alias of uniqueStrings([canonical, ...normalizeArray(record?.aliases)])) {
+      const key = alias.toLowerCase();
+      if (!byAlias.has(key)) byAlias.set(key, canonical);
+    }
+    for (const code of normalizeArray(record?.stockCodes)) {
+      const key = normalizeString(code).toUpperCase();
+      if (!key) continue;
+      if (!stockToCanonicals.has(key)) stockToCanonicals.set(key, new Set());
+      stockToCanonicals.get(key).add(canonical);
+    }
+  }
 
-  return normalizeString(record?.canonical) || raw;
+  // Current-state identity intentionally excludes storylines, because a stale
+  // storyline alias is exactly what this precedence layer is meant to heal.
+  const authoritativeTokens = uniqueStrings([
+    gameCountry,
+    ...Object.entries(world?.polityOverrides || {}).flatMap(([keyValue, entry]) => [
+      keyValue,
+      entry?.code,
+      entry?.name,
+      ...normalizeArray(entry?.aliases),
+    ]),
+    ...Object.keys(world?.countryStats || {}),
+    ...Object.values(world?.regionOwnershipOverrides || {}),
+    ...Object.values(world?.regionSovereigntyOverrides || {}),
+    ...Object.values(world?.regionClaimants || {}).flatMap((claimants) => normalizeArray(claimants)),
+    ...normalizeArray(world?.wars).flatMap((war) => [
+      ...normalizeArray(war?.sideA),
+      ...normalizeArray(war?.sideB),
+    ]),
+    ...normalizeArray(world?.relations).flatMap((relation) => [
+      relation?.polityA || relation?.a || relation?.actorA,
+      relation?.polityB || relation?.b || relation?.actorB,
+    ]),
+    ...normalizeArray(world?.agreements).flatMap((agreement) => normalizeArray(agreement?.parties)),
+  ]);
+
+  const authoritativeByStock = new Map();
+  for (const token of authoritativeTokens) {
+    const code = normalizeString(resolveStockCountryCode(token)).toUpperCase();
+    if (!code) continue;
+    const canonical =
+      byAlias.get(normalizeString(token).toLowerCase()) ||
+      normalizeString(token);
+    if (!canonical) continue;
+    if (!authoritativeByStock.has(code)) authoritativeByStock.set(code, new Set());
+    authoritativeByStock.get(code).add(canonical);
+  }
+
+  const canonical = (actor) => {
+    const raw = normalizeString(actor);
+    if (!raw) return "";
+    const stockCode = normalizeString(resolveStockCountryCode(raw)).toUpperCase();
+
+    if (stockCode) {
+      const authoritative = [...(authoritativeByStock.get(stockCode) || [])];
+      if (authoritative.length === 1) return authoritative[0];
+    }
+
+    const exact = byAlias.get(raw.toLowerCase());
+    if (exact) return exact;
+
+    if (stockCode) {
+      const matches = [...(stockToCanonicals.get(stockCode) || [])];
+      if (matches.length === 1) return matches[0];
+    }
+
+    return raw;
+  };
+
+  const equivalent = (left, right) => {
+    const a = canonical(left).toLowerCase();
+    const b = canonical(right).toLowerCase();
+    return Boolean(a && b && a === b);
+  };
+
+  const aliasesFor = (actor) => {
+    const target = canonical(actor);
+    const record = byCanonical.get(target.toLowerCase());
+    return uniqueStrings([target, ...(record?.aliases || [])]);
+  };
+
+  const mentioned = (value) => {
+    const haystack = ` ${normalizeString(value).toLowerCase()} `;
+    const matches = [];
+    for (const record of records) {
+      const aliases = uniqueStrings([record.canonical, ...normalizeArray(record.aliases)])
+        .sort((a, b) => b.length - a.length);
+      if (aliases.some((alias) => {
+        const token = normalizeString(alias).toLowerCase();
+        if (!token || token.length < 3) return false;
+        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(haystack);
+      })) {
+        matches.push(record.canonical);
+      }
+    }
+    return uniqueStrings(matches);
+  };
+
+  return {
+    records,
+    canonical,
+    equivalent,
+    aliasesFor,
+    mentionedPolities: mentioned,
+  };
 };
+
+export const canonicalWorldActor = (actor, world, gameCountry = "") =>
+  createWorldActorResolver(world, gameCountry).canonical(actor);
+
 
 export const worldActorsEquivalent = (
   left,
@@ -373,6 +626,7 @@ export const deferredStorylineReentryHasConcreteTrigger = (
   eventIndexes,
   prior,
   update,
+  { requireObjectiveDelta = true } = {},
 ) =>
   normalizeArray(eventIndexes).some((eventIndex) => {
     const event = normalizeArray(candidate?.events)[eventIndex];
@@ -396,7 +650,7 @@ export const deferredStorylineReentryHasConcreteTrigger = (
       return false;
     }
 
-    if (!deferredUpdateHasObjectiveDelta(prior, update)) return false;
+    if (requireObjectiveDelta && !deferredUpdateHasObjectiveDelta(prior, update)) return false;
 
     if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return true;
     if (ENDOGENOUS_MATERIAL_CUE_RE.test(text)) return true;
@@ -416,10 +670,11 @@ const actorPoolForExploration = (
 ) => {
   const world = bundle?.world || {};
   const gameCountry = normalizeString(bundle?.game?.country);
+  const actorResolver = createWorldActorResolver(world, gameCountry);
   const weighted = [];
 
   const add = (actor, weight = 1, reason = "") => {
-    const text = canonicalWorldActor(actor, world, gameCountry);
+    const text = actorResolver.canonical(actor);
     if (!text) return;
     weighted.push({
       actor: text,
@@ -473,16 +728,16 @@ const actorPoolForExploration = (
     add(unit?.ownerCode || unit?.owner, 6, "persistent military presence");
   }
 
-  for (const owner of Object.values(world?.regionOwnershipOverrides || {})) {
+  for (const owner of uniqueStrings(Object.values(world?.regionOwnershipOverrides || {}))) {
     add(owner, 6, "current de-facto territorial state");
   }
-  for (const owner of Object.values(world?.regionSovereigntyOverrides || {})) {
+  for (const owner of uniqueStrings(Object.values(world?.regionSovereigntyOverrides || {}))) {
     add(owner, 6, "current legal territorial state");
   }
-  for (const claimants of Object.values(world?.regionClaimants || {})) {
-    for (const actor of normalizeArray(claimants)) {
-      add(actor, 6, "current territorial claim/contest");
-    }
+  for (const actor of uniqueStrings(
+    Object.values(world?.regionClaimants || {}).flatMap((claimants) => normalizeArray(claimants)),
+  )) {
+    add(actor, 6, "current territorial claim/contest");
   }
 
   for (const [key, entry] of Object.entries(world?.polityOverrides || {})) {
@@ -496,7 +751,7 @@ const actorPoolForExploration = (
   // present-tense evidence, never the raw full history.
   for (const candidate of normalizeArray(causalCandidates)) {
     const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
-    for (const actor of mentionedPolities(text, world, gameCountry)) {
+    for (const actor of actorResolver.mentionedPolities(text)) {
       add(actor, 8, `current evidence: ${normalizeString(candidate?.title) || "active development"}`);
     }
   }
@@ -523,17 +778,90 @@ const actorPoolForExploration = (
   return [...best.values()];
 };
 
+const buildPlayerSphereActorKeys = ({
+  bundle,
+  diplomaticActors = [],
+  causalCandidates = [],
+  actorResolver,
+} = {}) => {
+  const world = bundle?.world || {};
+  const player = actorResolver.canonical(bundle?.game?.country);
+  const playerKey = normalizeString(player).toLowerCase();
+  const keys = new Set();
+  const add = (actor) => {
+    const canonical = actorResolver.canonical(actor);
+    const key = normalizeString(canonical).toLowerCase();
+    if (key) keys.add(key);
+  };
+
+  add(player);
+
+  // The bounded diplomatic context is already selected around the player and
+  // active processes, so its actors are legitimate members of the player's
+  // current causal sphere rather than arbitrary geographic catalog entries.
+  for (const actor of normalizeArray(diplomaticActors)) add(actor);
+
+  for (const relation of normalizeArray(world?.relations)) {
+    const a = actorResolver.canonical(relation?.polityA || relation?.a || relation?.actorA);
+    const b = actorResolver.canonical(relation?.polityB || relation?.b || relation?.actorB);
+    if (normalizeString(a).toLowerCase() === playerKey) add(b);
+    if (normalizeString(b).toLowerCase() === playerKey) add(a);
+  }
+
+  for (const agreement of normalizeArray(world?.agreements)) {
+    const parties = normalizeArray(agreement?.parties).map((actor) => actorResolver.canonical(actor));
+    if (parties.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
+      for (const actor of parties) add(actor);
+    }
+  }
+
+  for (const war of activeWarEntries(world)) {
+    const actors = [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]
+      .map((actor) => actorResolver.canonical(actor));
+    if (actors.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
+      for (const actor of actors) add(actor);
+    }
+  }
+
+  for (const storyline of normalizeArray(world?.storylines)) {
+    if (normalizeString(storyline?.status).toLowerCase() === "resolved") continue;
+    const participants = normalizeArray(storyline?.participants)
+      .map((actor) => actorResolver.canonical(actor));
+    if (participants.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
+      for (const actor of participants) add(actor);
+    }
+  }
+
+  // Current evidence can pull a nearby/connected actor into the sphere even
+  // before a formal relation ledger exists. This is intentionally bounded to
+  // the Director's present-tense causal candidate set.
+  for (const candidate of normalizeArray(causalCandidates)) {
+    const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
+    const mentioned = actorResolver.mentionedPolities(text);
+    if (mentioned.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
+      for (const actor of mentioned) add(actor);
+    }
+  }
+
+  return keys;
+};
+
 export const buildNativeWorldExplorationSlate = ({
   bundle,
   allStorylines = [],
   selectedStorylines = [],
   diplomaticActors = [],
   causalCandidates = [],
+  crisisCandidates = causalCandidates,
 } = {}) => {
   const actorRows = actorPoolForExploration(
     bundle,
     diplomaticActors,
     causalCandidates,
+  );
+  const actorResolver = createWorldActorResolver(
+    bundle?.world || {},
+    normalizeString(bundle?.game?.country),
   );
   const originDate = normalizeString(bundle?.game?.gameDate);
   const round = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
@@ -547,102 +875,258 @@ export const buildNativeWorldExplorationSlate = ({
       .filter(Boolean),
   );
 
+  // Selected storylines already give their participants dedicated causal
+  // attention. Keep them out of independent actor-domain slots so a crisis actor
+  // cannot earn another routine card merely by being salient. R3.6 fixes the live
+  // 1/9 scope imbalance with same-scope SYSTEM fillers instead of violating this
+  // separation.
+  const selectedParticipantKeys = new Set(
+    normalizeArray(selectedStorylines)
+      .flatMap((storyline) => normalizeArray(storyline?.participants))
+      .map((actor) => actorResolver.canonical(actor).toLowerCase())
+      .filter(Boolean),
+  );
+
   const deferred = normalizeArray(allStorylines)
     .filter((storyline) =>
       normalizeString(storyline?.status).toLowerCase() !== "resolved" &&
       !selectedIds.has(normalizeString(storyline?.id))
     );
 
-  // Relevance comes first. Rotation is only a tie-break inside similarly
-  // evidence-backed actors; it must never promote a catalog ghost over a
-  // polity with an active war, treaty, relation, unit, territory, or current signal.
-  const rankedActors = [...actorRows].sort((a, b) =>
+  // R3.6 composition target: five PLAYER-SPHERE evaluation lanes and five
+  // WIDER-WORLD lanes by construction. This does NOT mean five local + five global
+  // events. Quiet lanes stay quiet. Actor scarcity is handled by system/global
+  // lanes rather than silently turning a 50/50 scheduler into 1/9.
+  const playerSphereKeys = buildPlayerSphereActorKeys({
+    bundle,
+    diplomaticActors,
+    causalCandidates,
+    actorResolver,
+  });
+
+  const stableRank = (salt) => (a, b) =>
     (b.weight - a.weight) ||
-    (
-      stableHash(`${seed}|${a.actor}`) -
-      stableHash(`${seed}|${b.actor}`)
-    ) ||
-    a.actor.localeCompare(b.actor)
+    (stableHash(`${seed}|${salt}|${a.actor}`) - stableHash(`${seed}|${salt}|${b.actor}`)) ||
+    a.actor.localeCompare(b.actor);
+
+  const eligibleActorRows = actorRows.filter((row) =>
+    !selectedParticipantKeys.has(row.actor.toLowerCase())
   );
 
-  const actorSlots = rankedActors
-    .slice(0, EXPLORATION_ACTOR_SLOTS)
-    .map((row, index) => {
-      const actor = row.actor;
-      const domain =
-        EXPLORATION_DOMAINS[(seed + index * 3) % EXPLORATION_DOMAINS.length];
+  const spherePool = eligibleActorRows
+    .filter((row) => playerSphereKeys.has(row.actor.toLowerCase()))
+    .sort(stableRank("player-sphere"));
 
-      const deferredTopics = deferred
-        .filter((storyline) =>
-          normalizeArray(storyline?.participants)
-            .some((participant) =>
-              worldActorsEquivalent(
-                actor,
-                participant,
-                bundle?.world || {},
-                normalizeString(bundle?.game?.country),
-              )
-            )
-        )
-        .slice(0, 3)
-        .map((storyline) => normalizeString(storyline?.title))
-        .filter(Boolean);
+  const widerPool = eligibleActorRows
+    .filter((row) => !playerSphereKeys.has(row.actor.toLowerCase()));
 
-      const candidateEvidence = normalizeArray(causalCandidates)
-        .filter((candidate) =>
-          actorMentionedInText(
-            actor,
-            `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`,
-            bundle?.world || {},
-            normalizeString(bundle?.game?.country),
-          )
-        )
-        .slice(0, 2)
-        .map((candidate) => normalizeString(candidate?.title))
-        .filter(Boolean);
+  const sphereActors = spherePool
+    .slice(0, EXPLORATION_PLAYER_SPHERE_ACTOR_SLOTS)
+    .map((row) => ({ ...row, scope: "player-sphere" }));
 
-      const basisParts = uniqueStrings([
+  const sphereUsed = new Set(sphereActors.map((row) => row.actor.toLowerCase()));
+  const widerEvidenceActors = widerPool
+    .filter((row) => row.weight > 5)
+    .sort(stableRank("wider-evidence"))
+    .slice(0, EXPLORATION_WIDER_EVIDENCE_ACTOR_SLOTS)
+    .map((row) => ({ ...row, scope: "wider-world" }));
+
+  const widerUsed = new Set(widerEvidenceActors.map((row) => row.actor.toLowerCase()));
+  const widerLatentActors = widerPool
+    .filter((row) =>
+      row.weight <= 5 &&
+      !widerUsed.has(row.actor.toLowerCase())
+    )
+    .sort((a, b) =>
+      (stableHash(`${seed}|wider-latent|${a.actor}`) - stableHash(`${seed}|wider-latent|${b.actor}`)) ||
+      a.actor.localeCompare(b.actor)
+    )
+    .slice(0, EXPLORATION_WIDER_LATENT_ACTOR_SLOTS)
+    .map((row) => ({
+      ...row,
+      scope: "wider-world",
+      reasons: uniqueStrings([
         ...normalizeArray(row.reasons),
-        ...candidateEvidence.map((title) => `current causal evidence: ${title}`),
-      ]).slice(0, 4);
+        "rotating latent-world attention: active polity outside the player sphere without a stronger recent evidence slot",
+      ]),
+    }));
 
-      return {
-        id: index + 1,
-        actor,
-        domain,
-        deferredTopics,
-        basis: basisParts.join("; "),
-        relevance: row.weight,
-        type: "actor-domain",
-      };
+  const widerActors = [...widerEvidenceActors, ...widerLatentActors];
+  const usedKeys = new Set([
+    ...sphereUsed,
+    ...widerActors.map((row) => row.actor.toLowerCase()),
+  ]);
+
+  // Fill a sparse side from its own remaining actors first. If one side genuinely
+  // cannot fill, borrow from the other side rather than shrinking the world sweep.
+  const fillTo = (rows, target, pool, scope, salt) => {
+    if (rows.length >= target) return;
+    const extras = [...pool]
+      .filter((row) => !usedKeys.has(row.actor.toLowerCase()))
+      .sort(stableRank(salt));
+    for (const row of extras) {
+      if (rows.length >= target) break;
+      rows.push({ ...row, scope });
+      usedKeys.add(row.actor.toLowerCase());
+    }
+  };
+
+  fillTo(
+    sphereActors,
+    EXPLORATION_PLAYER_SPHERE_ACTOR_SLOTS,
+    spherePool,
+    "player-sphere",
+    "player-sphere-fill",
+  );
+  fillTo(
+    widerActors,
+    EXPLORATION_WIDER_ACTOR_SLOTS,
+    widerPool,
+    "wider-world",
+    "wider-world-fill",
+  );
+
+  // Never borrow across the scope boundary just to hit an actor count. Missing
+  // PLAYER-SPHERE actor lanes become regional/system lanes below; missing wider
+  // actor lanes become wider-system lanes. This preserves both selected-storyline
+  // isolation and the 5/5 attention contract.
+  const rankedActors = [...sphereActors, ...widerActors];
+
+  const actorSlots = rankedActors.map((row, index) => {
+    const actor = row.actor;
+    const domain =
+      EXPLORATION_DOMAINS[(seed + index * 3) % EXPLORATION_DOMAINS.length];
+
+    const deferredTopics = deferred
+      .filter((storyline) =>
+        normalizeArray(storyline?.participants)
+          .some((participant) => actorResolver.equivalent(actor, participant))
+      )
+      .slice(0, 3)
+      .map((storyline) => normalizeString(storyline?.title))
+      .filter(Boolean);
+
+    const candidateEvidence = normalizeArray(causalCandidates)
+      .filter((candidate) =>
+        actorResolver.aliasesFor(actor).some((alias) => {
+          const token = normalizeString(alias).toLowerCase();
+          if (!token || token.length < 3) return false;
+          const haystack = normalizeString(
+            `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`,
+          ).toLowerCase();
+          return haystack.includes(token);
+        })
+      )
+      .slice(0, 2)
+      .map((candidate) => normalizeString(candidate?.title))
+      .filter(Boolean);
+
+    const basisParts = uniqueStrings([
+      ...normalizeArray(row.reasons),
+      ...candidateEvidence.map((title) => `current causal evidence: ${title}`),
+    ]).slice(0, 4);
+
+    return {
+      id: index + 1,
+      actor,
+      domain,
+      deferredTopics,
+      basis: basisParts.join("; "),
+      relevance: row.weight,
+      scope: row.scope || (playerSphereKeys.has(actor.toLowerCase()) ? "player-sphere" : "wider-world"),
+      type: "actor-domain",
+    };
+  });
+
+  const latentCrisis = deriveLatentCrisisDiscoveryCandidate({
+    // R3.7: dedicated crisis evidence is allowed to come from the full bounded
+    // recent-history scan rather than only the ordinary top-10 initiative list.
+    causalCandidates: normalizeArray(crisisCandidates).length
+      ? crisisCandidates
+      : causalCandidates,
+    actorResolver,
+    playerSphereKeys,
+  });
+
+  let nextId = actorSlots.length + 1;
+  const systemSlots = [];
+
+  const playerCount = actorSlots.filter((slot) => slot.scope === "player-sphere").length;
+  const playerDeficit = Math.max(0, EXPLORATION_TARGET_PER_SCOPE - playerCount);
+  for (let index = 0; index < playerDeficit; index += 1) {
+    systemSlots.push({
+      id: nextId++,
+      actor: index === 0 ? "Player-sphere regional system" : `Player-sphere independent system ${index + 1}`,
+      domain:
+        index === 0
+          ? "cross-border reaction, domestic spillover, regional security, diplomacy, political pressure, economic shock, social response, or a NEW latent problem inside the player's current causal sphere that is not merely another routine update to a selected storyline"
+          : EXPLORATION_DOMAINS[(seed + 17 + index * 5) % EXPLORATION_DOMAINS.length],
+      deferredTopics: [],
+      basis:
+        "same-scope balance filler: local actors already receiving selected-storyline attention remain excluded from independent actor slots; inspect independent regional/system consequences rather than borrowing a wider-world actor or servicing the selected storyline again",
+      relevance: 0,
+      scope: "player-sphere",
+      type: "regional-system",
     });
+  }
 
-  const globalBase = actorSlots.length;
+  const crisisActor = latentCrisis?.actor || "Wider-world latent instability";
+  const crisisBasis = latentCrisis
+    ? `PROTECTED CURRENT TRIGGER: ${latentCrisis.sourceTitle}. ${latentCrisis.sourceDetail || ""} ` +
+      `Native trajectory value ${latentCrisis.trajectoryValue}/5. Plausible consequence channels if the process genuinely crosses threshold: ${latentCrisis.consequenceChannels.join(", ")}. ` +
+      "Do not force escalation; decide whether this evidence has actually become a new persistent unstable process."
+    : "No trajectory-4/5 wider-world trigger was found in the bounded present-tense ledger. Search latent instability conservatively; a crisis is not required and war is not the default.";
 
-  const globalSlots = [
-    {
-      id: globalBase + 1,
-      actor: "Cross-border system",
-      domain:
-        "new diplomacy, mediation, alignment, trade, alliance, or third-party reaction not already represented by a deferred storyline",
+  systemSlots.push({
+    id: nextId++,
+    actor: crisisActor,
+    domain:
+      "CRISIS DISCOVERY: test whether current political legitimacy, elite fracture, constitutional/succession dispute, separatism/federal tension, mass unrest, military-security friction, financial panic, resource shock, sanctions pressure, alliance fracture, or similar instability has crossed from background tension into a genuinely NEW persistent multi-turn crisis",
+    deferredTopics: [],
+    basis: crisisBasis,
+    relevance: latentCrisis?.score || 0,
+    scope: "wider-world",
+    type: "crisis-discovery",
+    targetActor: latentCrisis?.actor || "",
+    targetActors: latentCrisis?.actors || [],
+    sourceCandidateId: latentCrisis?.sourceCandidateId || "",
+    trajectoryValue: latentCrisis?.trajectoryValue || 0,
+    consequenceChannels: latentCrisis?.consequenceChannels || [],
+  });
+
+  systemSlots.push({
+    id: nextId++,
+    actor: "Cross-border / wider world system",
+    domain:
+      "new diplomacy, mediation, alignment, trade, alliance, third-party reaction, technology, industry, social movement, institutional change, disaster, or regional pressure not already represented by a deferred storyline",
+    deferredTopics: [],
+    basis:
+      "scan the wider current map/canon and surviving structural conditions for an independent consequential development; do not resurrect dormant or future polities from memorized history",
+    relevance: 0,
+    scope: "wider-world",
+    type: "global",
+  });
+
+  const widerCount = actorSlots.filter((slot) => slot.scope === "wider-world").length +
+    systemSlots.filter((slot) => slot.scope === "wider-world").length;
+  const widerDeficit = Math.max(0, EXPLORATION_TARGET_PER_SCOPE - widerCount);
+  for (let index = 0; index < widerDeficit; index += 1) {
+    systemSlots.push({
+      id: nextId++,
+      actor: `Wider-world independent system ${index + 1}`,
+      domain: EXPLORATION_DOMAINS[(seed + 31 + index * 7) % EXPLORATION_DOMAINS.length],
       deferredTopics: [],
-      basis: "scan current wars, treaties, relations, territorial pressures, and foreign interests for a new cross-border consequence",
+      basis:
+        "same-scope balance filler: current evidence did not provide another independent named wider-world actor, so inspect structural/latent causes without borrowing a player-sphere actor",
       relevance: 0,
+      scope: "wider-world",
       type: "global",
-    },
-    {
-      id: globalBase + 2,
-      actor: "Wider world",
-      domain:
-        "new technology, industry, infrastructure, social movement, institutional change, or regional pressure capable of starting a genuinely new process",
-      deferredTopics: [],
-      basis: "use the current map/canon and surviving structural conditions; do not resurrect dormant or future polities from memorized history",
-      relevance: 0,
-      type: "global",
-    },
-  ].slice(0, EXPLORATION_GLOBAL_SLOTS);
+    });
+  }
 
-  return [...actorSlots, ...globalSlots];
+  // Hard cap remains ten. Scope fillers only replace absent actor lanes, so this
+  // slice normally removes nothing; it is a final safety guard for malformed saves.
+  return [...actorSlots, ...systemSlots].slice(0, 10);
 };
 
 export const formatWorldExplorationAuditContract = (slate) => {
@@ -844,7 +1328,32 @@ export const deriveWorldExplorationAudit = (
     const domain = normalizeString(slot?.domain).toLowerCase();
     let verdict = "";
 
-    if (/diplom|mediat|align|trade|alliance|cross-border|third-party/.test(domain)) {
+    if (slot?.type === "crisis-discovery") {
+      const existingIds = new Set(
+        normalizeArray(world?.storylines)
+          .map((entry) => normalizeString(entry?.id).toLowerCase())
+          .filter(Boolean),
+      );
+      const discovered = storylineUpdates.find((entry) => {
+        const idValue = normalizeString(entry?.id).toLowerCase();
+        const kind = normalizeString(entry?.kind);
+        const status = normalizeString(entry?.status).toLowerCase();
+        return (
+          idValue &&
+          !existingIds.has(idValue) &&
+          status !== "resolved" &&
+          CRISIS_DISCOVERY_KIND_RE.test(kind) &&
+          (Number(entry?.pressure) || 0) >= 40 &&
+          deriveWorldTrajectoryValue(entry) >= 3 &&
+          normalizeArray(entry?.eventIndexes).length > 0
+        );
+      });
+      if (discovered) {
+        const storylineId = normalizeString(discovered?.id);
+        if (storylineId) claimedStorylineIds.add(storylineId.toLowerCase());
+        verdict = storylineId ? `storyline:${storylineId}` : "new-crisis";
+      }
+    } else if (/diplom|mediat|align|trade|alliance|cross-border|third-party/.test(domain)) {
       if (outreach.length > 0) {
         verdict = "outreach";
       } else if (ledgerValues.some(hasNativeLedgerRecords)) {
@@ -1238,8 +1747,175 @@ const routineMilitaryNoDeltaReason = (event) => {
   return "routine military continuation with no native material consequence";
 };
 
+
+const routineAdministrativeNoDeltaReason = (event) => {
+  const text =
+    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+
+  if (!ROUTINE_ADMINISTRATIVE_CUE_RE.test(text)) return "";
+  if (ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text)) return "";
+  if (hardImpactKeysForEvent(event).length) return "";
+  if (normalizeArray(event?.storylineIds).length) return "";
+  if (normalizeString(event?.warId)) return "";
+  if (event?.playerRelated === true) return "";
+  if (normalizeArray(event?.impacts?.actionIds).length) return "";
+
+  return "routine administrative/process card with no material native consequence";
+};
+
+
+const importanceWeightForQuality = (importance) => {
+  switch (normalizeString(importance).toLowerCase()) {
+    case "critical": return 4;
+    case "major": return 3;
+    case "moderate": return 2;
+    case "minor": return 1;
+    default: return 0;
+  }
+};
+
+const eventHasExplicitActionAuthority = (event) =>
+  normalizeArray(event?.impacts?.actionIds).length > 0;
+
+const lowTrajectoryInstitutionalEvent = (event) => {
+  if (!event || typeof event !== "object") return false;
+  if (deriveWorldTrajectoryValue(event) > 1) return false;
+  if (hardImpactKeysForEvent(event).length) return false;
+  if (normalizeArray(event?.storylineIds).length) return false;
+  if (normalizeString(event?.warId)) return false;
+  if (eventHasExplicitActionAuthority(event)) return false;
+  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  return LOW_TRAJECTORY_INSTITUTIONAL_RE.test(text) ||
+    TRAJECTORY_REPORTING_RE.test(text) ||
+    (ROUTINE_ADMINISTRATIVE_CUE_RE.test(text) && !ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text));
+};
+
+export const createWorldEventScopeClassifier = (
+  analysis = null,
+  { world = {}, gameCountry = "" } = {},
+) => {
+  // Build identity provenance ONCE for the bounded visible batch. Never recreate
+  // the 4k+ region alias index once per event; that is the exact class of hotpath
+  // R3.2 removed from the World Director.
+  const resolver = createWorldActorResolver(world, gameCountry);
+  const playerActors = uniqueStrings([
+    gameCountry,
+    ...normalizeArray(analysis?.explorationSlate)
+      .filter((slot) => slot?.scope === "player-sphere" && slot?.type === "actor-domain")
+      .map((slot) => slot?.actor),
+  ])
+    .map((actor) => resolver.canonical(actor))
+    .filter(Boolean);
+
+  return (event) => {
+    if (!event || typeof event !== "object") return "unknown";
+    if (event?.playerRelated === true) return "player-sphere";
+
+    const text = eventExplorationText(event);
+    const actors = mentionedPolities(text, world, gameCountry)
+      .map((actor) => resolver.canonical(actor))
+      .filter(Boolean);
+
+    if (
+      actors.some((actor) =>
+        playerActors.some((sphereActor) => resolver.equivalent(actor, sphereActor))
+      )
+    ) {
+      return "player-sphere";
+    }
+
+    return actors.length ? "wider-world" : "unknown";
+  };
+};
+
+export const classifyWorldEventScope = (
+  event,
+  analysis = null,
+  options = {},
+) => createWorldEventScopeClassifier(analysis, options)(event);
+
+const applyLowTrajectoryFeedGuard = ({
+  events,
+  priorEvents = [],
+  analysis = null,
+  world = {},
+  game = {},
+} = {}) => {
+  const source = normalizeArray(events);
+  const currentLow = source
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => lowTrajectoryInstitutionalEvent(event));
+
+  if (currentLow.length < LOW_TRAJECTORY_BATCH_TRIGGER) {
+    return { events: source, dropped: [] };
+  }
+
+  const recentLowCount = normalizeArray(priorEvents)
+    .slice(-LOW_TRAJECTORY_RECENT_WINDOW)
+    .filter(lowTrajectoryInstitutionalEvent)
+    .length;
+
+  const cap = recentLowCount >= LOW_TRAJECTORY_RECENT_SATURATION ? 1 : 2;
+  if (currentLow.length <= cap) return { events: source, dropped: [] };
+
+  const classifyScope = createWorldEventScopeClassifier(analysis, {
+    world,
+    gameCountry: normalizeString(game?.country),
+  });
+  const scopeCounts = source.reduce((acc, event) => {
+    const scope = classifyScope(event);
+    acc[scope] = (acc[scope] || 0) + 1;
+    return acc;
+  }, {});
+
+  const ranked = currentLow
+    .map(({ event, index }) => {
+      const scope = classifyScope(event);
+      const scopeCount = scopeCounts[scope] || 0;
+      return {
+        event,
+        index,
+        scope,
+        keepScore:
+          importanceWeightForQuality(event?.importance) * 10 +
+          (event?.notable === true ? 4 : 0) -
+          scopeCount,
+      };
+    })
+    .sort((a, b) =>
+      (b.keepScore - a.keepScore) ||
+      String(a.event?.date || "").localeCompare(String(b.event?.date || "")) ||
+      a.index - b.index
+    );
+
+  const keepIndexes = new Set(ranked.slice(0, cap).map((row) => row.index));
+  const lowIndexes = new Set(currentLow.map((row) => row.index));
+  const dropped = [];
+  const kept = [];
+
+  source.forEach((event, index) => {
+    if (!lowIndexes.has(index) || keepIndexes.has(index)) {
+      kept.push(event);
+      return;
+    }
+    dropped.push({
+      id: normalizeString(event?.id),
+      title: normalizeString(event?.title),
+      route: "LOW_TRAJECTORY_FEED_SATURATION",
+      reason:
+        `low-trajectory institutional/process card suppressed because this batch contained ${currentLow.length} such cards` +
+        (recentLowCount >= LOW_TRAJECTORY_RECENT_SATURATION
+          ? ` and ${recentLowCount}/${LOW_TRAJECTORY_RECENT_WINDOW} recent cards were already the same low-branch texture`
+          : ""),
+    });
+  });
+
+  return { events: kept, dropped };
+};
+
 export const screenGeneratedWorldEvents = ({
   events = [],
+  priorEvents = [],
   world = {},
   game = {},
   analysis = null,
@@ -1296,11 +1972,31 @@ export const screenGeneratedWorldEvents = ({
       continue;
     }
 
+    const administrativeReason = routineAdministrativeNoDeltaReason(event);
+    if (administrativeReason) {
+      dropped.push({
+        id: normalizeString(event?.id),
+        title: normalizeString(event?.title),
+        route: "ROUTINE_ADMINISTRATIVE_PROCESS",
+        reason: administrativeReason,
+      });
+      continue;
+    }
+
     kept.push(event);
   }
 
-  const result = {
+  const feedGuard = applyLowTrajectoryFeedGuard({
     events: kept,
+    priorEvents,
+    analysis,
+    world,
+    game,
+  });
+  if (feedGuard.dropped.length) dropped.push(...feedGuard.dropped);
+
+  const result = {
+    events: feedGuard.events,
     dropped,
     strippedPolityUpdates,
     mergedDuplicatePolityUpdates,
@@ -1318,7 +2014,7 @@ export const screenGeneratedWorldEvents = ({
   ) {
     console.info(
       `[OH Native World Integrity v${WORLD_INTEGRITY_VERSION}] ` +
-      `kept ${kept.length}/${normalizeArray(events).length} generated event(s); ` +
+      `kept ${result.events.length}/${normalizeArray(events).length} generated event(s); ` +
       `dropped ${dropped.length}, stripped ${strippedPolityUpdates} unsupported polity update(s), ` +
       `merged ${mergedDuplicatePolityUpdates} duplicate polity update(s), ` +
       `stripped ${strippedNoOpRegionControlOps} no-op control op(s).`,

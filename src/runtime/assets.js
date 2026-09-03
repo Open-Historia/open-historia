@@ -85,6 +85,7 @@ export const ESRI_BASEMAPS = [
   // Relief-first political canvas: World Ocean Base carries ocean bathymetry
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
   { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "atlas-relief-dark", label: "Atlas Relief - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
@@ -93,6 +94,7 @@ export const ESRI_BASEMAPS = [
   { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8 },
   { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16 },
   { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "ocean-dark", label: "Ocean - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
@@ -220,14 +222,14 @@ let primedCustomRegionCatalogKey = "";
 // AI (or a cheat) writes new colors or creates a polity mid-game, those caches
 // keep serving the pre-write value for the rest of the session. A write to the
 // underlying asset must drop the derived cache so the next read recomputes.
-const invalidateDerivedCachesForWrite = (url) => {
+const invalidateDerivedCachesForWrite = (url, { emitEvents = true } = {}) => {
   if (url && url === JSON_URLS.colors) {
     nationColorsPromise = null;
     nationColorsPromiseKey = "";
     // Dropping the memo only helps the NEXT caller. The map reads the palette
     // once per mount, so without a nudge an owner coloured mid-session keeps
     // painting a procedural fallback until a reload. Consumers listen for this.
-    if (typeof window !== "undefined") {
+    if (emitEvents && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("oh:colors-updated"));
     }
   }
@@ -237,7 +239,7 @@ const invalidateDerivedCachesForWrite = (url) => {
     // Flags are heavy/static enough that polling them would be wasteful. A write
     // is rare and already passes through this choke point, so notify visible UI
     // once and let each consumer refresh from the memoized asset on demand.
-    if (typeof window !== "undefined") {
+    if (emitEvents && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("oh:flags-updated"));
     }
   }
@@ -349,6 +351,13 @@ setRuntimeAssetEndpoints();
 
 const PERF_WARN_MS = 50;
 const PERF_STALL_MS = 120;
+
+// Performance telemetry stays active, but routine console noise is opt-in.
+// Temporary diagnostics can be re-enabled at runtime with:
+//   window.__OH_PERF_VERBOSE__ = true
+const isPerfConsoleVerbose = () =>
+  typeof window !== "undefined" && window.__OH_PERF_VERBOSE__ === true;
+
 const perfNow = () => (typeof performance !== "undefined" && performance?.now ? performance.now() : Date.now());
 const runtimeAssetLabel = (url = "") => {
   const raw = String(url || "");
@@ -372,7 +381,7 @@ export const reportPerfOperation = (
       extra: String(extra || ""),
     };
   }
-  if (numeric >= warnAt) {
+  if (numeric >= warnAt && isPerfConsoleVerbose()) {
     console.warn(
       `[OH PERF] ${operation} took ${numeric.toFixed(1)}ms${extra ? ` · ${extra}` : ""}`,
     );
@@ -422,11 +431,13 @@ export const installPerformanceWatchdog = () => {
           if (entry.duration < PERF_STALL_MS) continue;
           const last = window.__OH_LAST_PERF_OPERATION__;
           const recentNamed = last && Math.abs(perfNow() - Number(last.at || 0)) < 1800;
-          console.warn(
-            `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
-            `${mapMoving ? " · map moving" : ""}` +
-            `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
-          );
+          if (isPerfConsoleVerbose()) {
+            console.warn(
+              `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
+              `${mapMoving ? " · map moving" : ""}` +
+              `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
+            );
+          }
         }
       });
       longTaskObserver.observe({ entryTypes: ["longtask"] });
@@ -441,12 +452,14 @@ export const installPerformanceWatchdog = () => {
       const inputAge = now - Number(lastInput.at || 0);
       const last = window.__OH_LAST_PERF_OPERATION__;
       const opAge = last ? now - Number(last.at || 0) : Infinity;
-      console.warn(
-        `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
-        ` · map moving: ${mapMoving ? "yes" : "no"}` +
-        ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
-        ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
-      );
+      if (isPerfConsoleVerbose()) {
+        console.warn(
+          `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
+          ` · map moving: ${mapMoving ? "yes" : "no"}` +
+          ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
+          ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
+        );
+      }
     }
     lastFrame = now;
     rafId = window.requestAnimationFrame(frame);
@@ -846,6 +859,11 @@ export const writeJson = async (
     pretty = false,
     cloneResult = true,
     emitEvents = true,
+    emitDerivedEvents = emitEvents,
+    // Immutable maintenance payloads (notably the rolling rollback archive) can
+    // opt out of an otherwise-useful defensive cache clone. Default behavior is
+    // unchanged for every existing caller.
+    cacheClone = url !== JSON_URLS.world,
   } = {},
 ) => {
   const stringifyStartedAt = perfNow();
@@ -885,8 +903,8 @@ export const writeJson = async (
     /* no body, or not JSON — keep what we sent */
   }
 
-  primeJson(url, saved, { clone: url !== JSON_URLS.world });
-  invalidateDerivedCachesForWrite(url);
+  primeJson(url, saved, { clone: cacheClone });
+  invalidateDerivedCachesForWrite(url, { emitEvents: emitDerivedEvents });
   if (!isMutableRuntimeJsonUrl(url)) {
     persistResponse(
       url,
@@ -1318,8 +1336,8 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 // The map already pays the unavoidable parse cost of regions.geojson once.
 // Project a tiny metadata-only catalog while that geometry is in memory so
 // country panels/AI/cheats never reparse it just to learn province names.
-export const primeCustomRegionCatalog = (
-  geojson,
+export const primeCustomRegionCatalogEntries = (
+  rawEntries,
   {
     url = JSON_URLS.regionsGeojson,
     invalidateCatalog = true,
@@ -1327,29 +1345,23 @@ export const primeCustomRegionCatalog = (
 ) => {
   const startedAt = perfNow();
   const entries = [];
-  for (const feature of geojson?.features ?? []) {
-    const props = feature?.properties ?? {};
-    const id = props.id != null
-      ? String(props.id)
-      : props.GID_1 != null
-        ? String(props.GID_1)
-        : "";
+  for (const raw of rawEntries ?? []) {
+    const id = raw?.id != null ? String(raw.id) : "";
     if (!id) continue;
-    const name = resolveRegionName(id, props.name ?? props.NAME_1 ?? props.name_1);
-    const centroid = props?.centroid?.coordinates;
-    const lng = Number(Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude);
-    const lat = Number(Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude);
+    const name = resolveRegionName(id, raw?.name);
+    const lng = Number(raw?.lng);
+    const lat = Number(raw?.lat);
     entries.push({
-      country: props.country ? String(props.country) : "",
-      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
+      country: raw?.country ? String(raw.country) : "",
+      countryCode: raw?.countryCode ? String(raw.countryCode) : "",
       id,
       name: name || id,
       lng: Number.isFinite(lng) ? lng : null,
       lat: Number.isFinite(lat) ? lat : null,
-      tags: Array.isArray(props?.tags) ? props.tags.map((value) => String(value)) : [],
-      type: props?.type ? String(props.type) : "",
-      adjacencies: Array.isArray(props?.adjacencies)
-        ? props.adjacencies.map((value) => String(value)).filter(Boolean)
+      tags: Array.isArray(raw?.tags) ? raw.tags.map((value) => String(value)) : [],
+      type: raw?.type ? String(raw.type) : "",
+      adjacencies: Array.isArray(raw?.adjacencies)
+        ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
     });
   }
@@ -1365,6 +1377,35 @@ export const primeCustomRegionCatalog = (
     { extra: `${entries.length} regions`, warnAt: 25 },
   );
   return entries;
+};
+
+export const primeCustomRegionCatalog = (
+  geojson,
+  options = {},
+) => {
+  const rawEntries = [];
+  for (const feature of geojson?.features ?? []) {
+    const props = feature?.properties ?? {};
+    const id = props.id != null
+      ? String(props.id)
+      : props.GID_1 != null
+        ? String(props.GID_1)
+        : "";
+    if (!id) continue;
+    const centroid = props?.centroid?.coordinates;
+    rawEntries.push({
+      country: props.country ? String(props.country) : "",
+      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
+      id,
+      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
+      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
+      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
+      tags: Array.isArray(props?.tags) ? props.tags : [],
+      type: props?.type ?? "",
+      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
+    });
+  }
+  return primeCustomRegionCatalogEntries(rawEntries, options);
 };
 
 export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {

@@ -1146,6 +1146,14 @@ const ConversationView = memo(function ConversationView({ chat, playerCountry, w
         );
 });
 
+const DiplomacyDockIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
+        <path d="M8 9h8" />
+        <path d="M8 13h5" />
+    </svg>
+);
+
 const CountryTurnLabel = ({ country }) => {
     const flag = useCountryFlag(country);
     return (
@@ -1452,7 +1460,12 @@ const ChatListItem = memo(function ChatListItem({ chat, onClick, onDelete, unrea
     const previewCountries = chat.countries.slice(0, 4);
     const names    = chat.countries.map(c => c.name).join(", ");
     const lastMsg  = chat.messages?.at(-1);
-    const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
+    // Let the row's CSS ellipsis use the actual current panel width. The old
+    // 60-character pre-truncation was sized for the previous Diplomacy drawer
+    // and made V2's wider rows look artificially cramped.
+    const preview  = lastMsg
+        ? lastMsg.text.replace(/\*\*/g, "").replace(/\s+/g, " ").trim()
+        : "No messages yet";
 
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative", contentVisibility: "auto", containIntrinsicSize: "0 64px" }}>
@@ -2086,7 +2099,7 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
             <NationColorContext.Provider value={colorCatalog}>
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(17,24,39,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            <div className="oh-hud-panel oh-compact-workspace oh-diplomacy-panel" style={{ position: "fixed", bottom: isOpen ? "4.55rem" : "-40rem", left: "0.75rem", width: "min(36rem, calc(100vw - 1.5rem))", maxWidth: "calc(100vw - 1.5rem)", height: "min(35rem, calc(100vh - 6.1rem))", minHeight: "20rem", backgroundColor: "var(--oh-hud-bg-strong)", backdropFilter: "var(--oh-hud-blur)", borderRadius: "18px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
 
             {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
 
@@ -2095,7 +2108,7 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <span style={{ fontWeight: 700, fontSize: "1rem" }}>Diplomatic Chats</span>
+                <span style={{ fontWeight: 700, fontSize: "1rem" }}>Diplomacy</span>
                 <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
@@ -2166,7 +2179,7 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
 
 // ── Chat toolbar button + 5D.4 notification center ───────────────────────────
 
-const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
+const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle, dockMode = false }) {
     const [hasOpened, setHasOpened] = useState(false);
     const [pendingCountry, setPendingCountry] = useState(null);
     const [pendingChatId, setPendingChatId] = useState("");
@@ -2662,11 +2675,14 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
             <div
                 style={{
                     position: "fixed",
-                    top: FLOATING_UI_EDGE_GAP,
+                    top: "4.35rem",
                     left: "auto",
-                    right: `${toastRightOffsetPx()}px`,
+                    // Advisor and Stats share the same resizable right drawer.
+                    // That drawer publishes its live width as a CSS variable so
+                    // diplomatic toasts can remain top-right without covering it.
+                    right: "calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem)",
                     width: "min(23rem, calc(100vw - 2rem))",
-                    zIndex: 10002,
+                    zIndex: 10050,
                     pointerEvents: "none",
                     display: "flex",
                     flexDirection: "column",
@@ -2693,9 +2709,11 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                             position: "relative",
                             width: "100%",
                             textAlign: "left",
-                            border: "1px solid rgba(96,165,250,0.35)",
-                            borderRadius: "12px",
-                            background: "rgba(15,23,42,0.97)",
+                            border: "1px solid rgba(214,231,255,0.20)",
+                            borderRadius: "14px",
+                            background: "linear-gradient(180deg, rgba(29,44,63,0.72), rgba(8,16,28,0.62))",
+                            backdropFilter: "blur(26px) saturate(1.35)",
+                            WebkitBackdropFilter: "blur(26px) saturate(1.35)",
                             color: "white",
                             padding: "0.75rem 2.35rem 0.75rem 0.85rem",
                             boxShadow: "0 14px 38px rgba(0,0,0,0.42)",
@@ -2756,11 +2774,12 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                 <div
                     style={{
                         position: "fixed",
-                        // Search is anchored at 9.75rem and is 3.3rem wide when collapsed.
-                        // Keep the diplomacy notification immediately to its right.
-                        left: "calc(9.75rem + 3.3rem + 0.5rem)",
-                        bottom: FLOATING_UI_EDGE_GAP,
-                        zIndex: 10001,
+                        // The V2 command dock now owns the bottom-left edge. Keep the
+                        // notification center immediately above it instead of colliding
+                        // with / disappearing underneath the dock.
+                        left: FLOATING_UI_EDGE_GAP,
+                        bottom: "4.55rem",
+                        zIndex: 10050,
                         fontFamily: "sans-serif",
                     }}
                 >
@@ -2773,10 +2792,12 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                                 width: "min(22rem, calc(100vw - 1rem))",
                                 maxHeight: "min(27rem, calc(100vh - 7rem))",
                                 overflowY: "auto",
-                                borderRadius: "14px",
-                                border: "1px solid rgba(255,255,255,0.12)",
-                                background: "rgba(15,23,42,0.98)",
-                                boxShadow: "0 18px 50px rgba(0,0,0,0.48)",
+                                borderRadius: "16px",
+                                border: "1px solid rgba(214,231,255,0.18)",
+                                background: "linear-gradient(180deg, rgba(28,43,61,0.74), rgba(8,16,28,0.64))",
+                                backdropFilter: "blur(28px) saturate(1.38)",
+                                WebkitBackdropFilter: "blur(28px) saturate(1.38)",
+                                boxShadow: "0 18px 50px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08)",
                                 color: "white",
                             }}
                         >
@@ -2790,7 +2811,9 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                                     gap: "0.45rem",
                                     padding: "0.65rem 0.75rem",
                                     borderBottom: "1px solid rgba(255,255,255,0.08)",
-                                    background: "rgba(15,23,42,0.99)",
+                                    background: "rgba(16,28,43,0.76)",
+                                    backdropFilter: "blur(18px)",
+                                    WebkitBackdropFilter: "blur(18px)",
                                 }}
                             >
                                 <strong style={{ flex: 1, fontSize: "0.78rem" }}>
@@ -2864,10 +2887,12 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                             height: "2.5rem",
                             padding: "0 0.65rem",
                             borderRadius: "10px",
-                            border: "1px solid rgba(96,165,250,0.35)",
-                            background: "rgba(15,23,42,0.96)",
+                            border: "1px solid rgba(214,231,255,0.20)",
+                            background: "linear-gradient(180deg, rgba(31,47,67,0.72), rgba(9,18,31,0.62))",
+                            backdropFilter: "blur(24px) saturate(1.35)",
+                            WebkitBackdropFilter: "blur(24px) saturate(1.35)",
                             color: "white",
-                            boxShadow: "0 6px 18px rgba(0,0,0,0.38)",
+                            boxShadow: "0 8px 24px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.08)",
                             cursor: "pointer",
                             fontFamily: "sans-serif",
                             fontWeight: 800,
@@ -2899,34 +2924,30 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
         {notificationPortal}
 
         <button
-            title="Chat"
-            style={{
+            title="Diplomacy"
+            className={dockMode ? `oh-dock-segment${isOpen ? " oh-dock-segment-active" : ""}` : undefined}
+            style={dockMode ? {
+                gap: "0.42rem",
+                minWidth: "6.75rem",
+                padding: "0 0.68rem",
+                flexShrink: 0,
+            } : {
                 width: "3.3rem",
                 height: "3.3rem",
                 borderRadius: "10px",
-                border: hovered
-                    ? "1px solid rgba(255,255,255,0.2)"
-                    : isOpen
-                        ? "1px solid rgba(139,92,246,0.5)"
-                        : "1px solid rgba(255,255,255,0.1)",
-                background: isOpen
-                    ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))"
-                    : hovered
-                        ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))"
-                        : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))",
+                border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
+                background: isOpen ? "rgba(59,130,246,0.16)" : hovered ? "rgba(255,255,255,0.075)" : "rgba(255,255,255,0.035)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 cursor: "pointer",
                 transition: "all 0.12s ease",
-                boxShadow: hovered
-                    ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)"
-                    : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)",
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
                 fontSize: "1.2rem",
                 outline: "none",
                 transform: hovered ? "translateY(-1px)" : "translateY(0)",
                 color: "white",
-                fontFamily: "sans-serif",
+                fontFamily: "inherit",
                 flexShrink: 0,
             }}
             onMouseEnter={() => setHovered(true)}
@@ -2934,7 +2955,7 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
             onClick={onToggle}
         >
             <span style={{ position: "relative", display: "inline-flex" }}>
-                💬
+                <DiplomacyDockIcon />
                 {unseenCount > 0 && !isOpen && (
                     <span
                         style={{
@@ -2961,6 +2982,7 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
                     </span>
                 )}
             </span>
+            {dockMode && <span className="oh-dock-label-optional oh-dock-navigation-label">Diplomacy</span>}
         </button>
         </>
     );
@@ -2968,15 +2990,40 @@ const Chat = memo(function Chat({ hovered, setHovered, isOpen, onToggle }) {
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
-const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel }) => {
+const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, embedded = false }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     const toggleChat = useCallback(() => onTogglePanel("chat"), [onTogglePanel]);
     const toggleActions = useCallback(() => onTogglePanel("actions"), [onTogglePanel]);
     return (
-        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "8.75rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
-        <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={toggleChat} />
-        <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={toggleActions} />
+        <div style={embedded ? {
+            alignItems: "stretch",
+            display: "flex",
+            gap: "0.12rem",
+            minWidth: 0,
+        } : {
+            position: "fixed",
+            bottom: "0.5rem",
+            left: "0.5rem",
+            height: "4rem",
+            width: "8.75rem",
+            gap: "0.75rem",
+            padding: "0 0.1rem",
+            backgroundColor: "var(--oh-hud-bg)",
+            backdropFilter: "var(--oh-hud-blur)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "white",
+            fontFamily: "sans-serif",
+            borderRadius: "14px",
+            border: "1px solid var(--oh-hud-border)",
+            boxShadow: "var(--oh-hud-shadow-soft)",
+        }}>
+        <Actions dockMode={embedded} onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={toggleActions} />
+        {embedded && <div className="oh-dock-divider" />}
+        <Chat dockMode={embedded} hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={toggleChat} />
         </div>
     );
 });

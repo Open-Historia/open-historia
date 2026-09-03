@@ -8,10 +8,13 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
+import {
+    EMPTY_CITY_FEATURE_COLLECTION,
+    customCityFeatureCount,
+    normalizeCustomCityFeatureCollection,
+} from "../../runtime/cityFeatures.js";
 
 ensurePmtilesProtocol();
-
-const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
 const populationFilter = [
     "any",
@@ -36,16 +39,20 @@ const populationFilter = [
 // prominence tier instead: 4 = capital, 3 = major city, 2 = city, 1 = town.
 const customTierFilter = [
     "any",
-    ["==", ["get", "capital"], "primary"],
-    [">=", ["coalesce", ["get", "tier"], 0], 3],
-    ["all", [">=", ["coalesce", ["get", "tier"], 0], 2], [">=", ["zoom"], 4.3]],
-    [">=", ["zoom"], 5.8],
+    ["==", ["get", "_ohCapital"], true],
+    [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 3],
+    ["all",
+        [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 2],
+        [">=", ["zoom"], 4.0],
+    ],
+    [">=", ["zoom"], 5.4],
 ];
 
 const customSortKey = [
     "-",
     ["+",
-        ["*", ["coalesce", ["get", "tier"], 0], 1000000000],
+        ["*", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 1000000000],
+        ["*", ["case", ["==", ["get", "_ohCapital"], true], 1, 0], 5000000000],
         ["coalesce", ["get", "population"], 0],
     ],
 ];
@@ -54,11 +61,12 @@ const customSortKey = [
 // AI renames (world.cityRenames) are applied as a client-side match override so a
 // renamed city shows its new name without touching the tiles.
 const cityLabelExpr = (renames) => {
+    const baseLabel = ["coalesce", ["get", "city"], ["get", "name"], ""];
     const pairs = Object.entries(renames || {});
-    if (!pairs.length) return ["get", "city"];
-    const expr = ["match", ["downcase", ["get", "city"]]];
+    if (!pairs.length) return baseLabel;
+    const expr = ["match", ["downcase", baseLabel]];
     for (const [from, to] of pairs) expr.push(from, to);
-    expr.push(["get", "city"]);
+    expr.push(baseLabel);
     return expr;
 };
 
@@ -76,7 +84,7 @@ const StockCities = ({ label, vNext }) => (
         "text-allow-overlap": true,
         "text-field": [
             "case",
-            ["==", ["get", "capital"], "primary"], "★",
+            ["==", ["get", "_ohCapital"], true], "★",
             [">=", ["get", "population"], 2500000], "◆",
             "■",
         ],
@@ -148,7 +156,7 @@ const CustomCities = ({ data, label, vNext }) => (
     id="cities-shapes"
     type="symbol"
     beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={vNext ? 3.4 : 3.1}
+    minzoom={vNext ? 2.65 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
@@ -156,7 +164,7 @@ const CustomCities = ({ data, label, vNext }) => (
         "text-field": [
             "case",
             ["==", ["get", "capital"], "primary"], "★",
-            [">=", ["get", "tier"], 3], "◆",
+            [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 3], "◆",
             "■",
         ],
         "text-padding": 0,
@@ -164,8 +172,8 @@ const CustomCities = ({ data, label, vNext }) => (
             "interpolate", ["linear"], ["zoom"],
             3, [
                 "case",
-                ["==", ["get", "capital"], "primary"], 13.5,
-                ["match", ["coalesce", ["get", "tier"], 0], 4, 12.5, 3, 10.3, 2, 8.2, 6.0],
+                ["==", ["get", "_ohCapital"], true], 13.5,
+                ["match", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 4, 12.5, 3, 10.3, 2, 8.2, 6.0],
             ],
             10, 14.5,
         ],
@@ -182,7 +190,7 @@ const CustomCities = ({ data, label, vNext }) => (
     id="cities-labels"
     type="symbol"
     beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={vNext ? 4.2 : 3.1}
+    minzoom={vNext ? 3.0 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey,
@@ -194,8 +202,8 @@ const CustomCities = ({ data, label, vNext }) => (
             "interpolate", ["linear"], ["zoom"],
             3, [
                 "case",
-                ["==", ["get", "capital"], "primary"], 11.4,
-                ["match", ["coalesce", ["get", "tier"], 0], 4, 10.8, 3, 10.0, 9.0],
+                ["==", ["get", "_ohCapital"], true], 11.4,
+                ["match", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 4, 10.8, 3, 10.0, 9.0],
             ],
             10, 11.8,
         ],
@@ -219,6 +227,7 @@ const Cities = ({ vNext = false }) => {
     // so the map doesn't fire its own independent 5s poll.
     const { customCities: customFlag, cityRenames } = useWorldState();
     const [customData, setCustomData] = useState(null);
+    const [customLoadFailed, setCustomLoadFailed] = useState(false);
     const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
@@ -239,27 +248,51 @@ const Cities = ({ vNext = false }) => {
         let cancelled = false;
         if (!customFlag) {
             setCustomData(null);
+            setCustomLoadFailed(false);
             return undefined;
         }
-        readJson(citiesGeojsonUrl, { defaultValue: EMPTY_FEATURE_COLLECTION, force: true })
+
+        setCustomData(null);
+        setCustomLoadFailed(false);
+        readJson(citiesGeojsonUrl, { defaultValue: EMPTY_CITY_FEATURE_COLLECTION, force: true })
             .then((data) => {
                 if (cancelled) return;
-                setCustomData(data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION);
+                const normalized = normalizeCustomCityFeatureCollection(data);
+                const count = customCityFeatureCount(normalized);
+                setCustomData(normalized);
+                setCustomLoadFailed(count === 0);
+
+                if (import.meta.env?.DEV) {
+                    console.info(`[cities] custom city asset loaded: ${count} point features`);
+                }
+                if (count === 0) {
+                    console.warn(
+                        "[cities] world.customCities=true but cities.geojson is empty/missing; " +
+                        "using stock cities as a temporary fallback.",
+                    );
+                }
             })
-            .catch(() => {
-                if (!cancelled) setCustomData(EMPTY_FEATURE_COLLECTION);
+            .catch((error) => {
+                if (cancelled) return;
+                console.warn("[cities] failed to load scenario cities.geojson; using stock fallback.", error);
+                setCustomData(EMPTY_CITY_FEATURE_COLLECTION);
+                setCustomLoadFailed(true);
             });
+
         return () => {
             cancelled = true;
         };
     }, [customFlag, citiesGeojsonUrl, cityEditorEpoch]);
 
-    // Custom-city scenarios never show the modern database (anachronistic); while
-    // the custom set is still loading, show nothing rather than flash modern names.
+    // Never turn the whole planet cityless because a custom city asset is absent.
     if (customFlag) {
-        if (!customData || !customData.features.length) return null;
-        return <CustomCities data={customData} label={label} vNext={vNext} />;
+        if (customData === null) return null;
+        if (!customLoadFailed && customCityFeatureCount(customData) > 0) {
+            return <CustomCities data={customData} label={label} vNext={vNext} />;
+        }
+        return <StockCities label={label} vNext={vNext} />;
     }
+
     return <StockCities label={label} vNext={vNext} />;
 };
 

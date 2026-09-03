@@ -290,6 +290,7 @@ export const resolvePolityIdentity = (
     requireActive = false,
     allowCoreMatch = true,
     allowStockBase = true,
+    identityIndex = null,
   } = {},
 ) => {
   const stockName =
@@ -311,8 +312,13 @@ export const resolvePolityIdentity = (
   const coreInput =
     polityCore(stockName);
 
+  // Hot-path callers that resolve many identities against the SAME immutable
+  // world snapshot may build this once and reuse it. The default path remains
+  // byte-for-byte semantic equivalent: one fresh authoritative index per call.
   const index =
-    buildPolityIdentityIndex(world);
+    identityIndex && Array.isArray(identityIndex?.declared)
+      ? identityIndex
+      : buildPolityIdentityIndex(world);
 
   const stockCodes = stockCodesForToken(token, stockName);
   const mapRefMatches = stockCodes.length

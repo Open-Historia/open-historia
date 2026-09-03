@@ -42,14 +42,14 @@ const MODE_HINT = {
 };
 
 const surface = {
-  backgroundColor: "rgba(17, 24, 39, 0.96)",
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: "14px",
+  backgroundColor: "var(--oh-hud-bg-strong)",
+  backdropFilter: "var(--oh-hud-blur)",
+  WebkitBackdropFilter: "var(--oh-hud-blur)",
+  border: "1px solid var(--oh-hud-border)",
+  borderRadius: "16px",
   color: "white",
   fontFamily: "sans-serif",
-  boxShadow: "0 12px 40px rgba(0,0,0,0.48)",
+  boxShadow: "var(--oh-hud-shadow)",
 };
 
 const fieldStyle = {
@@ -408,10 +408,11 @@ export const ForcesPanel = memo(function ForcesPanel({ mapRef, topOffset = "0px"
 
       {open && (
         <div
+          className="oh-hud-panel"
           style={{
             ...surface,
             position: "fixed",
-            bottom: "4.75rem",
+            bottom: "4.85rem",
             left: "0.5rem",
             width: "min(23rem, calc(100vw - 1rem))",
             maxHeight: "72vh",

@@ -5,14 +5,18 @@ import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import {
   applyWorldStorylineUpdates,
   assessRecentWorldConsequenceLiveness,
+  bindNewStorylineEvents,
+  bindSelectedStorylineEvents,
   buildWorldInitiativeContext,
   decodeWorldStorylineUpdates,
   findWorldStorylineAntiStasisIssues,
   normalizeWorldStorylineEventLinks,
   stripQuietDeferredStorylineUpdates,
+  validateWorldEventConsequencePayload,
   validateWorldStorylinePayload,
 } from "./nativeWorldDirector.js";
 import {
+  createWorldEventScopeClassifier,
   deriveWorldExplorationAudit,
   screenGeneratedWorldEvents,
   stripWorldSweepAudit,
@@ -47,7 +51,7 @@ import {
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
   appendCountryStatHistorySample,
   captureCountryStatsHistory,
@@ -94,6 +98,7 @@ import {
   normalizeWorldState,
   readActionsState,
   readChatsState,
+  readChatsStateView,
   reconcileChatsForPlayer,
   reconcileStableChatsForPlayer,
   resolveChatParticipantIdentity,
@@ -114,6 +119,18 @@ import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
+import {
+  beginTurnPerfStage,
+  beginTurnPerfTrace,
+  endTurnPerfStage,
+  finishTurnPerfTrace,
+  measureTurnPerfStage,
+  recordTurnPerfAiAttempt,
+  recordTurnPerfFallback,
+  recordTurnPerfRetry,
+  updateTurnPerfMeta,
+} from "../../runtime/turnPerf.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -1611,7 +1628,9 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
         typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
           : Date.now();
-      const response = await callAI(systemPrompt, history, {
+      let response;
+      try {
+        response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
         // canned events that carry NO regionTransfers and NO diplomacy, which is why
@@ -1621,13 +1640,31 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
         ...(Number(maxTokens) > 0 ? { maxTokens: Number(maxTokens) } : {}),
         ...(typeof reasoningEnabled === "boolean" ? { reasoningEnabled } : {}),
         signal: controller.signal,
-        tool,
-      });
-      if (isContextDiagnosticsEnabled()) {
-        const aiEndedAt =
+          tool,
+        });
+      } catch (error) {
+        const aiFailedAt =
           typeof performance !== "undefined" && typeof performance.now === "function"
             ? performance.now()
             : Date.now();
+        recordTurnPerfAiAttempt({
+          taskKey,
+          attempt: outputAttempt,
+          ms: Math.max(0, aiFailedAt - aiStartedAt),
+          error: normalizeString(error?.message || error),
+        });
+        throw error;
+      }
+      const aiEndedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      recordTurnPerfAiAttempt({
+        taskKey,
+        attempt: outputAttempt,
+        ms: Math.max(0, aiEndedAt - aiStartedAt),
+      });
+      if (isContextDiagnosticsEnabled()) {
         console.info(
           `[context 9.5B timing] ${taskKey} AI attempt ${outputAttempt}: ` +
           `${Math.max(0, aiEndedAt - aiStartedAt).toFixed(1)} ms`,
@@ -1835,6 +1872,7 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
 
       failureReason = validation.error;
       if (outputAttempt === 1 && !controller.signal.aborted) {
+        recordTurnPerfRetry({ taskKey, reason: validation.error });
         history.push({
           role: "model",
           parts: [{ text: rawText || JSON.stringify(parsed ?? null) }],
@@ -1874,6 +1912,7 @@ An event that starts/joins/resumes a canonical war may be the mechanical prerequ
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
+  recordTurnPerfFallback({ taskKey, reason: failureReason });
   return {
     generation: { source: "fallback", fallbackReason: failureReason },
     payload: await fallback(),
@@ -1913,6 +1952,9 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
   });
   const { generation, payload } = await runJsonTask("eventConsolidator", {
+    // Pure summarization/continuity compression. Provider reasoning adds latency
+    // here without granting this maintenance task any simulation authority.
+    reasoningEnabled: false,
     fallback: () => ({
       summary: [
         events.map((event) => `${event.date || "undated"} ${event.title}: ${event.description}`).join("; "),
@@ -1920,14 +1962,24 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
         actions.length ? `Player orders resolved: ${actions.map((action) => action.title).join("; ")}` : "",
       ].filter(Boolean).join("\n"),
     }),
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
+    // Archival maintenance must never hold the playable turn hostage. Eight
+    // seconds is enough for the normal compact response; after that the existing
+    // deterministic fallback preserves canon without another long wait.
+    timeoutMs: 8000,
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     variables,
   });
   return { generation, summary: normalizeString(payload?.summary) };
 };
 
-const compactHistoryIfNeeded = async (bundle) => {
+const compactHistoryIfNeeded = async (bundle, { hasFreshTurnHistory = true } = {}) => {
+  // Maintenance must not turn a no-op/fallback month into a 7-10 second AI task.
+  // Raw events/chats/actions remain canonical and can be consolidated on the next
+  // meaningful turn; nothing is deleted or hidden by this deferral. The caller's
+  // world is already canonical at this point, so a deferred maintenance turn does
+  // not need another full-world normalization pass either.
+  if (!hasFreshTurnHistory) return bundle.world;
+
   const world = normalizeWorldState(bundle.world);
   const unconsolidatedEvents = getUnconsolidatedEvents(bundle.events, world);
   const shouldCompactEvents =
@@ -1935,8 +1987,14 @@ const compactHistoryIfNeeded = async (bundle) => {
     (bundle.game.round % CONSOLIDATION_INTERVAL_ROUNDS === 0 &&
       unconsolidatedEvents.length > CONSOLIDATION_RETAIN_EVENTS);
   const priorChatIds = new Set(world.consolidatedHistory.flatMap((entry) => entry.chatIds));
-  const closedChats = normalizeChats(bundle.chats)
+  const unconsolidatedClosedChats = normalizeChats(bundle.chats)
     .filter((chat) => chat.status === "closed" && !priorChatIds.has(chat.id));
+  const shouldCompactChats =
+    unconsolidatedClosedChats.length >= 4 ||
+    (bundle.game.round % CONSOLIDATION_INTERVAL_ROUNDS === 0 && unconsolidatedClosedChats.length > 0);
+  const closedChats = shouldCompactChats
+    ? unconsolidatedClosedChats.slice(0, CONSOLIDATION_BATCH_SIZE)
+    : [];
   const eventsToConsolidate = shouldCompactEvents
     ? unconsolidatedEvents.slice(0, -CONSOLIDATION_RETAIN_EVENTS).slice(0, CONSOLIDATION_BATCH_SIZE)
     : [];
@@ -1989,7 +2047,7 @@ const mergePolityCatalog = (countryCatalog, world) => {
     });
   }
 
-  for (const polity of Object.values(normalizeWorldState(world).polityOverrides)) {
+  for (const polity of Object.values(world?.polityOverrides || {})) {
     if (!polity) continue;
     merged.set((polity.code || polity.name).toUpperCase(), {
       code: polity.code,
@@ -2020,15 +2078,25 @@ const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
 export const isSimulationBusy = () => activeSimulations > 0;
 
-const resolveInvitees = async (names, world, additionalCountries = []) => {
-  const countryCatalog = mergePolityCatalog(await loadCountryNames(), world);
+const resolveInvitees = async (
+  names,
+  world,
+  additionalCountries = [],
+  {
+    countryCatalog: preparedCountryCatalog = null,
+    identityIndex: preparedIdentityIndex = null,
+  } = {},
+) => {
+  const identityIndex = preparedIdentityIndex || buildPolityIdentityIndex(world);
+  const countryCatalog =
+    preparedCountryCatalog || mergePolityCatalog(await loadCountryNames(), world);
 
   // Map known scenario/map actors onto the same stable lineage keys used by chat
   // reconciliation. This keeps useful map codes (flags/UI) without using them as
   // political identity when a save-aware name/alias already resolves correctly.
   const catalogByPolityKey = new Map();
   for (const country of countryCatalog) {
-    const resolved = resolveChatParticipantIdentity(country, world);
+    const resolved = resolveChatParticipantIdentity(country, world, identityIndex);
     if (!resolved.safe || !resolved.polityKey) continue;
     if (!catalogByPolityKey.has(resolved.polityKey)) {
       catalogByPolityKey.set(resolved.polityKey, resolved.participant);
@@ -2080,7 +2148,7 @@ const resolveInvitees = async (names, world, additionalCountries = []) => {
   const seen = new Set();
   for (const reference of normalizeArray(names)) {
     const participantInput = typeof reference === "string" ? { name: reference } : reference;
-    const identity = resolveChatParticipantIdentity(participantInput, world);
+    const identity = resolveChatParticipantIdentity(participantInput, world, identityIndex);
     let participant = null;
     let polityKey = "";
 
@@ -2213,19 +2281,33 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker = "", excludedSpeakers = []
   return { nextSpeaker: addressedSpeaker?.name || null };
 };
 
-export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
+export const buildGeneratedChat = async (
+  chatLike,
+  linkEventId,
+  world,
+  {
+    fallbackTitle = "",
+    playerName = "",
+    identityIndex: preparedIdentityIndex = null,
+    countryCatalog: preparedCountryCatalog = null,
+  } = {},
+) => {
+  const identityIndex = preparedIdentityIndex || buildPolityIdentityIndex(world);
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
-  const resolvedCountries = await resolveInvitees(countriesInput, world);
+  const resolvedCountries = await resolveInvitees(countriesInput, world, [], {
+    countryCatalog: preparedCountryCatalog,
+    identityIndex,
+  });
 
   // The player is IMPLICIT in every diplomatic chat. Model output sometimes
   // included the player in `countries`, which created self-participants such as
   // [United Kingdom, German Empire] while Germany itself was the player. Resolve
   // through lineage and strip the player before the chat ever reaches storage.
-  const playerIdentity = resolveChatParticipantIdentity({ name: playerName }, world);
+  const playerIdentity = resolveChatParticipantIdentity({ name: playerName }, world, identityIndex);
   const playerPolityKey = playerIdentity.safe ? normalizeString(playerIdentity.polityKey).toLowerCase() : "";
   const playerKey = normalizeString(playerName).toUpperCase();
   const matchesPlayer = (country) => {
-    const identity = resolveChatParticipantIdentity(country, world);
+    const identity = resolveChatParticipantIdentity(country, world, identityIndex);
     if (
       playerPolityKey &&
       identity.safe &&
@@ -2242,7 +2324,7 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
   // The initiating polity speaks first — and it is never the player. When the
   // model names no speaker (or names the player), attribute the opener to the
   // first non-player participant.
-  const speakerIdentity = resolveChatParticipantIdentity({ name: chatLike?.speaker }, world);
+  const speakerIdentity = resolveChatParticipantIdentity({ name: chatLike?.speaker }, world, identityIndex);
   const speakerPolityKey = speakerIdentity.safe ? normalizeString(speakerIdentity.polityKey).toLowerCase() : "";
   const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
   const initiator =
@@ -3259,6 +3341,28 @@ const LEGAL_TRANSFER_LANGUAGE = /\b(annex\w*|cedes?|ceded|ceding|cession|soverei
 // canned fallback over one stale id).
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
   const strict = strictTransfers;
+  // Validation can touch multiple created chats/unit references in one candidate.
+  // Normalize/index the canonical world once rather than rebuilding save-wide
+  // identity provenance for every participant token.
+  const worldState = normalizeWorldState(world);
+  let validationIdentityIndex = null;
+  let validationCountryCatalog = null;
+  const ensureValidationChatContext = async () => {
+    if (!validationIdentityIndex) {
+      validationIdentityIndex = buildPolityIdentityIndex(worldState);
+    }
+    if (!validationCountryCatalog) {
+      validationCountryCatalog = mergePolityCatalog(
+        await loadCountryNames(),
+        worldState,
+      );
+    }
+    return {
+      identityIndex: validationIdentityIndex,
+      countryCatalog: validationCountryCatalog,
+    };
+  };
+
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({
         event,
@@ -3274,12 +3378,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
         impacts: candidate?.impacts,
         path: "$.impacts",
       }];
-  const unresolvedTransfers = await resolveRegionTransfers(containers, world, { ownershipMode: "sovereignty" });
+  const unresolvedTransfers = await resolveRegionTransfers(containers, worldState, { ownershipMode: "sovereignty" });
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
   }
 
-  const unresolvedControlOps = await resolveRegionControlOps(containers, world);
+  const unresolvedControlOps = await resolveRegionControlOps(containers, worldState);
   if (strict && unresolvedControlOps.length > 0) {
     return buildControlFeedback(unresolvedControlOps);
   }
@@ -3319,7 +3423,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       }
     }
   }
-  const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
+  const unitIds = new Set(worldState.units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
   for (const { impacts } of containers) generatedPolities.push(...normalizeArray(impacts?.polityChanges));
 
@@ -3327,7 +3431,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
     const keptChats = [];
     for (let index = 0; index < normalizeArray(impacts?.createdChats).length; index += 1) {
       const createdChat = impacts.createdChats[index];
-      const countries = await resolveInvitees(createdChat?.countries, world, generatedPolities);
+      const chatContext = await ensureValidationChatContext();
+      const countries = await resolveInvitees(
+        createdChat?.countries,
+        worldState,
+        generatedPolities,
+        chatContext,
+      );
       if (countries.length === 0) {
         if (strict) return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
         continue; // salvage: drop the unresolvable chat, keep the turn
@@ -3594,6 +3704,7 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
 };
 
 const MAX_ROLLBACK_SNAPSHOTS = 12;
+let latestRollbackSnapshotMemory = null;
 
 // Persist the PRE-turn state so the cheats menu's "Roll back turn" can restore it.
 // A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
@@ -3601,24 +3712,41 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // without bound. Purely best-effort: a snapshot failure must never break a turn.
 const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors }) => {
   try {
-    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+    const readStage = beginTurnPerfStage("final.rollback-read");
+    // snapshots.json is owned by this runtime path; normal reads are safe because
+    // every write primes the cache. Avoid a forced network fetch every turn.
+    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: false, clone: false }).catch(() => []);
+    endTurnPerfStage(readStage);
+
+    const buildStage = beginTurnPerfStage("final.rollback-build");
     const list = Array.isArray(prior) ? prior : [];
+    // Do NOT structuredClone six large pre-turn assets here. writeJson serializes
+    // synchronously before its first await, so these references cannot be mutated
+    // between snapshot construction and payload capture. The old clone pass walked
+    // the whole campaign once, then JSON.stringify walked it again.
     const snapshot = {
       id: `snap-${round}-${Date.now()}`,
       round,
       fromDate,
       toDate,
       capturedAt: new Date().toISOString(),
-      state: {
-        game: cloneValue(game),
-        world: cloneValue(world),
-        events: cloneValue(events),
-        actions: cloneValue(actions),
-        chat: cloneValue(chat),
-        colors: cloneValue(colors),
-      },
+      state: { game, world, events, actions, chat, colors },
     };
-    await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS));
+    latestRollbackSnapshotMemory = snapshot;
+    const snapshots = [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS);
+    endTurnPerfStage(buildStage);
+
+    await yieldToUiFrame();
+    const writeStage = beginTurnPerfStage("final.rollback-write");
+    await writeJson(JSON_URLS.snapshots, snapshots, {
+      // snapshots are immutable after this point. Avoid cloning the entire rolling
+      // archive both into the asset cache and again for the unused return value.
+      cacheClone: false,
+      cloneResult: false,
+      emitEvents: false,
+      emitDerivedEvents: false,
+    });
+    endTurnPerfStage(writeStage);
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
   }
@@ -3627,8 +3755,28 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
 // Restore points, newest first (index 0 = undo the most recent turn). Shared by
 // the cheats menu and the timeline's Undo control.
 export const loadRollbackSnapshots = async () => {
-  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+  const list = await readJson(JSON_URLS.snapshots, {
+    defaultValue: [],
+    force: false,
+    clone: false,
+  }).catch(() => []);
   return Array.isArray(list) ? list : [];
+};
+
+export const findRollbackSnapshotForTurn = async ({ fromDate = "", toDate = "" } = {}) => {
+  const matches = (snapshot) =>
+    snapshot?.state?.world &&
+    (!fromDate || snapshot?.fromDate === fromDate) &&
+    (!toDate || snapshot?.toDate === toDate);
+
+  if (matches(latestRollbackSnapshotMemory)) {
+    return latestRollbackSnapshotMemory;
+  }
+
+  const snapshots = await loadRollbackSnapshots();
+  const match = snapshots.find(matches) || null;
+  if (match) latestRollbackSnapshotMemory = match;
+  return match;
 };
 
 // Roll back to the start of the turn captured at `index`: restore the six
@@ -3859,6 +4007,8 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
   existingGeneratedChats = [],
   mode = "jump",
   signal,
+  identityIndex: preparedIdentityIndex = null,
+  countryCatalog: preparedCountryCatalog = null,
 } = {}) => {
   if (mode !== "jump") return [];
 
@@ -3885,9 +4035,14 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
     return [];
   }
 
+  const identityIndex =
+    preparedIdentityIndex || buildPolityIdentityIndex(bundle?.world);
+  const countryCatalog =
+    preparedCountryCatalog || mergePolityCatalog(await loadCountryNames(), bundle?.world);
+
   const participantLabel = (chat) => normalizeArray(chat?.countries)
     .map((country) => {
-      const identity = resolveChatParticipantIdentity(country, bundle?.world);
+      const identity = resolveChatParticipantIdentity(country, bundle?.world, identityIndex);
       return normalizeString(identity?.name || country?.name || country?.code);
     })
     .filter(Boolean)
@@ -3903,9 +4058,10 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
       bundle?.chats,
       bundle?.world,
       toDate,
+      identityIndex,
     );
     for (const chat of existingApproaches) {
-      const key = chatParticipantSetKey(chat, bundle?.world);
+      const key = chatParticipantSetKey(chat, bundle?.world, identityIndex);
       if (!key) continue;
       blockedParticipantSets.set(key, participantLabel(chat) || key);
     }
@@ -3967,11 +4123,11 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
           `Choose at most one additional independently justified polity or genuinely joint small group for THIS review. If no further grounded contact exists after accounting for approaches already represented this turn, return chat:null. Return JSON only.`,
         validatePayload: async (candidate, { finalAttempt } = {}) => {
           if (candidate?.chat == null) return "";
-          const countries = await resolveInvitees(candidate.chat.countries, bundle?.world);
+          const countries = await resolveInvitees(candidate.chat.countries, bundle?.world, [], { countryCatalog, identityIndex });
           if (countries.length === 0) {
             return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
           }
-          const duplicateKey = chatParticipantSetKey({ countries }, bundle?.world);
+          const duplicateKey = chatParticipantSetKey({ countries }, bundle?.world, identityIndex);
           if (duplicateKey && blockedParticipantSets.has(duplicateKey) && !finalAttempt) {
             return `$.chat repeats participant set ${blockedParticipantSets.get(duplicateKey)} which already has an incoming approach represented this turn. Choose a different justified participant set or return chat:null.`;
           }
@@ -3992,7 +4148,11 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
         { ...payload.chat, source: "jump-initiative" },
         "",
         bundle?.world,
-        { playerName: bundle?.game?.country },
+        {
+          playerName: bundle?.game?.country,
+          countryCatalog,
+          identityIndex,
+        },
       );
       if (!built) {
         console.warn(
@@ -4001,7 +4161,7 @@ const maybeGeneratePostJumpDiplomaticInitiative = async ({
         break;
       }
 
-      const builtParticipantKey = chatParticipantSetKey(built, bundle?.world);
+      const builtParticipantKey = chatParticipantSetKey(built, bundle?.world, identityIndex);
       if (builtParticipantKey && blockedParticipantSets.has(builtParticipantKey)) {
         console.warn(
           `[OH Diplomatic Initiative 08.4.5] model repeated already-represented participant set ` +
@@ -4074,6 +4234,7 @@ const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
 
 // run the curator BEFORE impacts, chats, history, and persistence.
 // revolutionary concept: decide whether an event exists before fucking saving it.
+const finalCuratorStage = beginTurnPerfStage("final.curator");
 let curatedEvents = await curateGeneratedEvents({
   events: freshEvents,
   priorEvents,
@@ -4123,6 +4284,7 @@ let curatedEvents = await curateGeneratedEvents({
       },
     }),
 });
+endTurnPerfStage(finalCuratorStage);
 await yieldToUiFrame(signal);
 
 // Fix 08.3 — breadth is measured by WHAT SURVIVES CURATION, not by how many
@@ -4131,6 +4293,7 @@ await yieldToUiFrame(signal);
 // of exploration lanes still visibly neglected after curation. This still is
 // NOT a minimum-event quota: the re-check may return zero, and every supplemental
 // candidate must pass native integrity screening AND the same semantic Curator.
+const breadthRepairStage = beginTurnPerfStage("final.breadth-repair");
 const breadthRepair = await maybeRepairWorldBreadthAfterCuration({
   survivingEvents: curatedEvents,
   mainEvents: freshEvents,
@@ -4144,6 +4307,10 @@ const breadthRepair = await maybeRepairWorldBreadthAfterCuration({
   context: result?.breadthRepairContext,
   mode: result.mode,
   signal,
+});
+endTurnPerfStage(breadthRepairStage, {
+  triggered: Boolean(breadthRepair?.triggered),
+  supplementalEvents: normalizeArray(breadthRepair?.events).length,
 });
 await yieldToUiFrame(signal);
 
@@ -4169,11 +4336,13 @@ if (breadthRepair?.events?.length) {
 
   const repairScreened = screenGeneratedWorldEvents({
     events: repairFreshEvents,
+    priorEvents: [...priorEvents, ...curatedEvents],
     world: baseWorld,
     game: baseGame,
     analysis: breadthRepair.analysis,
   });
 
+  const breadthCuratorStage = beginTurnPerfStage("final.breadth-curator");
   const repairCuratedEvents = await curateGeneratedEvents({
     events: repairScreened.events,
     priorEvents: [...priorEvents, ...curatedEvents],
@@ -4217,6 +4386,7 @@ if (breadthRepair?.events?.length) {
         },
       }),
   });
+  endTurnPerfStage(breadthCuratorStage);
 
   const survivingRepairStorylineIds = new Set(
     repairCuratedEvents
@@ -4245,6 +4415,7 @@ if (breadthRepair?.events?.length) {
 // surviving military events actually use the persistent order of battle instead
 // of spawning a counter and forgetting it exists for the rest of the century.
 await yieldToUiFrame(signal);
+const unitDirectorStage = beginTurnPerfStage("final.unit-director");
 const directedEvents = await directGeneratedUnitOps({
   events: curatedEvents,
   game: baseGame,
@@ -4262,11 +4433,13 @@ const directedEvents = await directGeneratedUnitOps({
       },
     }),
 });
+endTurnPerfStage(unitDirectorStage);
 
 // Armies now move and fight. This second narrow pass translates the surviving
 // prose/front state into the native disputed-region machinery without pretending
 // that every occupation is suddenly international law.
 await yieldToUiFrame(signal);
+const territoryDirectorStage = beginTurnPerfStage("final.territory-director");
 let territoryEvents = await directGeneratedTerritoryOps({
   events: directedEvents,
   world: baseWorld,
@@ -4285,11 +4458,13 @@ let territoryEvents = await directGeneratedTerritoryOps({
       },
     }),
 });
+endTurnPerfStage(territoryDirectorStage);
 
 // The main simulator's control ops were resolved during payload validation, but
 // the native territory director can add new human place names after that point.
 // Resolve those too before they ever reach world.json. Unresolved additions fail
 // safe by disappearing instead of creating phantom region keys.
+const canonicalPostprocessStage = beginTurnPerfStage("final.canonical-postprocess");
 const territoryContainers = territoryEvents.map((event, index) => ({
   event,
   impacts: event?.impacts,
@@ -4377,6 +4552,7 @@ const canonicalDiplomaticError = validateDiplomaticLedgerPayload({
 if (canonicalDiplomaticError) {
   throw new Error(`[canonical diplomatic-state] ${canonicalDiplomaticError}`);
 }
+endTurnPerfStage(canonicalPostprocessStage);
 
 const nextEvents = [...priorEvents, ...territoryEvents];
   const nextGame = normalizeGameData({
@@ -4397,6 +4573,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   const generatedChats = [];
 
   await yieldToUiFrame(signal);
+  const impactApplyStage = beginTurnPerfStage("final.apply-event-impacts");
   const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
     colors: baseColors,
     events: territoryEvents,
@@ -4440,11 +4617,13 @@ const nextEvents = [...priorEvents, ...territoryEvents];
           )],
           toDate: nextGame.gameDate,
         },
-        ...normalizeWorldState(baseWorld).simulationHistory,
+        ...normalizeArray(baseWorld?.simulationHistory),
       ].slice(0, 12),
     },
   });
+  endTurnPerfStage(impactApplyStage);
   await yieldToUiFrame(signal);
+  const ledgerMergeStage = beginTurnPerfStage("final.ledger-merges");
   const warMerge = applyWarUpdates({
     world: worldWithImpacts,
     updates: normalizeArray(result.warUpdates),
@@ -4472,12 +4651,28 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     round: nextGame.round,
   });
   let nextWorld = storylineMerge.world;
+  endTurnPerfStage(ledgerMergeStage);
 
+  // One save-aware identity/catalog build for every generated diplomatic thread in
+  // this final apply. Before R3.3 each event-created/outreach chat rebuilt the
+  // 4,800-region polity provenance index repeatedly while resolving a handful of
+  // participants.
+  const generatedChatContextStage = beginTurnPerfStage("final.generated-chat-context");
+  const generatedChatIdentityIndex = buildPolityIdentityIndex(nextWorld);
+  const generatedChatCountryCatalog = mergePolityCatalog(
+    await loadCountryNames(),
+    nextWorld,
+  );
+  endTurnPerfStage(generatedChatContextStage);
+
+  const generatedChatStage = beginTurnPerfStage("final.generated-chats");
   for (const event of territoryEvents) {
     for (const createdChat of event.impacts.createdChats) {
       const nextChat = await buildGeneratedChat(createdChat, event.id, nextWorld, {
         fallbackTitle: event.title,
         playerName: baseGame.country,
+        countryCatalog: generatedChatCountryCatalog,
+        identityIndex: generatedChatIdentityIndex,
       });
       if (nextChat) {
         const datedChat = dateGeneratedChatOpener(nextChat, event.date || nextGame.gameDate);
@@ -4493,6 +4688,8 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   for (const chatLike of normalizeArray(result.outreach)) {
     const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", nextWorld, {
       playerName: baseGame.country,
+      countryCatalog: generatedChatCountryCatalog,
+      identityIndex: generatedChatIdentityIndex,
     });
     if (nextChat) {
       const datedChat = dateGeneratedChatOpener(nextChat, nextGame.gameDate);
@@ -4504,7 +4701,13 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   // Keep the in-memory turn bundle sane too. If two generated items refer to the
   // same open participant set (including aliases / reversed group order), compacting
   // history should see one conversation rather than two fake diplomatic threads.
-  nextChats = reconcileStableChatsForPlayer(nextChats, nextWorld, baseGame.country);
+  nextChats = reconcileStableChatsForPlayer(
+    nextChats,
+    nextWorld,
+    baseGame.country,
+    generatedChatIdentityIndex,
+  );
+  endTurnPerfStage(generatedChatStage);
 
   // Fix 08.4.5: AFTER Curator + canonical world updates, complete incoming diplomacy
   // up to the same hard three-approach turn ceiling. Existing event-linked/outreach
@@ -4512,6 +4715,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   // already spoke. Each added approach blocks its participant set before the next
   // review. The loop stops as soon as the model judges that no further independent
   // contact is grounded. A failed review never damages the already-valid world turn.
+  const diplomacyInitiativeStage = beginTurnPerfStage("final.diplomatic-initiative");
   const initiativeChats = await maybeGeneratePostJumpDiplomaticInitiative({
     bundle: {
       actions: nextActions,
@@ -4529,16 +4733,27 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     existingGeneratedChats: generatedChats,
     mode: result.mode,
     signal,
+    countryCatalog: generatedChatCountryCatalog,
+    identityIndex: generatedChatIdentityIndex,
+  });
+  endTurnPerfStage(diplomacyInitiativeStage, {
+    generatedChats: normalizeArray(initiativeChats).length,
   });
   for (const initiativeChat of normalizeArray(initiativeChats)) {
     nextChats.unshift(initiativeChat);
     generatedChats.unshift(initiativeChat);
   }
   if (normalizeArray(initiativeChats).length > 0) {
-    nextChats = reconcileStableChatsForPlayer(nextChats, nextWorld, baseGame.country);
+    nextChats = reconcileStableChatsForPlayer(
+      nextChats,
+      nextWorld,
+      baseGame.country,
+      generatedChatIdentityIndex,
+    );
   }
 
   if (result.mode === "jump" || result.mode === "auto") {
+    const historyCompactStage = beginTurnPerfStage("final.history-compaction");
     try {
       nextWorld = await compactHistoryIfNeeded({
         actions: nextActions,
@@ -4546,15 +4761,23 @@ const nextEvents = [...priorEvents, ...territoryEvents];
         events: nextEvents,
         game: nextGame,
         world: nextWorld,
+      }, {
+        hasFreshTurnHistory:
+          territoryEvents.length > 0 ||
+          generatedChats.length > 0 ||
+          (Boolean(result.clearActions) && plannedActionSnapshot.length > 0),
       });
     } catch (error) {
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
+    } finally {
+      endTurnPerfStage(historyCompactStage);
     }
   }
 
   // 8B.3.1 — optional bounded automatic Stats tracking. It runs only when the
   // player's configured calendar interval is due and uses ONE compact AI batch for
   // all initialized tracked countries. Failure never invalidates the completed turn.
+  const statsRefreshStage = beginTurnPerfStage("final.stats-refresh");
   try {
     nextWorld = await refreshTrackedCountryStatsIfDue({
       bundle: {
@@ -4569,15 +4792,28 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   } catch (error) {
     if (signal?.aborted) throw error;
     console.warn("[stats auto 8B.3.1] unexpected scheduler failure; completed world turn is preserved.", error);
+  } finally {
+    endTurnPerfStage(statsRefreshStage);
   }
 
   // 8B.3 — permanent compact Stats history. This snapshots only the numeric
   // countryStats sheets that already exist; it does NOT generate missing Stats and
   // therefore adds no AI work when automatic tracking is disabled or not due.
+  const statsHistoryStage = beginTurnPerfStage("final.stats-history");
   nextWorld = captureCountryStatsHistory(nextWorld, {
     date: nextGame.gameDate || nextGame.startDate || "",
     round: nextGame.round || 0,
   });
+  endTurnPerfStage(statsHistoryStage);
+
+  const actionsChanged =
+    Boolean(result.clearActions) && plannedActionSnapshot.length > 0;
+  const eventsChanged = territoryEvents.length > 0;
+  const colorsChanged = territoryEvents.some((event) =>
+    normalizeArray(event?.impacts?.polityChanges).some((change) =>
+      Boolean(normalizeString(change?.color))
+    )
+  );
 
   // Re-read the chat list instead of writing the pre-turn snapshot back over it.
   // Turns take a while, and anything the player did to the list while one ran —
@@ -4586,27 +4822,126 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   // revived thread instead of opening a fresh one. Falls back to the snapshot if
   // the read fails, which is the old behaviour and never loses a generated chat.
   let chatsToWrite;
+  const chatsChanged = generatedChats.length > 0;
+  const liveChatMergeStage = beginTurnPerfStage("final.live-chat-merge");
   try {
-    const liveChats = await readChatsState({
-      force: true,
-      world: nextWorld,
-      playerCountry: baseGame.country,
-    });
-    chatsToWrite = mergeIncomingChats(liveChats, generatedChats, nextWorld, {
-      playerCountry: baseGame.country,
-    });
+    // Read the live structural archive only. If this turn produced no new chat,
+    // there is NOTHING to merge or write back: preserving the player's live archive
+    // by leaving it untouched is both safer and dramatically cheaper.
+    const liveChatReadStage = beginTurnPerfStage("final.live-chat-read");
+    const liveChats = await readChatsStateView({ force: true });
+    endTurnPerfStage(liveChatReadStage);
+
+    if (chatsChanged) {
+      const liveChatReconcileStage = beginTurnPerfStage("final.live-chat-reconcile");
+      chatsToWrite = mergeIncomingChats(liveChats, generatedChats, nextWorld, {
+        playerCountry: baseGame.country,
+      });
+      endTurnPerfStage(liveChatReconcileStage);
+    } else {
+      chatsToWrite = liveChats;
+    }
   } catch {
-    chatsToWrite = reconcileStableChatsForPlayer(nextChats, nextWorld, baseGame.country);
+    chatsToWrite = chatsChanged
+      ? reconcileStableChatsForPlayer(nextChats, nextWorld, baseGame.country)
+      : nextChats;
+  } finally {
+    endTurnPerfStage(liveChatMergeStage, {
+      changed: chatsChanged,
+      generatedChats: generatedChats.length,
+    });
   }
 
-  await Promise.all([
-    writeActionsState(nextActions),
-    writeChatsState(chatsToWrite, { world: nextWorld, playerCountry: baseGame.country }),
-    writeEventsState(nextEvents),
-    writeGameData(nextGame),
-    writeJson(JSON_URLS.colors, nextColors, { pretty: true }),
-    writeWorldState(nextWorld),
-  ]);
+  // Persistence R3.3: start each PUT on a separate UI frame. writeJson performs
+  // normalization/stringify synchronously before its first await, so constructing
+  // Promise.all([...writes]) used to stack several heavy serializers in one task.
+  // The requests still overlap on the network; only their synchronous enqueue work
+  // is cooperatively separated. Suppress per-asset broadcasts until ALL six assets
+  // are canonical, then publish one coherent committed state below.
+  const persistenceStage = beginTurnPerfStage("final.persistence");
+  const pendingWrites = [];
+  const persisted = {};
+  const enqueuePersistenceWrite = async (label, writer) => {
+    await yieldToUiFrame(signal);
+    const enqueueStage = beginTurnPerfStage(`final.persist-enqueue.${label}`);
+    try {
+      pendingWrites.push(
+        Promise.resolve(writer()).then((value) => {
+          persisted[label] = value;
+          return value;
+        }),
+      );
+    } finally {
+      endTurnPerfStage(enqueueStage);
+    }
+  };
+
+  const quietWrite = {
+    emitEvents: false,
+    emitDerivedEvents: false,
+    cloneResult: false,
+  };
+
+  if (actionsChanged) {
+    await enqueuePersistenceWrite("actions", () =>
+      writeActionsState(nextActions, quietWrite));
+  }
+  if (chatsChanged) {
+    await enqueuePersistenceWrite("chat", () =>
+      writeChatsState(chatsToWrite, {
+        ...quietWrite,
+        world: nextWorld,
+        playerCountry: baseGame.country,
+        skipSnapshotClone: true,
+      }));
+  }
+  if (eventsChanged) {
+    await enqueuePersistenceWrite("events", () =>
+      writeEventsState(nextEvents, quietWrite));
+  }
+  await enqueuePersistenceWrite("game", () =>
+    writeGameData(nextGame, quietWrite));
+  if (colorsChanged) {
+    await enqueuePersistenceWrite("colors", () =>
+      writeJson(JSON_URLS.colors, nextColors, { ...quietWrite, pretty: true }));
+  }
+  await enqueuePersistenceWrite("world", () =>
+    writeWorldState(nextWorld, quietWrite));
+
+  const persistenceWaitStage = beginTurnPerfStage("final.persistence-wait");
+  await Promise.all(pendingWrites);
+  endTurnPerfStage(persistenceWaitStage);
+  endTurnPerfStage(persistenceStage);
+
+  // Publish the canonical turn atomically from the UI's perspective. Previously
+  // each PUT emitted its own generic runtime event while sibling assets were still
+  // mid-write, forcing repeated React/map/chat work against half-updated state.
+  if (typeof window !== "undefined") {
+    await yieldToUiFrame(signal);
+    const uiCommitStage = beginTurnPerfStage("final.ui-commit-broadcast");
+    window.dispatchEvent(new CustomEvent("oh:world-updated", {
+      detail: { world: persisted.world || nextWorld },
+    }));
+    window.dispatchEvent(new CustomEvent("oh:game-updated", {
+      detail: { game: persisted.game || nextGame },
+    }));
+    if (colorsChanged) {
+      window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    }
+    if (eventsChanged) {
+      window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+        detail: { key: "events", url: JSON_URLS.events, value: persisted.events || nextEvents },
+      }));
+    }
+    if (chatsChanged) {
+      window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+        detail: { key: "chat", url: JSON_URLS.chat, value: persisted.chat || chatsToWrite },
+      }));
+    }
+    // Give React/map consumers one render opportunity before attribution closes.
+    await yieldToUiFrame(signal);
+    endTurnPerfStage(uiCommitStage);
+  }
 
   // The turn's new state is now persisted. Web-mode encrypted sync listens for this
   // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
@@ -4616,6 +4951,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
 
   // Snapshot the state we just replaced so it can be rolled back to (best-effort).
+  const rollbackStage = beginTurnPerfStage("final.rollback-snapshot");
   await captureRollbackSnapshot({
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
@@ -4627,6 +4963,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     chat: baseChats,
     colors: baseColors,
   });
+  endTurnPerfStage(rollbackStage);
 
   return {
     actions: nextActions,
@@ -7580,8 +7917,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
 // high-pressure storyline crosses the 70-day anti-stasis backstop but the model
 // still copies its equilibrium forward, repair ONLY that process. Never throw
 // away unrelated valid events, and never turn this into a second world sweep.
-const WORLD_MOTION_REPAIR_EVENT_LIMIT = 1;
-const WORLD_MOTION_REPAIR_HISTORY_LIMIT = 12;
+const WORLD_MOTION_REPAIR_HISTORY_LIMIT = 8;
 
 const compactStorylineRepairHistory = (bundle, storyline) => {
   const id = normalizeString(storyline?.id);
@@ -7598,7 +7934,7 @@ const compactStorylineRepairHistory = (bundle, storyline) => {
     })
     .slice(-WORLD_MOTION_REPAIR_HISTORY_LIMIT)
     .map((event) => {
-      const desc = normalizeString(event?.description).slice(0, 900);
+      const desc = normalizeString(event?.description).slice(0, 520);
       return `${normalizeString(event?.date) || "????-??-??"} — ${normalizeString(event?.title) || "Untitled"}${desc ? `\n${desc}` : ""}`;
     })
     .join("\n\n");
@@ -7608,9 +7944,9 @@ const runTargetedWorldMotionRepair = async ({
   bundle,
   issue,
   mainPassEvents = [],
+  existingCausalEventIndex = -1,
   originDate,
   targetDate,
-  canEmitEvent,
   signal,
 } = {}) => {
   const prior = issue?.prior;
@@ -7623,43 +7959,59 @@ const runTargetedWorldMotionRepair = async ({
     .filter(Boolean)
     .slice(0, 8);
 
+  // Repair context used to dump ~4.2k chars PER participant plus 12 long event
+  // summaries. The repair only decides one storyline's semantic movement, so keep
+  // its evidence narrow. This is both cheaper and less likely to distract the model.
   const dossiers = await Promise.all(
     participants.map(async (name) => {
       try {
-        const text = await buildTargetDossier(bundle, name);
-        return `${name}:\n${normalizeString(text).slice(0, 4200) || "No additional dossier available."}`;
+        const dossier = await buildTargetDossier(bundle, name);
+        return `${name}:\n${normalizeString(dossier).slice(0, 1600) || "No additional dossier available."}`;
       } catch {
         return `${name}: no additional dossier available.`;
       }
     }),
   );
 
-  const recentHistory = compactStorylineRepairHistory(bundle, prior) || "No directly matched recent canonical events were found.";
-  const existingPassSummary = normalizeArray(mainPassEvents)
-    .slice(0, 8)
-    .map((event, index) => `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n${normalizeString(event?.description).slice(0, 650)}`)
+  const recentHistory =
+    compactStorylineRepairHistory(bundle, prior) ||
+    "No directly matched recent canonical events were found.";
+
+  const existingCausalEvent =
+    Number.isInteger(existingCausalEventIndex) &&
+    existingCausalEventIndex >= 0 &&
+    existingCausalEventIndex < normalizeArray(mainPassEvents).length
+      ? normalizeArray(mainPassEvents)[existingCausalEventIndex]
+      : null;
+
+  const mainPassSummary = normalizeArray(mainPassEvents)
+    .slice(0, 6)
+    .map((event, index) =>
+      `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n` +
+      `${normalizeString(event?.description).slice(0, 420)}`
+    )
     .join("\n\n") || "None.";
-  const territorialContext = await buildTerritorialControlContext(bundle?.world);
-  const canonicalWarContext = buildCanonicalWarContext(bundle?.world);
+
   const playerPolity = normalizeString(bundle?.game?.country) || "the player polity";
-  const eventAllowance = canEmitEvent
-    ? "You MAY return at most ONE visible event if this repair uncovers a genuinely material public development."
-    : "The main pass has already used its visible-event ceiling. Return NO visible event; repair the process only through a causally justified hidden pressure/momentum/status change.";
-
   const repairCause = issue?.kind === "missing-update"
-    ? "was selected for native attention, but the normal whole-world pass omitted its required semantic update"
-    : "crossed its anti-stasis backstop after the normal whole-world pass still left it objectively unchanged";
+    ? "was selected for native attention, but the accepted whole-world pass omitted its required semantic update"
+    : "crossed its anti-stasis backstop after the accepted whole-world pass still left it objectively unchanged";
 
-  let systemPrompt = `You are the TARGETED ENDOGENOUS MOTION REPAIR for OpenHistoria, an alternate-history strategy simulation.\n\n` +
-    `You are NOT simulating the whole world and you are NOT generating filler. One already-known persistent storyline ${repairCause}. Simulate ONLY this process through the supplied interval.\n\n` +
-    `Core rule: DEFERRED OR STALE DOES NOT MEAN FROZEN. The actors inside this process have their own objectives, commanders, institutions, manpower, supply, morale, politics, economics and initiative. Decide what they actually attempted during the interval and what succeeded, failed, partially succeeded, or changed internally. Do not wait for ${playerPolity} or an outside event to give them permission to act.\n\n` +
-    `WWI/trench-style stalemate is legal. Territorial movement is NOT required. But you may not merely paraphrase the same equilibrium. Routine artillery exchanges, patrols, unchanged skirmishes, meetings, weather-only delay, or generic 'fighting continues' are NOT a repair. Artillery/patrol activity may be background cause only when it produces a material consequence.\n\n` +
-    `A smaller power may hold, counterattack, recover ground, exploit overextension, force a local reverse, or create negotiation pressure. A larger power may fail locally. Do not decide outcomes from country size or memorized real history; branch from this campaign's actual state.\n\n` +
-    `If the equilibrium genuinely remains militarily static, change another real dimension when causally warranted: operational readiness, supply, command, casualties/attrition, morale, domestic politics, diplomatic pressure, offensive preparation/abandonment, strategic objectives, or status. Numeric pressure/momentum changes must be explained by the returned state; do not wiggle numbers merely to satisfy the validator.\n\n` +
-    `PLAYER AGENCY: ${playerPolity} is human-controlled. Autonomous private/social/local actors may create pressure inside it, but do not make a NEW major sovereign/executive decision for ${playerPolity} unless already authorized by supplied canon.\n\n` +
-    `${eventAllowance}\n\n` +
-    `OUTPUT CONTRACT: call the normal jump-result tool once. Return stopDate=${targetDate}. clearActions=false. Return NO catalyst and NO diplomaticOutreach. warUpdates, relationUpdates and agreementUpdates MUST be empty strings — this repair cannot silently alter belligerency or treaty ledgers. storylineUpdates MUST contain EXACTLY ONE record for ${storylineId}, in the standard format:\n` +
-    `For any combat event: preserve legal sovereignty vs de-facto control. Use warId/combatants correctly. Do not fabricate a legal region transfer for a battlefield capture. Existing persistent unit/territorial directors will reconcile missing unit/control detail after this repair. Do NOT conclude a ceasefire, peace treaty, war termination, formal alliance, or other ledger-changing settlement in this narrow repair; movement TOWARD negotiations/settlement is allowed.\n`;
+  let systemPrompt =
+    `You are the TARGETED ENDOGENOUS MOTION REPAIR for OpenHistoria.\n\n` +
+    `Repair EXACTLY ONE already-existing persistent storyline: ${storylineId}.\n` +
+    `The normal whole-world pass remains the sole source of visible timeline events. ` +
+    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, catalysts, Stats edits, or any other ledger mutation. ` +
+    `Return exactly one semantic storyline object through the dedicated repair tool.\n\n` +
+    `This storyline ${repairCause}. Decide what is true about THIS process at ${targetDate}. ` +
+    `Do not merely paraphrase the old equilibrium. Numeric pressure/momentum changes must follow the returned state. ` +
+    `Stalemate is legal when the state materially evolves in another dimension: readiness, logistics, command, morale, domestic politics, diplomacy, strategic objectives, preparation, restraint, or de-escalation.\n\n` +
+    `Non-player actors are allowed to miscalculate, overreach, mobilize, bluff, radicalize, back down, split internally, or accept dangerous risk when current causes support it. ` +
+    `Do not optimize every actor into caution. Do not invent chaos either.\n\n` +
+    `PLAYER AGENCY: ${playerPolity} is human-controlled. Do not invent a NEW major sovereign/executive decision for ${playerPolity} unless already authorized by canon.\n\n` +
+    `OUTPUT CONTRACT: call submit_world_motion_repair exactly once. stopDate MUST be ${targetDate}. ` +
+    `storyline.id MUST be exactly ${storylineId}. Preserve the existing kind/title/startedDate unless current canon genuinely changes status. ` +
+    `Participants are cumulative; include the current canonical participant set and any genuinely new participant, never delete a prior participant by omission.\n`;
 
   try {
     if (participants.some((name) => name.toLowerCase() === playerPolity.toLowerCase())) {
@@ -7667,7 +8019,7 @@ const runTargetedWorldMotionRepair = async ({
       systemPrompt += `\n${difficultyDirective(game.difficulty, "simulation")}\n`;
     }
   } catch {
-    // Difficulty failure leaves the narrow repair neutral rather than blocking it.
+    // Missing difficulty data leaves the repair neutral.
   }
 
   const userMessage = [
@@ -7678,29 +8030,33 @@ const runTargetedWorldMotionRepair = async ({
     JSON.stringify(prior, null, 2),
     "",
     issue?.kind === "missing-update"
-      ? "WHOLE-WORLD PASS STORYLINE UPDATE: MISSING — repair the selected process without replacing unrelated main-pass events."
+      ? "WHOLE-WORLD PASS STORYLINE UPDATE: MISSING."
       : "WHOLE-WORLD PASS ATTEMPTED UPDATE (insufficient):",
     JSON.stringify(attempted || {}, null, 2),
     "",
-    "CURRENT CANONICAL WARS:",
-    canonicalWarContext || "None recorded.",
+    existingCausalEvent
+      ? "MAIN-PASS CAUSAL EVENT ALREADY GENERATED AND NATIVELY LINKED — your storyline state MUST account for this event; do NOT recreate it:"
+      : "NO MAIN-PASS CAUSAL EVENT WAS FOUND — repair hidden semantic state only; do not manufacture a visible event:",
+    existingCausalEvent
+      ? `${normalizeString(existingCausalEvent?.date)} — ${normalizeString(existingCausalEvent?.title)}\n${normalizeString(existingCausalEvent?.description)}`
+      : "None.",
     "",
-    "CURRENT TERRITORIAL / FRONT EXCEPTIONS:",
-    territorialContext || "None recorded.",
-    "",
-    "PARTICIPANT DOSSIERS:",
+    "PARTICIPANT DOSSIERS (BOUNDED):",
     dossiers.join("\n\n"),
     "",
     "RECENT CANONICAL HISTORY RELEVANT TO THIS PROCESS:",
     recentHistory,
     "",
-    "EVENTS ALREADY GENERATED BY THE MAIN PASS THIS INTERVAL — DO NOT DUPLICATE THEM:",
-    existingPassSummary,
+    "OTHER MAIN-PASS EVENTS THIS INTERVAL — CONTEXT ONLY:",
+    mainPassSummary,
   ].join("\n");
 
   try {
-    if (signal?.aborted) throw signal.reason || new DOMException("Timeline jump cancelled.", "AbortError");
-    const timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 180000 : 0;
+    if (signal?.aborted) {
+      throw signal.reason || new DOMException("Timeline jump cancelled.", "AbortError");
+    }
+
+    const timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0;
     const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
 
     logContextDiagnostics({
@@ -7714,89 +8070,119 @@ const runTargetedWorldMotionRepair = async ({
       variables: { storylineId, originDate, targetDate },
     });
 
-    const response = await callAI(systemPrompt, [
-      { role: "user", parts: [{ text: userMessage }] },
-    ], {
-      deadline,
-      signal,
-      tool: getGameplayTool("jumpForward"),
+    const aiStartedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+
+    let response;
+    try {
+      response = await callAI(systemPrompt, [
+        { role: "user", parts: [{ text: userMessage }] },
+      ], {
+        deadline,
+        reasoningEnabled: false,
+        signal,
+        tool: getGameplayTool("worldMotionRepair"),
+      });
+    } catch (error) {
+      const failedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      recordTurnPerfAiAttempt({
+        taskKey: "worldMotionRepair",
+        attempt: 1,
+        ms: Math.max(0, failedAt - aiStartedAt),
+        error: normalizeString(error?.message || error),
+      });
+      throw error;
+    }
+
+    const aiEndedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    recordTurnPerfAiAttempt({
+      taskKey: "worldMotionRepair",
+      attempt: 1,
+      ms: Math.max(0, aiEndedAt - aiStartedAt),
     });
 
-    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+    const rawText =
+      typeof response === "string" ? response : normalizeString(response?.rawText);
     const parsed = response?.toolInput ?? extractJsonPayload(rawText);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("repair response did not contain a structured jump payload");
+
+    const schemaValidation = validateGameplayPayload("worldMotionRepair", parsed);
+    if (!schemaValidation.valid) {
+      throw new Error(schemaValidation.error);
     }
 
-    // Repair is never allowed to resolve queued player actions or open side channels.
-    parsed.clearActions = false;
-    parsed.catalyst = null;
-    parsed.diplomaticOutreach = [];
-
-    const schemaValidation = validateGameplayPayload("jumpForward", parsed);
-    if (!schemaValidation.valid) throw new Error(schemaValidation.error);
-
-    const repairEvents = normalizeArray(parsed.events);
-    if (repairEvents.length > (canEmitEvent ? WORLD_MOTION_REPAIR_EVENT_LIMIT : 0)) {
-      throw new Error(`repair returned ${repairEvents.length} visible event(s), above its local allowance`);
-    }
-    if (normalizeArray(parsed.warUpdates).length || normalizeArray(parsed.relationUpdates).length || normalizeArray(parsed.agreementUpdates).length) {
-      throw new Error("repair attempted to mutate war/relation/agreement ledgers; those belong to the normal world pass");
+    if (normalizeString(parsed?.stopDate) !== targetDate) {
+      throw new Error(`repair stopDate must be exactly ${targetDate}`);
     }
 
-    // Native bookkeeping owns causal event linkage here too. The repair model only
-    // needs to describe the storyline evolution and, optionally, one causal event.
-    normalizeWorldStorylineEventLinks(parsed, { world: bundle?.world });
-
-    const decodedUpdates = decodeWorldStorylineUpdates(parsed.storylineUpdates);
-    if (decodedUpdates.length !== 1 || normalizeString(decodedUpdates[0]?.id) !== storylineId) {
-      throw new Error(`repair must return exactly one storyline update for ${storylineId}`);
-    }
-    if (repairEvents.length && !normalizeArray(decodedUpdates[0]?.eventIndexes).includes(0)) {
-      throw new Error("native storyline binding could not identify the repair event as causal");
+    const rawUpdate = parsed?.storyline;
+    if (normalizeString(rawUpdate?.id) !== storylineId) {
+      throw new Error(`repair storyline id must be exactly ${storylineId}`);
     }
 
-    const dateError = validateTimelineDates({
-      candidate: parsed,
-      mode: "jump",
-      originDate,
-      targetDate,
-      requireAdvance: true,
-    });
-    if (dateError) throw new Error(dateError);
+    const validationEvent = existingCausalEvent
+      ? {
+          ...existingCausalEvent,
+          storylineIds: [...new Set([
+            ...normalizeArray(existingCausalEvent?.storylineIds).map(normalizeString).filter(Boolean),
+            storylineId,
+          ])],
+        }
+      : null;
 
-    const warError = validateWarLedgerPayload(parsed, { world: bundle?.world });
-    if (warError) throw new Error(warError);
+    const localUpdate = {
+      ...rawUpdate,
+      eventIndexes: validationEvent ? [0] : [],
+    };
 
-    const storylineError = validateWorldStorylinePayload(parsed, {
+    const validationCandidate = {
+      events: validationEvent ? [validationEvent] : [],
+      storylineUpdates: [localUpdate],
+      warUpdates: [],
+      relationUpdates: [],
+      agreementUpdates: [],
+      stopDate: targetDate,
+    };
+
+    const storylineError = validateWorldStorylinePayload(validationCandidate, {
       existingStorylines: [prior],
       selectedStorylines: [prior],
       deferredStorylines: [],
       originDate,
-      stopDate: normalizeString(parsed.stopDate) || targetDate,
+      stopDate: targetDate,
       enforceAntiStasis: true,
       world: bundle?.world,
     });
     if (storylineError) throw new Error(storylineError);
 
-    const worldChangeError = await validateGeneratedWorldChanges(
-      parsed,
-      bundle?.world,
-      { strictTransfers: false },
-    );
-    if (worldChangeError) throw new Error(worldChangeError);
-
     return {
-      event: repairEvents[0] || null,
-      update: decodedUpdates[0],
-      summary: normalizeString(parsed.summary),
+      event: null,
+      existingCausalEventIndex:
+        validationEvent && Number.isInteger(existingCausalEventIndex)
+          ? existingCausalEventIndex
+          : -1,
+      update: {
+        ...rawUpdate,
+        eventIndexes: [],
+      },
+      summary: normalizeString(parsed?.summary),
     };
   } catch (error) {
-    if (signal?.aborted) throw signal.reason instanceof Error
-      ? signal.reason
-      : new DOMException("Timeline jump cancelled.", "AbortError");
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Timeline jump cancelled.", "AbortError");
+    }
     console.warn(
-      `[OH World Motion Repair] ${storylineId} failed: ${normalizeString(error?.message || error) || "unknown error"}. ` +
+      `[OH World Motion Repair] ${storylineId} failed: ` +
+      `${normalizeString(error?.message || error) || "unknown error"}. ` +
       "Keeping the valid main world pass; this storyline remains overdue for the next turn.",
     );
     return null;
@@ -7836,14 +8222,24 @@ const repairAntiStasisStorylines = async ({
   );
 
   for (const issue of issues) {
-    const canEmitEvent = events.length < Math.max(0, Number(passMaxEvents) || 0);
+    const issueId = normalizeString(issue?.id);
+    const existingCausalEventIndex = (() => {
+      let best = -1;
+      events.forEach((event, index) => {
+        if (normalizeArray(event?.storylineIds).map(normalizeString).includes(issueId)) {
+          best = index;
+        }
+      });
+      return best;
+    })();
+
     const repair = await runTargetedWorldMotionRepair({
       bundle,
       issue,
       mainPassEvents: events,
+      existingCausalEventIndex,
       originDate,
       targetDate,
-      canEmitEvent,
       signal,
     });
 
@@ -7857,18 +8253,24 @@ const repairAntiStasisStorylines = async ({
       continue;
     }
 
-    const eventOffset = events.length;
     if (repair.event) events = [...events, repair.event];
+
+    const repairedEventIndexes =
+      Number.isInteger(repair.existingCausalEventIndex) &&
+      repair.existingCausalEventIndex >= 0 &&
+      repair.existingCausalEventIndex < events.length
+        ? [repair.existingCausalEventIndex]
+        : [];
+
     updates.push({
       ...repair.update,
-      eventIndexes: normalizeArray(repair.update?.eventIndexes)
-        .map((index) => index + eventOffset),
+      eventIndexes: repairedEventIndexes,
     });
     repaired += 1;
 
     console.info(
       `[OH World Motion Repair] repaired ${issue.id}: ` +
-      `${repair.event ? `1 material event (${normalizeString(repair.event.title)})` : "hidden objective evolution"}.`,
+      `${repairedEventIndexes.length ? "semantic state bound to existing main-pass event" : "hidden objective evolution"}.`,
     );
   }
 
@@ -7897,7 +8299,7 @@ const WORLD_BREADTH_REPAIR_MIN_EXPLORATION_SLOTS = 6;
 const WORLD_BREADTH_REPAIR_MIN_QUIET_SLOTS = 2;
 const WORLD_BREADTH_REPAIR_EVENT_LIMIT = 5;
 const WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS = 6;
-const WORLD_BREADTH_REPAIR_HISTORY_LIMIT = 16;
+const WORLD_BREADTH_REPAIR_HISTORY_LIMIT = 12;
 const quietWorldBreadthSlots = (analysis, explorationAudit) => {
   const quietIds = new Set(
     normalizeArray(explorationAudit?.quietSlotIds)
@@ -7935,21 +8337,40 @@ const postCuratorWorldBreadthSlots = ({ analysis, survivingEvents, bundle } = {}
     return { audit, slots: quiet };
   }
 
-  // Relevance-backed actor lanes first, but reserve room for at least one global
-  // lane when one is quiet so ordinary world texture is not crowded out by powers
-  // already prominent in the causal ledger.
-  const actorSlots = quiet
-    .filter((slot) => slot?.type === "actor-domain")
-    .sort((a, b) => (Number(b?.relevance) || 0) - (Number(a?.relevance) || 0));
-  const globalSlots = quiet.filter((slot) => slot?.type !== "actor-domain");
+  // R3.5: when many lanes are quiet, the bounded second search should not fall
+  // straight back into the player's neighborhood just because those actor rows
+  // carry high relevance scores. Reserve roughly half of the re-check capacity for
+  // WIDER-WORLD lanes, with the explicit crisis-discovery lane first when quiet.
+  // This is still an evaluation budget, not an output quota.
+  const rankSlot = (a, b) => {
+    const aCrisis = a?.type === "crisis-discovery" ? 1 : 0;
+    const bCrisis = b?.type === "crisis-discovery" ? 1 : 0;
+    return (bCrisis - aCrisis) ||
+      ((Number(b?.relevance) || 0) - (Number(a?.relevance) || 0)) ||
+      (Number(a?.id) || 0) - (Number(b?.id) || 0);
+  };
 
-  const selected = actorSlots.slice(0, WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS);
-  if (globalSlots.length && !selected.some((slot) => slot?.type !== "actor-domain")) {
-    if (selected.length >= WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS) selected.pop();
-    selected.push(globalSlots[0]);
-  }
+  const playerSphereSlots = quiet
+    .filter((slot) => slot?.scope === "player-sphere")
+    .sort(rankSlot);
+  const widerWorldSlots = quiet
+    .filter((slot) => slot?.scope !== "player-sphere")
+    .sort(rankSlot);
 
-  for (const slot of [...globalSlots.slice(1), ...actorSlots]) {
+  const selected = [];
+  const targetWider = Math.min(
+    widerWorldSlots.length,
+    Math.ceil(WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS / 2),
+  );
+  const targetPlayer = Math.min(
+    playerSphereSlots.length,
+    WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS - targetWider,
+  );
+
+  selected.push(...widerWorldSlots.slice(0, targetWider));
+  selected.push(...playerSphereSlots.slice(0, targetPlayer));
+
+  for (const slot of [...widerWorldSlots.slice(targetWider), ...playerSphereSlots.slice(targetPlayer)]) {
     if (selected.length >= WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS) break;
     if (!selected.some((entry) => Number(entry?.id) === Number(slot?.id))) selected.push(slot);
   }
@@ -7971,6 +8392,7 @@ const runWorldBreadthRepair = async ({
   analysis,
   quietSlots,
   mainEvents,
+  visibleEvents = mainEvents,
   originDate,
   targetDate,
   horizonDays,
@@ -7987,22 +8409,44 @@ const runWorldBreadthRepair = async ({
 
   const existingPassEvents = normalizeArray(mainEvents);
   const existingPassSummary = existingPassEvents
-    .slice(0, 10)
-    .map((event, index) => `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n${normalizeString(event?.description).slice(0, 600)}`)
+    .slice(0, 6)
+    .map((event, index) => `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n${normalizeString(event?.description).slice(0, 450)}`)
     .join("\n\n") || "None.";
+
+  const classifyVisibleScope = createWorldEventScopeClassifier(analysis, {
+    world: bundle?.world || {},
+    gameCountry: bundle?.game?.country,
+  });
+  const visibleScopeCounts = normalizeArray(visibleEvents).reduce(
+    (counts, event) => {
+      const scope = classifyVisibleScope(event);
+      counts[scope] = (counts[scope] || 0) + 1;
+      return counts;
+    },
+    { "player-sphere": 0, "wider-world": 0, unknown: 0 },
+  );
+  const underrepresentedVisibleScope =
+    visibleScopeCounts["player-sphere"] + 1 < visibleScopeCounts["wider-world"]
+      ? "PLAYER-SPHERE"
+      : visibleScopeCounts["wider-world"] + 1 < visibleScopeCounts["player-sphere"]
+        ? "WIDER-WORLD"
+        : "BALANCED/NEAR-BALANCED";
 
   const actorNames = [...new Set(
     quietSlots
-      .filter((slot) => slot?.type === "actor-domain")
-      .map((slot) => normalizeString(slot?.actor))
-      .filter(Boolean),
+      .filter((slot) =>
+        slot?.type === "actor-domain" ||
+        (slot?.type === "crisis-discovery" && normalizeString(slot?.targetActor || slot?.actor))
+      )
+      .map((slot) => normalizeString(slot?.targetActor || slot?.actor))
+      .filter((name) => name && !/latent instability|regional system|wider world system/i.test(name)),
   )].slice(0, 5);
 
   const dossiers = await Promise.all(
     actorNames.map(async (name) => {
       try {
         const text = await buildTargetDossier(bundle, name);
-        return `${name}:\n${normalizeString(text).slice(0, 2400) || "No additional dossier available."}`;
+        return `${name}:\n${normalizeString(text).slice(0, 1600) || "No additional dossier available."}`;
       } catch {
         return `${name}: no additional dossier available.`;
       }
@@ -8031,16 +8475,28 @@ const runWorldBreadthRepair = async ({
     const basis = normalizeString(slot?.basis)
       ? ` Current native basis: ${normalizeString(slot.basis)}.`
       : " No specific present-tense pressure was identified; inspect latent causes conservatively.";
-    return `${slot.id}. ${normalizeString(slot?.actor)} — inspect ${normalizeString(slot?.domain)}.${basis}${guard}`;
+    const scope = slot?.scope === "player-sphere" ? "PLAYER-SPHERE" : "WIDER-WORLD";
+    const crisisTag = slot?.type === "crisis-discovery" ? " | CRISIS-DISCOVERY" : "";
+    const trajectoryTag = Number(slot?.trajectoryValue) > 0
+      ? ` | native trajectory ${Number(slot.trajectoryValue)}/5`
+      : "";
+    const channels = normalizeArray(slot?.consequenceChannels).length
+      ? ` Potential consequence channels if threshold is genuinely crossed: ${normalizeArray(slot.consequenceChannels).join(", ")}.`
+      : "";
+    return `${slot.id}. [${scope}${crisisTag}${trajectoryTag}] ${normalizeString(slot?.actor)} — inspect ${normalizeString(slot?.domain)}.${basis}${channels}${guard}`;
   });
 
   let systemPrompt = `You are the NORMAL-MONTH WORLD COMPOSITION PASS for OpenHistoria, an alternate-history strategy simulation.\n\n` +
     `The primary whole-world pass for ${originDate} → ${targetDate} (${Math.round(Number(horizonDays) || 0)} days) was valid, but after Integrity and semantic Curator only ${Math.max(0, Number(survivorCount) || 0)} worthwhile visible event(s) remain. You are NOT replacing those events, NOT retrying the whole world, and NOT satisfying an event quota. Search the supplied exploration lanes that remain visibly neglected AFTER curation.\n\n` +
     `Evaluate EVERY supplied lane before finalizing. Do not stop after finding the first or second acceptable event if other supplied lanes also contain independent, concrete developments. Return ZERO events if all lanes are genuinely quiet; otherwise return each independently worthwhile outcome you actually find, up to the local ceiling. The purpose is broader discovery, not calendar padding. Small but concrete history is legitimate: domestic politics, industry, science/technology, social movements, institutions, public life, culture, personalities, accidents/disasters, economic decisions, regional developments, and informal diplomacy can all matter without being world-shattering.\n\n` +
+    `ATTENTION BALANCE: PLAYER-SPHERE and WIDER-WORLD are scheduler scopes, not event quotas. The native slate is constructed around a 5/5 attention balance. The currently surviving visible set is ${visibleScopeCounts["player-sphere"]} PLAYER-SPHERE / ${visibleScopeCounts["wider-world"]} WIDER-WORLD / ${visibleScopeCounts.unknown} unclassified. Underrepresented visible scope: ${underrepresentedVisibleScope}. Give both serious search effort. When similarly worthwhile candidates compete for a scarce visible slot, prefer the underrepresented visible scope; do not fill the month with several same-texture player-neighborhood consultations or several disconnected global ministry cards merely to hit a ratio.\n\n` +
+    `TRAJECTORY PRIORITY: Compare independently grounded candidates by what they open up next, not merely by how easy they are to summarize. Native trajectory value is a 0-5 selection hint: 0 isolated reporting/process; 1 low-branch administrative motion; 2 settled/material ordinary outcome; 3 capability or political change with meaningful next actions; 4 unstable process with several materially different branches; 5 threshold/breakpoint process. This is NOT a drama quota. Never fabricate a 4/5. But when event space is scarce, a grounded trajectory-4/5 development should normally outrank another trajectory-0/1 ministry report, routine framework, or successful implementation milestone.\n\n` +
+    `CRISIS DISCOVERY: If a CRISIS-DISCOVERY lane is supplied, it is a PROTECTED evaluation lane, not an event quota. Evaluate it independently before finalizing even if other slots already yielded acceptable cards. When native current evidence names a target actor/trigger, test THAT concrete pressure first rather than replacing it with a random dramatic country. Crisis does NOT mean war: constitutional breakdown, succession struggle, separatism/federal rupture, mass unrest, coup risk, banking/debt panic, alliance fracture, resource shock, border/security standoff or sanctions spiral can all have major consequences without shooting. If nothing crosses a threshold, return quiet AND do not substitute a low-trajectory administrative card as though it satisfied the crisis lane. If a crisis genuinely begins, its establishing event must be concrete and create a NEW storyline whose state identifies the trigger, unresolved stakes, and at least two plausible consequence channels. Under a shared event ceiling, an earned new crisis outranks a trajectory-0/1 administrative card.\n\n` +
     `OUTCOME-FIRST DISCIPLINE: Prefer completed facts and observable results over process. A meeting, review, study, procurement discussion, inspection, exercise, doctrine/planning session, or preliminary inquiry is normally NOT a visible event merely because officials performed it. Return it only when this interval produces a concrete adopted decision, funded order, fielded capability, command change, casualty/accident, deployment, completed project, demonstrated finding, prototype, licensed process, production step, or another observable consequence. Do not inflate process into significance.\n\n` +
     `${consequenceSignal?.level === "low" ? `CONSEQUENCE-AWARE SEARCH BIAS: The rolling visible timeline is busy but unusually low in material threshold outcomes (${Math.max(0, Number(consequenceSignal?.consequentialCount) || 0)}/${Math.max(0, Number(consequenceSignal?.eventCount) || 0)} over ~${Math.max(1, Number(consequenceSignal?.lookbackDays) || 90)} days). While evaluating THESE SAME neglected lanes, first ask whether any already-grounded pressure has matured into a real threshold outcome — a vote/result, resignation/appointment, strike/settlement, completed capability, decisive commercial/financial action, crisis escalation/de-escalation, or other development that materially changes what actors can do next. This is search ordering, NOT a requirement for drama. If no grounded threshold has matured, return ordinary concrete history or nothing rather than fabricating one.\n\n` : ""}` +
     `PHYSICAL-WORLD CONSEQUENCE AUDIT: For EACH event you decide is independently timeline-worthy, silently ask whether that event establishes a significant named geographically concrete physical facility/place that will persist beyond the event. If YES, that same event MUST carry an impacts.markerOps build with real coordinates and a lifecycle status that matches the event (planned, under_construction, or active; do not call a groundbreaking project active). Examples include a major new factory/arsenal, naval yard or port facility, logistics hub, laboratory, fortification, headquarters/base or airfield. Do not create markers for routine activity, generic offices, unnamed workshops, ordinary maintenance or mere continuation. This is NOT a marker quota and is NEVER a reason to invent an event. This narrow breadth-repair pass is not given the full current-feature ledger, so do not guess updates to existing markers; leave existing-feature lifecycle changes to the primary simulation unless an exact stable marker id is explicitly supplied in the evidence.\n\n` +
     `BELLIGERENCY / CAUSALITY DISCIPLINE: Treat the CURRENT CANONICAL WARS section below as authoritative. Do not describe a non-belligerent polity as having a wartime economy, wartime rationing, wartime production, war shortages, mobilization, or home-front controls merely because wars exist elsewhere. For a non-belligerent, such pressure is valid only when THIS campaign supplies an independent cause such as explicit preparedness/contingency policy or genuine foreign-war spillover (for example disrupted trade/imports/shipping, sanctions, refugees, or border disruption). If that cause is absent, find a different grounded development or return nothing.\n\n` +
+    `ERA / WAR CALIBRATION: ${analysis?.conflictRiskPosture?.label || "campaign-state conflict risk unknown"}. ${analysis?.conflictRiskPosture?.guidance || "Use current causal evidence rather than assuming either peace or war."} The calendar year is only one contextual prior. A modern date never makes war impossible; an early-20th-century date never makes war automatic. This breadth pass itself cannot declare war, but it may discover the concrete crisis pressure that could later lead there.\n\n` +
     `BAD SEARCH RESULTS: “the general staff reviews artillery procurement” with no adopted outcome; “an institute studies substitutes because of wartime shortages” for a polity that is not at war. BETTER: an order is actually adopted/funded, a capability enters production/service, or research reaches a concrete demonstrated result grounded in the campaign.\n\n` +
     `Do NOT repeat or paraphrase events already generated by the main pass. Do NOT service an existing persistent storyline merely because it exists; selected/deferred processes were handled by the primary simulation and anti-stasis machinery. If a supplied quiet slot independently creates a genuinely NEW unresolved process, you may create a NEW storyline linked to that event. Do not update an existing storyline id.\n\n` +
     `This narrow repair cannot declare/join/end a war, sign/ratify/suspend/end a formal agreement, or mutate bilateral relation ledgers. Those high-consequence ledger transitions belong to the primary whole-world pass. If a quiet-slot search points toward such a development, prefer the preceding concrete pressure/initiative only when it is independently timeline-worthy; otherwise return nothing rather than half-canonizing a treaty or war.\n\n` +
@@ -8058,6 +8514,7 @@ const runWorldBreadthRepair = async ({
     `INTERVAL: ${originDate} → ${targetDate}`,
     `LOCAL EVENT CEILING: ${maxEvents} (ceiling only; zero is valid)`,
     `ROLLING CONSEQUENCE SIGNAL: ${consequenceSignal?.level === "low" ? "LOW — prioritize mature threshold outcomes where causally earned" : "normal"} (${Math.max(0, Number(consequenceSignal?.consequentialCount) || 0)}/${Math.max(0, Number(consequenceSignal?.eventCount) || 0)} threshold events across ~${Math.max(1, Number(consequenceSignal?.lookbackDays) || 90)}d)`,
+    `CURRENT VISIBLE SCOPE BALANCE: ${visibleScopeCounts["player-sphere"]} PLAYER-SPHERE / ${visibleScopeCounts["wider-world"]} WIDER-WORLD / ${visibleScopeCounts.unknown} unclassified; underrepresented=${underrepresentedVisibleScope}`,
     "",
     "POST-CURATOR NEGLECTED EXPLORATION LANES — evaluate ALL of these:",
     slotLines.join("\n"),
@@ -8103,12 +8560,40 @@ const runWorldBreadthRepair = async ({
       },
     });
 
-    const response = await callAI(systemPrompt, [
-      { role: "user", parts: [{ text: userMessage }] },
-    ], {
-      deadline,
-      signal,
-      tool: getGameplayTool("jumpForward"),
+    const breadthAiStartedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    let response;
+    try {
+      response = await callAI(systemPrompt, [
+        { role: "user", parts: [{ text: userMessage }] },
+      ], {
+        deadline,
+        signal,
+        tool: getGameplayTool("jumpForward"),
+      });
+    } catch (error) {
+      const breadthAiFailedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      recordTurnPerfAiAttempt({
+        taskKey: "worldBreadthRepair",
+        attempt: 1,
+        ms: Math.max(0, breadthAiFailedAt - breadthAiStartedAt),
+        error: normalizeString(error?.message || error),
+      });
+      throw error;
+    }
+    const breadthAiEndedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    recordTurnPerfAiAttempt({
+      taskKey: "worldBreadthRepair",
+      attempt: 1,
+      ms: Math.max(0, breadthAiEndedAt - breadthAiStartedAt),
     });
 
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
@@ -8124,6 +8609,12 @@ const runWorldBreadthRepair = async ({
     const schemaValidation = validateGameplayPayload("jumpForward", parsed);
     if (!schemaValidation.valid) throw new Error(schemaValidation.error);
 
+    if (sortTimelineEventsChronologically(parsed)) {
+      console.info(
+        `[OH timeline order R3.6] sorted ${normalizeArray(parsed?.events).length} breadth candidate(s) chronologically without a retry.`,
+      );
+    }
+
     const repairEvents = normalizeArray(parsed.events);
     if (repairEvents.length > maxEvents) {
       throw new Error(`breadth repair returned ${repairEvents.length} event(s), above its local ceiling ${maxEvents}`);
@@ -8135,6 +8626,20 @@ const runWorldBreadthRepair = async ({
       normalizeArray(parsed.agreementUpdates).length
     ) {
       throw new Error("breadth repair attempted to mutate war/relation/agreement ledgers");
+    }
+
+    // R3.8: Crisis Discovery may correctly create a new process but forget the
+    // mechanical eventIndexes seam. Bind only a strong, unambiguous NEW-storyline
+    // match; ambiguity still fails closed below. No extra AI call is involved.
+    const newStorylineBinding = bindNewStorylineEvents(parsed, {
+      existingStorylines: bundle?.world?.storylines,
+      world: bundle?.world,
+    });
+    if (newStorylineBinding.bound) {
+      console.info(
+        `[OH World Breadth Crisis Binding R3.8] attached ${newStorylineBinding.bound} new storyline(s) to ` +
+        `their uniquely matching returned event(s).`,
+      );
     }
 
     const decodedStorylines = decodeWorldStorylineUpdates(parsed.storylineUpdates);
@@ -8277,6 +8782,7 @@ const maybeRepairWorldBreadthAfterCuration = async ({
     analysis,
     quietSlots,
     mainEvents: normalizeArray(mainEvents),
+    visibleEvents: normalizeArray(survivingEvents),
     originDate: normalizeString(context?.originDate),
     targetDate: normalizeString(context?.targetDate),
     horizonDays: days,
@@ -8671,20 +9177,37 @@ const formatDurationLabel = (days) => {
 
 export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
   beginSimulation();
+  beginTurnPerfTrace({
+    mode,
+    requestedDays: Math.max(0, Number(days) || 0),
+  });
+  let turnPerfOutcome = {
+    success: false,
+    error: "",
+    eventCount: 0,
+  };
   try {
     // Paint the spinner/Timeline state before any save normalization or migration.
     await yieldToUiFrame(signal);
-    let initialBundle = await readGameStateBundle({ force: false });
+    let initialBundle = await measureTurnPerfStage(
+      "bootstrap.read-game-state",
+      () => readGameStateBundle({ force: false }),
+    );
     await yieldToUiFrame(signal);
-    const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: false });
+    const baseColors = await measureTurnPerfStage(
+      "bootstrap.read-colors",
+      () => readJson(JSON_URLS.colors, { defaultValue: {}, force: false }),
+    );
     await yieldToUiFrame(signal);
 
+    const migrationStage = beginTurnPerfStage("bootstrap.diplomatic-migration");
     const diplomaticMigration = migrateLegacyDiplomaticState({
       world: initialBundle.world,
       events: initialBundle.events,
       chats: initialBundle.chats,
       game: initialBundle.game,
     });
+    endTurnPerfStage(migrationStage);
     await yieldToUiFrame(signal);
     if (diplomaticMigration.migrated) {
       initialBundle = { ...initialBundle, world: diplomaticMigration.world };
@@ -8718,6 +9241,13 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       dateStep,
       days: safeDays,
       mode,
+    });
+
+    updateTurnPerfMeta({
+      round: Number(initialBundle?.game?.round) || 0,
+      originDate,
+      targetDate,
+      passCount: windows.length,
     });
 
     let totalMaxEvents = eventBudgetForDays(safeDays);
@@ -8765,20 +9295,26 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       const passesLeft = windows.length - passIndex;
 
       await yieldToUiFrame(signal);
-      const variables = await buildTemplateVariables(workingBundle, {
-        taskKey,
-        consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
-        consolidatedHistorySelection: "coverage",
-        historicalAnchorActivationChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS,
-        historicalAnchorMaxChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS,
-        historicalAnchorMaxItems: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS,
-        targetDate: passTargetDate,
-      });
+      const variables = await measureTurnPerfStage(
+        `pass${passIndex + 1}.template-context`,
+        () => buildTemplateVariables(workingBundle, {
+          taskKey,
+          consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
+          consolidatedHistorySelection: "coverage",
+          historicalAnchorActivationChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS,
+          historicalAnchorMaxChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS,
+          historicalAnchorMaxItems: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS,
+          targetDate: passTargetDate,
+        }),
+      );
       await yieldToUiFrame(signal);
-      const worldInitiative = await buildWorldInitiativeContextBackground(
-        workingBundle,
-        { targetDate: passTargetDate },
-        signal,
+      const worldInitiative = await measureTurnPerfStage(
+        `pass${passIndex + 1}.world-initiative`,
+        () => buildWorldInitiativeContextBackground(
+          workingBundle,
+          { targetDate: passTargetDate },
+          signal,
+        ),
       );
       variables.worldInitiativeContext = worldInitiative.text;
 
@@ -8810,6 +9346,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
 
       const durationLabel = formatDurationLabel(window.days);
 
+      const worldAiStage = beginTurnPerfStage(`pass${passIndex + 1}.world-ai`);
       const { generation, payload } = await runJsonTask(taskKey, {
         fallback: () => fallbackJumpSimulation({
           bundle: workingBundle,
@@ -8824,18 +9361,18 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
             ? `Simulate an auto-jump and stop at the next genuinely notable or player-relevant event. Return JSON only. ` +
               `Generate ONLY causally warranted new developments before that stop point, at most ${passMaxEvents} events. ` +
               `There is no hard event-count quota. Do not pad the calendar, but do not confuse a lack of major geopolitical change with a lack of history: search for ordinary consequential developments and human/public texture as well as major events before deciding the world is quiet. ` +
-              `Persistent storylines remain autonomous even when deferred from focused attention: a material endogenous development from their own actors/conditions may reactivate them, while routine continuation stays hidden. Obey any 35-day reappraisal / 70-day anti-stasis directives in the Native World Director context. ` +
+              `Persistent storylines remain autonomous even when deferred from focused attention: a material endogenous development from their own actors/conditions may reactivate them, while routine continuation stays hidden. Obey the Native World Director risk/miscalculation posture and its tighter reappraisal/anti-stasis directives. Non-player leaders may make dangerous, irrational-in-hindsight choices when current incentives, ideology, misinformation, prestige, fear, or regime survival plausibly support them; deterrence lowers probability but never makes escalation impossible. Treat escalation as a real ladder of choices rather than a binary war/no-war switch: threats can become sanctions, reserve activation, dispersal, forward deployment, mobilization, ultimatums, dangerous incidents, limited clashes and eventually canonical war when causally crossed. ` +
               `Return compact storylineUpdates for every due persistent process, warUpdates for every canonical belligerency transition, relationUpdates for material bilateral political changes, and agreementUpdates for formal treaty/commitment lifecycle changes; use empty strings when a ledger does not change.`
             : `This is internal whole-world pass ${passIndex + 1} of ${windows.length} inside one user-requested fixed jump. ` +
               `Simulate ONLY ${passOriginDate} through ${passTargetDate} (${durationLabel}) and return JSON only. ` +
               `Generate ONLY causally warranted new developments, at most ${passMaxEvents} visible events. ` +
               `There is no hard event-count quota and no requirement to spread cards evenly. The event cap is a ceiling, not a target. ` +
               `Persistent storylines are autonomous causal processes. Scheduler selection prioritizes focused review; it does NOT grant or deny permission for actors inside deferred processes to act. A deferred storyline may reactivate through a genuinely material endogenous development from its own actors/conditions, but routine artillery, patrols, meetings, weather-only stasis, and paraphrases of an unchanged front remain non-events. ` +
-              `For selected active wars/crises, actually simulate each side's objectives, capabilities, constraints, opposition and result before concluding the equilibrium holds; smaller powers may hold, counterattack or exploit overextension, and static trench lines may still produce command, supply, morale, political, diplomatic or attritional consequences. Obey the 35-day reappraisal and 70-day anti-stasis directives in the Native World Director context without inventing a card merely to satisfy them. ` +
+              `For selected active wars/crises, actually simulate each side's objectives, capabilities, constraints, opposition and result before concluding the equilibrium holds; smaller powers may hold, counterattack or exploit overextension, and static fronts may still produce command, supply, morale, political, diplomatic or attritional consequences. Do not optimize every non-player actor into caution: miscalculation, overconfidence, ideology, domestic survival, prestige and bad intelligence may produce mobilization, ultimatums, force concentration, coups, alliance fractures or wars that a perfectly rational strategist would avoid. Treat escalation as a ladder, not a binary: pressure can climb through coercion, reserve activation, dispersal, deployments, mobilization, emergency measures, incidents and limited clashes before war. At each rung de-escalation remains possible. Obey the Native World Director's tighter reappraisal and anti-stasis directives. ` +
               `Advance scheduler-selected persistent storylines, but do NOT let one crisis monopolize the world: ` +
               `also evaluate independent diplomacy, domestic politics, economics, industry/technology, social and public life, military change, regional pressures, human/personality texture and genuinely new initiatives where current causes warrant them. ` +
               `For a month-scale whole-world pass, a final set of only 0-3 visible events is unusually sparse: before finalizing it, deliberately complete the exploration slate and re-check unrelated regions and actors across major, ordinary-consequential, and human/public lanes. Finding one or two excellent events is not a reason to stop searching. This is search calibration, NOT a minimum count; never invent an event merely to raise the number. ` +
-              `Do not create meta/calendar padding or empty process churn for breadth. Small but concrete events and human texture are legitimate history, not filler. Return compact storylineUpdates for every due process and every new unresolved process, with semantic state through THIS pass stopDate. ` +
+              `Do not create meta/calendar padding or empty process churn for breadth. "Readiness remains elevated", "monitoring continues", routine consultations, and similar status prose are not worthwhile visible events unless something concrete changes. Prefer decisions, failures, mobilizations, strikes, resignations, breakdowns, deployments, ultimatums, market shocks, escalations/de-escalations, and other consequences when current causes support them. Return compact storylineUpdates for every due process and every new unresolved process, with semantic state through THIS pass stopDate. ` +
               `Return warUpdates for every declaration/join/leave/ceasefire/resume/end in this pass; hard combat is legal only inside an active canonical war. Return relationUpdates only for material bilateral political shifts and agreementUpdates for every formal signed/ratified/concluded commitment or later lifecycle change; empty strings are correct when unchanged.`,
         validatePayload: async (candidate, { finalAttempt } = {}) => {
           const strict = !finalAttempt;
@@ -8846,6 +9383,12 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
           }
           if (strict && plannedActionCount > 0 && eventCount === 0) {
             return "$.events must contain at least one event while planned player actions are awaiting resolution.";
+          }
+
+          if (sortTimelineEventsChronologically(candidate)) {
+            console.info(
+              `[OH timeline order R3.6] sorted ${normalizeArray(candidate?.events).length} valid model event(s) chronologically without an AI retry.`,
+            );
           }
 
           const dateError = validateTimelineDates({
@@ -8987,20 +9530,64 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
             world: workingBundle.world,
           });
 
-          // A quiet update for a DEFERRED storyline is harmless extra bookkeeping,
-          // not a reason to reject an otherwise-valid 30k-token world simulation.
-          // Strip it before validation on the FIRST attempt. Material deferred re-entry
-          // still carries eventIndexes and remains subject to the strict trigger checks.
+          // R3.1: if the model generated a strong, uniquely matching development
+          // for one scheduler-selected storyline but forgot the bookkeeping, native
+          // JS attaches the existing storyline id. Semantic pressure/momentum/state
+          // still belongs to the model and is repaired separately if omitted.
+          const selectedBinding = bindSelectedStorylineEvents(candidate, {
+            selectedStorylines: worldInitiative.analysis?.attentionStorylines,
+            world: workingBundle.world,
+          });
+          if (selectedBinding.bound) {
+            console.info(
+              `[OH storyline selected binding] attached ${selectedBinding.bound} main-pass event(s) to ` +
+              `their uniquely matching selected storyline(s).`,
+            );
+
+            // R3.8 ordering fix: selectedBinding establishes objective event->storyline
+            // history. Immediately propagate that binding back into semantic
+            // update.eventIndexes BEFORE anti-stasis detection. Otherwise a June
+            // visible milestone can still be judged against January's visibility date
+            // and trigger a bogus repair call.
+            normalizeWorldStorylineEventLinks(candidate, {
+              world: workingBundle.world,
+            });
+          }
+
+          // R3.4: deferred-storyline bookkeeping is a LOCAL seam, never a reason to
+          // throw away unrelated valid world history. Strip both quiet echoes and
+          // linked-but-nonmaterial deferred re-entry BEFORE consequence validation.
+          // Linked events survive; only the invalid deferred storyline ownership is
+          // removed, so the event must still stand on its own canonical consequences.
           const deferredSalvage = stripQuietDeferredStorylineUpdates(
             candidate,
             worldInitiative.analysis?.deferredStorylines,
           );
           if (deferredSalvage.strippedIds.length) {
+            const details = [
+              deferredSalvage.strippedQuietIds?.length
+                ? `${deferredSalvage.strippedQuietIds.length} quiet`
+                : "",
+              deferredSalvage.strippedNonMaterialIds?.length
+                ? `${deferredSalvage.strippedNonMaterialIds.length} non-material linked`
+                : "",
+            ].filter(Boolean).join(" + ");
             console.warn(
-              `[OH World Storyline salvage] stripped ${deferredSalvage.strippedIds.length} quiet deferred bookkeeping update(s): ` +
-              deferredSalvage.strippedIds.join(", "),
+              `[OH World Storyline salvage R3.4] stripped ${deferredSalvage.strippedIds.length} deferred update(s)` +
+              `${details ? ` (${details})` : ""}: ${deferredSalvage.strippedIds.join(", ")}. ` +
+              "Unrelated events/ledgers remain eligible for the world pass.",
             );
           }
+
+          // Serious visible history must bite into an existing canonical owner. Run
+          // this AFTER deferred salvage so a fake/invalid storyline link cannot be
+          // used to satisfy the major-event consequence contract. First attempt gets
+          // corrective feedback; the final attempt remains fail-soft.
+          const consequenceError = validateWorldEventConsequencePayload(candidate, {
+            selectedStorylines: worldInitiative.analysis?.attentionStorylines,
+            strict,
+          });
+          if (consequenceError) return `[world consequence] ${consequenceError}`;
 
           const storylineError = validateWorldStorylinePayload(candidate, {
             existingStorylines: workingBundle.world?.storylines,
@@ -9033,22 +9620,27 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
         },
         variables,
       });
+      endTurnPerfStage(worldAiStage);
 
       // Fix 07.2 / 07.2B: preserve the accepted whole-world response. A selected
       // storyline that is objectively stale OR was omitted from storylineUpdates gets
       // one small targeted repair call. A failed local repair never triggers the
       // deterministic whole-turn fallback; the process simply stays overdue.
-      await repairAntiStasisStorylines({
-        payload,
-        bundle: workingBundle,
-        analysis: worldInitiative.analysis,
-        originDate: passOriginDate,
-        targetDate: passTargetDate,
-        passMaxEvents,
-        signal,
-      });
+      await measureTurnPerfStage(
+        `pass${passIndex + 1}.motion-repair`,
+        () => repairAntiStasisStorylines({
+          payload,
+          bundle: workingBundle,
+          analysis: worldInitiative.analysis,
+          originDate: passOriginDate,
+          targetDate: passTargetDate,
+          passMaxEvents,
+          signal,
+        }),
+      );
 
       await yieldToUiFrame(signal);
+      const postProcessStage = beginTurnPerfStage(`pass${passIndex + 1}.decode-screen`);
       const nativeExplorationAudit = deriveWorldExplorationAudit(
         payload,
         worldInitiative.analysis,
@@ -9096,6 +9688,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
       // or obvious no-delta candidates must not feed later internal passes.
       const screened = screenGeneratedWorldEvents({
         events: passEvents,
+        priorEvents: workingBundle.events,
         world: workingBundle.world,
         game: workingBundle.game,
         analysis: worldInitiative.analysis,
@@ -9138,15 +9731,19 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
         summary: stripWorldSweepAudit(payload?.summary),
         generation,
       };
+      endTurnPerfStage(postProcessStage);
 
       await yieldToUiFrame(signal);
-      const advanced = await advanceWorkingBundleForWorldPass({
-        bundle: workingBundle,
-        colors: workingColors,
-        result: passResult,
-        passNumber: passIndex + 1,
-        signal,
-      });
+      const advanced = await measureTurnPerfStage(
+        `pass${passIndex + 1}.hidden-commit`,
+        () => advanceWorkingBundleForWorldPass({
+          bundle: workingBundle,
+          colors: workingColors,
+          result: passResult,
+          passNumber: passIndex + 1,
+          signal,
+        }),
+      );
       await yieldToUiFrame(signal);
       workingBundle = advanced.bundle;
       workingColors = advanced.colors;
@@ -9228,17 +9825,35 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     // unit-director pass, one territory-director pass, one rollback snapshot and
     // one visible round increment — independent of the number of hidden windows.
     await yieldToUiFrame(signal);
-    return applySimulationResult({
-      baseActions: initialBundle.actions,
-      baseChats: initialBundle.chats,
-      baseColors,
-      baseEvents: initialBundle.events,
-      baseGame: initialBundle.game,
-      baseWorld: initialBundle.world,
-      result: finalResult,
-      signal,
-    });
+    const applied = await measureTurnPerfStage(
+      "final.canonical-apply",
+      () => applySimulationResult({
+        baseActions: initialBundle.actions,
+        baseChats: initialBundle.chats,
+        baseColors,
+        baseEvents: initialBundle.events,
+        baseGame: initialBundle.game,
+        baseWorld: initialBundle.world,
+        result: finalResult,
+        signal,
+      }),
+    );
+    turnPerfOutcome = {
+      success: true,
+      error: "",
+      // Includes post-Curator breadth events created inside applySimulationResult.
+      eventCount: Math.max(0, normalizeArray(applied?.events).length - normalizeArray(initialBundle?.events).length),
+    };
+    return applied;
+  } catch (error) {
+    turnPerfOutcome = {
+      ...turnPerfOutcome,
+      success: false,
+      error: normalizeString(error?.message || error).slice(0, 500),
+    };
+    throw error;
   } finally {
+    finishTurnPerfTrace(turnPerfOutcome);
     endSimulation();
   }
 };
@@ -11315,14 +11930,20 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
 const IDLE_DIPLOMACY_CHANCE = 1 / 8;
 const IDLE_DIPLOMACY_MAX_PER_GAME_DATE = 2;
 
-const idleDiplomacyBlockedSetsForDate = (chats, world, gameDate) => {
+const idleDiplomacyBlockedSetsForDate = (
+  chats,
+  world,
+  gameDate,
+  identityIndex = null,
+) => {
+  const index = identityIndex || buildPolityIdentityIndex(world);
   const blocked = new Map();
   const wantedDate = normalizeString(gameDate);
   if (!wantedDate) return blocked;
 
   for (const chat of normalizeChats(chats)) {
     if (normalizeString(chat?.status).toLowerCase() === "closed") continue;
-    const participantKey = chatParticipantSetKey(chat, world);
+    const participantKey = chatParticipantSetKey(chat, world, index);
     if (!participantKey) continue;
 
     const activeToday = normalizeArray(chat?.messages).some((message) =>
@@ -11333,7 +11954,7 @@ const idleDiplomacyBlockedSetsForDate = (chats, world, gameDate) => {
 
     const names = normalizeArray(chat?.countries)
       .map((country) => {
-        const identity = resolveChatParticipantIdentity(country, world);
+        const identity = resolveChatParticipantIdentity(country, world, index);
         return normalizeString(identity?.name || country?.name || country?.code);
       })
       .filter(Boolean)

@@ -1,6 +1,6 @@
 /*!
  * open historia enhanced — native unit director
- * v0.1.3
+ * v0.1.4
  *
  * the main simulator writes history. this thing makes sure armies do not become
  * decorative map stickers the moment an npc owns them.
@@ -20,6 +20,14 @@ const cloneValue = (value) => {
 
 const MILITARY_EVENT_PATTERN =
   /\b(battle|clash|combat|skirmish|firefight|shootout|gunfire|exchange(?:s|d)? of fire|opens? fire|comes? under fire|armed border incident|border incident|frontier incident|military incident|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw|withdrawal|mobiliz(?:e|es|ed|ation)|deploy|deployment|redeploy|redeployment|siege|invad(?:e|es|ed|ing|er|ers)|invasion|garrison(?:ed|ing)?|bombard|blockade|landing|breakthrough|encircle|engag(?:e|es|ed|ement)|make(?:s)? contact|made contact|surrender|capitulat|reinforc|maneuver|manoeuvre|march(?:es|ed|ing)?|cross(?:es|ed|ing) the|storm(?:s|ed|ing))\b/i;
+
+// R3.7: the expensive Unit Director is only useful when prose describes an
+// operational change that could actually move/spawn/fight/reinforce/remove a
+// persistent counter. Military industry, labs, doctrine, surveillance networks,
+// readiness coordination and procurement can remain military events without
+// paying an AI unit-state pass.
+const OPERATIONAL_UNIT_DELTA_PATTERN =
+  /\b(?:battle|clash|combat|skirmish|firefight|opens? fire|comes? under fire|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw(?:s|al|n|ing)?|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment|ing)?\s+(?:troops?|forces?|brigade|division|corps|army|battalion|regiment|units?)|redeploy(?:s|ed|ment|ing)?|siege|invad(?:e|es|ed|ing)|invasion|garrison(?:s|ed|ing)?|bombard(?:s|ed|ment|ing)?|blockade|landing|breakthrough|encircl(?:e|es|ed|ement)|engag(?:e|es|ed|ement)|surrender|capitulat|reinforcements? (?:arrive|deployed|sent)|reserve(?:s)? (?:activated|mobilized|called up)|march(?:es|ed|ing)?\s+(?:toward|to|into|across)|cross(?:es|ed|ing)\s+(?:the\s+)?(?:border|frontier|river))\b/i;
 
 const COMBAT_EVENT_PATTERN =
   /\b(battle|clash|combat|offensive|counteroffensive|attack|assault|advance|breakthrough|siege|invasion|invade|engage|fighting|war|recapture|capture|seize|retake)\b/i;
@@ -70,6 +78,11 @@ const opKey = (op) => {
 
 const hasMilitaryContent = (event) =>
   normalizeArray(event?.impacts?.unitOps).length > 0 || MILITARY_EVENT_PATTERN.test(eventText(event));
+
+export const eventNeedsNativeUnitDirector = (event) => {
+  if (!event || typeof event !== "object") return false;
+  return OPERATIONAL_UNIT_DELTA_PATTERN.test(eventText(event));
+};
 
 const makeWorkingUnitMap = (units) =>
   new Map(normalizeUnits(units).map((unit) => [unit.id, { ...unit }]));
@@ -265,7 +278,7 @@ const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
 const publishDirectorDiagnostics = ({ candidates = [], units = [], analysis = null, eventOrders = [], diagnostics = [], skippedReason = "" } = {}) => {
   if (typeof window !== "undefined") {
     window.__OH_NATIVE_UNIT_DIRECTOR__ = {
-      version: "0.1.3",
+      version: "0.1.4",
       last: () => ({
         candidateCount: candidates.length,
         candidateTitles: candidates.map(({ event, index }) => ({ index, title: normalizeString(event?.title) })),
@@ -288,7 +301,7 @@ export const directGeneratedUnitOps = async ({
   const sourceEvents = normalizeArray(events);
   const candidates = sourceEvents
     .map((event, index) => ({ event, index }))
-    .filter(({ event }) => hasMilitaryContent(event));
+    .filter(({ event }) => hasMilitaryContent(event) && eventNeedsNativeUnitDirector(event));
 
   const units = normalizeUnits(world?.units);
 
@@ -297,7 +310,7 @@ export const directGeneratedUnitOps = async ({
       ? "no operational military event candidates matched"
       : "no analyzer supplied";
     publishDirectorDiagnostics({ candidates, units, skippedReason });
-    console.groupCollapsed(`[OH Native Unit Director v0.1.3] ${candidates.length} military event(s), ${units.length} existing unit(s)`);
+    console.groupCollapsed(`[OH Native Unit Director v0.1.4] ${candidates.length} military event(s), ${units.length} existing unit(s)`);
     console.info(skippedReason);
     console.groupEnd();
     return sourceEvents;
@@ -372,7 +385,7 @@ export const directGeneratedUnitOps = async ({
   });
 
   console.groupCollapsed(
-    `[OH Native Unit Director v0.1.3] ${candidates.length} military event(s), ${units.length} existing unit(s)`,
+    `[OH Native Unit Director v0.1.4] ${candidates.length} military event(s), ${units.length} existing unit(s)`,
   );
   if (diagnostics.length > 0) console.table(diagnostics);
   else console.info("no unit operations were added this turn.");

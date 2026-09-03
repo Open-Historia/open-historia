@@ -811,7 +811,7 @@ const AdvancedStatsModal = ({
 
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(2,6,15,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(20,29,46,0.995), rgba(12,19,32,0.995))", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.58)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(15,26,41,0.995), rgba(7,13,22,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
                         {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
@@ -990,7 +990,7 @@ const HistoricalTrackingModal = ({
 
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(20,29,46,0.995), rgba(12,19,32,0.995))", border: "1px solid rgba(148,163,184,0.2)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.58)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(15,26,41,0.995), rgba(7,13,22,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "1rem 1.05rem 0.95rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
                         <div style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "1.2rem", height: "2.5rem", justifyContent: "center", width: "2.5rem" }}>⚙</div>
@@ -1723,8 +1723,8 @@ const StatsPaneBody = ({ active }) => {
             ) : initials}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
-            <span style={{ fontSize: "1.05rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.5rem" }}>
+            <span style={{ flex: "1 1 9rem", fontSize: "1.02rem", fontWeight: 800, lineHeight: 1.15, minWidth: 0, overflowWrap: "anywhere" }}>
             {polity?.name || displayName || targetCountry}
             </span>
             {isPlayer && (

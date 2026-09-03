@@ -1,5 +1,5 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { memo, startTransition, useEffect, useMemo, useState } from "react";
+import React, { memo, startTransition, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
@@ -11,7 +11,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { findRollbackSnapshotForTurn, loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -137,11 +137,11 @@ const ChevronDownIcon = () => (
 );
 
 const panelSurface = {
-    backgroundColor: "rgba(17, 24, 39, 0.95)",
-    backdropFilter: "blur(8px)",
-    border: "1px solid rgba(255,255,255,0.1)",
-    borderRadius: "16px",
-    boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
+    backgroundColor: "var(--oh-hud-bg-strong)",
+    backdropFilter: "var(--oh-hud-blur)",
+    border: "1px solid var(--oh-hud-border)",
+    borderRadius: "18px",
+    boxShadow: "var(--oh-hud-shadow)",
     color: "white",
     fontFamily: "sans-serif",
     overflow: "hidden",
@@ -233,6 +233,11 @@ const getEventMapChangeCount = (event) =>
     (event?.impacts?.regionTransfers?.length || 0) +
     (event?.impacts?.regionControlOps?.length || 0) +
     (event?.impacts?.polityChanges?.length || 0);
+
+const eventHasMapPresentationImpact = (event) =>
+    getEventMapChangeCount(event) > 0 ||
+    (event?.impacts?.unitOps?.length || 0) > 0 ||
+    (event?.impacts?.markerOps?.length || 0) > 0;
 
 const collectEventTags = (event, { polityLookup, regionLookup }) => {
     const labels = new Set();
@@ -488,13 +493,14 @@ const focusMapOnBounds = (mapRef, bounds) => {
         north += 0.45;
     }
 
+    map.stop?.();
     map.fitBounds(
         [
             [west, south],
             [east, north],
         ],
         {
-            duration: 1800,
+            duration: 650,
             essential: true,
             maxZoom: 6.8,
             padding: 80,
@@ -646,11 +652,12 @@ const EventCard = ({ event, footer = null, lookups }) => {
 
     return (
         <div
+        className="oh-timeline-card"
         style={{
             background: "linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03))",
             border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: "16px",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+            borderRadius: "18px",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 28px rgba(0,0,0,0.14)",
             overflow: "hidden",
         }}
         >
@@ -662,7 +669,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
             display: "flex",
             gap: "0.45rem",
             justifyContent: "space-between",
-            padding: "0.85rem 1rem 0.7rem",
+            padding: "0.95rem 1.1rem 0.78rem",
         }}
         >
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
@@ -680,7 +687,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
         </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", padding: "0.95rem 1rem 1rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.78rem", padding: "1.05rem 1.15rem 1.18rem" }}>
         {tags.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
             {tags.map((tag) => (
@@ -689,12 +696,12 @@ const EventCard = ({ event, footer = null, lookups }) => {
             </div>
         )}
 
-        <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        <div style={{ color: "rgba(255,255,255,0.97)", fontSize: "1rem", fontWeight: 850, letterSpacing: "0.018em", lineHeight: 1.28 }}>
         {event.title}
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(221,228,240,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            <div className="timeline-markdown" style={{ color: "rgba(225,233,244,0.84)", fontSize: "0.9rem", lineHeight: "1.62" }}>
             <ReactMarkdown>{event.description}</ReactMarkdown>
             </div>
         )}
@@ -770,51 +777,64 @@ const PanelChrome = ({
     title,
     topOffset,
     onClose,
+    variant = "standard",
 }) => {
     const hasHeaderText = Boolean(eyebrow || title || subtitle);
+    const isHistory = variant === "history";
+    const isAdvance = variant === "advance";
+    const width = isHistory
+        ? "min(46rem, calc(100vw - 1.5rem))"
+        : isAdvance
+        ? "min(29rem, calc(100vw - 1.5rem))"
+        : PANEL_WIDTH;
+    const height = isHistory
+        ? "min(70vh, calc(100vh - 6.2rem))"
+        : isAdvance
+        ? "auto"
+        : "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))";
 
     return (
         <div
+        className={`oh-hud-panel${isHistory ? " oh-timeline-panel" : ""}${isAdvance ? " oh-advance-panel" : ""}`}
         style={{
             ...panelSurface,
-            bottom: isOpen ? "4.9rem" : "-34rem",
+            bottom: isOpen ? "4.55rem" : isHistory ? "-60rem" : "-40rem",
             display: "flex",
             flexDirection: "column",
-            // Match the Actions/Chat panels: on short laptop screens the sliver
-            // calc(100vh - 33rem) collapsed to the 10rem floor, so grow to at
-            // least 30rem while still capping at calc(100vh - 9rem) to fit. (The
-            // min() already caps height, so no separate maxHeight is needed.)
-            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
-            left: "0.5rem",
+            height,
+            left: "0.75rem",
+            maxHeight: isAdvance ? "calc(100vh - 6rem)" : undefined,
             maxWidth: "calc(100vw - 1rem)",
-            minHeight: "10rem",
+            minHeight: isHistory ? "24rem" : isAdvance ? "0" : "10rem",
             opacity: isOpen ? 1 : 0,
             pointerEvents: isOpen ? "auto" : "none",
-            transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
+            transform: undefined,
+            transition: "bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease",
+            width,
         }}
         >
         <div
         style={{
             borderBottom: hasHeaderText ? "1px solid rgba(255,255,255,0.07)" : "none",
             flexShrink: 0,
-            padding: hasHeaderText ? "1rem 1.25rem 0.75rem" : "0.7rem 0.75rem 0",
+            padding: hasHeaderText ? "1rem 1.2rem 0.82rem" : "0.7rem 0.75rem 0",
         }}
         >
         <div style={{ alignItems: "center", display: "flex", justifyContent: hasHeaderText ? "space-between" : "flex-end" }}>
         {hasHeaderText && (
             <div style={{ minWidth: 0 }}>
             {eyebrow && (
-                <div style={{ color: "rgba(147,197,253,0.75)", fontSize: "0.64rem", fontWeight: 700, letterSpacing: "0.14em", marginBottom: "0.12rem", textTransform: "uppercase" }}>
+                <div style={{ color: "rgba(147,197,253,0.72)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.13em", marginBottom: "0.14rem", textTransform: "uppercase" }}>
                 {eyebrow}
                 </div>
             )}
             {title && (
-                <div style={{ color: "rgba(255,255,255,0.96)", fontSize: "1rem", fontWeight: 700 }}>
+                <div style={{ color: "rgba(255,255,255,0.97)", fontSize: isHistory ? "1.08rem" : "1rem", fontWeight: 850 }}>
                 {title}
                 </div>
             )}
             {subtitle && (
-                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem", lineHeight: "1.45", marginTop: "0.12rem" }}>
+                <div style={{ color: "rgba(220,232,247,0.43)", fontSize: "0.73rem", lineHeight: "1.45", marginTop: "0.16rem" }}>
                 {subtitle}
                 </div>
             )}
@@ -824,24 +844,18 @@ const PanelChrome = ({
         type="button"
         onClick={onClose}
         style={{
-            background: "none",
-            border: "none",
-            borderRadius: "6px",
+            alignItems: "center",
+            background: "rgba(255,255,255,0.025)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: "8px",
             color: "rgba(255,255,255,0.5)",
             cursor: "pointer",
             display: "flex",
             fontSize: "1.1rem",
+            height: "2rem",
+            justifyContent: "center",
             lineHeight: 1,
-            padding: "0.15rem 0.3rem",
-            transition: "all 0.15s ease",
-        }}
-        onMouseEnter={(event) => {
-            event.currentTarget.style.background = "rgba(255,255,255,0.08)";
-            event.currentTarget.style.color = "white";
-        }}
-        onMouseLeave={(event) => {
-            event.currentTarget.style.background = "none";
-            event.currentTarget.style.color = "rgba(255,255,255,0.5)";
+            width: "2rem",
         }}
         aria-label="Close panel"
         >
@@ -850,7 +864,7 @@ const PanelChrome = ({
         </div>
         </div>
 
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.85rem", minHeight: 0, overflowY: "auto", padding: "0.95rem 1.25rem 1.25rem", scrollbarWidth: "none" }}>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.85rem", minHeight: 0, overflowY: "auto", padding: isAdvance ? "0.9rem 1rem 1rem" : "1rem 1.2rem 1.2rem", scrollbarWidth: "thin" }}>
         {children}
         </div>
         </div>
@@ -909,246 +923,161 @@ const TimelineSkipPanel = ({
     undoCount,
 }) => {
     const [customValue, setCustomValue] = useState("");
-    const [customUnit, setCustomUnit] = useState("days");
+    const [customUnit, setCustomUnit] = useState("months");
     const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
     const runCustomJump = () => {
         const amount = Number(customValue);
         if (!Number.isFinite(amount) || amount <= 0 || isLoading) return;
         onJump(amount * (unitToDays[customUnit] ?? 1));
     };
-    const jumpOptions = [
-        { label: "6 hours", sublabel: dayjs(currentDate).format("M/D/YYYY"), days: 0.25 },
-        { label: "1 day", sublabel: dayjs(currentDate).add(1, "day").format("M/D/YYYY"), days: 1 },
-        { label: "3 days", sublabel: dayjs(currentDate).add(3, "day").format("M/D/YYYY"), days: 3 },
-        { label: "1 week", sublabel: dayjs(currentDate).add(7, "day").format("M/D/YYYY"), days: 7 },
-        { label: "1 month", sublabel: dayjs(currentDate).add(1, "month").format("M/D/YYYY"), days: 30 },
-        { label: "3 months", sublabel: dayjs(currentDate).add(3, "month").format("M/D/YYYY"), days: 90 },
-        { label: "6 months", sublabel: dayjs(currentDate).add(6, "month").format("M/D/YYYY"), days: 180 },
-        { label: "1 year", sublabel: dayjs(currentDate).add(1, "year").format("M/D/YYYY"), days: 365 },
+    const primaryOptions = [
+        { label: "1 Month", days: 30 },
+        { label: "3 Months", days: 90 },
+        { label: "6 Months", days: 180 },
+        { label: "1 Year", days: 365 },
     ];
+    const shortOptions = [
+        { label: "6 hours", days: 0.25 },
+        { label: "1 day", days: 1 },
+        { label: "3 days", days: 3 },
+        { label: "1 week", days: 7 },
+    ];
+    const optionButton = (opt, primary = false) => (
+        <button
+        key={opt.label}
+        type="button"
+        disabled={isLoading}
+        onClick={() => { if (!isLoading) onJump(opt.days); }}
+        style={{
+            background: primary ? "rgba(59,130,246,0.12)" : "rgba(255,255,255,0.035)",
+            border: primary ? "1px solid rgba(96,165,250,0.2)" : "1px solid rgba(255,255,255,0.075)",
+            borderRadius: "10px",
+            color: primary ? "#e4efff" : "rgba(255,255,255,0.72)",
+            cursor: isLoading ? "default" : "pointer",
+            fontSize: primary ? "0.78rem" : "0.7rem",
+            fontWeight: primary ? 800 : 700,
+            minHeight: primary ? "2.6rem" : "2.2rem",
+            opacity: isLoading ? 0.55 : 1,
+            padding: "0.45rem 0.55rem",
+        }}
+        >
+        {opt.label}
+        </button>
+    );
 
     return (
         <PanelChrome
-        eyebrow=""
+        eyebrow="Timeline"
         isOpen={isOpen}
         onClose={onClose}
-        title="Timeline"
+        title="Advance Time"
+        subtitle={`Current date · ${dayjs(currentDate).format("MMMM D, YYYY")}`}
         topOffset={topOffset}
-        >
-        <div
-        style={{
-            alignItems: "center",
-            display: "flex",
-            flexDirection: "column",
-            gap: 0,
-        }}
+        variant="advance"
         >
         {canUndo && (
-            <>
             <button
             type="button"
             disabled={isLoading}
             onClick={() => { if (!isLoading) onUndo(); }}
             style={{
-                background: "rgba(180,83,9,0.18)",
-                border: "1px solid rgba(245,158,11,0.5)",
-                borderRadius: "10px",
-                color: "#fcd9a8",
-                cursor: isLoading ? "default" : "pointer",
-                opacity: isLoading ? 0.7 : 1,
-                padding: "0.38rem 0",
-                textAlign: "center",
-                width: "12.5rem",
-            }}
-            >
-            <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>↩ Undo last turn</div>
-            <div style={{ color: "rgba(252,211,77,0.72)", fontSize: "0.7rem" }}>
-            {undoCount} turn{undoCount === 1 ? "" : "s"} can be undone
-            </div>
-            </button>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
-            </>
-        )}
-        <div
-        style={{
-            background: "rgba(109,40,217,0.2)",
-            border: "2px solid rgba(139,92,246,0.8)",
-            borderRadius: "999px",
-            color: "rgba(196,165,255,0.95)",
-            fontSize: "0.7rem",
-            fontWeight: 700,
-            letterSpacing: "0.04em",
-            padding: "0.35rem 0",
-            textAlign: "center",
-            width: "5.5rem",
-        }}
-        >
-        {dayjs(currentDate).format("M/D/YYYY")}
-        </div>
-
-        {jumpOptions.map((opt) => (
-            <React.Fragment key={opt.label}>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
-            <JumpNode isLoading={isLoading} opt={opt} onJump={onJump} />
-            </React.Fragment>
-        ))}
-
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
-        <button
-        type="button"
-        onClick={() => {
-            if (isLoading) {
-                return;
-            }
-
-            onAutoJump();
-        }}
-        style={{
-            background: "rgba(37,99,235,0.2)",
-            border: "1px solid rgba(96,165,250,0.45)",
-            borderRadius: "12px",
-            color: "white",
-            cursor: "pointer",
-            opacity: isLoading ? 0.72 : 1,
-            padding: "0.55rem 0.7rem",
-            textAlign: "center",
-            width: "12.5rem",
-        }}
-        >
-        <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>Auto-jump</div>
-        </button>
-
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
-        <div
-        style={{
-            alignItems: "center",
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: "12px",
-            display: "flex",
-            gap: "0.35rem",
-            padding: "0.45rem 0.5rem",
-            width: "12.5rem",
-        }}
-        >
-        <input
-        type="number"
-        min="1"
-        step="any"
-        value={customValue}
-        onChange={(event) => setCustomValue(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter") runCustomJump(); }}
-        placeholder="Custom"
-        disabled={isLoading}
-        style={{
-            background: "rgba(0,0,0,0.25)",
-            border: "1px solid rgba(255,255,255,0.16)",
-            borderRadius: "8px",
-            color: "#fff",
-            fontSize: "0.8rem",
-            minWidth: 0,
-            outline: "none",
-            padding: "0.3rem 0.4rem",
-            width: "3.4rem",
-        }}
-        />
-        <select
-        data-no-translate
-        value={customUnit}
-        onChange={(event) => setCustomUnit(event.target.value)}
-        disabled={isLoading}
-        style={{
-            background: "rgba(0,0,0,0.25)",
-            border: "1px solid rgba(255,255,255,0.16)",
-            borderRadius: "8px",
-            color: "#fff",
-            cursor: "pointer",
-            flex: 1,
-            fontSize: "0.8rem",
-            minWidth: 0,
-            outline: "none",
-            padding: "0.3rem 0.2rem",
-        }}
-        >
-        <option value="hours" style={{ color: "black" }}>hours</option>
-        <option value="days" style={{ color: "black" }}>days</option>
-        <option value="weeks" style={{ color: "black" }}>weeks</option>
-        <option value="months" style={{ color: "black" }}>months</option>
-        <option value="years" style={{ color: "black" }}>years</option>
-        </select>
-        <button
-        type="button"
-        onClick={runCustomJump}
-        disabled={isLoading || !customValue}
-        style={{
-            background: "rgba(109,40,217,0.4)",
-            border: "1px solid rgba(139,92,246,0.6)",
-            borderRadius: "8px",
-            color: "#fff",
-            cursor: isLoading || !customValue ? "default" : "pointer",
-            fontSize: "0.8rem",
-            fontWeight: 700,
-            opacity: isLoading || !customValue ? 0.5 : 1,
-            padding: "0.3rem 0.6rem",
-        }}
-        >
-        Go
-        </button>
-        </div>
-        </div>
-
-        {isLoading && (
-            <div
-            style={{
                 alignItems: "center",
-                background: "rgba(255,255,255,0.04)",
-                       border: "1px solid rgba(255,255,255,0.08)",
-                       borderRadius: "12px",
-                       color: "rgba(255,255,255,0.75)",
-                       display: "flex",
-                       fontSize: "0.76rem",
-                       gap: "0.55rem",
-                       justifyContent: "center",
-                       padding: "0.68rem 0.8rem",
+                background: "rgba(245,158,11,0.08)",
+                border: "1px solid rgba(245,190,73,0.18)",
+                borderRadius: "10px",
+                color: "#f5d59b",
+                cursor: isLoading ? "default" : "pointer",
+                display: "flex",
+                fontSize: "0.72rem",
+                fontWeight: 750,
+                justifyContent: "space-between",
+                opacity: isLoading ? 0.6 : 1,
+                padding: "0.58rem 0.72rem",
+                width: "100%",
             }}
             >
-            <SpinnerRing size={15} />
-            <span>Simulating…</span>
-            {onCancel && (
+            <span>↩ Undo last turn</span>
+            <span style={{ color: "rgba(245,213,155,0.52)", fontSize: "0.64rem" }}>{undoCount} available</span>
+            </button>
+        )}
+
+        <section>
+            <div style={{ color: "rgba(220,232,247,0.38)", fontSize: "0.6rem", fontWeight: 850, letterSpacing: "0.11em", marginBottom: "0.48rem", textTransform: "uppercase" }}>Step forward</div>
+            <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                {primaryOptions.map((opt) => optionButton(opt, true))}
+            </div>
+        </section>
+
+        <section>
+            <div style={{ color: "rgba(220,232,247,0.38)", fontSize: "0.6rem", fontWeight: 850, letterSpacing: "0.11em", marginBottom: "0.48rem", textTransform: "uppercase" }}>Short step</div>
+            <div style={{ display: "grid", gap: "0.38rem", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                {shortOptions.map((opt) => optionButton(opt, false))}
+            </div>
+        </section>
+
+        <section>
+            <div style={{ color: "rgba(220,232,247,0.38)", fontSize: "0.6rem", fontWeight: 850, letterSpacing: "0.11em", marginBottom: "0.48rem", textTransform: "uppercase" }}>Custom span</div>
+            <div style={{ alignItems: "center", display: "grid", gap: "0.42rem", gridTemplateColumns: "minmax(0, 1fr) minmax(6rem, 0.9fr) auto" }}>
+                <input
+                type="number"
+                min="1"
+                step="any"
+                value={customValue}
+                onChange={(event) => setCustomValue(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") runCustomJump(); }}
+                placeholder="Amount"
+                disabled={isLoading}
+                style={{ background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", color: "#fff", fontSize: "0.76rem", minWidth: 0, outline: "none", padding: "0.6rem 0.65rem" }}
+                />
+                <select
+                data-no-translate
+                value={customUnit}
+                onChange={(event) => setCustomUnit(event.target.value)}
+                disabled={isLoading}
+                style={{ background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", color: "#fff", cursor: "pointer", fontSize: "0.76rem", minWidth: 0, outline: "none", padding: "0.58rem 0.55rem" }}
+                >
+                <option value="hours" style={{ color: "black" }}>hours</option>
+                <option value="days" style={{ color: "black" }}>days</option>
+                <option value="weeks" style={{ color: "black" }}>weeks</option>
+                <option value="months" style={{ color: "black" }}>months</option>
+                <option value="years" style={{ color: "black" }}>years</option>
+                </select>
                 <button
                 type="button"
-                onClick={onCancel}
-                style={{
-                    background: "rgba(220,38,38,0.18)",
-                    border: "1px solid rgba(248,113,113,0.5)",
-                    borderRadius: "8px",
-                    color: "#fecaca",
-                    cursor: "pointer",
-                    fontSize: "0.74rem",
-                    fontWeight: 600,
-                    marginLeft: "0.2rem",
-                    padding: "0.28rem 0.7rem",
-                }}
-                >
-                Cancel
-                </button>
-            )}
+                onClick={runCustomJump}
+                disabled={isLoading || !customValue}
+                style={{ background: "rgba(59,130,246,0.16)", border: "1px solid rgba(96,165,250,0.26)", borderRadius: "9px", color: "#dbeafe", cursor: isLoading || !customValue ? "default" : "pointer", fontSize: "0.75rem", fontWeight: 850, opacity: isLoading || !customValue ? 0.45 : 1, padding: "0.6rem 0.85rem" }}
+                >Go</button>
+            </div>
+        </section>
+
+        <section>
+            <div style={{ color: "rgba(220,232,247,0.38)", fontSize: "0.6rem", fontWeight: 850, letterSpacing: "0.11em", marginBottom: "0.48rem", textTransform: "uppercase" }}>Auto-simulate</div>
+            <button
+            type="button"
+            disabled={isLoading}
+            onClick={() => { if (!isLoading) onAutoJump(); }}
+            style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(37,99,235,0.22), rgba(30,64,175,0.14))", border: "1px solid rgba(96,165,250,0.3)", borderRadius: "11px", color: "#eef6ff", cursor: isLoading ? "default" : "pointer", display: "flex", justifyContent: "space-between", minHeight: "3rem", opacity: isLoading ? 0.6 : 1, padding: "0.65rem 0.8rem", textAlign: "left", width: "100%" }}
+            >
+                <div>
+                    <div style={{ fontSize: "0.8rem", fontWeight: 850 }}>Until next important event</div>
+                    <div style={{ color: "rgba(219,234,254,0.46)", fontSize: "0.65rem", marginTop: "0.16rem" }}>AI chooses the stopping crossroads, up to one year.</div>
+                </div>
+                <span style={{ color: "#93c5fd", fontSize: "1rem" }}>▶</span>
+            </button>
+        </section>
+
+        {isLoading && (
+            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", color: "rgba(255,255,255,0.72)", display: "flex", fontSize: "0.72rem", gap: "0.55rem", justifyContent: "center", padding: "0.65rem 0.75rem" }}>
+                <SpinnerRing size={15} />
+                <span>Simulating…</span>
+                {onCancel && <button type="button" onClick={onCancel} style={{ background: "rgba(220,38,38,0.16)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: "7px", color: "#fecaca", cursor: "pointer", fontSize: "0.7rem", fontWeight: 700, marginLeft: "0.2rem", padding: "0.3rem 0.65rem" }}>Cancel</button>}
             </div>
         )}
 
         {error && (
-            <div
-            style={{
-                background: "rgba(127,29,29,0.24)",
-                   border: "1px solid rgba(248,113,113,0.3)",
-                   borderRadius: "16px",
-                   color: "#fecaca",
-                   fontSize: "0.76rem",
-                   lineHeight: "1.5",
-                   padding: "0.85rem 0.9rem",
-            }}
-            >
-            {error}
+            <div style={{ background: "rgba(127,29,29,0.22)", border: "1px solid rgba(248,113,113,0.28)", borderRadius: "12px", color: "#fecaca", fontSize: "0.74rem", lineHeight: "1.5", padding: "0.75rem 0.8rem" }}>
+                {error}
             </div>
         )}
         </PanelChrome>
@@ -1175,24 +1104,27 @@ const TimelineHistoryPanel = ({
     const lastVisibleEventRef = React.useRef(null);
 
     useEffect(() => {
-        if (!isOpen || !lastVisibleEventRef.current) {
+        // Do not scroll the very first revealed card underneath the panel header
+        // when Current Events opens. Only subsequent reveals should move the list.
+        if (!isOpen || visibleEvents.length <= 1 || !lastVisibleEventRef.current) {
             return;
         }
 
         lastVisibleEventRef.current.scrollIntoView({
             behavior: "smooth",
-            block: "start",
+            block: "nearest",
         });
     }, [isOpen, record?.id, visibleEvents.length]);
 
     return (
         <PanelChrome
-        eyebrow=""
+        eyebrow="Timeline"
         isOpen={isOpen}
         onClose={onClose}
         subtitle={record?.rangeLabel || ""}
-        title="Events"
+        title="Current Events"
         topOffset={topOffset}
+        variant="history"
         >
         {warning && (
             <div
@@ -1270,6 +1202,8 @@ const DateWidget = memo(function DateWidget({
     onTogglePanel = null,
     rightShift,
     topOffset = "0.5rem",
+    dockLeading = null,
+    dockMiddle = null,
 }) {
     const [gameData, setGameData] = useState(null);
     const [events, setEvents] = useState([]);
@@ -1608,100 +1542,90 @@ const DateWidget = memo(function DateWidget({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
-    const historyRecords = useMemo(() => {
-        if (openPanel !== "history") return [];
-        const rawHistory = worldState?.simulationHistory ?? [];
-        return rawHistory
-        .map((entry, index) => buildTurnRecord({
-            entry,
-            index,
-            history: rawHistory,
-            eventLookup,
-            game: gameData,
-            lookups,
-        }))
-        .filter(Boolean);
-    }, [eventLookup, gameData, lookups, openPanel, worldState]);
-
-    // The legacy Events panel used historyRecords[0] unconditionally. That assumes
-    // every simulationHistory row is a normal turn and that no stale/future/manual
-    // presentation records can sit ahead of the current canonical timeline. Native
-    // manual events and GM transactions break that assumption.
-    //
-    // Pick the latest record that is actually relevant to the current game date:
-    // - ignore future-dated history while the clock is still earlier;
-    // - ignore fully orphaned records whose event IDs no longer resolve;
-    // - on the same date, prefer a record that still has real events;
-    // - if several same-date records have events (turn + manual/GM), prefer the later
-    //   auxiliary entry in history order so the newly-authored event is what opens.
+    // Only the latest relevant turn is ever rendered. The previous implementation
+    // eagerly built every simulationHistory row (tags, map-change counts, event
+    // resolution) whenever Events opened, then threw all but one away.
     const latestTurnRecord = useMemo(() => {
-        if (!historyRecords.length) {
-            return null;
-        }
+        if (openPanel !== "history") return null;
+
+        const rawHistory = worldState?.simulationHistory ?? [];
+        if (!rawHistory.length) return null;
 
         const rawCurrentDate = String(gameData?.gameDate || gameData?.startDate || "").trim();
         const parsedCurrentDate = rawCurrentDate ? dayjs(rawCurrentDate) : null;
         const hasComparableCurrentDate = Boolean(parsedCurrentDate && parsedCurrentDate.isValid());
 
-        const viable = historyRecords.filter((record) => {
-            const orphaned =
-            Number(record?.referencedEventCount || 0) > 0 &&
-            (record?.events?.length || 0) === 0;
-            if (orphaned) {
-                return false;
-            }
-
-            if (!hasComparableCurrentDate) {
-                return true;
-            }
-
-            const rawRecordDate = String(record?.toDate || record?.date || record?.fromDate || "").trim();
-            const parsedRecordDate = rawRecordDate ? dayjs(rawRecordDate) : null;
-            if (!parsedRecordDate || !parsedRecordDate.isValid()) {
-                return true;
-            }
-
-            return !parsedRecordDate.isAfter(parsedCurrentDate, "day");
-        });
-
-        const candidates = viable.length ? viable : historyRecords;
-        let best = null;
+        let bestEntry = null;
+        let bestIndex = -1;
         let bestDate = null;
+        let bestHasEvents = false;
 
-        for (const record of candidates) {
-            const rawRecordDate = String(record?.toDate || record?.date || record?.fromDate || "").trim();
+        for (let index = 0; index < rawHistory.length; index += 1) {
+            const entry = rawHistory[index];
+            if (!entry) continue;
+
+            const referencedEventIds = (entry.eventIds ?? []).filter(Boolean);
+            const resolvedEventCount = referencedEventIds.reduce(
+                (count, eventId) => count + (eventLookup.has(eventId) ? 1 : 0),
+                0,
+            );
+            if (referencedEventIds.length > 0 && resolvedEventCount === 0) continue;
+
+            const rawRecordDate = String(entry?.toDate || entry?.date || entry?.fromDate || "").trim();
             const parsedRecordDate = rawRecordDate ? dayjs(rawRecordDate) : null;
             const comparable = Boolean(parsedRecordDate && parsedRecordDate.isValid());
 
-            if (!best) {
-                best = record;
-                bestDate = comparable ? parsedRecordDate : null;
+            if (
+                hasComparableCurrentDate &&
+                comparable &&
+                parsedRecordDate.isAfter(parsedCurrentDate, "day")
+            ) {
                 continue;
             }
 
-            if (!comparable) {
+            const hasEvents = resolvedEventCount > 0;
+            if (!bestEntry) {
+                bestEntry = entry;
+                bestIndex = index;
+                bestDate = comparable ? parsedRecordDate : null;
+                bestHasEvents = hasEvents;
                 continue;
             }
+
+            if (!comparable) continue;
 
             if (!bestDate || parsedRecordDate.isAfter(bestDate, "day")) {
-                best = record;
+                bestEntry = entry;
+                bestIndex = index;
                 bestDate = parsedRecordDate;
+                bestHasEvents = hasEvents;
                 continue;
             }
 
             if (parsedRecordDate.isSame(bestDate, "day")) {
-                const bestHasEvents = (best?.events?.length || 0) > 0;
-                const nextHasEvents = (record?.events?.length || 0) > 0;
-
-                if ((nextHasEvents && !bestHasEvents) || nextHasEvents === bestHasEvents) {
-                    best = record;
+                if ((hasEvents && !bestHasEvents) || hasEvents === bestHasEvents) {
+                    bestEntry = entry;
+                    bestIndex = index;
                     bestDate = parsedRecordDate;
+                    bestHasEvents = hasEvents;
                 }
             }
         }
 
-        return best || candidates[0] || null;
-    }, [gameData, historyRecords]);
+        if (!bestEntry) {
+            bestEntry = rawHistory[0];
+            bestIndex = 0;
+        }
+
+        return buildTurnRecord({
+            entry: bestEntry,
+            index: bestIndex,
+            history: rawHistory,
+            eventLookup,
+            game: gameData,
+            lookups,
+        });
+    }, [eventLookup, gameData, lookups, openPanel, worldState]);
 
     const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
     ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
@@ -1781,10 +1705,17 @@ const DateWidget = memo(function DateWidget({
     // panel, a new record, or a missing snapshot all clear the override — the
     // worst case is the old behavior: the final state all at once.
     const [stagedBase, setStagedBase] = useState({ recordId: null, world: null });
+    const stagedReplayRef = useRef({
+        recordId: null,
+        mapEventCount: 0,
+        world: null,
+    });
+    const stagedOverrideActiveRef = useRef(false);
 
     // A new turn invalidates any staged base from the previous one.
     useEffect(() => {
         setStagedBase({ recordId: null, world: null });
+        stagedReplayRef.current = { recordId: null, mapEventCount: 0, world: null };
     }, [latestTurnRecord?.id]);
 
     // Load the pre-jump world lazily, whenever the history panel is actually
@@ -1800,13 +1731,15 @@ const DateWidget = memo(function DateWidget({
             return undefined;
         }
         let cancelled = false;
-        loadRollbackSnapshots()
-            .then((snapshots) => {
+        findRollbackSnapshotForTurn({
+            fromDate: record.fromDate,
+            toDate: record.toDate,
+        })
+            .then((match) => {
                 if (cancelled) return;
-                const match = (snapshots || []).find(
-                    (snap) => snap?.fromDate === record.fromDate && snap?.toDate === record.toDate && snap?.state?.world,
-                );
-                if (match) setStagedBase({ recordId: record.id, world: match.state.world });
+                if (match?.state?.world) {
+                    setStagedBase({ recordId: record.id, world: match.state.world });
+                }
             })
             .catch(() => {
                 /* no snapshot — reveal without staging */
@@ -1825,21 +1758,60 @@ const DateWidget = memo(function DateWidget({
             stagedBase.world &&
             totalVisibleEvents > 0 &&
             visibleEventCount < totalVisibleEvents;
+
         if (!stagingActive) {
-            setWorldStateOverride(null);
-            setUnitsOverride(null);
+            if (stagedOverrideActiveRef.current) {
+                setWorldStateOverride(null);
+                setUnitsOverride(null);
+                stagedOverrideActiveRef.current = false;
+            }
+            stagedReplayRef.current = { recordId: null, mapEventCount: 0, world: null };
             return;
         }
-        const revealed = record.events.slice(0, Math.max(1, visibleEventCount));
+
+        const mapEvents = record.events
+            .slice(0, Math.max(1, visibleEventCount))
+            .filter(eventHasMapPresentationImpact);
+
+        // Most timeline cards have no map mutation at all. Text, relations, Stats,
+        // agreements and storyline movement must not force a 2MB world normalize,
+        // map publication and layer rebuild merely because the player clicked Next.
+        if (mapEvents.length === 0) {
+            if (stagedOverrideActiveRef.current) {
+                setWorldStateOverride(null);
+                setUnitsOverride(null);
+                stagedOverrideActiveRef.current = false;
+            }
+            stagedReplayRef.current = { recordId: record.id, mapEventCount: 0, world: null };
+            return;
+        }
+
+        const cached = stagedReplayRef.current;
+        const canAdvanceIncrementally =
+            cached.recordId === record.id &&
+            cached.world &&
+            cached.mapEventCount <= mapEvents.length;
+
+        const baseWorld = canAdvanceIncrementally ? cached.world : stagedBase.world;
+        const alreadyApplied = canAdvanceIncrementally ? cached.mapEventCount : 0;
+        const pendingMapEvents = mapEvents.slice(alreadyApplied);
+
+        if (pendingMapEvents.length === 0) return;
+
         const { world: stagedWorld } = applyEventImpactsToWorld({
             colors: {},
-            events: revealed,
-            // Timeline staging replays impacts from the pre-turn snapshot on every
-            // state refresh. Keep the preview mechanically identical without
-            // re-emitting canonical unit-combat diagnostics each time.
+            events: pendingMapEvents,
             logUnitCombat: false,
-            world: stagedBase.world,
+            presentationPreview: true,
+            world: baseWorld,
         });
+
+        stagedReplayRef.current = {
+            recordId: record.id,
+            mapEventCount: mapEvents.length,
+            world: stagedWorld,
+        };
+        stagedOverrideActiveRef.current = true;
         setWorldStateOverride(stagedWorld);
         setUnitsOverride(stagedWorld.units ?? []);
     }, [latestTurnRecord, openPanel, stagedBase, totalVisibleEvents, visibleEventCount]);
@@ -1885,97 +1857,55 @@ const DateWidget = memo(function DateWidget({
             />
         )}
 
-        <div
-        style={{
-            ...widgetSurface,
-            right: rightShift,
-            top: topOffset,
-            // The player's country sits beside the date. On phones the standalone
-            // pill would cover the date, so stretch the widget; on desktop cap the
-            // width so a long fantasy country name ellipsizes instead of sprawling.
-            ...(isMobile
-                ? { width: "min(24rem, calc(100vw - 5.75rem))" }
-                : playerCountry
-                ? { maxWidth: "min(28rem, calc(100vw - 8rem))" }
-                : null),
-        }}
-        >
+        <div className="oh-game-dock">
+        {dockLeading}
+        {dockLeading && <div className="oh-dock-divider" />}
+
         <button
         type="button"
-        style={{
-            ...buttonStyle,
-            color: openPanel === "history" ? "#bfdbfe" : buttonStyle.color,
-        }}
+        className={`oh-dock-segment${openPanel === "history" ? " oh-dock-segment-active" : ""}`}
         onClick={() => togglePanel("history")}
-        onMouseEnter={(event) => {
-            if (openPanel !== "history") {
-                event.currentTarget.style.color = "white";
-            }
-        }}
-        onMouseLeave={(event) => {
-            if (openPanel !== "history") {
-                event.currentTarget.style.color = buttonStyle.color;
-            }
+        title="Open current events"
+        style={{
+            flex: "0 0 auto",
+            justifyContent: "flex-start",
+            gap: "0.52rem",
+            minWidth: isMobile ? "6.6rem" : "9.6rem",
+            maxWidth: isMobile ? "7.3rem" : "10.6rem",
+            padding: "0 0.72rem",
         }}
         >
-        {"\u00AB"}
+            <CalendarIcon />
+            <div style={{ minWidth: 0, textAlign: "left" }}>
+                <div style={{ color: "rgba(255,255,255,0.95)", fontSize: isMobile ? "0.72rem" : "0.8rem", fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayDate}</div>
+                <div className="oh-dock-label-optional" style={{ color: "rgba(210,226,245,0.38)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.035em", marginTop: "0.17rem", textTransform: "uppercase" }}>Current events</div>
+            </div>
         </button>
 
-        <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", minWidth: 0 }}>
-        {playerCountry ? (
-            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}>
-            <span
-            style={{
-                color: "rgba(147,197,253,0.88)",
-                fontSize: isMobile ? "0.68rem" : "0.8rem",
-                fontWeight: 700,
-                letterSpacing: "0.05em",
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                textTransform: "uppercase",
-                whiteSpace: "nowrap",
-            }}
-            >
-            {playerCountry}
-            </span>
-            <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: isMobile ? "0.82rem" : "0.95rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
-            {displayDate}
-            </span>
-            </div>
-        ) : (
-            <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
-            {displayDate}
-            </div>
-        )}
-        </div>
+        <div className="oh-dock-divider" />
+        {dockMiddle}
+        {dockMiddle && <div className="oh-dock-divider" />}
 
         <button
         type="button"
-        style={{
-            ...buttonStyle,
-            color: openPanel === "skip" ? "rgba(196,165,255,0.9)" : buttonStyle.color,
-        }}
+        className="oh-dock-segment oh-dock-advance"
         onClick={() => {
             if (isLoading) {
                 setPanel("skip");
                 return;
             }
-
             togglePanel("skip");
         }}
-        onMouseEnter={(event) => {
-            if (openPanel !== "skip") {
-                event.currentTarget.style.color = "white";
-            }
-        }}
-        onMouseLeave={(event) => {
-            if (openPanel !== "skip") {
-                event.currentTarget.style.color = buttonStyle.color;
-            }
-        }}
+        title="Advance time"
         >
-        {isLoading ? <SpinnerRing size={15} tone="rgba(196,165,255,0.95)" /> : "\u00BB"}
+        {isLoading ? (
+            <SpinnerRing size={15} tone="rgba(32,24,8,0.8)" />
+        ) : (
+            <>
+            <span style={{ fontSize: "0.78rem" }}>▶</span>
+            <span className="oh-dock-label-optional">Advance</span>
+            </>
+        )}
         </button>
         </div>
         </>

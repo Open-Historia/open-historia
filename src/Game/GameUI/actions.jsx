@@ -118,25 +118,25 @@ const ActionItem = ({ action, onDelete }) => {
             display: "flex",
             gap: "0.5rem",
             justifyContent: "space-between",
-            lineHeight: "1.75",
-            padding: "0.55rem 0.85rem",
+            lineHeight: "1.62",
+            padding: "1rem 1.1rem",
             transition: "background 0.15s",
         }}
         >
         <div style={{ flex: 1, minWidth: 0 }}>
         {showTitle && (
-            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "clamp(0.98rem, 0.32vw + 0.84rem, 1.08rem)", fontWeight: 700, marginBottom: "0.28rem" }}>
             {normalized.title}
             </div>
         )}
-        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "clamp(1.02rem, 0.35vw + 0.86rem, 1.14rem)", lineHeight: "1.62", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
         {label}
         </div>
         <div
         style={{
             color: "rgba(255,255,255,0.38)",
-            fontSize: "0.68rem",
-            letterSpacing: "0.06em",
+            fontSize: "clamp(0.74rem, 0.18vw + 0.68rem, 0.82rem)",
+            letterSpacing: "0.05em",
             marginTop: "0.25rem",
             textTransform: "uppercase",
         }}
@@ -414,30 +414,30 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
     return (
         <div
+        className="oh-hud-panel oh-compact-workspace oh-orders-panel"
         style={{
-            backdropFilter: "blur(8px)",
-            backgroundColor: "rgba(17, 24, 39, 0.95)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: "16px",
-            bottom: isOpen ? "4.25rem" : "-30rem",
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
+            backdropFilter: "var(--oh-hud-blur)",
+            backgroundColor: "var(--oh-hud-bg-strong)",
+            border: "1px solid var(--oh-hud-border)",
+            borderRadius: "18px",
+            bottom: isOpen ? "4.55rem" : "-34rem",
+            boxShadow: "var(--oh-hud-shadow)",
             color: "white",
             display: "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            // Grow to use the height a taller screen offers (leaving ~16rem for the
-            // top bar), never dropping below a usable 30rem floor for laptops/phones,
-            // and never past the 9rem the top UI needs (so it can't overflow up).
-            height: "min(calc(100vh - 9rem), max(calc(100vh - 16rem), 30rem))",
-            minHeight: "10rem",
-            left: "0rem",
+            // Compact left workspace: enough room for suggestions/actions without
+            // turning the command surface into a full-height wall over the map.
+            height: "min(52rem, calc(100vh - 5.6rem))",
+            minHeight: "34rem",
+            left: "0.75rem",
             maxWidth: "calc(100vw - 1rem)",
             opacity: isOpen ? 1 : 0,
             overflow: "hidden",
             pointerEvents: isOpen ? "auto" : "none",
             position: "fixed",
             transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
-            width: "26.25rem",
+            width: "min(36rem, calc(100vw - 1.5rem))",
             zIndex: 9998,
         }}
         >
@@ -450,7 +450,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             padding: "1rem 1.25rem 0.75rem",
         }}
         >
-        <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>Actions</span>
+        <span style={{ fontSize: "clamp(1.08rem, 0.55vw + 0.84rem, 1.28rem)", fontWeight: 700, letterSpacing: "0.01em" }}>Orders</span>
         <button
         type="button"
         onClick={onClose}
@@ -478,12 +478,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem", padding: "1.1rem 1.25rem", flex: 1, minHeight: 0, overflow: "hidden" }}>
         <p
         style={{
             color: "rgba(255,255,255,0.75)",
-            fontSize: "0.82rem",
-            lineHeight: "1.55",
+            fontSize: "clamp(0.94rem, 0.32vw + 0.78rem, 1.04rem)",
+            lineHeight: "1.62",
             margin: 0,
         }}
         >
@@ -499,7 +499,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             borderRadius: "10px",
             color: "rgba(196, 165, 255, 0.95)",
             cursor: "pointer",
-            fontSize: "0.82rem",
+            fontSize: "clamp(0.92rem, 0.28vw + 0.78rem, 1rem)",
             fontWeight: 500,
             letterSpacing: "0.01em",
             padding: "0.55rem 1rem",
@@ -529,7 +529,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             color: "rgba(255,255,255,0.82)",
             cursor: "pointer",
             display: "flex",
-            fontSize: "0.8rem",
+            fontSize: "clamp(0.9rem, 0.25vw + 0.78rem, 0.98rem)",
             gap: "0.5rem",
             justifyContent: "center",
             padding: "0.52rem 1rem",
@@ -575,9 +575,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         <p
         style={{
             color: "rgba(255,255,255,0.9)",
-            fontSize: "0.78rem",
+            fontSize: "clamp(0.88rem, 0.28vw + 0.76rem, 0.98rem)",
             fontWeight: 700,
-            letterSpacing: "0.06em",
+            letterSpacing: "0.055em",
             margin: "0 0 0.5rem 0",
             textTransform: "uppercase",
         }}
@@ -589,14 +589,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         style={{
             display: "flex",
             flexDirection: "column",
-            gap: "0.4rem",
+            gap: "0.75rem",
             flex: 1,
             overflowY: "auto",
             scrollbarWidth: "none",
         }}
         >
         {submittedActions.length === 0 && (
-            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.8rem", fontStyle: "italic", margin: 0 }}>
+            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "clamp(0.92rem, 0.28vw + 0.78rem, 1rem)", fontStyle: "italic", margin: 0 }}>
             No actions submitted yet.
             </p>
         )}
@@ -613,8 +613,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             backgroundColor: "rgba(0,0,0,0.2)",
             borderTop: "1px solid rgba(255,255,255,0.07)",
             display: "flex",
-            gap: "0.5rem",
-            padding: "0.75rem 1rem",
+            gap: "0.72rem",
+            padding: "1rem 1rem",
         }}
         >
         <div style={{ alignItems: "stretch", display: "flex", flex: 1, position: "relative" }}>
@@ -632,13 +632,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             boxSizing: "border-box",
             color: "white",
             fontFamily: "sans-serif",
-            fontSize: "0.82rem",
+            fontSize: "clamp(0.98rem, 0.32vw + 0.84rem, 1.08rem)",
             outline: "none",
             padding: "0.7rem 2.8rem 0.7rem 0.85rem",
             resize: "vertical",
             transition: "border-color 0.2s",
-            minHeight: "3rem",
-            lineHeight: "1.45",
+            minHeight: "4.25rem",
+            lineHeight: "1.5",
             overflowY: "auto",
             width: "100%",
         }}
@@ -688,10 +688,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             cursor: inputValue.trim() && !isSubmitting && !isImproving ? "pointer" : "not-allowed",
             display: "flex",
             flexShrink: 0,
-            height: "2.2rem",
+            height: "2.8rem",
             justifyContent: "center",
             transition: "background 0.15s",
-            width: "2.2rem",
+            width: "2.8rem",
         }}
         onMouseEnter={(event) => {
             if (inputValue.trim() && !isSubmitting && !isImproving) {
@@ -711,7 +711,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     );
 };
 
-const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
+const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle, dockMode = false }) => {
     const [hasOpened, setHasOpened] = React.useState(false);
 
     React.useEffect(() => {
@@ -731,27 +731,26 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
         )}
         <button
         type="button"
-        title="Actions"
-        style={{
+        title="Orders"
+        className={dockMode ? `oh-dock-segment${isOpen ? " oh-dock-segment-active" : ""}` : undefined}
+        style={dockMode ? {
+            gap: "0.42rem",
+            minWidth: "5.45rem",
+            padding: "0 0.68rem",
+        } : {
             alignItems: "center",
             background: isOpen
-            ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
+            ? "rgba(59,130,246,0.16)"
             : hovered
-            ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-            : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
-            border: hovered
-            ? "1px solid rgba(255,255,255,0.2)"
-            : isOpen
-            ? "1px solid rgba(139,92,246,0.5)"
-            : "1px solid rgba(255,255,255,0.1)",
+            ? "rgba(255,255,255,0.075)"
+            : "rgba(255,255,255,0.035)",
+            border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
             borderRadius: "10px",
-            boxShadow: hovered
-            ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
-            : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
             color: "white",
             cursor: "pointer",
             display: "flex",
-            fontFamily: "sans-serif",
+            fontFamily: "inherit",
             fontSize: "1.2rem",
             height: "3.3rem",
             justifyContent: "center",
@@ -765,6 +764,7 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
         onClick={onToggle}
         >
         <SparkleIcon />
+        {dockMode && <span className="oh-dock-label-optional oh-dock-navigation-label">Orders</span>}
         </button>
         </>
     );

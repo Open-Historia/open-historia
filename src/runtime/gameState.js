@@ -5,7 +5,7 @@ import { normalizeTagList } from "./countryTags.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { toCountryName } from "./ownerNames.js";
-import { isStockPolityName, resolvePolityIdentity, resolveTerritorialPolityIdentity } from "./polityIdentity.js";
+import { buildPolityIdentityIndex, isStockPolityName, resolvePolityIdentity, resolveTerritorialPolityIdentity } from "./polityIdentity.js";
 import { distanceKm, engagementRangeKm, resolveClash } from "../Game/Map/unitCombat.js";
 
 
@@ -614,7 +614,7 @@ const currentPolityDisplayName = (world, polityKey) => {
   return normalizeOptionalString(record?.name || record?.code || polityKey);
 };
 
-const resolveChatIdentityTokens = ({ code = "", name = "", polityKey = "" } = {}, world) => {
+const resolveChatIdentityTokens = ({ code = "", name = "", polityKey = "" } = {}, world, identityIndex = null) => {
   const strongTokens = [polityKey, name]
     .map(normalizeOptionalString)
     .filter(Boolean);
@@ -630,6 +630,7 @@ const resolveChatIdentityTokens = ({ code = "", name = "", polityKey = "" } = {}
       requireActive: false,
       allowCoreMatch: true,
       allowStockBase: true,
+      identityIndex,
     });
     if (resolution.resolved) resolutions.push(resolution);
     if (String(resolution.status || "").startsWith("ambiguous")) ambiguous = true;
@@ -666,7 +667,7 @@ const resolveChatIdentityTokens = ({ code = "", name = "", polityKey = "" } = {}
   };
 };
 
-export const resolveChatParticipantIdentity = (entry, world) => {
+export const resolveChatParticipantIdentity = (entry, world, identityIndex = null) => {
   const participant = normalizeChatCountry(entry);
   if (!participant) {
     return {
@@ -677,7 +678,7 @@ export const resolveChatParticipantIdentity = (entry, world) => {
     };
   }
 
-  const resolution = resolveChatIdentityTokens(participant, world);
+  const resolution = resolveChatIdentityTokens(participant, world, identityIndex);
   if (!resolution.safe) {
     return {
       participant,
@@ -704,14 +705,14 @@ export const resolveChatParticipantIdentity = (entry, world) => {
   };
 };
 
-const reconcileReactionMapForWorld = (reactions, world) => {
+const reconcileReactionMapForWorld = (reactions, world, identityIndex = null) => {
   const next = {};
   for (const [name, reaction] of Object.entries(normalizeReactionMap(reactions))) {
     const resolved = resolveChatParticipantIdentity({
       code: reaction.code,
       name,
       polityKey: reaction.polityKey,
-    }, world);
+    }, world, identityIndex);
     const nextName = resolved.safe ? resolved.participant.name : name;
     if (!nextName) continue;
 
@@ -728,7 +729,7 @@ const reconcileReactionMapForWorld = (reactions, world) => {
   return next;
 };
 
-const reconcileChatMessageForWorld = (message, world) => {
+const reconcileChatMessageForWorld = (message, world, identityIndex = null) => {
   const normalized = normalizeChatMessage(message);
   if (!normalized) return null;
 
@@ -736,7 +737,7 @@ const reconcileChatMessageForWorld = (message, world) => {
     code: normalized.code,
     name: normalized.speaker,
     polityKey: normalized.polityKey,
-  }, world);
+  }, world, identityIndex);
 
   return {
     ...normalized,
@@ -745,18 +746,18 @@ const reconcileChatMessageForWorld = (message, world) => {
       polityKey: resolved.polityKey,
       speaker: resolved.participant.name,
     } : {}),
-    reactions: reconcileReactionMapForWorld(normalized.reactions, world),
+    reactions: reconcileReactionMapForWorld(normalized.reactions, world, identityIndex),
   };
 };
 
-export const reconcileChatForWorld = (entry, world, index = 0) => {
+export const reconcileChatForWorld = (entry, world, index = 0, identityIndex = null) => {
   const chat = normalizeChatEntry(entry, index);
   if (!chat) return null;
 
   const countries = [];
   const seenSafeKeys = new Set();
   for (const country of chat.countries) {
-    const resolved = resolveChatParticipantIdentity(country, world);
+    const resolved = resolveChatParticipantIdentity(country, world, identityIndex);
     if (!resolved.participant) continue;
 
     if (resolved.safe) {
@@ -772,18 +773,33 @@ export const reconcileChatForWorld = (entry, world, index = 0) => {
     ...chat,
     countries,
     messages: chat.messages
-      .map((message) => reconcileChatMessageForWorld(message, world))
+      .map((message) => reconcileChatMessageForWorld(message, world, identityIndex))
       .filter(Boolean),
   };
 };
 
-export const chatParticipantSetKey = (entry, world) => {
-  const chat = reconcileChatForWorld(entry, world);
+export const chatParticipantSetKey = (entry, world, identityIndex = null) => {
+  // Current Continuum saves persist stable polityKey on chat participants. Computing
+  // a participant-set key must never reconcile every MESSAGE in the thread: the old
+  // implementation did exactly that and rebuilt the full polity identity index many
+  // times while merely asking "which countries are in this chat?".
+  const rawCountries = normalizeArray(entry?.countries || entry?.participants);
+  if (rawCountries.length) {
+    const directKeys = rawCountries
+      .map((country) => normalizeString(country?.polityKey).toLowerCase())
+      .filter(Boolean);
+    if (directKeys.length === rawCountries.length) {
+      return [...new Set(directKeys)].sort().join("\u001f");
+    }
+  }
+
+  const index = identityIndex || buildPolityIdentityIndex(world);
+  const chat = reconcileChatForWorld(entry, world, 0, index);
   if (!chat || chat.countries.length === 0) return "";
 
   const keys = [];
   for (const country of chat.countries) {
-    const resolved = resolveChatParticipantIdentity(country, world);
+    const resolved = resolveChatParticipantIdentity(country, world, index);
     if (!resolved.safe || !resolved.polityKey) return "";
     keys.push(normalizeString(resolved.polityKey).toLowerCase());
   }
@@ -848,9 +864,9 @@ const mergeChatMessages = (primaryMessages, incomingMessages) => {
   return merged;
 };
 
-const mergeChatRecords = (primary, incoming, world) => {
-  const left = reconcileChatForWorld(primary, world);
-  const right = reconcileChatForWorld(incoming, world);
+const mergeChatRecords = (primary, incoming, world, identityIndex = null) => {
+  const left = reconcileChatForWorld(primary, world, 0, identityIndex);
+  const right = reconcileChatForWorld(incoming, world, 0, identityIndex);
   if (!left) return right;
   if (!right) return left;
 
@@ -865,12 +881,13 @@ const mergeChatRecords = (primary, incoming, world) => {
     source: left.source || right.source,
     status: left.status || right.status || "open",
     title: left.title || right.title,
-  }, world);
+  }, world, 0, identityIndex);
 };
 
-export const reconcileChatsForWorld = (chats, world) => {
+export const reconcileChatsForWorld = (chats, world, identityIndex = null) => {
+  const index = identityIndex || buildPolityIdentityIndex(world);
   const reconciled = normalizeArray(chats)
-    .map((entry, index) => reconcileChatForWorld(entry, world, index))
+    .map((entry, entryIndex) => reconcileChatForWorld(entry, world, entryIndex, index))
     .filter(Boolean);
 
   const output = [];
@@ -884,7 +901,7 @@ export const reconcileChatsForWorld = (chats, world) => {
       continue;
     }
 
-    const key = chatParticipantSetKey(chat, world);
+    const key = chatParticipantSetKey(chat, world, index);
     if (!key) {
       // Ambiguous/unresolved actors are intentionally NOT merged. This is the civil-
       // war safety wall: uncertainty produces two threads, not one invented polity.
@@ -899,7 +916,7 @@ export const reconcileChatsForWorld = (chats, world) => {
       continue;
     }
 
-    output[existingIndex] = mergeChatRecords(output[existingIndex], chat, world);
+    output[existingIndex] = mergeChatRecords(output[existingIndex], chat, world, index);
   }
 
   return output;
@@ -911,11 +928,13 @@ export const reconcileChatsForWorld = (chats, world) => {
 // lineage. Strip the player ONLY when its save-aware lineage resolves unambiguously,
 // then reconcile again so [Britain, player] and [Britain] collapse into one thread.
 // If the player identity is ambiguous/unresolved, preserve the data rather than guess.
-export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
-  const base = reconcileChatsForWorld(chats, world);
+export const reconcileChatsForPlayer = (chats, world, playerCountry = "", identityIndex = null) => {
+  const index = identityIndex || buildPolityIdentityIndex(world);
+  const base = reconcileChatsForWorld(chats, world, index);
   const playerIdentity = resolveChatParticipantIdentity(
     typeof playerCountry === "object" ? playerCountry : { name: playerCountry },
     world,
+    index,
   );
 
   if (!playerIdentity.safe || !playerIdentity.polityKey) return base;
@@ -924,22 +943,18 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   const stripped = base
     .map((chat) => {
       const countries = normalizeArray(chat.countries).filter((country) => {
-        const resolved = resolveChatParticipantIdentity(country, world);
+        const resolved = resolveChatParticipantIdentity(country, world, index);
         if (!resolved.safe || !resolved.polityKey) return true;
         return normalizeString(resolved.polityKey).toLowerCase() !== playerKey;
       });
 
-      // A player-only thread is not diplomacy; it was malformed legacy/generated
-      // state. Dropping it is safer than letting the UI invite the player to answer
-      // themselves or letting an AI leader speak on the player's behalf.
       if (countries.length === 0) return null;
       return { ...chat, countries };
     })
     .filter(Boolean);
 
-  return reconcileChatsForWorld(stripped, world);
+  return reconcileChatsForWorld(stripped, world, index);
 };
-
 
 // R2.33 — fast current-save path.
 //
@@ -949,15 +964,17 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
 //
 // Prove the archive is safe for the cheap path. Any legacy/ambiguous/duplicate case
 // falls straight back to the old semantic reconciler.
-export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "") => {
+export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "", identityIndex = null) => {
   const rows = normalizeArray(chats);
+  const index = identityIndex || buildPolityIdentityIndex(world);
   const playerIdentity = resolveChatParticipantIdentity(
     typeof playerCountry === "object" ? playerCountry : { name: playerCountry },
     world,
+    index,
   );
 
   if (!playerIdentity.safe || !playerIdentity.polityKey) {
-    return reconcileChatsForPlayer(rows, world, playerCountry);
+    return reconcileChatsForPlayer(rows, world, playerCountry, index);
   }
 
   const playerKey = normalizeString(playerIdentity.polityKey).toLowerCase();
@@ -973,7 +990,7 @@ export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "") 
 
     for (const country of rawCountries) {
       const key = normalizeString(country?.polityKey).toLowerCase();
-      if (!key) return reconcileChatsForPlayer(rows, world, playerCountry);
+      if (!key) return reconcileChatsForPlayer(rows, world, playerCountry, index);
       if (key === playerKey || localKeys.has(key)) continue;
       localKeys.add(key);
       countries.push(country);
@@ -984,7 +1001,7 @@ export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "") 
     if (normalizeString(chat?.status).toLowerCase() !== "closed") {
       const threadKey = [...localKeys].sort().join("\\u001f");
       if (!threadKey || openThreadKeys.has(threadKey)) {
-        return reconcileChatsForPlayer(rows, world, playerCountry);
+        return reconcileChatsForPlayer(rows, world, playerCountry, index);
       }
       openThreadKeys.add(threadKey);
     }
@@ -1004,28 +1021,39 @@ export const reconcileStableChatsForPlayer = (chats, world, playerCountry = "") 
 // separate from normalizeChats so structural parsing never starts making historical
 // claims about which two actors are "really" the same country.
 export const mergeIncomingChats = (existingChats, incomingChats, world, { playerCountry = "" } = {}) => {
+  const identityIndex = buildPolityIdentityIndex(world);
   const reconcile = (list) => playerCountry
-    ? reconcileChatsForPlayer(list, world, playerCountry)
-    : reconcileChatsForWorld(list, world);
+    ? reconcileStableChatsForPlayer(list, world, playerCountry, identityIndex)
+    : reconcileChatsForWorld(list, world, identityIndex);
   const base = reconcile(existingChats);
   const incoming = reconcile(incomingChats);
 
-  // Incoming lists are already newest-first. Iterate backwards when prepending so
-  // their visible ordering survives.
+  // Pre-index current open threads once. The old findIndex + participant-key loop
+  // recomputed semantic identity across the entire archive for every incoming chat.
+  const openByKey = new Map();
+  for (let index = 0; index < base.length; index += 1) {
+    const candidate = base[index];
+    if (normalizeString(candidate?.status).toLowerCase() === "closed") continue;
+    const key = chatParticipantSetKey(candidate, world, identityIndex);
+    if (key && !openByKey.has(key)) openByKey.set(key, index);
+  }
+
   for (let index = incoming.length - 1; index >= 0; index -= 1) {
     const chat = incoming[index];
     const status = normalizeString(chat.status).toLowerCase();
-    const key = status === "closed" ? "" : chatParticipantSetKey(chat, world);
-    const existingIndex = key
-      ? base.findIndex((candidate) =>
-          normalizeString(candidate.status).toLowerCase() !== "closed" &&
-          chatParticipantSetKey(candidate, world) === key)
-      : -1;
+    const key = status === "closed" ? "" : chatParticipantSetKey(chat, world, identityIndex);
+    const existingIndex = key && openByKey.has(key) ? openByKey.get(key) : -1;
 
     if (existingIndex >= 0) {
-      base[existingIndex] = mergeChatRecords(base[existingIndex], chat, world);
+      base[existingIndex] = mergeChatRecords(base[existingIndex], chat, world, identityIndex);
     } else {
       base.unshift(chat);
+      // unshift shifts every prior numeric index by one. Incoming count is tiny
+      // (<=3 per turn), so update the compact lookup rather than rescanning chats.
+      for (const [knownKey, knownIndex] of openByKey.entries()) {
+        openByKey.set(knownKey, knownIndex + 1);
+      }
+      if (key) openByKey.set(key, 0);
     }
   }
 
@@ -2693,7 +2721,7 @@ export const readChatsState = async ({ force = false, world = null, playerCountr
   const chats = await normalizeChatsCooperatively(raw);
   if (!world) return chats;
   return playerCountry
-    ? reconcileChatsForPlayer(chats, world, playerCountry)
+    ? reconcileStableChatsForPlayer(chats, world, playerCountry)
     : reconcileChatsForWorld(chats, world);
 };
 
@@ -2703,13 +2731,21 @@ export const readChatsState = async ({ force = false, world = null, playerCountr
 // point preserves call order for EVERY writer, not just the React panel.
 let chatWriteQueue = Promise.resolve();
 
-export const writeChatsState = (chats, { world = null, playerCountry = "", ...options } = {}) => {
+export const writeChatsState = (chats, {
+  world = null,
+  playerCountry = "",
+  skipSnapshotClone = false,
+  ...options
+} = {}) => {
   const normalized = world
     ? (playerCountry
-      ? reconcileChatsForPlayer(chats, world, playerCountry)
+      ? reconcileStableChatsForPlayer(chats, world, playerCountry)
       : reconcileChatsForWorld(chats, world))
     : normalizeChats(chats);
-  const snapshot = cloneValue(normalized);
+  // Canonical turn apply hands us a fresh list that is never mutated after this
+  // call, so it can opt out of a second deep archive clone. Other writers retain
+  // the old defensive snapshot behaviour by default.
+  const snapshot = skipSnapshotClone ? normalized : cloneValue(normalized);
 
   const write = async () => {
     const saved = await writeJson(JSON_URLS.chat, snapshot, { pretty: false, ...options });
@@ -3309,9 +3345,39 @@ const applyRegionControlOpToWorld = (world, rawOp) => {
   }
 };
 
-export const applyEventImpactsToWorld = ({ colors = {}, events = [], game = {}, logUnitCombat = true, world }) => {
+const cloneWorldForPresentationPreview = (world) => {
+  const source = world && typeof world === "object" ? world : {};
+  return {
+    ...source,
+    // Only stores that event impact application can mutate are copied. Large
+    // immutable campaign ledgers (simulationHistory, consolidatedHistory,
+    // storylines, etc.) stay structurally shared during Events-panel replay.
+    polityOverrides: { ...(source.polityOverrides || {}) },
+    countryStats: { ...(source.countryStats || {}) },
+    countryTags: { ...(source.countryTags || {}) },
+    internationalReputation: { ...(source.internationalReputation || {}) },
+    regionOwnershipOverrides: { ...(source.regionOwnershipOverrides || {}) },
+    regionSovereigntyOverrides: { ...(source.regionSovereigntyOverrides || {}) },
+    regionClaimants: { ...(source.regionClaimants || {}) },
+    agreements: Array.isArray(source.agreements) ? [...source.agreements] : [],
+    units: Array.isArray(source.units) ? [...source.units] : [],
+    markers: Array.isArray(source.markers) ? [...source.markers] : [],
+    cityRenames: { ...(source.cityRenames || {}) },
+  };
+};
+
+export const applyEventImpactsToWorld = ({
+  colors = {},
+  events = [],
+  game = {},
+  logUnitCombat = true,
+  presentationPreview = false,
+  world,
+}) => {
   const nextColors = cloneValue(colors) ?? {};
-  const nextWorld = normalizeWorldState(world);
+  const nextWorld = presentationPreview
+    ? cloneWorldForPresentationPreview(world)
+    : normalizeWorldState(world);
 
   for (const event of normalizeEvents(events)) {
     // create/restore/rename/update first. a newborn or restored polity therefore

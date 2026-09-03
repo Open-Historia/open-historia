@@ -306,3 +306,259 @@ body {
     transform: translate3d(1.4rem, -1rem, 0);
   }
 }
+
+/* -------------------------------------------------------------------------
+   Continuum gameplay HUD v2 — left-anchored liquid-glass shell
+   ------------------------------------------------------------------------- */
+:root {
+  --oh-hud-bg: rgba(9, 17, 29, 0.52);
+  --oh-hud-bg-strong: rgba(8, 16, 28, 0.66);
+  --oh-hud-bg-soft: rgba(22, 35, 52, 0.46);
+  --oh-hud-border: rgba(220, 236, 255, 0.17);
+  --oh-hud-border-strong: rgba(228, 240, 255, 0.29);
+  --oh-hud-text: #f8fbff;
+  --oh-hud-muted: rgba(226, 236, 249, 0.64);
+  --oh-hud-faint: rgba(226, 236, 249, 0.38);
+  --oh-hud-blue: #4b91ff;
+  --oh-hud-blue-soft: rgba(75, 145, 255, 0.16);
+  --oh-hud-amber: #f5bd4f;
+  --oh-hud-amber-hover: #ffd06d;
+  --oh-hud-red: #ef4444;
+  --oh-hud-radius: 16px;
+  --oh-hud-shadow: 0 20px 56px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(255,255,255,0.025);
+  --oh-hud-shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,0.095);
+  --oh-hud-blur: blur(14px) saturate(1.18);
+}
+
+.oh-game-dock {
+  position: fixed;
+  left: 0.75rem;
+  bottom: 0.7rem;
+  transform: none;
+  z-index: 9999;
+  isolation: isolate;
+  display: flex;
+  align-items: stretch;
+  min-height: 3.28rem;
+  width: fit-content;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.22rem;
+  gap: 0.08rem;
+  /* Dock-launched panels are fixed viewport surfaces. Never clip or establish
+     a filtered containing block around them. */
+  overflow: visible;
+  border: 1px solid var(--oh-hud-border-strong);
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: var(--oh-hud-shadow);
+}
+
+.oh-game-dock::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(44, 61, 82, 0.57), rgba(9, 17, 29, 0.46)),
+    rgba(8, 16, 28, 0.34);
+  backdrop-filter: var(--oh-hud-blur);
+  -webkit-backdrop-filter: var(--oh-hud-blur);
+}
+
+.oh-game-dock::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  inset: 1px 1px auto;
+  height: 42%;
+  border-radius: 16px 16px 40% 40%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.065), transparent);
+  opacity: 0.8;
+}
+
+.oh-dock-segment {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 2.78rem;
+  padding: 0 0.68rem;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--oh-hud-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 760;
+  letter-spacing: 0.003em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.oh-dock-segment:hover {
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(255,255,255,0.09);
+  color: var(--oh-hud-text);
+}
+
+.oh-dock-segment:active {
+  transform: translateY(1px);
+}
+
+.oh-dock-segment-active {
+  background: linear-gradient(180deg, rgba(91,155,255,0.17), rgba(59,130,246,0.08));
+  border-color: rgba(125,177,255,0.31);
+  color: #edf6ff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.oh-dock-divider {
+  position: relative;
+  z-index: 1;
+  width: 1px;
+  align-self: center;
+  height: 1.9rem;
+  background: rgba(255,255,255,0.09);
+  flex: 0 0 1px;
+}
+
+.oh-dock-label-optional {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oh-dock-advance {
+  min-width: 6.45rem;
+  margin-left: 0.08rem;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(255, 226, 158, 0.62);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255,211,112,0.98), rgba(237,171,53,0.98));
+  color: #17120a;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.48), 0 5px 18px rgba(229, 163, 47, 0.14);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.oh-dock-advance:hover {
+  background: linear-gradient(180deg, #ffdc8e, #f7bd4d);
+  border-color: rgba(255, 238, 195, 0.82);
+  color: #100d07;
+}
+
+.oh-hud-panel,
+.oh-hud-popover {
+  border: 1px solid var(--oh-hud-border) !important;
+  background:
+    linear-gradient(180deg, rgba(29, 44, 63, 0.66), rgba(8, 16, 28, 0.54)) !important;
+  box-shadow: var(--oh-hud-shadow) !important;
+  backdrop-filter: var(--oh-hud-blur) !important;
+  -webkit-backdrop-filter: var(--oh-hud-blur) !important;
+}
+
+.oh-hud-panel {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(126, 176, 255, 0.07), transparent 34%),
+    linear-gradient(180deg, rgba(28, 42, 60, 0.64), rgba(7, 14, 25, 0.55)) !important;
+}
+
+.oh-timeline-panel {
+  background:
+    radial-gradient(circle at 15% 0%, rgba(145, 190, 255, 0.075), transparent 36%),
+    linear-gradient(180deg, rgba(26, 41, 59, 0.56), rgba(8, 16, 28, 0.46)) !important;
+}
+
+.oh-timeline-card {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.105), rgba(255,255,255,0.045)) !important;
+  border-color: rgba(230,240,255,0.14) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 12px 30px rgba(0,0,0,0.11) !important;
+  /* Nested backdrop blurs over a moving WebGL canvas are especially expensive
+     in Firefox. The parent panel already supplies the glass effect. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.oh-compact-workspace {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(130, 180, 255, 0.06), transparent 32%),
+    linear-gradient(180deg, rgba(25, 40, 58, 0.62), rgba(8, 16, 28, 0.52)) !important;
+}
+
+.oh-dock-polity {
+  flex: 0 1 auto;
+}
+
+.oh-dock-polity-meta {
+  min-width: 0;
+}
+
+@keyframes oh-hud-pop {
+  from { opacity: 0; transform: translateY(7px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 1100px) {
+  .oh-dock-navigation-label {
+    display: none;
+  }
+
+  .oh-game-dock button[title="Orders"],
+  .oh-game-dock button[title="Diplomacy"],
+  .oh-game-dock button[title="Advisor"] {
+    min-width: 2.9rem !important;
+    padding-left: 0.55rem !important;
+    padding-right: 0.55rem !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .oh-dock-label-optional {
+    display: none;
+  }
+
+  .oh-game-dock {
+    bottom: 0.45rem;
+    width: fit-content;
+    max-width: calc(100vw - 0.7rem);
+    padding: 0.2rem;
+    border-radius: 16px;
+  }
+
+  .oh-dock-segment {
+    min-height: 2.8rem;
+    padding: 0 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .oh-dock-advance {
+    min-width: 3.1rem;
+    padding: 0 0.62rem;
+  }
+
+  .oh-dock-label-optional {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .oh-game-dock .oh-dock-segment {
+    min-width: 0 !important;
+  }
+
+  .oh-game-dock .oh-dock-advance {
+    flex: 0 0 3.15rem;
+    min-width: 3.15rem !important;
+  }
+}

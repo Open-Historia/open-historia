@@ -9,7 +9,7 @@ import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
-import { installPerformanceWatchdog, reportPerfOperation } from "../../runtime/assets.js";
+import { reportPerfOperation } from "../../runtime/assets.js";
 import {
   getStoredProvider,
   loadProviderSettingsFormState,
@@ -21,7 +21,7 @@ import {
 // Width is kept in px so the drag maps 1:1 to the pointer, persisted in
 // localStorage, and clamped to a readable min and the current viewport.
 const ADVISOR_MIN_WIDTH = 280;
-const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
+const ADVISOR_DEFAULT_WIDTH = 344; // 20rem, the old fixed width
 const clampAdvisorWidth = (px) => {
   const max = (typeof window !== "undefined" ? window.innerWidth : 1280) - 16;
   return Math.round(Math.min(Math.max(px, Math.min(ADVISOR_MIN_WIDTH, max)), max));
@@ -43,17 +43,17 @@ const reportReactRender = (id, phase, actualDuration) => {
 
 const baseStyle = {
   position: "fixed",
-  backgroundColor: "rgba(17, 24, 39, 0.9)",
-  backdropFilter: "blur(4px)",
+  backgroundColor: "var(--oh-hud-bg)",
+  backdropFilter: "var(--oh-hud-blur)",
   zIndex: 9999,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   color: "white",
   fontFamily: "sans-serif",
-  borderRadius: "12px",
-  border: "1px solid rgba(255,255,255,0.1)",
-  boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+  borderRadius: "14px",
+  border: "1px solid var(--oh-hud-border)",
+  boxShadow: "var(--oh-hud-shadow-soft)",
 };
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
@@ -125,14 +125,36 @@ const WebGLWarningPopup = () => (
   </div>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
-  <button onClick={onToggle} style={{
-    ...baseStyle,
-    bottom: "0.5rem", right: rightShift,
-    height: "4rem", width: "4rem",
-    cursor: "pointer", fontSize: "1.5rem",
-    transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-  }}>🧭</button>
+const AdvisorDockIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
+    <path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3" />
+  </svg>
+);
+
+const AdvisorButton = ({ isAdvisorOpen, onToggle, embedded = false }) => (
+  <button
+    type="button"
+    onClick={onToggle}
+    title="Advisor"
+    className={embedded ? `oh-dock-segment${isAdvisorOpen ? " oh-dock-segment-active" : ""}` : undefined}
+    style={embedded ? {
+      gap: "0.42rem",
+      minWidth: "5.65rem",
+      padding: "0 0.68rem",
+    } : {
+      ...baseStyle,
+      bottom: "0.5rem",
+      right: "0.5rem",
+      height: "4rem",
+      width: "4rem",
+      cursor: "pointer",
+      fontSize: "1.5rem",
+    }}
+  >
+    <AdvisorDockIcon />
+    {embedded && <span className="oh-dock-label-optional oh-dock-navigation-label">Advisor</span>}
+  </button>
 );
 
 const Main = ({
@@ -164,24 +186,13 @@ const Main = ({
     if (!checkWebGL()) setShowWebGLWarning(true);
   }, []);
 
-  // First-open lazy chunks used to make Cheats/Advisor look like "the whole game
-  // froze" while the browser fetched/parsed them. Warm both when the main thread
-  // is idle; opening the panel remains lazy from the user's perspective.
-  useEffect(() => {
-    const warm = () => {
-      import("./advisor").catch(() => {});
-      import("./cheats").catch(() => {});
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(warm, { timeout: 3000 });
-      return () => window.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(warm, 1500);
-    return () => window.clearTimeout(id);
-  }, []);
+  // R5.0: keep heavy Advisor/Cheats dependency trees genuinely lazy. Browsing the
+  // map must never suddenly compile Chart.js + gameplay.js just because an idle
+  // timeout happened to fire while the player was dragging.
 
-  // R2.28: catch silent visible freezes too, not only named code paths.
-  useEffect(() => installPerformanceWatchdog(), []);
+  // R5.0 removes the temporary global rAF/pointer performance watchdog from the
+  // normal gameplay path. The map now profiles drag frames only while a drag is
+  // actually active, rather than running another callback every rendered frame.
 
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
@@ -191,13 +202,29 @@ const Main = ({
   // silent on any failure. Hidden tabs don't roll the dice.
   useEffect(() => {
     if (hasNoGames) return undefined;
-    const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+    let idleHandle = null;
+    const run = () => {
+      idleHandle = null;
+      if (document.visibilityState !== "visible" || window.__OH_MAP_MOVING__) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
+    };
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible" || window.__OH_MAP_MOVING__) return;
+      if (typeof window.requestIdleCallback === "function") {
+        idleHandle = window.requestIdleCallback(run, { timeout: 10000 });
+      } else {
+        idleHandle = window.setTimeout(run, 750);
+      }
     }, 60000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      if (idleHandle != null) {
+        window.cancelIdleCallback?.(idleHandle);
+        window.clearTimeout?.(idleHandle);
+      }
+    };
   }, [hasNoGames]);
 
   useEffect(() => {
@@ -261,10 +288,17 @@ const Main = ({
   }, []);
 
   const openAdvisor = useCallback(() => {
+    setActiveBottomPanel(null);
     setIsAdvisorOpen(true);
   }, []);
   const closeAdvisor = useCallback(() => setIsAdvisorOpen(false), []);
-  const toggleAdvisor = useCallback(() => setIsAdvisorOpen((open) => !open), []);
+  const toggleAdvisor = useCallback(() => {
+    setIsAdvisorOpen((open) => {
+      const next = !open;
+      if (next) setActiveBottomPanel(null);
+      return next;
+    });
+  }, []);
   const toggleForces = useCallback(() => setIsForcesOpen((open) => !open), []);
   const closeCheats = useCallback(() => setIsCheatsOpen(false), []);
   const openForcesFromCheats = useCallback(() => {
@@ -289,7 +323,12 @@ const Main = ({
   }, []);
 
   const rightShift = isAdvisorOpen ? `calc(${advisorWidth}px + 0.5rem)` : "0.5rem";
+  const setGameplayPanel = useCallback((panelName) => {
+    if (panelName) setIsAdvisorOpen(false);
+    setActiveBottomPanel(panelName);
+  }, []);
   const toggleBottomPanel = useCallback((panelName) => {
+    setIsAdvisorOpen(false);
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
     ));
@@ -306,24 +345,37 @@ const Main = ({
       <DateWidget
         activePanel={activeBottomPanel}
         mapRef={mapRef}
-        onSetPanel={setActiveBottomPanel}
+        onSetPanel={setGameplayPanel}
         onTogglePanel={toggleBottomPanel}
         rightShift={rightShift}
         topOffset={TOP_BAR_OFFSET}
+        dockLeading={(
+          <React.Profiler id="OtherBadge" onRender={reportReactRender}>
+            <Other embedded />
+          </React.Profiler>
+        )}
+        dockMiddle={(
+          <>
+            <React.Profiler id="Toolbar" onRender={reportReactRender}>
+              <Toolbar
+                embedded
+                onOpenAdvisor={openAdvisor}
+                activePanel={activeBottomPanel}
+                onTogglePanel={toggleBottomPanel}
+              />
+            </React.Profiler>
+            <div className="oh-dock-divider" />
+            <AdvisorButton
+              embedded
+              isAdvisorOpen={isAdvisorOpen}
+              onToggle={toggleAdvisor}
+            />
+          </>
+        )}
       />
-      </React.Profiler>
-      <React.Profiler id="Toolbar" onRender={reportReactRender}>
-      <Toolbar
-        onOpenAdvisor={openAdvisor}
-        activePanel={activeBottomPanel}
-        onTogglePanel={toggleBottomPanel}
-      />
-      </React.Profiler>
-      <React.Profiler id="OtherBadge" onRender={reportReactRender}>
-      <Other rightShift={rightShift} />
       </React.Profiler>
       <React.Profiler id="Search" onRender={reportReactRender}>
-      <Search mapRef={mapRef} />
+      <Search mapRef={mapRef} placement="top-right" />
       </React.Profiler>
       <React.Profiler id="ForcesPanel" onRender={reportReactRender}>
       <ForcesPanel
@@ -333,11 +385,6 @@ const Main = ({
         onToggle={toggleForces}
       />
       </React.Profiler>
-      <AdvisorButton
-        isAdvisorOpen={isAdvisorOpen}
-        rightShift={rightShift}
-        onToggle={toggleAdvisor}
-      />
       <React.Profiler id="AdvisorPanel" onRender={reportReactRender}>
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
@@ -371,7 +418,7 @@ const Main = ({
           }}
           onClose={() => setIsSettingsOpen(false)}
           onOpenGameManagement={() => openLibraryTab("games")}
-          onOpenEvents={() => setActiveBottomPanel("history")}
+          onOpenEvents={() => setGameplayPanel("history")}
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);

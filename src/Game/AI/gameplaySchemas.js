@@ -563,7 +563,9 @@ const eventSchema = {
     title: textSchema("Concise event headline."),
     description: textSchema("Specific narrative description and consequences."),
     quote: eventQuoteSchema,
-    importance: textSchema("Importance label, normally minor or major."),
+    importance: textSchema(
+      "Importance label, normally minor or major. Use major only for a genuinely consequential threshold; strategically major events should normally have a matching canonical state consequence rather than prose-only significance.",
+    ),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     notable: {
       type: "boolean",
@@ -679,12 +681,26 @@ const storylineUpdateSchema = {
     participants: {
       type: "array",
       maxItems: 12,
-      description: "Current canonical polity participants. Use exact current polity identities.",
+      description: "Canonical polity participants involved in this persistent process. This list is cumulative on update: include newly involved actors; omission does not remove existing participants. Use exact current polity identities.",
       items: nonEmptyTextSchema("One current canonical polity."),
     },
     state: nonEmptyTextSchema("Semantic state through the current stop date: what is true now and why the process remains active/dormant/resolved."),
   },
   required: ["id", "status", "pressure", "momentum", "kind", "title", "participants", "state"],
+  additionalProperties: false,
+};
+
+export const WORLD_MOTION_REPAIR_SCHEMA = {
+  type: "object",
+  description:
+    "One narrow semantic repair for exactly one already-existing persistent storyline. "
+    + "No events, wars, relations, agreements, territory, units, chats, catalysts, or other world changes are allowed.",
+  properties: {
+    stopDate: nonEmptyTextSchema("Exact simulation stop date in YYYY-MM-DD form."),
+    storyline: storylineUpdateSchema,
+    summary: textSchema("Optional concise note explaining the repaired semantic movement."),
+  },
+  required: ["stopDate", "storyline", "summary"],
   additionalProperties: false,
 };
 
@@ -878,7 +894,7 @@ export const JUMP_FORWARD_SCHEMA = {
     storylineUpdates: {
       type: "string",
       description:
-        "Compact newline-separated storyline records. Empty string when none. Record format is documented in the live prompt.",
+        "Compact newline-separated storyline records. Empty string when none. Persist unresolved multi-turn crises/processes here instead of letting a major crisis disappear after one event. Record format is documented in the live prompt.",
     },
     warUpdates: {
       type: "string",
@@ -1071,7 +1087,7 @@ const gmStorylineUpdateSchema = {
     startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
     kind: nonEmptyTextSchema("Short process category such as crisis, politics, economy, war, revolution, or diplomacy."),
     title: nonEmptyTextSchema("Concise persistent process title."),
-    participants: stringArraySchema("Current canonical polity participants. Full polity names only."),
+    participants: stringArraySchema("Canonical polity participants. Cumulative on update: include new actors; omitted prior actors remain. Full polity names only."),
     eventIndexes: gmEventIndexesSchema,
     state: nonEmptyTextSchema("What is true now and why the process remains active/dormant/resolved through the current game date."),
   },
@@ -2006,6 +2022,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
   territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
+  worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -2046,6 +2063,12 @@ export const TERRITORY_DIRECTOR_TOOL = makeTool(
   "submit_territory_director",
   "Submit conservative de-facto territorial control operations for supplied military/front events.",
   TERRITORY_DIRECTOR_SCHEMA,
+);
+
+export const WORLD_MOTION_REPAIR_TOOL = makeTool(
+  "submit_world_motion_repair",
+  "Submit exactly one semantic update for one existing persistent storyline. This tool cannot create events or mutate any other canonical ledger.",
+  WORLD_MOTION_REPAIR_SCHEMA,
 );
 
 export const ACTIONS_TOOL = makeTool(
@@ -2131,6 +2154,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   timelineCurator: TIMELINE_CURATOR_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
   territoryDirector: TERRITORY_DIRECTOR_TOOL,
+  worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,

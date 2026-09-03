@@ -1469,87 +1469,52 @@ droppedCount:
       new Date().toISOString(),
   };
 
-  console.group(
-    `[OH Native Timeline Curator v${VERSION}] DETERMINISTIC LIVE — ${incoming.length} generated event(s)`,
-  );
+  const verboseDiagnostics =
+    typeof window !== "undefined" && window.__OH_AI_VERBOSE__ === true;
 
-  console.log({
-    gameDate:
-      lastAudit.gameDate,
-
-    round:
-      lastAudit.round,
-
-    simulationMode:
-      mode,
-
-    priorEventCount:
-      lastAudit.priorEventCount,
-
-    plannedActionCount:
-      lastAudit.plannedActionCount,
-
-    analysisSource:
-      lastAudit.analysisSource,
-
-    analysisFallbackReason:
-      lastAudit.analysisFallbackReason ||
-      "—",
-
-    wouldKeep:
-      wouldKeepCount,
-
-    wouldDrop:
-      wouldDropCount,
-
-    actualDropped:
-      0,
-  });
-
-  if (eventSummaries.length) {
-    console.log("native events:");
-    console.table(
-      eventSummaries,
+  if (verboseDiagnostics) {
+    console.group(
+      `[OH Native Timeline Curator v${VERSION}] DETERMINISTIC LIVE — ${incoming.length} generated event(s)`,
     );
+
+    console.log({
+      gameDate: lastAudit.gameDate,
+      round: lastAudit.round,
+      simulationMode: mode,
+      priorEventCount: lastAudit.priorEventCount,
+      plannedActionCount: lastAudit.plannedActionCount,
+      analysisSource: lastAudit.analysisSource,
+      analysisFallbackReason: lastAudit.analysisFallbackReason || "—",
+      wouldKeep: wouldKeepCount,
+      wouldDrop: wouldDropCount,
+      actualDropped: droppedEvents.length,
+    });
+
+    if (eventSummaries.length) {
+      console.log("native events:");
+      console.table(eventSummaries);
+    }
+
+    if (judgmentRows.length) {
+      console.log("deterministic curator:");
+      console.table(judgmentRows);
+    }
+
+    if (lastAudit.storylineSaturation.length) {
+      console.log("recent storyline saturation:");
+      console.table(lastAudit.storylineSaturation);
+    }
+
+    if (analysisError) console.warn("analyst error:", analysisError);
+    console.log(`live curator — kept ${keptEvents.length} event(s), dropped ${droppedEvents.length}.`);
+    console.groupEnd();
+  } else {
+    console.info(
+      `[OH Native Timeline Curator v${VERSION}] kept ${keptEvents.length}/${incoming.length} event(s)` +
+      `${droppedEvents.length ? `; dropped ${droppedEvents.length}` : ""}.`,
+    );
+    if (analysisError) console.warn(`[OH Native Timeline Curator] analyst error: ${analysisError}`);
   }
-
-  if (judgmentRows.length) {
-    console.log(
-      "deterministic curator:",
-    );
-
-    console.table(
-      judgmentRows,
-    );
-  }
-
-  if (
-    lastAudit
-      .storylineSaturation
-      .length
-  ) {
-    console.log(
-      "recent storyline saturation:",
-    );
-
-    console.table(
-      lastAudit
-        .storylineSaturation,
-    );
-  }
-
-  if (analysisError) {
-    console.warn(
-      "analyst error:",
-      analysisError,
-    );
-  }
-
-  console.log(
-  `live curator — kept ${keptEvents.length} event(s), dropped ${droppedEvents.length}.`,
-);
-
-  console.groupEnd();
 
   // alright, no more training wheels.
 return keptEvents;

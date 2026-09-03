@@ -1,28 +1,22 @@
 import { useEffect, useState } from "react";
 import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 
-// Map-facing world store.
+// Map-facing world store — R5.0 event-driven edition.
 //
-// R2.27: local world writes push updates immediately through "oh:world-updated".
-// The network poll is now only a safety net for external/device writes, rather
-// than reparsing the entire campaign every five seconds while the player is idle.
+// Canonical same-tab writes already dispatch `oh:world-updated`. The previous
+// 90-second "safety" poll force-fetched + parsed world.json on the renderer
+// thread and could interrupt otherwise idle map interaction. Bootstrap once from
+// the already-warmed asset cache, then update only when canonical state changes.
 
-const POLL_MS = 90000;
-const RETRY_BUSY_MS = 2500;
-const IDLE_TIMEOUT_MS = 4000;
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_MARKERS = Object.freeze([]);
 
 let sharedState = null;
 let publishedState = null;
-let pollTimer = null;
-let idleHandle = null;
 let listenersInstalled = false;
-let pollInFlight = false;
-let mapMoving = false;
-let lastPollAt = 0;
+let bootstrapPromise = null;
 const subscribers = new Set();
-
 let overrideState = null;
 
 const effectiveState = () => overrideState ?? sharedState;
@@ -41,12 +35,32 @@ const areEqualShallow = (a, b) => {
 
 const areEqualStructured = (a, b) => {
   if (a === b) return true;
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index += 1) {
+      if (!areEqualStructured(a[index], b[index])) return false;
+    }
+    return true;
+  }
+
+  if (typeof a === "object") {
+    if (Array.isArray(b)) return false;
+    const keysA = Object.keys(a);
+    if (keysA.length !== Object.keys(b).length) return false;
+    for (const key of keysA) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (!areEqualStructured(a[key], b[key])) return false;
+    }
+    return true;
+  }
+
+  return Object.is(a, b);
 };
 
 const deriveMapState = (state) => ({
-  // Kept for compatibility with existing consumers. As before, this is a
-  // map-facing snapshot: non-map-only changes do not force a publication.
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
   customRegions: Boolean(state?.customRegions),
@@ -69,142 +83,119 @@ const sameMapState = (prev, next) =>
   prev.customRegions === next.customRegions &&
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
-  areEqualStructured(prev.background, next.background) &&
+  prev.background === next.background &&
   prev.labelFont === next.labelFont &&
   prev.labelHaloColor === next.labelHaloColor &&
   prev.labelTextColor === next.labelTextColor &&
-  areEqualShallow(prev.regionOwnershipOverrides, next.regionOwnershipOverrides) &&
-  areEqualStructured(prev.regionClaimants, next.regionClaimants) &&
-  areEqualStructured(prev.markers, next.markers) &&
-  areEqualStructured(prev.cityRenames, next.cityRenames) &&
-  areEqualStructured(prev.polityOverrides, next.polityOverrides);
+  prev.regionOwnershipOverrides === next.regionOwnershipOverrides &&
+  prev.regionClaimants === next.regionClaimants &&
+  prev.markers === next.markers &&
+  prev.cityRenames === next.cityRenames &&
+  prev.polityOverrides === next.polityOverrides;
+
+const stabilizeMapStateReferences = (prev, next) => {
+  if (!prev) return next;
+  return {
+    ...next,
+    background: areEqualStructured(prev.background, next.background)
+      ? prev.background
+      : next.background,
+    regionOwnershipOverrides: areEqualShallow(
+      prev.regionOwnershipOverrides,
+      next.regionOwnershipOverrides,
+    )
+      ? prev.regionOwnershipOverrides
+      : next.regionOwnershipOverrides,
+    regionClaimants: areEqualStructured(prev.regionClaimants, next.regionClaimants)
+      ? prev.regionClaimants
+      : next.regionClaimants,
+    polityOverrides: areEqualStructured(prev.polityOverrides, next.polityOverrides)
+      ? prev.polityOverrides
+      : next.polityOverrides,
+    markers: areEqualStructured(prev.markers, next.markers)
+      ? prev.markers
+      : next.markers,
+    cityRenames: areEqualStructured(prev.cityRenames, next.cityRenames)
+      ? prev.cityRenames
+      : next.cityRenames,
+  };
+};
 
 const publish = ({ force = false } = {}) => {
   const state = effectiveState();
   if (!state) return;
-  const next = deriveMapState(state);
+  const rawNext = deriveMapState(state);
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const next = force
+    ? rawNext
+    : stabilizeMapStateReferences(publishedState, rawNext);
   const unchanged = !force && sameMapState(publishedState, next);
   const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
   reportPerfOperation("compare map-facing world slices", elapsed, { warnAt: 25 });
-  if (unchanged) return;
+  recordMapWork("useWorldState:compare", elapsed, { force, subscribers: subscribers.size });
+  if (unchanged) {
+    recordMapTrace("world-store:no-op", { force, subscribers: subscribers.size });
+    return;
+  }
+
   publishedState = next;
+  recordMapTrace("world-store:publish", {
+    force,
+    subscribers: subscribers.size,
+    override: Boolean(overrideState),
+    markers: next.markers?.length ?? 0,
+  });
   for (const fn of subscribers) fn(next);
 };
 
-// The raw world the map runtime most recently received. Use this for click-time
-// identity lookups instead of issuing a new world.json fetch.
 export const getWorldStateSnapshot = () => effectiveState();
 
 export const setWorldStateOverride = (next) => {
   overrideState = next && typeof next === "object" ? next : null;
-  publish({ force: true });
-};
-
-const poll = async () => {
-  if (pollInFlight || mapMoving || document.visibilityState === "hidden") return;
-  pollInFlight = true;
-  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-  try {
-    sharedState = await readJson(JSON_URLS.world, {
-      defaultValue: {},
-      force: true,
-      clone: false,
-    });
-    lastPollAt = Date.now();
-  } catch {
-    if (!sharedState) sharedState = {};
-  } finally {
-    pollInFlight = false;
-  }
-
-  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
-  reportPerfOperation("world external safety poll", elapsed, { warnAt: 75 });
+  recordMapTrace("world-store:override", { active: Boolean(overrideState) });
   publish();
 };
 
-const cancelScheduledPoll = () => {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-  if (idleHandle != null && typeof window.cancelIdleCallback === "function") {
-    window.cancelIdleCallback(idleHandle);
-  }
-  idleHandle = null;
-};
-
-const scheduleIdlePoll = (delay = POLL_MS) => {
-  if (typeof window === "undefined" || subscribers.size === 0) return;
-  cancelScheduledPoll();
-
-  pollTimer = window.setTimeout(() => {
-    pollTimer = null;
-    if (subscribers.size === 0) return;
-    if (document.visibilityState !== "visible" || mapMoving) {
-      scheduleIdlePoll(RETRY_BUSY_MS);
-      return;
-    }
-
-    const run = () => {
-      idleHandle = null;
-      if (document.visibilityState !== "visible" || mapMoving) {
-        scheduleIdlePoll(RETRY_BUSY_MS);
-        return;
-      }
-      poll().finally(() => scheduleIdlePoll(POLL_MS));
-    };
-
-    if (typeof window.requestIdleCallback === "function") {
-      idleHandle = window.requestIdleCallback(run, { timeout: IDLE_TIMEOUT_MS });
-    } else {
-      pollTimer = window.setTimeout(() => {
-        pollTimer = null;
-        run();
-      }, 250);
-    }
-  }, Math.max(0, delay));
+const bootstrap = async () => {
+  if (sharedState) return sharedState;
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = readJson(JSON_URLS.world, {
+    defaultValue: {},
+    force: false,
+    clone: false,
+  })
+    .then((world) => {
+      sharedState = world && typeof world === "object" ? world : {};
+      publish();
+      return sharedState;
+    })
+    .catch(() => {
+      if (!sharedState) sharedState = {};
+      publish();
+      return sharedState;
+    })
+    .finally(() => {
+      bootstrapPromise = null;
+    });
+  return bootstrapPromise;
 };
 
 const onWorldUpdated = (event) => {
   const next = event?.detail?.world;
   if (!next || typeof next !== "object") return;
   sharedState = next;
+  recordMapTrace("world-store:canonical-update", {
+    override: Boolean(overrideState),
+    storylines: Array.isArray(next.storylines) ? next.storylines.length : 0,
+    markers: Array.isArray(next.markers) ? next.markers.length : 0,
+  });
   if (!overrideState) publish();
-};
-
-const onMapMotion = (event) => {
-  mapMoving = Boolean(event?.detail?.active);
-  if (!mapMoving && subscribers.size > 0 && !pollInFlight) {
-    scheduleIdlePoll(POLL_MS);
-  }
-};
-
-const onVisibilityChange = () => {
-  if (document.visibilityState !== "visible" || subscribers.size === 0) return;
-  const staleFor = Date.now() - lastPollAt;
-  scheduleIdlePoll(staleFor >= 15000 ? 800 : POLL_MS);
 };
 
 const installListeners = () => {
   if (listenersInstalled || typeof window === "undefined") return;
   listenersInstalled = true;
   window.addEventListener("oh:world-updated", onWorldUpdated);
-  window.addEventListener("oh:map-motion", onMapMotion);
-  document.addEventListener("visibilitychange", onVisibilityChange);
-};
-
-const startPolling = () => {
-  installListeners();
-  if (!sharedState && !pollInFlight) {
-    poll().finally(() => scheduleIdlePoll(POLL_MS));
-    return;
-  }
-  scheduleIdlePoll(POLL_MS);
-};
-
-const stopPolling = () => {
-  cancelScheduledPoll();
 };
 
 export function useWorldState() {
@@ -215,7 +206,7 @@ export function useWorldState() {
   });
 
   useEffect(() => {
-    startPolling();
+    installListeners();
     const handler = (data) => setState(data);
     subscribers.add(handler);
 
@@ -223,11 +214,12 @@ export function useWorldState() {
       setState(publishedState);
     } else if (effectiveState()) {
       publish({ force: true });
+    } else {
+      void bootstrap();
     }
 
     return () => {
       subscribers.delete(handler);
-      if (subscribers.size === 0) stopPolling();
     };
   }, []);
 

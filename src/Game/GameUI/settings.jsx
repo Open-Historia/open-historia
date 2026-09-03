@@ -28,17 +28,17 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
-    backdropFilter: "blur(4px)",
+    backgroundColor: "var(--oh-hud-bg)",
+    backdropFilter: "var(--oh-hud-blur)",
     zIndex: 9999,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     color: "white",
     fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+    borderRadius: "14px",
+    border: "1px solid var(--oh-hud-border)",
+    boxShadow: "var(--oh-hud-shadow-soft)",
 };
 
 const labelStyle = {
@@ -668,12 +668,13 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
     style={{
         ...baseStyle,
         top: topOffset,
-        left: "0.5rem",
-        height: "4rem",
-        width: "4rem",
+        left: "0.65rem",
+        height: "3rem",
+        width: "3rem",
         cursor: "pointer",
-        fontSize: "1.55rem",
-        fontWeight: 700,
+        fontSize: "1.18rem",
+        fontWeight: 800,
+        background: "linear-gradient(180deg, rgba(39,55,75,0.58), rgba(8,16,28,0.48))",
     }}
     >
     ☰
@@ -895,8 +896,8 @@ const SettingsWorkspace = ({
     );
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Game settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(20,29,46,0.995), rgba(12,19,32,0.995))", border: "1px solid rgba(148,163,184,0.2)", borderRadius: isMobile ? "12px" : "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.58)", display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Game settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(32,48,67,0.72), rgba(8,16,28,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
                     <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -1108,9 +1109,9 @@ const SettingsMenu = ({
         <div
         style={{
             ...baseStyle,
-            top: `calc(${topOffset} + 4.25rem)`,
-            left: "0.5rem",
-            width: isMobile ? "calc(100vw - 1rem)" : "30rem",
+            top: `calc(${topOffset} + 3.45rem)`,
+            left: "0.65rem",
+            width: isMobile ? "calc(100vw - 1rem)" : "29rem",
             maxWidth: "calc(100vw - 1rem)",
             minHeight: isMobile ? "auto" : "22rem",
             maxHeight: `calc(100vh - ${topOffset} - 5.25rem)`,
@@ -1120,9 +1121,9 @@ const SettingsMenu = ({
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
-            background: "linear-gradient(180deg, rgba(16,23,38,0.985), rgba(9,14,25,0.98))",
-            border: "1px solid rgba(148,163,184,0.16)",
-            boxShadow: "0 24px 70px rgba(0,0,0,0.48)",
+            background: "linear-gradient(180deg, rgba(32,48,67,0.68), rgba(8,16,28,0.58))",
+            border: "1px solid var(--oh-hud-border)",
+            boxShadow: "var(--oh-hud-shadow)",
         }}
         >
             <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.75rem", margin: "-0.1rem -0.1rem 0.75rem", padding: "0 0.1rem 0.7rem" }}>
