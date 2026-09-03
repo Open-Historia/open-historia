@@ -437,6 +437,14 @@ export const spyOperationOps = (spies, projects, { date = "", playerPolity = "" 
   const ops = [];
   const bySpyId = new Map();
   for (const project of asArray(projects)) {
+    // The player's OWN operations only. linkedSpyIds is written by two different
+    // mechanisms that mean different things: here it means "this entry IS the
+    // agent", and in spyProvenanceOps it means "this entry is what the agent told
+    // us about someone else". Without this guard a recalled agent closed the
+    // FOREIGN intelligence they had reported — stamping "Our agent in X was
+    // withdrawn" onto a rival's programme, which is both the wrong entry and a
+    // sentence that says out loud the thing the board must never say.
+    if (asText(project?.ownerCode)) continue;
     const id = spyIdOf(project);
     if (id) bySpyId.set(id, project);
   }

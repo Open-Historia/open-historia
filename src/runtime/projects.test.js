@@ -681,3 +681,17 @@ test("the operation the agent IS is never doubted, only what it reported", () =>
   assert.equal(ops.length, 1);
   assert.equal(ops[0].id, "f1", "only the foreign entry is doubted");
 });
+
+test("a recalled agent closes its own operation, never the intelligence it reported", () => {
+  // linkedSpyIds is written by two mechanisms with different meanings: here the
+  // entry IS the agent, in spyProvenanceOps it is what the agent reported. Sharing
+  // the field without checking ownerCode had a recalled agent cancelling a rival's
+  // programme and stamping "Our agent in X was withdrawn" on it — the wrong entry,
+  // and a sentence that says out loud what the board must never say.
+  const ownOperation = { id: "op1", name: "Agent in Prussia", ownerCode: "", status: "active", linkedSpyIds: ["spy-france-prussia-1"] };
+  const reported = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const ops = spyOperationOps([spy({ status: "recalled" })], [ownOperation, reported], { playerPolity: "France" });
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].id, "op1");
+  assert.equal(ops[0].op, "cancel");
+});
