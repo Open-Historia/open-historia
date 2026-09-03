@@ -248,3 +248,41 @@ test("what the simulator is told, and what a foreign leader is told", () => {
   assert.ok(!germany.includes("Rhine"));
   assert.equal(foreignAgentBrief(world, "Spain", { playerPolity: P, material: "x" }), "");
 });
+
+test("the brief says where the service has GONE BLIND, not just where it can see", () => {
+  // Going quiet about a lost target is not enough: silence reads the same as
+  // "nothing happened", so anything already recorded about that polity drifts on
+  // looking current and whoever is asked next has to invent why it went dark.
+  const world = {
+    spies: [
+      { id: "s1", owner: P, target: "Prussia", status: "active" },
+      { id: "s2", owner: P, target: "Austria", status: "exposed" },
+    ],
+  };
+  const intercepts = {
+    Prussia: { gatheredAt: "1741-04-01", round: 9, planted: false, exchanges: [
+      { id: "e1", counterpart: "Bavaria", date: "1741-03-20", subject: "Silesia", messages: [{ speaker: "Prussia", text: "We march in spring." }] },
+    ] },
+    Austria: { gatheredAt: "1740-11-02", round: 4, planted: false, exchanges: [
+      { id: "e2", counterpart: "Russia", date: "1740-10-30", subject: "Subsidies", messages: [{ speaker: "Austria", text: "We need the money." }] },
+    ] },
+  };
+
+  const brief = espionageBrief(world, intercepts, { playerPolity: P });
+
+  assert.match(brief, /no longer has an agent inside: Austria \(last read 1740-11-02\)/);
+  assert.match(brief, /cannot be confirmed now/);
+  // The live one still reports, and the lost one's content stays out of the brief.
+  assert.match(brief, /Intercepted Prussia↔Bavaria/);
+  assert.ok(!brief.includes("We need the money"), "a lost target's material must not keep being read");
+});
+
+test("nothing is said about going blind when every target is still live", () => {
+  const world = { spies: [{ id: "s1", owner: P, target: "Prussia", status: "active" }] };
+  const intercepts = {
+    Prussia: { gatheredAt: "1741-04-01", round: 9, planted: false, exchanges: [
+      { id: "e1", counterpart: "Bavaria", date: "1741-03-20", subject: "Silesia", messages: [{ speaker: "Prussia", text: "We march." }] },
+    ] },
+  };
+  assert.ok(!espionageBrief(world, intercepts, { playerPolity: P }).includes("no longer has an agent"));
+});
