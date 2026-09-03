@@ -21,18 +21,25 @@
 //
 // COARSE_TOLERANCE_DEG is the Douglas-Peucker band. The map runs ~0.0155 deg/px
 // at z5.5 (where the tier is fully opaque) and ~0.0078 at z6.5 (where it has
-// faded to nothing), so 0.01 deg stays sub-pixel across the range that is
-// actually visible. Measured on the 3,644-region Medieval map: 2.57M vertices
-// -> 602k, a 4.3x cut, in ~120ms.
+// faded to nothing), so 0.01 deg is 0.64px at z5.5 — already under what a screen
+// can show. Tightening it further buys nothing visible and costs vertices
+// linearly (0.005 doubles them for 0.32px), which is why the flicker fix below
+// spends its budget on RINGS instead of on shape.
 //
-// COARSE_MIN_SPAN_DEG drops whole rings smaller than ~2px at z6.5. On the same
-// map that is 52% of all rings — offshore rocks and one-pixel slivers that
-// cannot be seen at these zooms but still cost per-ring tiling work. 111,769
-// rings -> 18,039. Dropping a ring is not dropping a region: only a polygon
-// whose OUTER ring goes is removed, and a region keeps every part still big
-// enough to see.
+// COARSE_MIN_SPAN_DEG drops whole rings too small to see, and is the knob that
+// has to be set against FLICKER rather than against detail. A ring the tier drops
+// is still in the stock tiles, so it blinks into existence as they fade in — and
+// at the first setting (0.0155, a full pixel at z5.5) that was 93,000 rings
+// appearing across the crossfade, which reads as shimmer over any coast or
+// archipelago. At a third of a pixel it cannot be seen arriving. The cost of the
+// tighter figure is small and almost all of it is structured-clone time out of
+// the worker: 602k -> 694k vertices, 18k -> 41k rings, index unchanged at ~130ms,
+// clone 127ms -> 164ms. Still a third of the 2.57M vertices that froze startup.
+//
+// Dropping a ring is not dropping a region: only a polygon whose OUTER ring goes
+// is removed, and a region keeps every part still big enough to see.
 export const COARSE_TOLERANCE_DEG = 0.01;
-export const COARSE_MIN_SPAN_DEG = 0.0155;
+export const COARSE_MIN_SPAN_DEG = 0.005;
 
 // Squared perpendicular distance from p to segment ab. Squared throughout so the
 // hot loop never calls Math.sqrt.
