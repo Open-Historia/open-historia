@@ -39,10 +39,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
+          # Node 24 (Active LTS). Node 20 is end-of-life, and wrangler 4 — what
+          # wrangler-action@v4 installs by default — needs Node 22 or newer.
           node-version: 24
           cache: npm
 
@@ -68,7 +70,7 @@ jobs:
           echo "No oversized files. dist-site is $(du -sh dist-site | cut -f1)."
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -9,7 +9,7 @@
 // would be ESM, and Electron's main process is most predictable as CJS. The
 // server is ESM and is pulled in with a dynamic import().
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -140,10 +140,34 @@ const installAutoUpdater = () => {
     download: () => {
       // checkForUpdates has to have run first — downloadUpdate with nothing found
       // rejects. Chaining them here means the page needs one call, not two.
+      //
+      // isUpdateAvailable, NOT updateInfo: electron-updater fills updateInfo in
+      // either case — it is the parsed feed, not a verdict — so testing it treats
+      // "the feed says you are already on the newest version" as something to
+      // download. And checkForUpdates resolves NULL, quietly and with no error
+      // event, whenever the updater declines to run at all; the case that reaches
+      // real players is a Linux AppImage started outside its own bundle (no
+      // APPIMAGE env, e.g. after --appimage-extract), which is exactly the build
+      // that cannot replace itself.
+      //
+      // Both of those have to land somewhere, or nothing ever moves the state off
+      // "checking" and the banner sits on "Fetching the update…" for ever with no
+      // way out. "error" is that somewhere: it is what the banner already reads as
+      // "offer the installer download instead", and it is a settled state, so the
+      // page stops polling for a download that is never coming.
       setUpdateState({ state: "checking", error: "" });
       autoUpdater
         .checkForUpdates()
-        .then((result) => (result?.updateInfo ? autoUpdater.downloadUpdate() : null))
+        .then((result) =>
+          result?.isUpdateAvailable
+            ? autoUpdater.downloadUpdate()
+            : setUpdateState({
+                state: "error",
+                error: result
+                  ? "No newer version in the update feed."
+                  : "This build cannot replace itself in place.",
+              }),
+        )
         .catch((error) => setUpdateState({ state: "error", error: String(error?.message || error) }));
     },
     // isSilent: the whole point is that the player does not meet an installer.
@@ -171,6 +195,13 @@ let setupWindow = null;
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
 // second launch goes straight into the game.
+//
+// Size is NOT an integrity check — it only answers "is the download finished".
+// A file of the right length whose contents are not the map we published passes
+// this and would then be used forever, because nothing downstream looked again.
+// verifyMapData() below closes that: it runs the fetcher's --ensure pass after
+// the window is up, which checks the SHA-256 of anything it has not already
+// verified and quietly re-downloads what doesn't match.
 const missingAssets = () => {
   let manifest;
   try {
@@ -217,6 +248,22 @@ const downloadMapData = (onProgress) =>
     child.on("error", () => resolve());
   });
 
+// Verify the map data against the manifest's checksums in the background, after
+// the game is already on screen. The fetcher remembers what it has verified, so
+// this is a handful of stats on a normal launch and a re-hash only when a file
+// changed underneath us. Deliberately silent and non-blocking: the player never
+// waits on it, and a repair looks like the same best-effort download the setup
+// screen does.
+const verifyMapData = () => {
+  const child = spawn(process.execPath, [FETCH_SCRIPT, "--ensure"], {
+    cwd: USER_ROOT,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  child.on("error", () => {});
+};
+
 // --- windows ----------------------------------------------------------------
 
 const createSetupWindow = () =>
@@ -231,6 +278,56 @@ const createSetupWindow = () =>
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
   });
 
+// Electron builds NO context menu on its own — a right-click just does
+// nothing, in an editable field or not. Chrome's spellchecker (spellcheck:
+// true, the default, made explicit below) still runs and underlines
+// misspellings, but with no menu there is nowhere to pick a suggested
+// correction, let alone cut/copy/paste. This is the standard fix: build one
+// from `params` on every "context-menu" event. Suggestions/dictionary first
+// (only when the click actually landed on a misspelled word), then the usual
+// edit actions — each one only offered when `editFlags` says it applies, so
+// e.g. a right-click on plain, non-editable text doesn't offer "Paste".
+const attachEditingContextMenu = (win) => {
+  win.webContents.on("context-menu", (_event, params) => {
+    const menu = new Menu();
+    const { editFlags, dictionarySuggestions, misspelledWord } = params;
+
+    if (misspelledWord) {
+      if (dictionarySuggestions.length === 0) {
+        menu.append(new MenuItem({ label: "No spelling suggestions", enabled: false }));
+      } else {
+        for (const suggestion of dictionarySuggestions) {
+          menu.append(new MenuItem({
+            label: suggestion,
+            click: () => win.webContents.replaceMisspelling(suggestion),
+          }));
+        }
+      }
+      menu.append(new MenuItem({
+        label: "Add to dictionary",
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(misspelledWord),
+      }));
+      menu.append(new MenuItem({ type: "separator" }));
+    }
+
+    if (editFlags.canUndo) menu.append(new MenuItem({ label: "Undo", role: "undo" }));
+    if (editFlags.canRedo) menu.append(new MenuItem({ label: "Redo", role: "redo" }));
+    if (editFlags.canUndo || editFlags.canRedo) menu.append(new MenuItem({ type: "separator" }));
+
+    if (editFlags.canCut) menu.append(new MenuItem({ label: "Cut", role: "cut" }));
+    if (editFlags.canCopy) menu.append(new MenuItem({ label: "Copy", role: "copy" }));
+    if (editFlags.canPaste) menu.append(new MenuItem({ label: "Paste", role: "paste" }));
+    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: "Select All", role: "selectAll" }));
+
+    // Right-clicking blank space with nothing selected/editable earns none of
+    // the above — popping up an empty menu would just be a dead flash. Pinned
+    // to `win` explicitly rather than relying on popup()'s "focused window"
+    // default, which is one assumption fewer to hold if a second window is
+    // ever added.
+    if (menu.items.length > 0) menu.popup({ window: win });
+  });
+};
+
 const createMainWindow = () => {
   const win = new BrowserWindow({
     width: 1440,
@@ -241,13 +338,46 @@ const createMainWindow = () => {
     backgroundColor: "#0d1122",
     show: false,
     title: "Open Historia",
+    // Explicit even though it's already Electron's default — the whole reason
+    // this window needs a context menu at all is to surface what this enables.
+    webPreferences: { spellcheck: true },
   });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
+  //
+  // Only http(s) and mailto get out. shell.openExternal hands whatever it is
+  // given to the OS, which will happily act on schemes that are not "a link":
+  // file: opens a local file in its registered application, smb:/\\host leaks a
+  // Windows credential hash to a remote server, and any app-registered handler
+  // is fair game. The page renders AI output and community text, so what reaches
+  // here is not always something the player wrote.
+  const openableExternally = (target) => {
+    try {
+      return ["https:", "http:", "mailto:"].includes(new URL(target).protocol);
+    } catch {
+      return false;
+    }
+  };
+
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (openableExternally(url)) shell.openExternal(url);
+    else console.warn(`[shell] refused to open ${url} externally`);
     return { action: "deny" };
   });
+
+  // Keep the game IN the game window. This window has no address bar, no back
+  // button and an auto-hidden menu, so a link that navigates it away strands the
+  // player on a page they cannot leave — and hands anything that can render a
+  // link a full-window canvas to imitate the app on. Same-origin navigation (the
+  // local server the app itself serves) is the app working normally; anything
+  // else is a link, and links open in the real browser.
+  win.webContents.on("will-navigate", (event, targetUrl) => {
+    const appOrigin = `http://localhost:${process.env.PORT || 3000}`;
+    if (targetUrl.startsWith(`${appOrigin}/`) || targetUrl === appOrigin) return;
+    event.preventDefault();
+    if (openableExternally(targetUrl)) shell.openExternal(targetUrl);
+  });
+  attachEditingContextMenu(win);
   win.once("ready-to-show", () => win.show());
   return win;
 };
@@ -327,6 +457,8 @@ const boot = async () => {
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
+  // The game is up; now confirm the map on disk is still the map we shipped.
+  verifyMapData();
 };
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and

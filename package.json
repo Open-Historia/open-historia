@@ -72,8 +72,8 @@
     "vite": "^7.3.2"
   },
   "optionalDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
   },
   "main": "electron/main.cjs",
   "build": {
@@ -92,6 +92,7 @@
     "asarUnpack": [
       "scripts/**"
     ],
+    "afterPack": "./scripts/mac-adhoc-sign.cjs",
     "publish": [
       {
         "provider": "generic",
