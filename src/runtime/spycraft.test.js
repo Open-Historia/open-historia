@@ -129,7 +129,7 @@ test("a caught foreign agent waits for the PLAYER's decision and stops reporting
   for (let round = 1; round <= 60 && !caught; round += 1) {
     const out = resolveEspionage(world, { round, date: "d", playerPolity: P });
     world = { ...world, spies: out.spies };
-    if (out.notices.some((n) => n.kind === "discovered")) caught = out;
+    if (normalizeSpies(out.spies).some((s) => s.status === "discovered")) caught = out;
   }
   assert.ok(caught, "a 0-vs-100 agent is caught");
   const [spy] = foreignSpies(world, P);
