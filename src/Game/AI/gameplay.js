@@ -1550,7 +1550,6 @@ const applySimulationResult = async ({
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
   const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
-  const nextEvents = [...priorEvents, ...freshEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -1660,9 +1659,29 @@ const applySimulationResult = async ({
   worldWithImpacts.spies = espionage.spies;
   // A spy in the world needs a seal for what it will report under.
   if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
+  const espionageEventIds = [];
   for (const event of espionage.events) {
     const entry = normalizeEventEntry({ ...event, id: "espionage-" + nextGame.round + "-" + freshEvents.length }, freshEvents.length);
-    if (entry) freshEvents.push(entry);
+    if (entry) {
+      freshEvents.push(entry);
+      espionageEventIds.push(entry.id);
+    }
+  }
+  // Built HERE rather than beside freshEvents above, because the loop that just
+  // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
+  // taken before the loop cannot see an exposure or a discovery — and that copy is
+  // what writeEventsState persists and what this function returns.
+  const nextEvents = [...priorEvents, ...freshEvents];
+  // Same reason, for this turn's own record: simulationHistory is built as an
+  // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
+  // resolves on its output, so its eventIds snapshot also predates the loop.
+  // time.jsx renders a turn's events from exactly this list.
+  if (espionageEventIds.length && worldWithImpacts.simulationHistory?.[0]) {
+    const [turnEntry, ...olderTurns] = worldWithImpacts.simulationHistory;
+    worldWithImpacts.simulationHistory = [
+      { ...turnEntry, eventIds: [...turnEntry.eventIds, ...espionageEventIds] },
+      ...olderTurns,
+    ];
   }
   let nextWorld = worldWithImpacts;
 
