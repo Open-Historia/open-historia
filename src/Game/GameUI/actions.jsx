@@ -131,7 +131,7 @@ const ActionItem = ({ action, onDelete }) => {
         >
         <div style={{ flex: 1, minWidth: 0 }}>
         {showTitle && (
-            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "clamp(0.98rem, 0.32vw + 0.84rem, 1.08rem)", fontWeight: 700, marginBottom: "0.28rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "clamp(0.9rem, calc(0.5vh + 0.63rem), 1.08rem)", fontWeight: 700, marginBottom: "0.28rem" }}>
             {normalized.title}
             </div>
         )}
@@ -448,7 +448,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             fontFamily: "sans-serif",
             // Compact left workspace: enough room for suggestions/actions without
             // turning the command surface into a full-height wall over the map.
-            height: "min(52rem, calc(100vh - 5.6rem))",
+            height: "min(52rem, calc(37vh + 19rem), calc(100vh - 5.6rem))",
             minHeight: "34rem",
             left: "0.75rem",
             maxWidth: "calc(100vw - 1rem)",
@@ -457,7 +457,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             pointerEvents: isOpen ? "auto" : "none",
             position: "fixed",
             transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
-            width: "min(36rem, calc(100vw - 1.5rem))",
+            width: "min(36rem, calc(21vh + 17.2rem), calc(100vw - 1.5rem))",
             zIndex: 9998,
         }}
         >
@@ -467,10 +467,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             borderBottom: "1px solid rgba(255,255,255,0.07)",
             display: "flex",
             justifyContent: "space-between",
-            padding: "1rem 1.25rem 0.75rem",
+            padding: "clamp(0.78rem, 1.1vh, 1rem) clamp(1rem, 1.4vh, 1.25rem) clamp(0.65rem, 0.85vh, 0.75rem)",
         }}
         >
-        <span style={{ fontSize: "clamp(1.08rem, 0.55vw + 0.84rem, 1.28rem)", fontWeight: 700, letterSpacing: "0.01em" }}>Orders</span>
+        <span style={{ fontSize: "clamp(1.08rem, calc(0.7vh + 0.65rem), 1.28rem)", fontWeight: 700, letterSpacing: "0.01em" }}>Orders</span>
         <button
         type="button"
         onClick={onClose}
@@ -498,11 +498,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem", padding: "1.1rem 1.25rem", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "clamp(0.78rem, 1.2vh, 1.1rem)", padding: "clamp(0.82rem, 1.2vh, 1.1rem) clamp(1rem, 1.4vh, 1.25rem)", flex: 1, minHeight: 0, overflow: "hidden" }}>
         <p
         style={{
             color: "rgba(255,255,255,0.75)",
-            fontSize: "clamp(0.94rem, 0.32vw + 0.78rem, 1.04rem)",
+            fontSize: "clamp(0.9rem, calc(0.45vh + 0.64rem), 1.04rem)",
             lineHeight: "1.62",
             margin: 0,
         }}
@@ -519,7 +519,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             borderRadius: "10px",
             color: "rgba(196, 165, 255, 0.95)",
             cursor: "pointer",
-            fontSize: "clamp(0.92rem, 0.28vw + 0.78rem, 1rem)",
+            fontSize: "clamp(0.88rem, calc(0.42vh + 0.63rem), 1rem)",
             fontWeight: 500,
             letterSpacing: "0.01em",
             padding: "0.55rem 1rem",
@@ -549,7 +549,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             color: "rgba(255,255,255,0.82)",
             cursor: "pointer",
             display: "flex",
-            fontSize: "clamp(0.9rem, 0.25vw + 0.78rem, 0.98rem)",
+            fontSize: "clamp(0.86rem, calc(0.4vh + 0.62rem), 0.98rem)",
             gap: "0.5rem",
             justifyContent: "center",
             padding: "0.52rem 1rem",
@@ -575,7 +575,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 display: "flex",
                 flexDirection: "column",
                 gap: "0.5rem",
-                maxHeight: "13rem",
+                maxHeight: "clamp(8rem, 16vh, 13rem)",
                 overflowY: "auto",
                 scrollbarWidth: "none",
             }}
@@ -633,8 +633,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             backgroundColor: "rgba(0,0,0,0.2)",
             borderTop: "1px solid rgba(255,255,255,0.07)",
             display: "flex",
-            gap: "0.72rem",
-            padding: "1rem 1rem",
+            gap: "clamp(0.55rem, 0.8vh, 0.72rem)",
+            padding: "clamp(0.72rem, 1.1vh, 1rem)",
         }}
         >
         <div style={{ alignItems: "stretch", display: "flex", flex: 1, position: "relative" }}>
@@ -657,7 +657,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             padding: "0.7rem 2.8rem 0.7rem 0.85rem",
             resize: "vertical",
             transition: "border-color 0.2s",
-            minHeight: "4.25rem",
+            minHeight: "clamp(3.5rem, 4.7vh, 4.25rem)",
             lineHeight: "1.5",
             overflowY: "auto",
             width: "100%",

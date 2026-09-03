@@ -1,11 +1,12 @@
 /*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useState } from "react";
-import { JSON_URLS, getNationFlags, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { useLibraryState } from "../../runtime/library.js";
 
 const baseStyle = {
     position: "fixed",
@@ -49,7 +50,10 @@ const FallbackBadge = ({ label }) => (
 );
 
 const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
-    const [country, setCountry] = useState(null);
+    const { activeGame } = useLibraryState();
+    const activeGameId = String(activeGame?.id || "");
+    const activeGameCountry = String(activeGame?.country || "").trim();
+    const [country, setCountry] = useState(() => activeGameCountry || null);
     // A LANDLESS player is a stateless actor (a person, a movement, a
     // government-in-exile) whose game.country may still resolve to a real ISO
     // code — but they are NOT that country, so the badge must not borrow its
@@ -65,8 +69,18 @@ const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
 
     useEffect(() => {
         let cancelled = false;
-        const liveCountry = { current: "" };
+        const liveCountry = { current: activeGameCountry };
         const liveWorld = { current: null };
+
+        // The library store owns which campaign is active. Using cached game.json here
+        // meant a campaign switch could leave this one badge stuck on the previous
+        // player's polity even while every other UI surface had already moved on.
+        if (activeGameCountry) {
+            setCountry((current) => current === activeGameCountry ? current : activeGameCountry);
+        }
+        setWorldState(null);
+        setLandless(false);
+        setImageFailed(false);
 
         const apply = () => {
             if (cancelled) return;
@@ -79,12 +93,12 @@ const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
         };
 
         Promise.all([
-            readJson(JSON_URLS.game, { defaultValue: {}, force: false, clone: false }),
-            readWorldState({ force: false }),
+            // One forced refresh on campaign activation is cheap and prevents the new
+            // polity from being paired with the previous campaign's world/flag state.
+            readWorldState({ force: true }),
             getNationFlags().catch(() => ({})),
         ])
-            .then(([game, world, flags]) => {
-                liveCountry.current = game?.country || "";
+            .then(([world, flags]) => {
                 liveWorld.current = world;
                 setWorldState(world || null);
                 setFlagCatalog(flags || {});
@@ -119,7 +133,7 @@ const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
             window.removeEventListener("oh:world-updated", onWorldUpdated);
             window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdated);
         };
-    }, []);
+    }, [activeGameCountry, activeGameId]);
 
     useEffect(() => {
         setImageFailed(false);
