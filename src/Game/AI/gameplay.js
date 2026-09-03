@@ -4730,14 +4730,119 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) {
     worldWithImpacts.spySeal = newSeal();
   }
-  for (const event of espionage.events) {
+
+  // Upstream resolves espionage after the ordinary event bundle has already been
+  // applied. Continuum still needs those outcomes to behave like real campaign
+  // events: visible in the turn timeline, classified like the rest of the feed,
+  // and capable of changing the bilateral ledger when an operation is exposed.
+  const espionageEventIds = [];
+  const espionageRelationUpdates = [];
+  const relationStatusForScore = (value) => {
+    const score = Math.max(-100, Math.min(100, Math.round(Number(value) || 0)));
+    if (score >= 55) return "friendly";
+    if (score >= 20) return "cordial";
+    if (score >= -10) return "neutral";
+    if (score >= -30) return "cautious";
+    if (score >= -60) return "strained";
+    if (score > -90) return "hostile";
+    return "rival";
+  };
+  const sameRelationPair = (entry, a, b) => {
+    const left = canonicalCampaignPolity(entry?.a, espionageWorld, espionageIdentityIndex);
+    const right = canonicalCampaignPolity(entry?.b, espionageWorld, espionageIdentityIndex);
+    return (left === a && right === b) || (left === b && right === a);
+  };
+
+  for (let espionageIndex = 0; espionageIndex < espionage.events.length; espionageIndex += 1) {
+    const event = espionage.events[espionageIndex];
+    const notice = espionage.notices?.[espionageIndex] || null;
+    const spy = notice?.spyId
+      ? espionage.spies.find((candidate) => candidate?.id === notice.spyId)
+      : null;
+    const publicExposure = notice?.kind === "exposed" && spy;
+
     const entry = normalizeEventEntry(
-      { ...event, id: `espionage-${nextGame.round}-${territoryEvents.length}` },
+      {
+        ...event,
+        ...(publicExposure ? {
+          title: `Espionage scandal erupts as ${spy.target} expels ${spy.owner} agent`,
+          description:
+            `${spy.target}'s counter-intelligence service has dismantled an espionage operation linked to ${spy.owner}, ` +
+            "expelled the operative, and publicized the arrest. The disclosure has materially damaged bilateral relations.",
+        } : {}),
+        id: `espionage-${nextGame.round}-${territoryEvents.length}`,
+        importance: notice?.kind === "suspected" ? "minor" : "major",
+        kind: "diplomacy",
+        notable: true,
+        playerRelated: true,
+        source: "espionage",
+      },
       territoryEvents.length,
     );
     if (!entry) continue;
+
     territoryEvents.push(entry);
     nextEvents.push(entry);
+    espionageEventIds.push(entry.id);
+
+    // A public exposure is not just prose. It becomes a real, event-linked
+    // bilateral deterioration in the same canonical relation ledger used by
+    // ordinary diplomacy. Secret discoveries/turns stay secret and do not.
+    if (publicExposure) {
+      const owner = canonicalCampaignPolity(spy.owner, espionageWorld, espionageIdentityIndex);
+      const target = canonicalCampaignPolity(spy.target, espionageWorld, espionageIdentityIndex);
+      if (owner && target && owner !== target) {
+        const sameTurnUpdate = [...normalizeArray(result.relationUpdates)]
+          .reverse()
+          .find((update) => sameRelationPair(update, owner, target));
+        const priorRelation = normalizeArray(worldWithImpacts.relations)
+          .find((relation) => sameRelationPair(relation, owner, target));
+        const baseScore = Number.isFinite(Number(sameTurnUpdate?.score))
+          ? Number(sameTurnUpdate.score)
+          : Number.isFinite(Number(priorRelation?.score))
+            ? Number(priorRelation.score)
+            : 0;
+        const score = Math.max(-100, Math.min(100, Math.round(baseScore) - 20));
+
+        espionageRelationUpdates.push({
+          id: `relation-update-espionage-${nextGame.round}-${espionageIndex}`,
+          a: owner,
+          b: target,
+          score,
+          status: relationStatusForScore(score),
+          eventIndexes: [],
+          eventIds: [entry.id],
+          summary: `Public exposure of ${owner}'s espionage operation in ${target}.`,
+        });
+      }
+    }
+  }
+
+  const effectiveRelationUpdates = [
+    ...normalizeArray(result.relationUpdates),
+    ...espionageRelationUpdates,
+  ];
+
+  // The turn-history snapshot was created before espionage resolution. Append the
+  // late deterministic events now so Current Events can actually reveal them.
+  if (espionageEventIds.length && normalizeArray(worldWithImpacts.simulationHistory).length) {
+    const [latestHistory, ...olderHistory] = normalizeArray(worldWithImpacts.simulationHistory);
+    worldWithImpacts.simulationHistory = [
+      {
+        ...latestHistory,
+        eventIds: [...new Set([
+          ...normalizeArray(latestHistory?.eventIds),
+          ...espionageEventIds,
+        ])],
+        relationIds: [...new Set([
+          ...normalizeArray(latestHistory?.relationIds),
+          ...espionageRelationUpdates
+            .map((update) => relationPairKeyForHistory(update.a, update.b))
+            .filter(Boolean),
+        ])],
+      },
+      ...olderHistory,
+    ];
   }
 
   endTurnPerfStage(impactApplyStage);
@@ -4754,7 +4859,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   await yieldToUiFrame(signal);
   const diplomaticMerge = applyDiplomaticUpdates({
     world: warMerge.world,
-    relationUpdates: normalizeArray(result.relationUpdates),
+    relationUpdates: effectiveRelationUpdates,
     agreementUpdates: normalizeArray(result.agreementUpdates),
     events: territoryEvents,
     stopDate: nextGame.gameDate,
@@ -4846,7 +4951,7 @@ const nextEvents = [...priorEvents, ...territoryEvents];
     fromDate: baseGame.gameDate,
     toDate: nextGame.gameDate,
     events: territoryEvents,
-    relationUpdates: normalizeArray(result.relationUpdates),
+    relationUpdates: effectiveRelationUpdates,
     agreementUpdates: normalizeArray(result.agreementUpdates),
     plannedActions: plannedActionSnapshot,
     existingGeneratedChats: generatedChats,

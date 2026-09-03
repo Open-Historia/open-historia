@@ -511,7 +511,7 @@ const focusMapOnBounds = (mapRef, bounds) => {
 const filterPlannedActions = (actions) =>
 normalizeActions(actions).filter((action) => action.status === "planned");
 
-const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) => {
+const buildTurnRecord = ({ entry, index, history, eventLookup, allEvents = [], allReferencedEventIds = null, game, lookups }) => {
     if (!entry) {
         return null;
     }
@@ -526,7 +526,30 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
     const toDate = entry.toDate || entry.date || game?.gameDate || "";
     const fromDate = fallbackStartDate || toDate;
     const referencedEventIds = (entry.eventIds ?? []).filter(Boolean);
-    const events = referencedEventIds.map((eventId) => eventLookup.get(eventId)).filter(Boolean);
+    const referencedEvents = referencedEventIds.map((eventId) => eventLookup.get(eventId)).filter(Boolean);
+
+    // R5/Continuum saves produced before the espionage integration fix can contain
+    // a canonical espionage event that was written after simulationHistory took its
+    // eventId snapshot. Surface only those truly orphaned events in the matching
+    // turn window; newly generated events are linked normally and never use this path.
+    const globallyReferenced = allReferencedEventIds instanceof Set
+        ? allReferencedEventIds
+        : new Set(referencedEventIds);
+    const parsedFromDate = fromDate ? dayjs(fromDate) : null;
+    const parsedToDate = toDate ? dayjs(toDate) : null;
+    const legacyEspionageEvents = (allEvents ?? []).filter((event) => {
+        if (String(event?.source || "").trim().toLowerCase() !== "espionage") return false;
+        const eventId = String(event?.id || "").trim();
+        if (!eventId || globallyReferenced.has(eventId)) return false;
+
+        const rawDate = String(event?.date || "").trim();
+        const parsedDate = rawDate ? dayjs(rawDate) : null;
+        if (!parsedDate?.isValid?.()) return false;
+        if (parsedFromDate?.isValid?.() && !parsedDate.isAfter(parsedFromDate, "day")) return false;
+        if (parsedToDate?.isValid?.() && parsedDate.isAfter(parsedToDate, "day")) return false;
+        return true;
+    });
+    const events = [...referencedEvents, ...legacyEspionageEvents];
     const plannedActions = filterPlannedActions(entry.plannedActions || entry.actions);
     const mapChangeCount = events.reduce((sum, event) => sum + getEventMapChangeCount(event), 0);
     const tags = new Set();
@@ -669,7 +692,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
             display: "flex",
             gap: "0.45rem",
             justifyContent: "space-between",
-            padding: "0.95rem 1.1rem 0.78rem",
+            padding: "clamp(0.72rem, 1.05vh, 0.95rem) clamp(0.9rem, 1.25vh, 1.1rem) clamp(0.62rem, 0.86vh, 0.78rem)",
         }}
         >
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
@@ -687,7 +710,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
         </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.78rem", padding: "1.05rem 1.15rem 1.18rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "clamp(0.62rem, 0.88vh, 0.78rem)", padding: "clamp(0.8rem, 1.15vh, 1.05rem) clamp(0.92rem, 1.28vh, 1.15rem) clamp(0.9rem, 1.32vh, 1.18rem)" }}>
         {tags.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
             {tags.map((tag) => (
@@ -696,12 +719,12 @@ const EventCard = ({ event, footer = null, lookups }) => {
             </div>
         )}
 
-        <div style={{ color: "rgba(255,255,255,0.97)", fontSize: "1rem", fontWeight: 850, letterSpacing: "0.018em", lineHeight: 1.28 }}>
+        <div style={{ color: "rgba(255,255,255,0.97)", fontSize: "clamp(0.9rem, 1.12vh, 1rem)", fontWeight: 850, letterSpacing: "0.018em", lineHeight: 1.28 }}>
         {event.title}
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(225,233,244,0.84)", fontSize: "0.9rem", lineHeight: "1.62" }}>
+            <div className="timeline-markdown" style={{ color: "rgba(225,233,244,0.84)", fontSize: "clamp(0.82rem, 1vh, 0.9rem)", lineHeight: "1.62" }}>
             <ReactMarkdown>{event.description}</ReactMarkdown>
             </div>
         )}
@@ -783,12 +806,12 @@ const PanelChrome = ({
     const isHistory = variant === "history";
     const isAdvance = variant === "advance";
     const width = isHistory
-        ? "min(46rem, calc(100vw - 1.5rem))"
+        ? "min(46rem, calc(32vh + 17.2rem), calc(100vw - 1.5rem))"
         : isAdvance
         ? "min(29rem, calc(100vw - 1.5rem))"
         : PANEL_WIDTH;
     const height = isHistory
-        ? "min(70vh, calc(100vh - 6.2rem))"
+        ? "min(70vh, calc(91vh - 19rem), calc(100vh - 6.2rem))"
         : isAdvance
         ? "auto"
         : "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))";
@@ -817,7 +840,7 @@ const PanelChrome = ({
         style={{
             borderBottom: hasHeaderText ? "1px solid rgba(255,255,255,0.07)" : "none",
             flexShrink: 0,
-            padding: hasHeaderText ? "1rem 1.2rem 0.82rem" : "0.7rem 0.75rem 0",
+            padding: hasHeaderText ? "clamp(0.78rem, 1.1vh, 1rem) clamp(0.95rem, 1.35vh, 1.2rem) clamp(0.66rem, 0.9vh, 0.82rem)" : "0.7rem 0.75rem 0",
         }}
         >
         <div style={{ alignItems: "center", display: "flex", justifyContent: hasHeaderText ? "space-between" : "flex-end" }}>
@@ -829,12 +852,12 @@ const PanelChrome = ({
                 </div>
             )}
             {title && (
-                <div style={{ color: "rgba(255,255,255,0.97)", fontSize: isHistory ? "1.08rem" : "1rem", fontWeight: 850 }}>
+                <div style={{ color: "rgba(255,255,255,0.97)", fontSize: isHistory ? "clamp(0.98rem, 1.2vh, 1.08rem)" : "1rem", fontWeight: 850 }}>
                 {title}
                 </div>
             )}
             {subtitle && (
-                <div style={{ color: "rgba(220,232,247,0.43)", fontSize: "0.73rem", lineHeight: "1.45", marginTop: "0.16rem" }}>
+                <div style={{ color: "rgba(220,232,247,0.43)", fontSize: "clamp(0.68rem, 0.82vh, 0.73rem)", lineHeight: "1.45", marginTop: "0.16rem" }}>
                 {subtitle}
                 </div>
             )}
@@ -864,7 +887,7 @@ const PanelChrome = ({
         </div>
         </div>
 
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.85rem", minHeight: 0, overflowY: "auto", padding: isAdvance ? "0.9rem 1rem 1rem" : "1rem 1.2rem 1.2rem", scrollbarWidth: "thin" }}>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: isHistory ? "clamp(0.68rem, 0.95vh, 0.85rem)" : "0.85rem", minHeight: 0, overflowY: "auto", padding: isAdvance ? "0.9rem 1rem 1rem" : isHistory ? "clamp(0.78rem, 1.1vh, 1rem) clamp(0.95rem, 1.35vh, 1.2rem) clamp(0.95rem, 1.35vh, 1.2rem)" : "1rem 1.2rem 1.2rem", scrollbarWidth: "thin" }}>
         {children}
         </div>
         </div>
@@ -1617,15 +1640,21 @@ const DateWidget = memo(function DateWidget({
             bestIndex = 0;
         }
 
+        const allReferencedEventIds = new Set(
+            rawHistory.flatMap((entry) => (entry?.eventIds ?? []).filter(Boolean)),
+        );
+
         return buildTurnRecord({
             entry: bestEntry,
             index: bestIndex,
             history: rawHistory,
             eventLookup,
+            allEvents: events,
+            allReferencedEventIds,
             game: gameData,
             lookups,
         });
-    }, [eventLookup, gameData, lookups, openPanel, worldState]);
+    }, [eventLookup, events, gameData, lookups, openPanel, worldState]);
 
     const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
     ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
