@@ -5,6 +5,7 @@ import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { buildTurnEvents } from "../../runtime/turnEvents.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
@@ -28,7 +29,6 @@ import {
   readInterceptsState,
   writeInterceptsState,
   normalizeActionEntry,
-  normalizeEventEntry,
   normalizeActions,
   normalizeChatEntry,
   normalizeChats,
@@ -1617,60 +1617,59 @@ const applySimulationResult = async ({
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
-      simulationHistory: [
-        {
-          catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
-          date: nextGame.gameDate,
-          eventIds: freshEvents.map((event) => event.id),
-          fallbackReason: normalizeString(result.generation?.fallbackReason),
-          fromDate: baseGame.gameDate,
-          mode: normalizeString(result.mode) || "jump",
-          plannedActions: plannedActionSnapshot,
-          round: nextGame.round,
-          summary: normalizeString(result.summary),
-          source: result.generation?.source || "ai",
-          toDate: nextGame.gameDate,
-        },
-        ...normalizeWorldState(baseWorld).simulationHistory,
-      ].slice(0, 12),
+      // This turn's history record is NOT built here. Its eventIds have to list
+      // the espionage events too, and those do not exist until resolveEspionage
+      // has run on THIS call's output — so building it here made the id list a
+      // snapshot taken one step too early. It is prepended below instead, once,
+      // off the finished list. baseWorld's own history rides through and comes
+      // back normalized.
     },
   });
-  const espionage = resolveEspionage(worldWithImpacts, {
-    round: nextGame.round,
-    date: nextGame.gameDate,
-    playerPolity: normalizeString(baseGame.country),
-    candidates: espionageCandidates,
-  });
+  // Espionage is elapsed time, not an edit: it rolls detection, turning and
+  // foreign deployment for the round, seeded on the round number. A game-master
+  // command is the player rewriting the world by hand, so it must not also
+  // advance the spy war — a cheat would burn that round's roll and quietly get
+  // an agent caught, in a turn the player never meant as a passage of time.
+  // Jumps, auto-jumps and catalyst stages are all genuinely elapsed time.
+  const espionage = normalizeString(result.mode) === "game-master"
+    ? { spies: worldWithImpacts.spies, events: [] }
+    : resolveEspionage(worldWithImpacts, {
+      round: nextGame.round,
+      date: nextGame.gameDate,
+      playerPolity: normalizeString(baseGame.country),
+      candidates: espionageCandidates,
+    });
   worldWithImpacts.spies = espionage.spies;
   // A spy in the world needs a seal for what it will report under.
   if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
-  const espionageEventIds = [];
-  for (const event of espionage.events) {
-    const entry = normalizeEventEntry({ ...event, id: "espionage-" + nextGame.round + "-" + freshEvents.length }, freshEvents.length);
-    if (entry) {
-      freshEvents.push(entry);
-      espionageEventIds.push(entry.id);
-    }
-  }
-  // Built HERE rather than beside freshEvents above, because the loop that just
-  // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
-  // taken before the loop cannot see an exposure or a discovery — and that copy is
-  // what writeEventsState persists and what this function returns.
-  const nextEvents = [...priorEvents, ...freshEvents];
-  // Same reason, for this turn's own record: simulationHistory is built as an
-  // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
-  // resolves on its output, so its eventIds snapshot also predates the loop.
-  // time.jsx renders a turn's events from exactly this list.
-  if (espionageEventIds.length && worldWithImpacts.simulationHistory?.[0]) {
-    const [turnEntry, ...olderTurns] = worldWithImpacts.simulationHistory;
-    worldWithImpacts.simulationHistory = [
-      { ...turnEntry, eventIds: [...turnEntry.eventIds, ...espionageEventIds] },
-      ...olderTurns,
-    ];
-  }
+
+  // The turn's finished event list and the ids its record points at, built
+  // together off one array now that espionage has had its say (turnEvents.js).
+  const { turnEvents, nextEvents, eventIds } = buildTurnEvents({
+    priorEvents,
+    freshEvents,
+    espionageEvents: espionage.events,
+    round: nextGame.round,
+  });
+  worldWithImpacts.simulationHistory = [
+    {
+      catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
+      date: nextGame.gameDate,
+      eventIds,
+      fallbackReason: normalizeString(result.generation?.fallbackReason),
+      fromDate: baseGame.gameDate,
+      mode: normalizeString(result.mode) || "jump",
+      plannedActions: plannedActionSnapshot,
+      round: nextGame.round,
+      summary: normalizeString(result.summary),
+      source: result.generation?.source || "ai",
+      toDate: nextGame.gameDate,
+    },
+    ...worldWithImpacts.simulationHistory,
+  ].slice(0, 12);
   let nextWorld = worldWithImpacts;
 
-  for (const event of freshEvents) {
+  for (const event of turnEvents) {
     for (const createdChat of event.impacts.createdChats) {
       const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
         fallbackTitle: event.title,

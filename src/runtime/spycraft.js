@@ -176,8 +176,14 @@ export const foreignDeployChance = (polityIntelligence, { hostile = false, hosti
 export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "", candidates = [] } = {}) => {
   const player = String(playerPolity ?? "").trim();
   let spies = normalizeSpies(world?.spies);
+  // NARRATIVE ONLY — these events must never carry `impacts`. resolveEspionage
+  // runs on the world applyEventImpactsToWorld has already produced, so an
+  // impact attached here would join the turn's event list AFTER the only pass
+  // that applies impacts: persisted, rendered and fed to the model, while
+  // changing nothing in the world. The "relations are strained" line below is
+  // the obvious candidate for wanting one — route that through a generated
+  // event's polityChanges, or give applySimulationResult a second impact pass.
   const events = [];
-  const notices = [];
   const roll = (key) => draw(`${round}:${key}`);
   const intel = (polity) => intelligenceOf(world, polity);
 
@@ -190,7 +196,6 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
       if (roll(`${spy.id}:detect`) < detectionChance(targetIntel, ownerIntel)) {
         if (spy.target === player) {
           // The player decides: expel or turn. It stops reporting meanwhile.
-          notices.push({ kind: "discovered", spyId: spy.id, owner: spy.owner });
           events.push({
             date, kind: "world", source: "espionage",
             title: `Counter-intelligence uncovers a ${spy.owner} agent`,
@@ -207,7 +212,6 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
           title: `Spy ring rolled up in ${spy.target}`,
           description: `${spy.target} has expelled an agent working for ${spy.owner}, and made the arrest public. Relations with ${spy.owner} are strained.`,
         });
-        notices.push({ kind: "exposed", spyId: spy.id, target: spy.target });
         return { ...spy, status: "exposed", exposedAt: date };
       }
       return spy;
@@ -216,7 +220,6 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
     // Turned, and the owner's own service may notice the reports are wrong.
     if (spy.status === "turned" && !spy.suspected && spy.owner === player) {
       if (roll(`${spy.id}:suspect`) < suspicionChance(ownerIntel, targetIntel)) {
-        notices.push({ kind: "suspected", spyId: spy.id, target: spy.target });
         events.push({
           date, kind: "world", source: "espionage",
           title: `Doubts about the agent in ${spy.target}`,
@@ -245,7 +248,7 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
     }
   }
 
-  return { spies, events, notices };
+  return { spies, events };
 };
 
 // ---- redaction ----------------------------------------------------------------
