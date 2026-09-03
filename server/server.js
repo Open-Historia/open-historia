@@ -2,6 +2,9 @@
 import crypto from "crypto";
 import express from "express";
 import fs from "fs";
+import http from "http";
+import https from "https";
+import os from "os";
 import path from "path";
 import url from "url";
 import {
@@ -50,9 +53,13 @@ import {
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
+  allowedCorsOrigin,
   crossOriginWriteAllowed,
   isAllowedHubUrl,
+  isLoopbackAddress,
   parseByteRange,
+  relayTargetAllowed,
+  sanitizeRelayHeaders,
 } from "./security.js";
 import { appendLog, appendLogBatch, readLogTail, logFilePath } from "./logStore.js";
 
@@ -62,17 +69,94 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const distDir = path.join(__dirname, "../dist");
 
+// WHERE THIS LISTENS is the real access control. Every /api route is
+// unauthenticated by design — it is a personal game server, and the app has no
+// login — so anyone who can open a socket to it can read, overwrite and delete
+// every game and scenario. The cross-origin guard below cannot change that: it
+// keeps a *browser* on another site out, but a non-browser client just sends a
+// matching Origin header (see server/security.js).
+//
+// So this used to be `app.listen(PORT)`, which binds every interface: on a café
+// or dorm network, every device on it had full control of the player's saves.
+// Now it binds loopback unless the player asks for LAN play — which they need
+// for the Android client and for "play from another room", so asking has to be
+// easy. Three ways, in precedence order:
+//
+//   1. OH_HOST, for headless boxes, Termux and anyone scripting it:
+//        OH_HOST=0.0.0.0 node server/server.js     # any device on the network
+//        OH_HOST=192.168.1.9 node server/server.js # one interface only
+//      When set it WINS and pins the setting — the in-game toggle reports that
+//      the environment owns the decision rather than fighting it.
+//   2. The in-game toggle (Settings → Network → "Let other devices connect"),
+//      which persists to network-settings.json and rebinds the listener live —
+//      no restart, no terminal. This is what the desktop app uses, where an
+//      environment variable is not a thing a player can set.
+//   3. Neither: loopback. The desktop app, Termux on the same phone and a
+//      browser on the same machine all arrive over loopback, so the default
+//      costs them nothing.
+const NETWORK_SETTINGS_FILE = path.join(DATA_DIR, "network-settings.json");
+const LOOPBACK_HOST = "127.0.0.1";
+const ALL_INTERFACES_HOST = "0.0.0.0";
+
+const isLanHost = (host) => host !== LOOPBACK_HOST && host !== "localhost" && host !== "::1";
+
+const readNetworkSettings = () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(NETWORK_SETTINGS_FILE, "utf8"));
+    return { lanAccess: parsed?.lanAccess === true };
+  } catch {
+    return { lanAccess: false };
+  }
+};
+
+const writeNetworkSettings = (settings) => {
+  fs.mkdirSync(path.dirname(NETWORK_SETTINGS_FILE), { recursive: true });
+  fs.writeFileSync(NETWORK_SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
+};
+
+// Set = the environment decides and the toggle is read-only.
+const HOST_FROM_ENV = process.env.OH_HOST || "";
+let HOST = HOST_FROM_ENV || (readNetworkSettings().lanAccess ? ALL_INTERFACES_HOST : LOOPBACK_HOST);
+let LAN_ENABLED = isLanHost(HOST);
+
+// The addresses a phone or another computer would actually type in. Doing this
+// here is the difference between "enable LAN play" being a setting and being a
+// chore: the player never has to go and find their own IP.
+const lanAddresses = () =>
+  Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) =>
+    (addresses ?? [])
+      .filter((address) => address.family === "IPv4" && !address.internal)
+      .map((address) => ({ interface: name, url: `http://${address.address}:${PORT}` })),
+  );
+
+// Body limits. These used to be 2048mb, which let a single request exhaust the
+// process's memory before any handler ran. The real ceiling is a scenario bundle
+// with an embedded basemap; the hub caps those at 200 MB (HUB_MAX_BUNDLE_BYTES),
+// so 512 MB leaves room for a hand-built import several times that size while
+// still refusing a body that exists only to OOM the server.
 const jsonParser = express.json({ limit: "64mb" });
-const largeJsonParser = express.json({ limit: "2048mb" });
-const uploadParser = express.raw({ type: () => true, limit: "2048mb" });
+const largeJsonParser = express.json({ limit: "512mb" });
+const uploadParser = express.raw({ type: () => true, limit: "512mb" });
 
 // The Android app's connect screen lives on the WebView's own origin, so its
 // probe of this server is a cross-origin request — without these headers the
-// phone blocks it (CORS) and the app can never connect. This is a personal
-// game server whose whole API is open to whoever can reach it, so a blanket
-// allow changes nothing security-wise.
+// phone blocks it (CORS) and the app can never connect.
+//
+// This was `Access-Control-Allow-Origin: *`, on the reasoning that the API is
+// open to whoever can reach it anyway so a blanket allow changes nothing. That
+// holds for someone already on the network; it does NOT hold for a random
+// website. Reads are "safe methods", so the write guard below never sees them —
+// with `*`, any page in any tab could fetch /api/games off the player's own
+// machine and read the response. An allowlist keeps the phone working and puts
+// the same-origin policy back in front of everyone else.
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const corsOrigin = allowedCorsOrigin(req.headers.origin, req.headers.host, {
+    allowAll: process.env.OH_ALLOW_CROSS_ORIGIN === "1",
+  });
+  // Vary regardless of the outcome: the answer depends on the request's Origin,
+  // so a cache must not reuse one origin's response for another.
+  res.setHeader("Vary", "Origin");
+  if (corsOrigin) res.setHeader("Access-Control-Allow-Origin", corsOrigin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   // PMTiles range reads are cross-origin from the phone shell. Range is
@@ -81,10 +165,34 @@ app.use((req, res, next) => {
   // absent, which it reports as a hard error.
   res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
   // Chrome's Private Network Access preflights loopback/LAN targets and
-  // requires this opt-in on top of regular CORS.
-  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  // requires this opt-in on top of regular CORS. Only worth sending to an origin
+  // we are already answering — offering it to everyone advertises a localhost
+  // service to any page that cares to look.
+  if (corsOrigin) res.setHeader("Access-Control-Allow-Private-Network", "true");
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
+  }
+  next();
+});
+
+// Per-IP fixed-window rate limit for requests that arrive over the network, the
+// same shape the content node already uses. Loopback is exempt: the game itself
+// polls runtime state briskly and it is not the traffic this is here for. Only
+// meaningful when OH_HOST opens the server up at all, which is exactly when an
+// unauthenticated API benefits from a ceiling on how fast it can be hammered.
+const RATE_LIMIT_PER_MIN = Number(process.env.OH_RATE_LIMIT) || 1200;
+const rateHits = new Map();
+const rateTimer = setInterval(() => rateHits.clear(), 60000);
+if (typeof rateTimer.unref === "function") rateTimer.unref();
+
+app.use((req, res, next) => {
+  const address = req.socket?.remoteAddress;
+  if (isLoopbackAddress(address)) return next();
+  const count = (rateHits.get(address) || 0) + 1;
+  rateHits.set(address, count);
+  if (count > RATE_LIMIT_PER_MIN) {
+    res.setHeader("Retry-After", "60");
+    return sendError(res, 429, new Error("Too many requests — slow down."));
   }
   next();
 });
@@ -96,28 +204,41 @@ ensureBasemapStore();
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
+  // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
+  // puts the real cause on error.cause — which is the difference between a
+  // mistyped endpoint (ENOTFOUND), a backend that is not running
+  // (ECONNREFUSED) and a request that ran past a timeout
+  // (UND_ERR_HEADERS_TIMEOUT). The player's copied bug report is the only place
+  // any of this is ever read, and it used to say "fetch failed" and nothing
+  // else. Appended rather than substituted: the message is what a human reads.
+  const detail = error instanceof Error
+    ? (error.cause?.code || error.cause?.message || error.code || "")
+    : "";
+  const reported = detail && !message.includes(detail) ? `${message} (${detail})` : message;
   // Single choke point for every API failure, which is what makes logging them
   // one line rather than forty.
   appendLog({
     level: statusCode >= 500 ? "error" : "warn",
     source: "server",
     event: `http.${statusCode}`,
-    message,
+    message: reported,
     data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
   });
-  res.status(statusCode).json({ error: message });
+  res.status(statusCode).json({ error: reported });
 };
 
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
-// The blanket CORS above is needed so the Android connect screen (on the
-// WebView's own origin) can *probe* this server — a GET. But it also let any
-// web page the user happens to be visiting POST/PUT/DELETE to localhost:
-// delete saved maps and games, drive the AI relay at internal hosts, or hit
-// /api/server/shutdown. The app serves its own SPA, so real gameplay writes
-// are same-origin (Origin host === Host). No-Origin writes are trusted only
-// from loopback — a native client on the same machine — so a curl from another
-// host on the LAN can't slip past with no Origin header. Set
-// OH_ALLOW_CROSS_ORIGIN=1 to restore the old fully-open behavior.
+// The CORS allowlist above lets the Android connect screen (on the WebView's own
+// origin) *probe* this server — a GET. Without this guard, any web page the
+// player happens to be visiting could also POST/PUT/DELETE to localhost: delete
+// saved maps and games, drive the AI relay, or hit /api/server/shutdown. The app
+// serves its own SPA, so real gameplay writes are same-origin (Origin host ===
+// Host); no-Origin writes are trusted only from loopback.
+//
+// This stops browsers, which is what CSRF is. It does NOT stop a non-browser
+// client on the network, which sets Origin and Host itself — that is what the
+// loopback default is for, not this. Set OH_ALLOW_CROSS_ORIGIN=1 to
+// restore the old fully-open behavior (this guard off, CORS back to `*`).
 const ALLOW_CROSS_ORIGIN_WRITES = process.env.OH_ALLOW_CROSS_ORIGIN === "1";
 app.use((req, res, next) => {
   const decision = crossOriginWriteAllowed({
@@ -681,43 +802,241 @@ const setHubFileGuards = (res) => {
 // plain server-to-server for the endpoint. The target is whatever the player
 // configured in Settings — them talking to their own AI through their own
 // game server.
+//
+// Which also makes it, structurally, a request forwarder: caller-chosen URL,
+// caller-chosen headers, response body handed back. It cannot refuse private
+// addresses — a model on localhost or the LAN box is the entire point — so it is
+// fenced in three other ways instead:
+//   1. LOOPBACK ONLY by default. A relay reachable from the network is an open
+//      proxy for everyone on it. The desktop app, Termux-on-the-same-phone and a
+//      browser on the host all come from loopback and are unaffected; a phone
+//      talking to a desktop needs OH_ALLOW_REMOTE_RELAY=1, which is a deliberate
+//      "yes, proxy for my LAN" and is stated as such.
+//   2. Cloud metadata endpoints refused (relayTargetAllowed) — never an AI
+//      endpoint, always credentials.
+//   3. Caller headers filtered, redirects not followed, response size and time
+//      bounded, so it cannot be aimed at an internal service and used to walk a
+//      redirect chain or stream something unbounded back.
+const ALLOW_REMOTE_RELAY = process.env.OH_ALLOW_REMOTE_RELAY === "1";
+const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
+
+// Spoken with http/https directly rather than with fetch(), for one reason:
+// Node's fetch() is undici, whose headersTimeout defaults to 300 seconds and
+// cannot be changed without the undici package. A generation that takes longer
+// than five minutes to produce its FIRST byte — a big save's ~190 KB prompt
+// being evaluated by a local model, or any buffered (non-streamed) answer — was
+// therefore killed by the relay itself at ~301-307s, no matter what the player
+// had set. The game read that as a failed turn and served canned events, which
+// is exactly what "Limit AI generation" does: the reported symptom was a
+// five-minute limit that the toggle said was off, because the limit was never
+// the toggle's. RELAY_TIMEOUT_MS above is the only deadline now, and it is one
+// somebody chose.
+//
+// Direct http also lets the upstream body be PIPED back instead of buffered,
+// which is what makes the streaming the rest of the AI stack does worth doing:
+// the browser now sees tokens as they arrive rather than one blob at the end,
+// so a local model notices a cancelled request on its next write.
+const relayTransport = (target) => (target.protocol === "https:" ? https : http);
+
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
   let completed = false;
+  let timedOut = false;
   const abortUpstream = () => {
     if (!completed) controller.abort();
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    abortUpstream();
+  }, RELAY_TIMEOUT_MS);
 
   try {
-    const { url: targetUrl, method = "POST", headers = {}, payload } = req.body ?? {};
-    const target = new URL(String(targetUrl ?? ""));
-    if (target.protocol !== "http:" && target.protocol !== "https:") {
-      return sendError(res, 400, new Error("Only http(s) AI endpoints can be relayed."));
+    if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
+      return sendError(
+        res,
+        403,
+        new Error(
+          "The AI relay only answers this machine. Set OH_ALLOW_REMOTE_RELAY=1 to let other "
+            + "devices on your network relay AI calls through this server.",
+        ),
+      );
     }
-    const upstream = await fetch(target, {
-      method: method === "GET" ? "GET" : "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: method === "GET" ? undefined : JSON.stringify(payload ?? {}),
-      signal: controller.signal,
+
+    const { url: targetUrl, method = "POST", headers = {}, payload } = req.body ?? {};
+    let target;
+    try {
+      target = new URL(String(targetUrl ?? ""));
+    } catch {
+      return sendError(res, 400, new Error("That AI endpoint is not a valid URL."));
+    }
+    const verdict = relayTargetAllowed(target);
+    if (!verdict.allowed) {
+      return sendError(res, 400, new Error(verdict.reason));
+    }
+
+    const requestMethod = method === "GET" ? "GET" : "POST";
+    const body = requestMethod === "GET" ? undefined : JSON.stringify(payload ?? {});
+    // Lowercased and merged by name, because http.request sends this object's
+    // keys verbatim: a caller passing "content-type" beside our "Content-Type"
+    // would have the endpoint receive BOTH. fetch's Headers used to fold them
+    // for us (case-insensitive, last wins), and this keeps that behaviour.
+    // sanitizeRelayHeaders has already dropped content-length and host.
+    const upstreamHeaders = { "content-type": "application/json" };
+    for (const [key, value] of Object.entries(sanitizeRelayHeaders(headers))) {
+      upstreamHeaders[key.toLowerCase()] = value;
+    }
+    if (body !== undefined) upstreamHeaders["content-length"] = Buffer.byteLength(body);
+
+    const upstream = await new Promise((resolve, reject) => {
+      // http.request does not follow redirects at all, which is the behaviour
+      // the old fetch asked for with redirect:"manual": a 302 from the
+      // configured endpoint to somewhere else is not something an AI backend
+      // does, and following one would re-open the target check just passed. The
+      // status comes back as-is and the client can act on it.
+      const upstreamRequest = relayTransport(target).request(target, {
+        method: requestMethod,
+        headers: upstreamHeaders,
+        signal: controller.signal,
+      }, resolve);
+      upstreamRequest.on("error", reject);
+      upstreamRequest.end(body);
     });
-    const text = await upstream.text();
+
+    // Refuse an oversized response before reading a byte of it when the endpoint
+    // declares its size, and stop mid-body when it does not.
+    const declared = Number(upstream.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > RELAY_MAX_RESPONSE_BYTES) {
+      upstream.destroy();
+      return sendError(res, 502, new Error("The AI endpoint's response is too large to relay."));
+    }
+
+    res.status(upstream.statusCode || 502);
+    res.type(upstream.headers["content-type"] || "application/json");
+
+    let received = 0;
+    await new Promise((resolve, reject) => {
+      upstream.on("data", (chunk) => {
+        received += chunk.length;
+        if (received > RELAY_MAX_RESPONSE_BYTES) {
+          upstream.destroy(new Error("The AI endpoint's response is too large to relay."));
+          return;
+        }
+        // Backpressure: a slow client must not make the relay buffer the whole
+        // answer in memory, which is what it was doing before.
+        if (!res.write(chunk)) {
+          upstream.pause();
+          res.once("drain", () => upstream.resume());
+        }
+      });
+      upstream.on("end", resolve);
+      upstream.on("error", reject);
+    });
+
     completed = true;
-    res.status(upstream.status);
-    res.type(upstream.headers.get("content-type") || "application/json");
-    res.send(text);
+    res.end();
   } catch (error) {
+    // The relay's own deadline used to abort the upstream and then send
+    // NOTHING: no status, no body, no res.end(), so the game sat on an open
+    // socket forever instead of failing. Answer it.
+    if (timedOut) {
+      if (!res.headersSent) {
+        sendError(res, 504, new Error(
+          `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
+            + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
+        ));
+      } else if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
+      return;
+    }
     if (!controller.signal.aborted && !res.headersSent) {
       sendError(res, 502, error);
+    } else if (!res.writableEnded && !res.destroyed) {
+      // Headers are already out, so there is no status left to set — end the
+      // response rather than leaking the socket. (A client that went away has
+      // destroyed it already; there is nothing to answer.)
+      res.end();
     }
+  } finally {
+    clearTimeout(timeout);
   }
+});
+
+// --- LAN sharing, from the UI ---------------------------------------------
+// Reading it is harmless (the page shows the toggle's state); the ADDRESSES are
+// only handed to a caller on this machine, since they describe the host's other
+// interfaces and a phone already knows the one it used.
+app.get("/api/server/network", (req, res) => {
+  const local = isLoopbackAddress(req.socket?.remoteAddress);
+  res.json({
+    lanEnabled: LAN_ENABLED,
+    host: HOST,
+    port: Number(PORT),
+    lockedByEnv: Boolean(HOST_FROM_ENV),
+    addresses: local ? lanAddresses() : [],
+  });
+});
+
+// Turn LAN sharing on or off without restarting anything.
+//
+// Only this machine may call it: whether the server is reachable from the
+// network is a decision for the person sitting at it, not for whoever is
+// already on the network. (With LAN off there is nobody else to ask; with LAN
+// on, the remote caller could otherwise switch it off under the owner.)
+app.post("/api/server/network", jsonParser, (req, res) => {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) {
+    return sendError(res, 403, new Error("Only the machine running the server can change this."));
+  }
+  if (HOST_FROM_ENV) {
+    return sendError(
+      res,
+      409,
+      new Error(`OH_HOST is set to "${HOST_FROM_ENV}", so it decides who can reach this server. Unset it to use this switch.`),
+    );
+  }
+
+  const lanEnabled = req.body?.lanEnabled === true;
+  const nextHost = lanEnabled ? ALL_INTERFACES_HOST : LOOPBACK_HOST;
+  if (nextHost === HOST) {
+    return res.json({ lanEnabled: LAN_ENABLED, host: HOST, port: Number(PORT), lockedByEnv: false, addresses: lanAddresses() });
+  }
+
+  try {
+    writeNetworkSettings({ lanAccess: lanEnabled });
+  } catch (error) {
+    return sendError(res, 500, error);
+  }
+
+  // Answer BEFORE rebinding: the reply travels over a connection this is about
+  // to drop. Loopback stays reachable either way (0.0.0.0 includes it), so the
+  // page that flipped the switch keeps working — only devices on the network
+  // gain or lose access.
+  res.json({
+    lanEnabled,
+    host: nextHost,
+    port: Number(PORT),
+    lockedByEnv: false,
+    addresses: lanEnabled ? lanAddresses() : [],
+  });
+  setTimeout(() => rebindListener(nextHost), 250);
 });
 
 // Shut the server down from the UI (the ⏻ button in the top bar) — handy on
 // phones/Termux and headless installs where no terminal is in sight. Responds
 // first so the client can show its "server stopped" screen, then exits.
-app.post("/api/server/shutdown", (_req, res) => {
+//
+// A remote kill switch on an API with no password is worth one extra condition:
+// answer this machine always, and the network only when the player has already
+// said LAN play is what they want (OH_HOST). Termux on the same phone and the
+// desktop app both come from loopback, so the button keeps working where it was
+// most needed.
+app.post("/api/server/shutdown", (req, res) => {
+  if (!LAN_ENABLED && !isLoopbackAddress(req.socket?.remoteAddress)) {
+    return sendError(res, 403, new Error("Only this machine can shut the server down."));
+  }
   res.json({ ok: true });
   console.log("Shutdown requested from the UI — exiting.");
   setTimeout(() => process.exit(0), 300);
@@ -982,15 +1301,102 @@ app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
+const describeBinding = () => {
+  if (LAN_ENABLED) {
+    console.log(`Reachable from your network on ${HOST}:${PORT}. This API has no password:`);
+    console.log("anyone who can reach that address can read, change and delete your games.");
+    for (const { url } of lanAddresses()) console.log(`  ${url}`);
+    console.log(
+      HOST_FROM_ENV
+        ? "Unset OH_HOST to go back to this machine only."
+        : "Turn it off in Settings → Network, or unset it there when you're done.",
+    );
+  } else {
+    console.log("Listening on 127.0.0.1 only (this machine).");
+    console.log(
+      HOST_FROM_ENV
+        ? "OH_HOST pins this. Set OH_HOST=0.0.0.0 to let other devices connect."
+        : "To play from your phone or another device, turn on Settings → Network → \"Let other devices connect\".",
+    );
+  }
+};
+
 // Exported so a test can shut the listener down; nothing else imports it (the
 // app and the launchers import this module purely for its side effects).
-export const httpServer = app.listen(PORT, () => {
+export const httpServer = app.listen(PORT, HOST, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  describeBinding();
 });
+
+// Move the listener to a different interface in place, so the LAN toggle takes
+// effect immediately instead of asking the player to restart a game they are in
+// the middle of. Node lets a closed server listen() again; if the new bind
+// fails (something else already holds the port on that interface) we go back to
+// the one that was working rather than leaving the player with no server.
+// True while a LAN-toggle rebind is in flight. The startup error handler below
+// must stand aside for it: that handler exits the process on EADDRINUSE, it was
+// registered first, and Node runs "error" listeners in REGISTRATION ORDER — so
+// without this flag it fired before the recovery handler here ever ran, and a
+// rebind that could not take the new interface killed the game server out from
+// under a player mid-campaign instead of falling back to the interface that was
+// working. The rollback below was unreachable code.
+let rebinding = false;
+
+const rebindListener = (nextHost) => {
+  const previousHost = HOST;
+
+  // Registered explicitly rather than passed to listen() as its callback, because
+  // a callback handed to listen() becomes a one-shot "listening" listener the
+  // moment listen() is called and a FAILED bind does not take it back off. It
+  // then fired on the fallback bind below, and the server reported itself
+  // shared — host 0.0.0.0, lanEnabled true — while the socket was actually back
+  // on loopback. The Settings panel and the addresses it tells the player to
+  // type into their phone were both wrong, with nothing listening on them.
+  const onListening = () => {
+    httpServer.removeListener("error", onError);
+    HOST = nextHost;
+    LAN_ENABLED = isLanHost(HOST);
+    rebinding = false;
+    console.log(`Rebound to ${HOST}:${PORT}.`);
+    describeBinding();
+  };
+
+  const onError = (error) => {
+    console.error(`Could not rebind to ${nextHost}:${PORT} (${error.message}); staying on ${previousHost}.`);
+    httpServer.removeListener("listening", onListening);
+    httpServer.removeListener("error", onError);
+    HOST = previousHost;
+    LAN_ENABLED = isLanHost(HOST);
+    try {
+      writeNetworkSettings({ lanAccess: LAN_ENABLED });
+    } catch { /* the binding is what matters; the file is a hint for next boot */ }
+    // Cleared BEFORE the fallback bind, deliberately. If even the interface that
+    // was working a moment ago will not take the port there is nothing left to
+    // fall back to, and the fatal handler below saying so beats leaving a live
+    // process with no listener on it at all.
+    rebinding = false;
+    httpServer.listen(PORT, previousHost);
+  };
+
+  rebinding = true;
+  // Keep-alive connections would hold close() open indefinitely, and one of them
+  // is the page that just flipped the switch.
+  httpServer.closeAllConnections?.();
+  httpServer.close(() => {
+    httpServer.once("error", onError);
+    httpServer.once("listening", onListening);
+    httpServer.listen(PORT, nextHost);
+  });
+};
 
 // A taken port used to crash with a raw EADDRINUSE stack, which the launchers
 // then reported as a bare "Server stopped." — say what actually happened.
+//
+// Startup only. A failure during a rebind is rebindListener's to recover from,
+// and exiting there would turn "that interface is busy" into "your game server is
+// gone"; the listener it registers puts the previous binding back instead.
 httpServer.on("error", (error) => {
+  if (rebinding) return;
   if (error?.code === "EADDRINUSE") {
     console.error(`Port ${PORT} is already in use — Open Historia is probably already running.`);
     console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
