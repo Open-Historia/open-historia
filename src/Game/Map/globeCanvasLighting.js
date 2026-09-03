@@ -134,11 +134,11 @@ export const drawGlobeLighting = ({
     CANVAS_STATES.set(canvas, state);
   }
   const requestId = ++state.latestRequestId;
-  const synchronous = immediate || state.failed;
+  const synchronous = state.failed;
   const { pixelWidth, pixelHeight } = getRenderSize(
     width,
     height,
-    synchronous ? INTERACTIVE_RENDER_PIXELS : REFINED_RENDER_PIXELS,
+    immediate ? INTERACTIVE_RENDER_PIXELS : REFINED_RENDER_PIXELS,
   );
   const payload = {
     matrix: Array.from(matrix),

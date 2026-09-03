@@ -42,9 +42,9 @@ export const JSON_ASSET_DEFAULTS = {
 };
 
 export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
-  "allowedUnitTypes", "author", "background", "basemap", "customCities", "customRegions",
+  "allowedUnitTypes", "author", "background", "basemap", "customCities", "customGeometry", "customRegions",
   "difficulty", "language", "mapCredit", "notes", "ownerCodes", "polityOverrides",
-  "regionOwnershipOverrides", "simulationRules", "startingTimelineText",
+  "regionOwnershipOverrides", "regionClaimants", "simulationRules", "startingTimelineText",
 ];
 
 export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
@@ -291,9 +291,12 @@ export const buildFreshWorldSeedFromScenario = ({ baseWorld, scenarioWorld }) =>
 };
 
 // Served world always carries customRegions:true (server normalizeRuntimeWorld:1786).
-export const normalizeRuntimeWorld = (assetKey, data) => {
+export const normalizeRuntimeWorld = (assetKey, data, scenarioCustomGeometry) => {
   if (assetKey !== "world" || !data || typeof data !== "object" || Array.isArray(data)) return data;
-  return data.customRegions ? data : { ...data, customRegions: true };
+  const normalized = data.customRegions ? data : { ...data, customRegions: true };
+  return normalized.customGeometry == null && scenarioCustomGeometry != null
+    ? { ...normalized, customGeometry: Boolean(scenarioCustomGeometry) }
+    : normalized;
 };
 
 // server normalizeId (:316) — no length cap for scenario/game ids.

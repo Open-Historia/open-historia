@@ -3,6 +3,7 @@ import mapLibreGl from "maplibre-gl";
 import { mergeCountryOverrides } from "./countryList.js";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
+import { loadRegionSeed } from "./regionSeed.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
@@ -391,7 +392,7 @@ const createPmtilesArchive = (url) => {
   return new PMTiles(source, pmtilesCache);
 };
 
-const registerPmtilesArchive = (url) => {
+export const registerPmtilesArchive = (url) => {
   ensurePmtilesProtocol();
   const archive = createPmtilesArchive(url);
   pmtilesArchives.set(url, archive);
@@ -545,7 +546,7 @@ export const ensureBasemapProtocol = () => {
   }
 };
 
-export const readJson = async (url, { cache, defaultValue, force = false, signal } = {}) => {
+export const readJson = async (url, { cache, clone = true, defaultValue, force = false, signal } = {}) => {
   // Snapshot the decision NOW, never inside the request closure — see
   // isNoStoreJsonUrl for why an post-await evaluation strands an entry.
   const store = cache === undefined ? !isNoStoreJsonUrl(url) : cache !== false;
@@ -555,14 +556,16 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
   if (!store) jsonValueCache.delete(url);
 
   if (!force && jsonValueCache.has(url)) {
-    return cloneJson(jsonValueCache.get(url));
+    const val = jsonValueCache.get(url);
+    return clone ? cloneJson(val) : val;
   }
 
   // Even with force: true, batch concurrent requests to the same URL so
   // multiple independent 5s pollers (Nations, Cities, background, units)
   // don't each fire their own network fetch.
   if (jsonRequestCache.has(url)) {
-    return cloneJson(await jsonRequestCache.get(url));
+    const val = await jsonRequestCache.get(url);
+    return clone ? cloneJson(val) : val;
   }
 
   const request = (async () => {
@@ -581,7 +584,7 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
       if (defaultValue !== undefined) {
         // Serve the fallback but do NOT cache it — a transient failure must not
         // pin the default for the rest of the session; the next read retries.
-        return cloneJson(defaultValue);
+        return clone ? cloneJson(defaultValue) : defaultValue;
       }
 
       throw error;
@@ -591,7 +594,8 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
     });
 
   jsonRequestCache.set(url, request);
-  return cloneJson(await request);
+  const val = await request;
+  return clone ? cloneJson(val) : val;
 };
 
 export const warmJson = async (url, options = {}) => {
@@ -992,8 +996,9 @@ export const loadCountryNames = async ({ force = false } = {}) => {
           props?.Country || props?.NAME || props?.name || props?.COUNTRY,
           code,
         );
-        if (name && !seen.has(name)) {
-          seen.set(name, code);
+        const nameKey = String(name ?? "").trim().toLowerCase();
+        if (nameKey && !seen.has(nameKey)) {
+          seen.set(nameKey, code);
         }
       }
 
@@ -1077,49 +1082,38 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       // Regions the stock tiles don't know — shapes DRAWN in the map editor
       // (reg_* ids) and seed-only regions — get their names from the active
       // scenario's own geometry, so the AI can talk about them by name instead
-      // of raw ids.
+      // of raw ids. The seed comes from the worker-backed loader
+      // (regionSeed.js): the 55-220 MB document is parsed in the worker and
+      // only the compact index crosses to the main thread, so this no longer
+      // costs a second main-thread JSON.parse of the same file.
       let customRegionsResolved = true;
       try {
-        const custom = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null });
-        // readJson RECORDS a genuine parse (it deliberately does not retain this
-        // document — see isNoStoreJsonUrl) and records nothing on a transient
-        // failure. That lets us tell a dropped fetch (retry) apart from a
-        // scenario that simply has no custom regions (stock names are correct),
-        // so one failed request on a custom map can't pin a blank political map
-        // for the whole session.
-        //
-        // Do NOT "simplify" this to a test on `custom` itself: the server
-        // answers a geometry-less scenario with a 200 empty FeatureCollection,
-        // and dropping `defaultValue` above doesn't work either — when a
-        // concurrent forced reader is the batched originator, its own default
-        // resolves this promise too, so a failure arrives as a value with no throw.
-        customRegionsResolved = jsonLoadedUrls.has(JSON_URLS.regionsGeojson);
-        for (const feature of custom?.features ?? []) {
-          const props = feature?.properties ?? {};
-          const id = props.id != null ? String(props.id) : "";
-          if (!id) continue;
-          // Same placeholder correction as the stock pass above — and it must happen
-          // HERE too: a scenario's geometry is seeded from the same GADM export, so
-          // without this the scenario's own "NA" wins on the next line and puts the
-          // placeholder back over the corrected stock name.
-          const name = resolveRegionName(id, props.name);
-          const existing = seen.get(id);
-          if (existing) {
-            // The scenario's own name for a stock region WINS. A world that
-            // renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about
-            // South Konisburg everywhere — the AI's region transfers can only
-            // resolve against the name the world actually uses.
-            if (name) existing.name = name;
-            if (props.country) existing.country = String(props.country);
-            continue;
+        const seed = await loadRegionSeed(JSON_URLS.regionsGeojson);
+        customRegionsResolved = Boolean(seed);
+        if (seed) {
+          for (const [id, props] of seed.propsById) {
+            // Same placeholder correction as the stock pass above — and it must
+            // happen HERE too: a scenario's geometry is seeded from the same
+            // GADM export, so without this the scenario's own "NA" wins on the
+            // next line and puts the placeholder back over the corrected stock
+            // name.
+            const name = resolveRegionName(id, props.name);
+            const existing = seen.get(id);
+            if (existing) {
+              // The scenario's own name for a stock region WINS. A world that
+              // renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about
+              // South Konisburg everywhere — the AI's region transfers can only
+              // resolve against the name the world actually uses.
+              if (name) existing.name = name;
+              continue;
+            }
+            seen.set(id, {
+              country: "",
+              countryCode: props.gid0 ? String(props.gid0) : "",
+              id,
+              name: name || id,
+            });
           }
-          const countryCode = props.gid0 ? String(props.gid0) : "";
-          seen.set(id, {
-            country: props.country ? String(props.country) : "",
-            countryCode,
-            id,
-            name: name || id,
-          });
         }
       } catch {
         customRegionsResolved = false;
