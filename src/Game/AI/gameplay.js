@@ -2386,9 +2386,13 @@ const applySimulationResult = async ({
     ];
   }
   // Built HERE, not next to freshEvents above, because the espionage loop has
-  // just appended to freshEvents. Upstream computes this before that loop, so its
-  // exposures and discoveries never reach writeEventsState and are gone on the
-  // next reload — the world remembers the spy was caught, the event log does not.
+  // just appended to freshEvents, and this is a COPY — a snapshot taken before the
+  // loop cannot see an exposure or a discovery. Upstream builds it before that loop,
+  // so its espionage events are not merely lost on reload: writeEventsState persists
+  // the stale copy and the function returns it too, so they are never written
+  // anywhere and the player never sees them at all. It hides well because
+  // worldWithImpacts.spies is updated in place just above — the Spy tab looks right
+  // while the event log has no idea any of it happened.
   const nextEvents = [...priorEvents, ...freshEvents];
   let nextWorld = worldWithImpacts;
 
