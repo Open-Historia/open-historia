@@ -1318,7 +1318,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ possibly compromised</span>}
+            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ Possibly compromised</span>}
             </div>
             <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
             {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
