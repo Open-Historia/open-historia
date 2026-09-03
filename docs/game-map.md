@@ -145,7 +145,8 @@ Two constants (`World.jsx:44`) give the image-source corners:
 |---|---|---|---|---|
 | `countries-source` | vector | `PMTILES_PROTOCOL_URLS.countries`, `maxzoom 8` | `!customFlag` | `countries-fill`, `countries-outline` |
 | `regions-source` | vector | `PMTILES_PROTOCOL_URLS.regions`, `maxzoom 8` | **never gated** | `regions-fill`, `regions-disputed`, `regions-outline` |
-| `custom-regions-source` | geojson | `enrichedCustomRegionData`, `tolerance 0` | inert unless `customActive` | `custom-regions-fill-far`, `custom-regions-hairline-far`, `custom-regions-disputed-far`, `custom-regions-fill`, `custom-regions-disputed`, `custom-regions-outline` |
+| `custom-regions-far-source` | geojson | `regionSeed.coarseFC`, `tolerance 0` | inert unless `farTierActive` | `custom-regions-fill-far`, `custom-regions-hairline-far`, `custom-regions-disputed-far` |
+| `custom-regions-source` | geojson | `regionSeed.authoredFC`, `tolerance 0.6` | inert unless `customActive` | `custom-regions-fill`, `custom-regions-disputed`, `custom-regions-outline` |
 | `country-curved-label-source` | geojson | `activeCurvedLabelData` | — | `country-curved-labels` |
 | `country-point-label-source` | geojson | `activePointLabelData` | — | `country-labels` |
 
@@ -164,7 +165,7 @@ Two constants (`World.jsx:44`) give the image-source corners:
 | `AUTHORED_GEOMETRY_FILTER` | `custom OR edited==true` | geometry that lives **only** in the GeoJSON |
 | `STOCK_GEOMETRY_FILTER` | `GADM AND edited!=true` | unedited GADM → paints via tiles |
 
-The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile-zoom 5; hand-off happens just past that. The **`edited` split** matters: a GADM region the editor *reshaped* has a dotted id but its true shape is now in the GeoJSON, while the stock tile still carries the *original* shape. Painting both stacks two 0.72 fills and darkens the reshaped area, so edited GADM ids are pulled out of the tile layers (`editedStockIds`, computed in `Nations.jsx:949`) and rendered from the GeoJSON like author-drawn shapes.
+The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile-zoom 5; hand-off happens just past that. The far tier's geometry is **coarsened in the worker** (`regionSeedCore.js`: Douglas-Peucker at `COARSE_TOLERANCE_DEG` 0.01°, plus a `COARSE_MIN_SPAN_DEG` 0.0155° ring cull) — sub-pixel across the band where the tier is actually visible, and 2.57M vertices down to ~602k on the Medieval map. Handing MapLibre the raw seed is what froze startup for seconds, which is why the tier was briefly removed altogether. **Every plain GADM region still gets geometry**: when a region is nothing but sub-threshold specks its largest ring is kept anyway, because the tiles have faded out across this band and a dropped region would simply vanish (Pukapuka, 2.8° of scattered atolls, did exactly that). The **`edited` split** matters: a GADM region the editor *reshaped* has a dotted id but its true shape is now in the GeoJSON, while the stock tile still carries the *original* shape. Painting both stacks two 0.72 fills and darkens the reshaped area, so edited GADM ids are pulled out of the tile layers (`editedStockIds`, computed in `Nations.jsx:949`) and rendered from the GeoJSON like author-drawn shapes.
 
 ### 4.3 Fill / outline paint objects
 
@@ -172,12 +173,14 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 |---|---|---|
 | `regions-fill` | `stockRegionsFillPaint` | `match GID_1 → ownerColorCss(owner)` for every non-drawn, non-edited region; opacity `TILE_FILL_FADE` (0 unless `customActive`) |
 | `regions-outline` | `regionsOutlinePaint` | black hairline; width `interp 3→0.2, 8→0.6, 12→1.0`; opacity fades in `5.5→0, 6.5→0.6, 8→0.7` (only when the tile fills do — below that the seed hairlines carry it); excludes `editedStockIds` |
-| `custom-regions-fill-far` | `["get","_fillColor"]` | seed-GeoJSON fill for GADM regions, `maxzoom 7`, opacity `FAR_FILL_FADE` |
+| `custom-regions-fill-far` | `farRegionsFillColor` | coarse-GeoJSON fill for plain GADM regions, `maxzoom 7`, opacity `FAR_FILL_FADE` |
 | `custom-regions-hairline-far` | — | seed hairlines that sit exactly on the far fills, hand off at z6.5 |
-| `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
+| `custom-regions-fill` | `customRegionsFillColor` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
 | `custom-regions-outline` | — | black outline for authored geometry, opacity `3→0, 4→0.35, 8→0.6` |
 
-`_fillColor` is **pre-baked into each GeoJSON feature** by `enrichedCustomRegionData` (`Nations.jsx:852`) so the GL paint expression is the constant `["get","_fillColor"]` — a match expression that never recompiles when ownership changes. The colour per feature is: override colour (`regionOwnershipOverrides[id]`) → owner colour (`ownerColorCss(props.owner)`) → `NEUTRAL_LAND_COLOR = rgb(88,98,110)`.
+Both fill colours are `["match", ["get","id"], …]` expressions built on the main thread from `ownerByRegionId`, one per collection (`customRegionsFillColor` for the authored shapes, `farRegionsFillColor` for the coarse ones). Nothing is baked into the features themselves — the coarse features carry **only** an `id` — so a province that changes hands recolours without the geometry being rebuilt. The colour per region is: live override (`regionOwnershipOverrides[id]`, folded into `ownerByRegionId`) → seed owner → `NEUTRAL_LAND_COLOR = rgb(88,98,110)`.
+
+> This replaced a `_fillColor` property pre-baked onto every feature by `enrichedCustomRegionData`. That approach had to rebuild the whole FeatureCollection whenever ownership changed, which is exactly the work the worker-parsed seed exists to avoid.
 
 ---
 
@@ -328,7 +331,11 @@ Units are a **visual representation of what the events say**, not a wargame the 
 The map's single `click` handler routes by `getInteractionMode()`:
 
 - **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`. It is the only such mode left.
-- **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`/`cities-labels`) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
+- **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`) → region, all through `resolveRegionHit()`. `cities-labels` is deliberately **not** queried: text labels have huge bounding boxes that swallow province clicks.
+  - Which layers are queried is `hasStockBase` (`regionSeed.hasGadm`): `["custom-regions-fill","custom-regions-disputed","regions-fill","regions-disputed"]` when the map has real GADM land under it, and only the two `custom-` layers on a fully hand-drawn world — so a click on fantasy ocean resolves to nothing rather than the leftover real country underneath.
+  - Which hits are **kept** is `hasDrawnGeometry` (`regionSeed.hasDrawn`): on any map carrying drawn shapes, a `regions-fill` hit only counts if `ownerLookupRef` knows that region. The two flags are complementary, not opposites, and both are true on a **hybrid** map (drawn shapes over GADM land) — which is the case that needs them separate. Without the second filter a hybrid map resolves clicks on GADM regions the scenario never included.
+  - The far tier is **not** queried: it is a low-zoom cosmetic twin of `regions-fill`, and querying both would return two hits for one province.
+  - Owner resolution is `ownerLookupRef` **first**, `props.owner` only as a fallback. `props.owner` is a snapshot baked into the scenario geometry at generation time and never updated, so reading it first shows a transferred region's *old* owner. `??` (not `||`), so a resolved `""` (explicitly unclaimed) is kept. The underlying GADM `gid0` is kept as a flag fallback.
 
 The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system). It replays through `applyEventImpactsToWorld` with the same `motion` the persisted turn used, or the reveal would show units in positions the saved world never had.
 
@@ -356,7 +363,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | `maxZoom 16` | `<Map>` | Camera ceiling; past PMTiles' z8 the tiles overzoom |
 | `maxBounds` lat `-80…85` | `<Map>` | Keep the camera in the usable latitude band |
 | PMTiles `maxzoom 8` | `countries-source`, `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
-| `custom-regions-fill-far maxzoom 7` | seed-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
+| `custom-regions-fill-far maxzoom 7` | coarse-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |
 | Pixel-ratio switch z4.5 / z5 | `applyDynamicPixelRatio` | Soften the whole-world view; hysteresis prevents flapping |
 | Cities `minzoom 3.4`, city thresholds step by zoom | `Cities.jsx` | Thin out symbols as you zoom out |
@@ -372,9 +379,17 @@ world.json ──(useWorldState, 5s)──► customRegions, regionOwnershipOver
    │                                 regionClaimants, polityOverrides, markers,
    │                                 labelFont/Color, basemap, background, units
    │
-   ├─► Nations.jsx ──► enrichedCustomRegionData (_fillColor/_stripes baked in)
+   ├─► Nations.jsx ──► ownerByRegionId (live overrides win)
+   │                     ├─► customRegionsFillColor  (match id → colour, authoredFC)
+   │                     ├─► farRegionsFillColor     (match id → colour, coarseFC)
+   │                     └─► stockRegionsFillPaint   (match GID_1 → colour, tiles)
    │                   ownerLabelData (per-owner, follows conquests)
-   │                   stockRegionsFillPaint (GID_1 → owner colour)
+   │
+   │   regions.geojson ──(loadRegionSeed → worker)──► regionSeed
+   │                        ├─ ownersById / propsById  (index, every region)
+   │                        ├─ authoredFC   (drawn + reshaped, all zooms)
+   │                        ├─ coarseFC     (plain GADM, simplified, far tier)
+   │                        └─ hasDrawn / hasGadm
    │
    ├─► useCustomBackground ──► buildWorldStyle (image/vector/placeholder/ESRI)
    ├─► MarkersLayer ──► markers-source

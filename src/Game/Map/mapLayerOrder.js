@@ -63,13 +63,14 @@ export const MAP_LAYER_ORDER = [
   "regions-fill",
   "regions-disputed",
   "regions-outline",
-  // The far tier (custom-regions-fill-far / -hairline-far / -disputed-far) used
-  // to sit here, painting unedited GADM regions from the seed GeoJSON below z7 to
-  // hide the sliver gaps the tiler leaves between independently-simplified
-  // neighbours. It is gone because regionSeedCore.js no longer keeps geometry for
-  // those regions — only drawn shapes and reshaped ones survive the index, so
-  // there is nothing left to paint. Restoring it means having the worker emit a
-  // simplified low-zoom collection, not re-adding these ids.
+  // The far tier: plain GADM provinces from the scenario's own (worker-coarsened)
+  // geometry, painted below z7 where the stock tiles simplify each region
+  // independently and leave sliver gaps between neighbours. Above the tiles so it
+  // covers them through the z5.5->6.5 crossfade, below the authored shapes so a
+  // drawn region still wins over the province beneath it.
+  "custom-regions-fill-far",
+  "custom-regions-hairline-far",
+  "custom-regions-disputed-far",
   "custom-regions-fill",
   "custom-regions-disputed",
   "custom-regions-outline",

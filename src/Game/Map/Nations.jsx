@@ -202,9 +202,16 @@ const CUSTOM_GEOMETRY_FILTER = ["==", ["index-of", ".", ["get", "id"]], -1];
 // ["==", ["get","edited"], true] is false for it and these fall back exactly to the
 // dot test — stock and author-only maps render identically to before.
 const AUTHORED_GEOMETRY_FILTER = ["any", CUSTOM_GEOMETRY_FILTER, ["==", ["get", "edited"], true]];
-// The pre-tiled archive paints all zooms, so the old seed<->tile crossfade
-// (FAR_FILL_FADE / TILE_FILL_FADE around z5.5-6.5) is gone: one constant opacity.
 const TILE_FILL_OPACITY = 0.72;
+// Seed <-> tile crossfade. The stock archive is simplified per zoom and each
+// region is simplified independently, so below ~z6.5 neighbouring borders drift
+// apart and the map shows sliver gaps between provinces. The far tier paints the
+// same provinces from the scenario's own geometry instead, coarsened in the
+// worker (regionSeedCore.js), and the two swap over z5.5 -> z6.5 rather than
+// cutting, so no border ever pops. Reciprocal on purpose: total ink stays at
+// TILE_FILL_OPACITY right through the handover instead of dipping or doubling.
+const FAR_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, TILE_FILL_OPACITY, 6.5, 0];
+const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, TILE_FILL_OPACITY];
 
 // ---- Owner labels for custom maps -----------------------------------------
 // The stock label pipeline labels modern countries from countries.pmtiles, which
@@ -522,6 +529,11 @@ const WorldMap = ({ isGlobe = false }) => {
   // KEPT (see resolveRegionHit). The indexer already computes it alongside hasGadm.
   // Defaults false while the seed loads, so nothing is filtered out before we know.
   const hasDrawnGeometry = regionSeed ? regionSeed.hasDrawn : false;
+  // Is there a far tier under the tiles to hand over to? Only when this scenario
+  // actually produced coarse geometry: a fully hand-drawn world has no plain GADM
+  // regions to paint, and there the tiles must stay at flat opacity rather than
+  // fading into nothing at world view.
+  const farTierActive = customActive && (regionSeed?.coarseFC?.features.length ?? 0) > 0;
   // Re-read on each render so a runtime token change (switching games/scenarios)
   // refetches the geometry, mirroring the live-URL world poll below.
   const regionsGeojsonUrl = JSON_URLS.regionsGeojson;
@@ -1108,6 +1120,23 @@ const WorldMap = ({ isGlobe = false }) => {
     return ["match", ["get", "id"], ...stops, NEUTRAL_LAND_COLOR];
   }, [customActive, regionSeed, ownerByRegionId, ownerColorCss]);
 
+  // The same expression for the far tier's own (plain GADM) features. Built from
+  // the live ownership lookup rather than baked into the geometry, so a province
+  // that changes hands recolours here exactly as it does on the tiles above —
+  // the coarse features carry nothing but an id for this reason.
+  const farRegionsFillColor = useMemo(() => {
+    if (!customActive) return NEUTRAL_LAND_COLOR;
+    const stops = [];
+    for (const feature of regionSeed.coarseFC.features) {
+      const regionId = String(feature.properties?.id ?? "");
+      if (!regionId) continue;
+      const owner = ownerByRegionId.get(regionId) ?? "";
+      stops.push(regionId, owner ? ownerColorCss(owner) : NEUTRAL_LAND_COLOR);
+    }
+    if (!stops.length) return NEUTRAL_LAND_COLOR;
+    return ["match", ["get", "id"], ...stops, NEUTRAL_LAND_COLOR];
+  }, [customActive, regionSeed, ownerByRegionId, ownerColorCss]);
+
   // Disputed region stripe stops: builds pairs [regionId, stripeImageId]
   // for both the custom-region GeoJSON layers and the stock vector tile layer.
   const customDisputedStops = useMemo(() => {
@@ -1233,11 +1262,16 @@ const WorldMap = ({ isGlobe = false }) => {
       // Never for a reshaped region: its tile still holds the original shape, so
       // painting it here would double-fill the edited area over the GeoJSON that
       // now owns it.
+      //
+      // Everything else fades IN as the far tier fades out (TILE_FILL_FADE), so
+      // the tiles own the close range where they are crisp and the seed geometry
+      // owns the low zooms where they gap. Only on a custom map: with no far tier
+      // beneath it a fade would just make the world view transparent.
       "fill-opacity": editedStockIds.length
-        ? ["case", ["in", ["get", "GID_1"], ["literal", editedStockIds]], 0, TILE_FILL_OPACITY]
-        : TILE_FILL_OPACITY,
+        ? ["case", ["in", ["get", "GID_1"], ["literal", editedStockIds]], 0, farTierActive ? TILE_FILL_FADE : TILE_FILL_OPACITY]
+        : (farTierActive ? TILE_FILL_FADE : TILE_FILL_OPACITY),
     };
-  }, [customActive, ownerByRegionId, regionSeed, colorMap, ownerColorCss, editedStockIds, regionOwnershipOverrides]);
+  }, [customActive, farTierActive, ownerByRegionId, regionSeed, colorMap, ownerColorCss, editedStockIds, regionOwnershipOverrides]);
 
   // Stock country fills/borders render ONLY once the world is known to be a
   // stock world. Gating on the customRegions FLAG (not customActive, which
@@ -1353,8 +1387,9 @@ const WorldMap = ({ isGlobe = false }) => {
           source-layer="regions"
           paint={stockRegionsFillPaint}
         />
-        {/* Striped fill for disputed GADM regions — the tiles paint at every
-            zoom, so the stripes do too. */}
+        {/* Striped fill for disputed GADM regions. Rides the same crossfade as
+            the solid fill above, so a contested border hands over from the far
+            tier's stripes without the pattern blinking mid-zoom. */}
         {disputedTileStops.length > 0 && (
           <Layer
             id="regions-disputed"
@@ -1367,7 +1402,9 @@ const WorldMap = ({ isGlobe = false }) => {
               : ["in", ["get", "GID_1"], ["literal", disputedTileStops.filter((_, i) => i % 2 === 0)]]}
             paint={{
               "fill-pattern": ["match", ["get", "GID_1"], ...disputedTileStops, disputedTileStops[1]],
-              "fill-opacity": customActive && worldKnown ? TILE_FILL_OPACITY : 0,
+              "fill-opacity": customActive && worldKnown
+                ? (farTierActive ? TILE_FILL_FADE : TILE_FILL_OPACITY)
+                : 0,
             }}
           />
         )}
@@ -1378,6 +1415,64 @@ const WorldMap = ({ isGlobe = false }) => {
           filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
           paint={regionsOutlinePaint}
         />
+      </Source>
+
+      {/* ---- The far tier -------------------------------------------------
+          Plain GADM provinces painted from the scenario's OWN geometry below
+          z7, because the stock tiles simplify each region independently at low
+          zoom and neighbouring borders drift apart into visible sliver gaps.
+          This geometry is coarsened in the worker (regionSeedCore.js) — 2.57M
+          vertices down to ~600k on the Medieval map — so it costs a fraction of
+          the full seed that used to freeze startup for seconds.
+
+          Rendered from its own Source, not the authored one, so the two can
+          carry different geometry for the same region without a filter deciding
+          between them every frame. Inert on a fully hand-drawn world, which has
+          no plain GADM regions to paint. */}
+      <Source
+        id="custom-regions-far-source"
+        type="geojson"
+        data={farTierActive ? regionSeed.coarseFC : EMPTY_FEATURE_COLLECTION}
+        tolerance={0}
+      >
+        <Layer
+          id="custom-regions-fill-far"
+          type="fill"
+          maxzoom={7}
+          paint={{
+            "fill-color": farRegionsFillColor,
+            "fill-opacity": farTierActive ? FAR_FILL_FADE : 0,
+          }}
+        />
+        {/* Hairlines from the SAME coarse geometry as the fill above, so a
+            zoomed-out border sits exactly on the edge of its colour rather than
+            beside it. Hands off to the stock-tile hairlines on the same band. */}
+        <Layer
+          id="custom-regions-hairline-far"
+          type="line"
+          maxzoom={7}
+          paint={{
+            "line-color": "#000",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.3, 6.5, 0.6],
+            "line-opacity": farTierActive
+              ? ["interpolate", ["linear"], ["zoom"], 3, 0.35, 5.5, 0.55, 6.5, 0]
+              : 0,
+          }}
+        />
+        {/* Disputed stripes, far twin. Same crossfade as the fill so a contested
+            province reads as contested at every zoom, not only close in. */}
+        {farTierActive && customDisputedStops.length > 0 && (
+          <Layer
+            id="custom-regions-disputed-far"
+            type="fill"
+            maxzoom={7}
+            filter={["in", ["get", "id"], ["literal", customDisputedIds]]}
+            paint={{
+              "fill-pattern": ["match", ["get", "id"], ...customDisputedStops, customDisputedStops[1]],
+              "fill-opacity": FAR_FILL_FADE,
+            }}
+          />
+        )}
       </Source>
 
       {/* Author-DRAWN / editor-EDITED geometry only — a handful of features
