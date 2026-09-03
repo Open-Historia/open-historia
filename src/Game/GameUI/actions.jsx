@@ -3,6 +3,7 @@ import React from "react";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplay.js";
 import { revertUnitOrder } from "../Map/unitsController.js";
@@ -337,6 +338,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         setIsSubmitting(true);
         try {
             await persistActions([...actions, nextAction]);
+            // What the player told their country to do is half of "the series of
+            // events they did" — a turn that goes wrong usually goes wrong
+            // BECAUSE of an order, and the diagnostics log is unreadable without
+            // them. The text is short and the player wrote it, so it goes in
+            // whole rather than as a length.
+            logDebugEvent("action", `Order queued: ${nextAction.title || nextAction.text || "(untitled)"}`, {
+                queued: actions.length + 1,
+            });
             setInputValue("");
         } finally {
             setIsSubmitting(false);
@@ -386,6 +395,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 console.warn("[actions] could not revert the unit order:", error);
             }
         }
+        logDebugEvent("action", `Order removed: ${removed?.title || removed?.text || "(untitled)"}`, {
+            reverted: Boolean(removed?.unitRevert && (removed.status ?? "planned") === "planned"),
+        });
         await persistActions(actions.filter((_, actionIndex) => actionIndex !== index));
     };
 
@@ -398,6 +410,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         await persistActions([...actions, queuedAction]);
+        logDebugEvent("action", `Suggested order queued: ${queuedAction.title || queuedAction.text || "(untitled)"}`);
         // Visible click feedback: the suggestion button flips to "✓ Queued".
         setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));
     };

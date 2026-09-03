@@ -8,11 +8,14 @@ import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   getStoredProvider,
   loadProviderSettingsFormState,
+  logProviderSwitch,
   normalizeProvider,
   persistProviderSetting,
+  syncAiDebugContext,
 } from "../AI/providerConfig.js";
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
@@ -153,6 +156,24 @@ const Main = ({
     if (!checkWebGL()) setShowWebGLWarning(true);
   }, []);
 
+  // Where the player was looking, in detailed mode only.
+  //
+  // One effect over every panel flag rather than a call inside each handler:
+  // these panels are opened from a dozen places (the toolbar, the advisor's own
+  // buttons, a keyboard shortcut), and a per-handler call would miss most of
+  // them the day it was written. The timeline's own panels log themselves in
+  // time.jsx, which owns them.
+  useEffect(() => {
+    const open = [
+      activeBottomPanel && `bottom:${activeBottomPanel}`,
+      isSettingsOpen && "settings",
+      isCheatsOpen && "cheats",
+      isAdvisorOpen && "advisor",
+      isForcesOpen && "forces",
+    ].filter(Boolean);
+    logDebugEvent("ui", `Open panels: ${open.length ? open.join(", ") : "(none)"}`, undefined, { verbose: true });
+  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isForcesOpen]);
+
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
   // inbox unprompted. Everything that could break it is guarded inside
@@ -196,7 +217,14 @@ const Main = ({
   }, [isFullscreenEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("api_provider", normalizeProvider(apiProvider));
+    const normalized = normalizeProvider(apiProvider);
+    const previous = localStorage.getItem("api_provider");
+    localStorage.setItem("api_provider", normalized);
+    // First run of this effect is the mount, not a choice, so only a real change
+    // is worth a log line; the context sync runs either way so the report header
+    // is populated from the moment the game loads.
+    if (previous !== null && previous !== normalized) logProviderSwitch(normalized);
+    else syncAiDebugContext();
   }, [apiProvider]);
 
   useEffect(() => {

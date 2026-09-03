@@ -3,6 +3,7 @@ import mapLibreGl from "maplibre-gl";
 import { mergeCountryOverrides } from "./countryList.js";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
+import { logDebugEvent } from "./debugLog.js";
 import { loadRegionSeed } from "./regionSeed.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
@@ -625,6 +626,7 @@ export const primeJson = (url, data, { cache } = {}) => {
 
 export const writeJson = async (url, data, { pretty = false } = {}) => {
   const payload = JSON.stringify(data, null, pretty ? 2 : 0);
+  const startedAt = Date.now();
   const response = await fetch(url, {
     body: payload,
     headers: JSON_HEADERS,
@@ -632,8 +634,25 @@ export const writeJson = async (url, data, { pretty = false } = {}) => {
   });
 
   if (!response.ok) {
+    // This is THE save path: world.json, game.json, actions, events and chats
+    // all persist through here, so a failure here is the campaign not being
+    // written to disk. It threw a bare Error into whatever caller happened to
+    // be running, several of which only surface it as a toast — which is gone
+    // by the time anyone files a report. Logged at BOTH levels for that reason;
+    // everything else about this function is detail-only.
+    logDebugEvent("save", `FAILED to save ${url} — HTTP ${response.status}`, { bytes: payload.length });
     throw new Error(`Failed to save ${url}: HTTP ${response.status}`);
   }
+
+  // Detailed mode follows the saves that worked, with their size. Growth is the
+  // point: a world.json climbing past a megabyte is a real and reported problem
+  // (it makes every turn slower), and it is invisible in any single entry —
+  // you see it by reading the same line at three points in one session.
+  const elapsed = Date.now() - startedAt;
+  logDebugEvent("save", `Saved ${url}`, {
+    bytes: payload.length,
+    ...(elapsed >= 1000 ? { slowMs: elapsed } : {}),
+  }, { verbose: true });
 
   // Cache what the store SAYS IT STORED, not what we sent it. Both stores already
   // return the normalized record from their PUT and it used to be thrown away, so
@@ -872,6 +891,19 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
     if (buffer == null) {
       const { response } = await fetchWithPersistence(url, { signal });
       buffer = await response.arrayBuffer();
+      // Bytes from a node were hash-checked above; bytes from the origin were
+      // not, which made the fallback the weakest link in a chain built to be
+      // strong. Hold it to the same signed manifest. A mismatch throws rather
+      // than degrading quietly: the caller already handles a failed archive by
+      // painting the procedural fallback, and a map that fails loudly beats a
+      // map someone else chose.
+      if (import.meta.env.VITE_OH_WEB) {
+        const { verifyOriginBuffer } = await import("./web/contentTrust.js");
+        const { checked, ok } = await verifyOriginBuffer(url, buffer);
+        if (checked && !ok) {
+          throw new Error(`${url} does not match the signed content manifest — refusing to use it.`);
+        }
+      }
     }
     primePmtilesArchive(url, buffer);
     return buffer;
