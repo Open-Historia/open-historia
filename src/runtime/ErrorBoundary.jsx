@@ -1,6 +1,7 @@
 /*! Open Historia — React error boundary (recoverable render-crash fallback) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React from "react";
 import { logEvent } from "./logClient.js";
+import { flushDebugLog, logDebugEvent } from "./debugLog.js";
 
 // Catches render/lifecycle/constructor throws in the map, game UI and panels so a
 // crash shows a recoverable fallback (with a Reload) instead of React unmounting the
@@ -27,9 +28,22 @@ class ErrorBoundary extends React.Component {
       message: String(error?.message ?? error),
       data: { stack: String(error?.stack ?? "").slice(0, 8000), componentStack: info?.componentStack },
     });
+    // The console line above is already captured by the diagnostics log, but a
+    // render crash is the one entry a reader should never have to hunt for, so
+    // it gets its own category — and the first few frames of the component
+    // stack, which name the panel that blew up.
+    logDebugEvent("crash", "Render crash caught by the error boundary.", {
+      error: `${error?.name || "Error"}: ${error?.message || String(error)}`,
+      componentStack: String(info?.componentStack || "").trim().split("\n").slice(0, 4).join(" <- "),
+    });
+    // Written out now rather than on the debounce: the player's next move is the
+    // Reload button below, and the whole point of persisting the log is that it
+    // survives that.
+    flushDebugLog();
   }
 
   handleReload = () => {
+    flushDebugLog();
     window.location.reload();
   };
 

@@ -20,6 +20,21 @@ import {
     getMapSetting,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import {
+    buildDebugLogReport,
+    clearDebugLog,
+    debugLogFilename,
+    formatLogSize,
+    getDebugLogBytes,
+    getDebugLogLimitBytes,
+    getDebugLogSize,
+    isDebugLogEnabled,
+    isDebugLogVerbose,
+    setDebugLogEnabled,
+    setDebugLogVerbose,
+    subscribeToDebugLog,
+} from "../../runtime/debugLog.js";
 
 const baseStyle = {
     position: "fixed",
@@ -896,6 +911,187 @@ const NetworkSharing = () => {
     );
 };
 
+// Settings → Diagnostics: the log a player pastes into a bug report.
+//
+// Two ways out, because the two report routes want different things. Copy is for
+// Discord, where a paste is one action and an attachment is four. Save is for a
+// GitHub issue and for the long logs — a full buffer is a couple of hundred
+// kilobytes, past what a Discord message will take, and an attached file is also
+// the only form that survives being read a week later. Both sit above the
+// toggles: getting the log out is what a player comes to this section to do, and
+// the switches are set once and then left alone.
+//
+// The warning is not boilerplate. This log carries the names of the player's
+// countries, their queued orders and their in-game dates, and some of that is
+// campaign fiction they may not want in public. It never carries an API key
+// (runtime/debugLog.js redacts on the way in), and saying so explicitly is what
+// stops the more careful half of players from deciding not to send it at all.
+const DiagnosticsPanel = () => {
+    const [copyState, setCopyState] = useState("idle");
+    const [cleared, setCleared] = useState(false);
+    // The count is the whole reason this section is visible when nothing is
+    // wrong: "Entries: 0" after a crash means the log is not recording and the
+    // player should say so, rather than pasting an empty report.
+    const [count, setCount] = useState(() => getDebugLogSize());
+    const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // Both toggles are read from the module rather than held only here, because
+    // the module is where the persisted answer lives — this panel is unmounted
+    // every time the menu closes, and a useState default would otherwise be a
+    // second, disagreeing copy of the setting.
+    const [enabled, setEnabled] = useState(() => isDebugLogEnabled());
+    const [verbose, setVerbose] = useState(() => isDebugLogVerbose());
+
+    useEffect(() => subscribeToDebugLog(() => {
+        setCount(getDebugLogSize());
+        setBytes(getDebugLogBytes());
+    }), []);
+
+    const toggleEnabled = () => {
+        const next = !enabled;
+        setDebugLogEnabled(next);
+        setEnabled(next);
+        setCount(getDebugLogSize());
+        setBytes(getDebugLogBytes());
+    };
+
+    const toggleVerbose = () => {
+        const next = !verbose;
+        setDebugLogVerbose(next);
+        setVerbose(next);
+    };
+
+    const handleCopy = async () => {
+        setCopyState("copying");
+        // Through the shared helper: navigator.clipboard needs a secure context
+        // and a browser reaching this game over plain http on the LAN (Settings →
+        // Network) does not have one. Same reason clipboard.js exists at all.
+        const ok = await copyToClipboard(buildDebugLogReport());
+        setCopyState(ok ? "copied" : "failed");
+        setTimeout(() => setCopyState("idle"), 2500);
+    };
+
+    const handleDownload = () => {
+        const blob = new Blob([buildDebugLogReport()], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = debugLogFilename();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Revoked on the next tick, not immediately: Firefox cancels a download
+        // whose blob URL is revoked in the same task as the click.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    const handleClear = () => {
+        clearDebugLog();
+        setCleared(true);
+        setTimeout(() => setCleared(false), 2500);
+    };
+
+    return (
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.35rem" }}>Diagnostics</div>
+        <div style={{ marginBottom: "0.55rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        The game keeps a running log of what you did — saves opened, orders queued, turns taken, and anything that went wrong. Send it with a bug report and it says what happened, in order.
+        </div>
+
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", opacity: enabled ? 1 : 0.45 }}>
+        <button
+        type="button"
+        onClick={handleCopy}
+        disabled={copyState === "copying"}
+        style={{ ...diagnosticsButton, flex: 1 }}
+        >
+        {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy" : copyState === "copying" ? "Copying…" : "📋 Copy log"}
+        </button>
+        <button type="button" onClick={handleDownload} style={{ ...diagnosticsButton, flex: 1 }}>
+        💾 Save as file
+        </button>
+        </div>
+
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>
+        {/* The size, not just the count, because the cap is otherwise invisible:
+            a player watching the count sit still cannot tell a quiet game from a
+            log that is silently rolling its oldest entries off the front. */}
+        {!enabled
+            ? "Not recording."
+            : cleared
+            ? "Cleared."
+            : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
+        </span>
+        <button
+        type="button"
+        onClick={handleClear}
+        title="Empties the log. Do this just before reproducing a bug and the log will contain only the steps that caused it."
+        style={{ ...diagnosticsButton, padding: "0.3rem 0.55rem", fontSize: "0.7rem" }}
+        >
+        Clear
+        </button>
+        </div>
+
+        <div style={{ margin: "0.5rem 0 1rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", lineHeight: 1.4 }}>
+        {/* The warning tracks the switch below rather than stating the worst
+            case always: a player reading "your conversations are included" on a
+            log that does not contain them learns to disbelieve this line, which
+            is the one line here that has to be believed. */}
+        Your API key is never included. Country names, your queued orders and error messages are{verbose ? ", and while detailed logging is on, everything you and the AI said to each other" : ""} — read it before posting it somewhere public.
+        </div>
+
+        <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
+        <div style={helperTextStyle}>
+        On by default. Off: nothing is recorded, and the log stored on this device is deleted. Remembered across save changes and restarts.
+        </div>
+
+        <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
+        <div style={helperTextStyle}>
+        Off by default, and remembered like the switch above. Turn it on before reproducing a bug, then send the log. Adds:
+        <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1rem" }}>
+        <li>Every message to and from your advisor, in full</li>
+        <li>Every diplomatic message, in full, with who said it to whom</li>
+        <li>Letters the advisor drafted, and the notes countries send you</li>
+        <li>Every AI task and what it answered, and why an answer was rejected</li>
+        <li>What each turn changed in the world</li>
+        <li>Every server request and every save, with sizes</li>
+        <li>Which panels you opened</li>
+        <li>Full error stacks and much longer details</li>
+        <li>The game&apos;s routine console messages</li>
+        </ul>
+        <div style={{ marginTop: "0.3rem" }}>
+        The log gets a bigger allowance while this is on, but still fills faster. It now quotes your conversations word for word — read it before posting it somewhere public.
+        </div>
+        </div>
+
+        </div>
+    );
+};
+
+const helperTextStyle = {
+    marginTop: "-0.7rem",
+    marginBottom: "0.7rem",
+    fontSize: "0.72rem",
+    color: "rgba(255,255,255,0.45)",
+    lineHeight: 1.35,
+};
+
+const diagnosticsButton = {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: "8px",
+    color: "white",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "sans-serif",
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    gap: "0.35rem",
+    justifyContent: "center",
+    padding: "0.45rem 0.6rem",
+};
+
 const SettingsMenu = ({
     topOffset = "0.5rem",
     isFullscreenEnabled,
@@ -1035,6 +1231,8 @@ const SettingsMenu = ({
         </div>
 
         <NetworkSharing />
+
+        <DiagnosticsPanel />
 
         {typeof onOpenCheats === "function" && (
             <button
