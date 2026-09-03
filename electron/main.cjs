@@ -222,10 +222,34 @@ const installAutoUpdater = () => {
     download: () => {
       // checkForUpdates has to have run first — downloadUpdate with nothing found
       // rejects. Chaining them here means the page needs one call, not two.
+      //
+      // isUpdateAvailable, NOT updateInfo: electron-updater fills updateInfo in
+      // either case — it is the parsed feed, not a verdict — so testing it treats
+      // "the feed says you are already on the newest version" as something to
+      // download. And checkForUpdates resolves NULL, quietly and with no error
+      // event, whenever the updater declines to run at all; the case that reaches
+      // real testers is a Linux AppImage started outside its own bundle (no
+      // APPIMAGE env, e.g. after --appimage-extract), which is exactly the build
+      // that cannot replace itself.
+      //
+      // Both of those have to land somewhere, or nothing ever moves the state off
+      // "checking" and the banner sits on "Fetching the update…" for ever with no
+      // way out. "error" is that somewhere: it is what the banner already reads as
+      // "offer the installer download instead", and it is a settled state, so the
+      // page stops polling for a download that is never coming.
       setUpdateState({ state: "checking", error: "" });
       autoUpdater
         .checkForUpdates()
-        .then((result) => (result?.updateInfo ? autoUpdater.downloadUpdate() : null))
+        .then((result) =>
+          result?.isUpdateAvailable
+            ? autoUpdater.downloadUpdate()
+            : setUpdateState({
+                state: "error",
+                error: result
+                  ? "No newer version in the update feed."
+                  : "This build cannot replace itself in place.",
+              }),
+        )
         .catch((error) => setUpdateState({ state: "error", error: String(error?.message || error) }));
     },
     // isSilent: the whole point is that the player does not meet an installer.
