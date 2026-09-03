@@ -2082,6 +2082,7 @@ const OlMap = ({
     if (esri) {
       base = new TileLayer({
         source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
+        opacity: Number.isFinite(esri.editorOpacity) ? esri.editorOpacity : 1,
       });
     } else if (!customActive && (basemap === "osm" || basemap === "light")) {
       base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
@@ -2092,7 +2093,11 @@ const OlMap = ({
       baseLayerRef.current = base;
     }
     const el = map.getTargetElement();
-    if (el) el.style.background = customActive ? "#0b1a2b" : BASEMAP_BG[basemap] || "#0b1020";
+    if (el) {
+      el.style.background = customActive
+        ? "#0b1a2b"
+        : esri?.editorBackground || BASEMAP_BG[basemap] || "#0b1020";
+    }
   }, [basemap, customBackground]);
 
   // Custom uploaded background: a georeferenced vector/raster layer beneath the

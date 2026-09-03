@@ -1788,7 +1788,7 @@ const LibraryTopBar = () => {
     const currentWorld = details?.data?.world ?? {};
     const currentGame = details?.data?.game ?? {};
 
-    await saveScenario(scenarioId, {
+    const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
         ...currentWorld,
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
@@ -1820,6 +1820,11 @@ const LibraryTopBar = () => {
           currentGame.startDate || currentGame.gameDate || seed.game?.startDate || seed.game?.gameDate || "2016-01-01",
       },
     });
+
+    // saveScenario returns the canonical scenario we just wrote. keep the drawer's
+    // copy in sync too, or reopening Workshop resurrects its old world.json and a
+    // later ordinary Scenario Save can literally write the stale basemap back.
+    setEditorDetails(savedScenarioDetails);
 
     await uploadScenarioAsset(
       scenarioId,

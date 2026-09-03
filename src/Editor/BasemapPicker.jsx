@@ -101,7 +101,7 @@ const closeBtn = {
   width: "2rem",
 };
 
-const BasemapCard = ({ title, imageUrl, active, badge, onClick, onDelete, onPublish }) => (
+const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish }) => (
   <div
     style={{ ...cardSurface, outline: active ? "2px solid #7c3aed" : "none", outlineOffset: "-2px" }}
     onClick={onClick}
@@ -114,7 +114,7 @@ const BasemapCard = ({ title, imageUrl, active, badge, onClick, onDelete, onPubl
           alt=""
           loading="lazy"
           onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", filter: imageFilter || "none" }}
         />
       ) : (
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>
@@ -283,6 +283,7 @@ const BasemapPicker = ({
                       key={b.id}
                       title={b.label}
                       imageUrl={esriPreviewUrl(b.service)}
+                      imageFilter={b.previewFilter}
                       active={!currentCustomId && currentBasemap === b.id}
                       onClick={() => { onSelectBuiltin(b.id); onClose(); }}
                     />
