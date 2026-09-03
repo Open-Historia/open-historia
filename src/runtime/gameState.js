@@ -940,6 +940,18 @@ const PROJECT_STATUS_SET = new Set(PROJECT_STATUSES);
 // the same answer, and two copies of this list would drift apart.
 export const PROJECT_OPEN_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
 const PROJECT_KIND_SET = new Set(["project", "operation"]);
+// Whether an entry sourced from a spy can still be trusted. "" is the ordinary
+// case and covers everything the player learned openly.
+//
+// "doubted" is ENGINE-ONLY and is not in the schema, so no model can emit it: it
+// is stamped when the agent an entry was sourced from turns out to be compromised
+// (projects.js spyIntelDoubtOps). "confirmed" and "refuted" are the model's to
+// give, and only once a FRESH agent is in that polity — that is the whole loop:
+// you are fed a story, your counter-intelligence starts to doubt the source, and
+// the only way to settle it is to send someone else and see.
+const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
+const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
+
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
 
@@ -1220,11 +1232,19 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     eventIds: normalizeIdList(entry.eventIds, MAX_PROJECT_EVENT_IDS),
     linkedUnitIds: normalizeIdList(entry.linkedUnitIds, 12),
     linkedMarkerIds: normalizeIdList(entry.linkedMarkerIds, 12),
-    // The agent a covert operation is actually tracking (projects.js
-    // spyOperationOps). Engine-written only: it is absent from projectSchema, so
-    // a strict provider cannot emit it, and absent from PROJECT_PATCHABLE_FIELDS,
-    // so no update can rewrite or clear the link out from under the entry.
+    // The agent an entry is sourced from: the operation a spy IS (spyOperationOps)
+    // or the foreign programme a spy told us about (spyProvenanceOps). What makes
+    // a doubt later find the right entries.
+    //
+    // Patchable, because the engine sets it through an ordinary update op — but
+    // absent from projectSchema, so a strict provider cannot emit it at all. That
+    // absence is the real protection, and it is the same one "doubted" relies on:
+    // the schema decides what a model can say, the whitelist only decides what an
+    // op can carry.
     linkedSpyIds: normalizeIdList(entry.linkedSpyIds, 12),
+    verification: PROJECT_VERIFICATION_SET.has(normalizeOptionalString(entry.verification))
+      ? normalizeOptionalString(entry.verification)
+      : "",
     focus: normalizeProjectCoords(entry.focus),
     note: normalizeTextLike(entry.note),
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -1296,6 +1316,7 @@ const PROJECT_FIELD_ALIASES = {
   // Listed so the engine's own create carries the link through listProvidedFields
   // when it restates an entry that already exists. Not patchable — see above.
   linkedSpyIds: ["linkedSpyIds"],
+  verification: ["verification"],
   focus: ["focus"],
   note: ["note"],
 };
@@ -1425,7 +1446,7 @@ const normalizeProjectOp = (entry) => {
 const PROJECT_PATCHABLE_FIELDS = [
   "kind", "ownerCode", "summary", "status", "priority", "progress", "secrecy", "ongoing",
   "startedAt", "targetDate", "lastUpdate", "note", "focus",
-  "linkedUnitIds", "linkedMarkerIds", "onComplete",
+  "linkedUnitIds", "linkedMarkerIds", "onComplete", "verification", "linkedSpyIds",
 ];
 
 // The first key of `field`'s alias list that the patch actually carries, or "" for

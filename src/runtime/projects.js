@@ -486,3 +486,132 @@ export const spyOperationOps = (spies, projects, { date = "", playerPolity = "" 
   }
   return ops;
 };
+
+// ---- doubting what a compromised agent told us ------------------------------
+// A turned agent feeds planted material, and the board opens a foreign entry from
+// it. That is the deception working, and it is meant to. What was missing is the
+// end of it: the entry sat there forever and the player never found out they had
+// been played, which makes a successful deception indistinguishable from noise.
+//
+// So the entry is marked DOUBTFUL rather than deleted, and settling it is a move
+// the player makes: send someone else. Nobody — not the engine, not the player —
+// is told outright that it was a lie. A fresh agent in that polity is what gives
+// the model untainted material to confirm or refute it with.
+//
+// The engine owns "doubted" and nothing else here. "confirmed" and "refuted" are
+// judgements about the world, which only the model can make, so they arrive as
+// ordinary project ops (see the schema's verification field).
+const spyIdsOf = (project) => asArray(project?.linkedSpyIds).map(asText).filter(Boolean);
+
+// A foreign entry the board learned while an agent was inside that polity is, by
+// the prompt's own rules, sourced from that agent — it is the only channel that
+// puts another power's programme on the board. Stamping the link is what lets the
+// doubt find the right entries later, and it is retroactive on purpose: an entry
+// opened before this existed still gets tied to the agent that must have produced
+// it.
+export const spyProvenanceOps = (spies, projects, { playerPolity = "" } = {}) => {
+  const player = asText(playerPolity).toLowerCase();
+  const liveByTarget = new Map();
+  for (const spy of asArray(spies)) {
+    const owner = asText(spy?.owner).toLowerCase();
+    if (owner && player && owner !== player) continue;
+    if (!LIVE_SPY_STATUSES.has(asText(spy?.status) || "active")) continue;
+    const target = asText(spy?.target);
+    if (target && !liveByTarget.has(target.toLowerCase())) liveByTarget.set(target.toLowerCase(), spy);
+  }
+  if (!liveByTarget.size) return [];
+
+  const ops = [];
+  for (const project of asArray(projects)) {
+    if (!isProjectOpen(project)) continue;
+    // Only a FOREIGN entry: a blank ownerCode is the player's own work, which no
+    // spy told them about.
+    const owner = asText(project?.ownerCode);
+    if (!owner) continue;
+    if (spyIdsOf(project).length) continue;
+    const spy = liveByTarget.get(owner.toLowerCase());
+    if (!spy) continue;
+    ops.push({
+      op: "update",
+      id: asText(project.id),
+      name: asText(project.name),
+      linkedSpyIds: [asText(spy.id)],
+    });
+  }
+  return ops;
+};
+
+// Cast doubt on everything a compromised agent sourced, and hand the question to
+// whoever is sent next.
+//
+// The trigger is `suspected` — the analysts' own warning, the same flag the Spy
+// tab shows — not proof. The player is never told their agent was turned, so the
+// board must not say so either: the entry reads as unconfirmed, not as a lie.
+//
+// Doubt is only cast once per entry (an entry already carrying a verification is
+// left alone), so the model's later confirmed/refuted verdict is never overwritten
+// by the engine on the next turn.
+export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = "" } = {}) => {
+  const player = asText(playerPolity).toLowerCase();
+  const compromised = new Set();
+  for (const spy of asArray(spies)) {
+    const owner = asText(spy?.owner).toLowerCase();
+    if (owner && player && owner !== player) continue;
+    const status = asText(spy?.status) || "active";
+    // Suspected while still running, or exposed after having been turned: both
+    // mean what this agent sent may have been written by the other side.
+    if (spy?.suspected === true || status === "turned") compromised.add(asText(spy?.id));
+  }
+  if (!compromised.size) return [];
+
+  const ops = [];
+  for (const project of asArray(projects)) {
+    if (!isProjectOpen(project)) continue;
+    if (asText(project?.verification)) continue;
+    if (!spyIdsOf(project).some((id) => compromised.has(id))) continue;
+    ops.push({
+      op: "update",
+      id: asText(project.id),
+      name: asText(project.name),
+      verification: "doubted",
+      status: "stalled",
+      lastUpdate: `Our analysts no longer trust how we came by this${date ? ` (as of ${date})` : ""}.`
+        + " It stands unconfirmed until someone else can look.",
+    });
+  }
+  return ops;
+};
+
+// Which doubted entries the player now has a CLEAN pair of eyes on — a live agent
+// in that polity that is not one of the agents the doubt came from. These are the
+// ones the model is asked to settle; without a fresh source it is guessing, and
+// guessing is what put the phantom there in the first place.
+export const doubtedAwaitingFreshSource = (spies, projects, { playerPolity = "" } = {}) => {
+  const player = asText(playerPolity).toLowerCase();
+  const fresh = new Map();
+  for (const spy of asArray(spies)) {
+    const owner = asText(spy?.owner).toLowerCase();
+    if (owner && player && owner !== player) continue;
+    // A turned or suspected agent is not a clean source, however live it looks.
+    if (asText(spy?.status) !== "active" || spy?.suspected === true) continue;
+    const target = asText(spy?.target);
+    if (target) fresh.set(target.toLowerCase(), spy);
+  }
+
+  const out = [];
+  for (const project of asArray(projects)) {
+    if (!isProjectOpen(project)) continue;
+    if (asText(project?.verification) !== "doubted") continue;
+    const spy = fresh.get(asText(project?.ownerCode).toLowerCase());
+    if (!spy || spyIdsOf(project).includes(asText(spy.id))) continue;
+    out.push({ project, spy });
+  }
+  return out;
+};
+
+export const describeDoubtedForPrompt = (pending) => {
+  if (!pending.length) return "";
+  return pending
+    .map(({ project, spy }) => `- "${project.name}" (${project.ownerCode}) — doubted; you now have a fresh agent inside ${spy.target}.`)
+    .join("\n");
+};

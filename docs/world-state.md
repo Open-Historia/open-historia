@@ -97,7 +97,7 @@ Stored in world so they share every read/write/poll/normalize path with no serve
 
 | Field | Type | Default | Element shape (normalizer) |
 |---|---|---|---|
-| `projects` | `Project[]` | `[]` | `normalizeProjectEntry`: `{id,name,kind,ownerCode,summary,status,progress,tags,secrecy,startedAt,targetDate,milestones,nextMilestone,lastUpdate,eventIds,linkedUnitIds,linkedMarkerIds,linkedSpyIds,focus,note,createdAt,updatedAt,updatedRound}`. |
+| `projects` | `Project[]` | `[]` | `normalizeProjectEntry`: `{id,name,kind,ownerCode,summary,status,progress,tags,secrecy,startedAt,targetDate,milestones,nextMilestone,lastUpdate,eventIds,linkedUnitIds,linkedMarkerIds,linkedSpyIds,verification,focus,note,createdAt,updatedAt,updatedRound}`. |
 
 The **Projects & Operations board**: long-running efforts that span rounds — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns. Deliberately distinct from the actions queue, which holds one round's orders and is resolved by the next jump.
 
@@ -124,6 +124,21 @@ Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately — `buildFreshWorldSeedFrom
 Three cases are deliberately left alone. A `turned` agent changes nothing — the player is never told, and an entry that closed itself would say so louder than any message. A `suspected` one is left alone too, because the model is free to set it back to active on the next jump and the two would flip-flop; the Spy tab already flags it. And another polity's agent inside the player is not the player's programme.
 
 Espionage also reaches the board **through the events it produces**: `resolveEspionage` runs inside `applySimulationResult`, and the `projects` task now runs there too, after it — so an exposure can stall the operation it belonged to on the same turn rather than a turn later. The `projects` task additionally receives the `[Espionage]` brief (framed for the board rather than the simulator), which is the one source that can put a **rival's** programme on the board as a foreign entry.
+
+#### Doubting what a spy told you
+
+A turned agent feeds planted material and the board opens a foreign entry from it. That is the deception working. What makes it a mechanic rather than noise is that it ends, and that settling it is a **move the player makes**.
+
+`verification` runs `"" → doubted → confirmed | refuted`, and ownership is split:
+
+- `spyProvenanceOps` ties a foreign entry to the agent that must have produced it (the brief is the only channel that puts a rival's programme on the board), stamping `linkedSpyIds`. Retroactive on purpose, so entries opened before this existed still get linked.
+- `spyIntelDoubtOps` stamps **`doubted`** when that agent is `suspected` or `turned` — the analysts' own warning, the same flag the Spy tab shows, not proof. Cast once per entry, so a later verdict is never overwritten. The wording never says an agent was turned: the player is not told, so the board is not either.
+- `doubtedAwaitingFreshSource` lists doubted entries the player now has a **clean** agent for — not the one that caused the doubt, and not a suspected replacement. That list is handed to the `projects` task, because whether a fresh source bears on an entry is a fact about world state, not something readable from board text.
+- **`confirmed` and `refuted` are the model's**, through an ordinary op. `projectSchema` offers only those two, so no model can cast doubt on the board itself — only settle one already cast.
+
+The engine never decides whether a programme was real; that is fiction, and only the model has it. It decides only *whether the question can honestly be asked yet*.
+
+> `linkedSpyIds` and `verification` are both in `PROJECT_PATCHABLE_FIELDS` because the engine sets them through ordinary update ops. The protection is `projectSchema`, which omits `linkedSpyIds` entirely and restricts `verification` to the two verdicts: **the schema decides what a model can say, the whitelist only decides what an op can carry.**
 
 `world.intelligence` is reachable from the board rather than only from a bare `polityChange`: a sustained build-up belongs in a programme whose `onComplete.polityChanges` carries the new rating, so it lands when the work finishes and can be funded, watched, or wrecked first. A sudden shock — a purge, a defector, a ring rolled up — still changes it directly. `onComplete` releases on completion only, never on a cancel or a fail, so abandoning the programme delivers nothing.
 

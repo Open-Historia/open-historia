@@ -579,6 +579,18 @@ const projectSchema = {
       description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
       enum: ["public", "restricted", "covert"],
     },
+    // Only the two VERDICTS are offered. "doubted" is stamped by the engine when
+    // the agent an entry came from turns out to be compromised, and is absent from
+    // this enum on purpose: a model must never be able to cast doubt on the board
+    // itself, only to settle a doubt already cast — and only from a fresh source.
+    verification: {
+      type: "string",
+      description:
+        "Only for an entry the board shows as doubted, and only once a fresh source is in place: "
+        + "confirmed if the new material shows the effort is real, refuted if it shows there was never "
+        + "anything there (pair refuted with failing the entry). Leave it out otherwise.",
+      enum: ["confirmed", "refuted"],
+    },
     startedAt: textSchema("In-game date work began (YYYY-MM-DD)."),
     ongoing: {
       type: "boolean",
