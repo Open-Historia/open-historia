@@ -588,11 +588,22 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
   return ops;
 };
 
-// Which doubted entries the player now has a CLEAN pair of eyes on — a live agent
-// in that polity that is not one of the agents the doubt came from. These are the
-// ones the model is asked to settle; without a fresh source it is guessing, and
-// guessing is what put the phantom there in the first place.
-export const doubtedAwaitingFreshSource = (spies, projects, { playerPolity = "" } = {}) => {
+// Which doubted entries the player now has a CLEAN pair of eyes on. Two things
+// have to be true, and the second is the one that matters:
+//
+//  1. a live agent in that polity who is neither compromised nor the agent the
+//     doubt came from, and
+//  2. that agent has actually REPORTED — untainted material exists.
+//
+// (2) is enforced through `planted`, which gatherIntelligence sets from the
+// source's own status and which replaces the target's entry on every gather. So
+// it is true exactly while the channel is the other side's writing, and false the
+// moment a clean agent files anything. Without this check the question reached the
+// board the instant a replacement was deployed, when the only material in hand was
+// still the fabrication — and settling a doubt from the evidence the doubt is
+// ABOUT is precisely the failure this mechanic exists to prevent. The prompt asks
+// the model to hold off in that case; this makes it so it is never asked.
+export const doubtedAwaitingFreshSource = (spies, projects, { playerPolity = "", intercepts = null } = {}) => {
   const player = asText(playerPolity).toLowerCase();
   const fresh = new Map();
   for (const spy of asArray(spies)) {
@@ -604,12 +615,21 @@ export const doubtedAwaitingFreshSource = (spies, projects, { playerPolity = "" 
     if (target) fresh.set(target.toLowerCase(), spy);
   }
 
+  // Intercepts are keyed by the target name as the agent filed it, which need not
+  // match the entry's ownerCode in case — the whole polity namespace is compared
+  // case-insensitively elsewhere for the same reason.
+  const reported = new Map();
+  for (const [target, entry] of Object.entries(intercepts || {})) {
+    if (entry && entry.planted !== true) reported.set(asText(target).toLowerCase(), entry);
+  }
+
   const out = [];
   for (const project of asArray(projects)) {
     if (!isProjectOpen(project)) continue;
     if (asText(project?.verification) !== "doubted") continue;
     const spy = fresh.get(asText(project?.ownerCode).toLowerCase());
     if (!spy || spyIdsOf(project).includes(asText(spy.id))) continue;
+    if (!reported.has(asText(spy.target).toLowerCase())) continue;
     out.push({ project, spy });
   }
   return out;

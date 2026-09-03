@@ -901,10 +901,16 @@ const generateProjectOps = async (bundle, events, { signal } = {}) => {
   // rather than left for the model to notice, because settling one is only honest
   // when a fresh source genuinely exists — and that is a fact about world state,
   // not something readable from the board text.
+  // The sealed file is enough: only `planted` is read, so there is no need to
+  // decrypt anything to know whether the latest material came from a clean source.
+  const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
   const pendingDoubts = doubtedAwaitingFreshSource(
     normalizeSpies(bundle.world?.spies),
     board,
-    { playerPolity: normalizeString(bundle.game?.country) },
+    {
+      playerPolity: normalizeString(bundle.game?.country),
+      intercepts: normalizeIntercepts(gathered),
+    },
   );
   const doubtBlock = pendingDoubts.length
     ? `\n\nThese doubted entries can now be settled — a fresh agent is in place:\n${describeDoubtedForPrompt(pendingDoubts)}`
