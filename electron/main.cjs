@@ -404,9 +404,11 @@ const findFreePort = (start, attempts = 20) =>
     probe.unref();
     probe.once("error", () => resolve(findFreePort(start + 1, attempts - 1)));
     probe.once("listening", () => probe.close(() => resolve(start)));
-    // Bind the wildcard, not 127.0.0.1: server.js listens on every interface, so
-    // a loopback-only probe would call a port free that a 0.0.0.0 publisher
-    // (Docker's default) already owns — exactly the case this exists for.
+    // Bind the wildcard, not 127.0.0.1. server.js now binds loopback by default
+    // (OH_HOST), but a player can point it at every interface, and a loopback-only
+    // probe would call a port free that a 0.0.0.0 publisher (Docker's default)
+    // already owns — exactly the case this exists for. Probing wider than we bind
+    // can only skip a port that would have worked, which costs nothing.
     probe.listen(start);
   });
 
