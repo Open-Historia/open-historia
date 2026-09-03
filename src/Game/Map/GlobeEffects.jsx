@@ -1,4 +1,4 @@
-﻿/*! Open Historia — globe celestial rendering, day/night lighting + orbit © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — globe celestial rendering, day/night lighting + orbit © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useEffect } from "react";
 import { useMap } from "react-map-gl/maplibre";
 import {
@@ -6,7 +6,6 @@ import {
   globeTransitionOpacity,
   projectGlobeSun,
   subsolarPoint,
-  sunLimbBloom,
 } from "./globeSunMath.js";
 import {
   drawGlobeLighting,
@@ -20,16 +19,17 @@ import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
-// While the user is actively dragging/zooming, redraw the sun/lighting every
-// frame so it tracks the camera precisely. While idle (including during
-// auto-rotate), the same visual result is indistinguishable at a much lower
-// rate, so throttle down hard — this is the single biggest lever on
-// sustained CPU/GPU load, since idle auto-rotate used to force a full
-// MapLibre re-render plus a from-scratch lighting repaint 60 times a second,
-// forever, even with the phone just sitting on a table.
-const CELESTIAL_FRAME_MS_ACTIVE = 1000 / 60;
+// While the user is actively dragging/zooming the stars redraw at 25fps rather
+// than 60: each frame is ~1,800 immediate-mode 2D canvas arc()+fill() calls, so
+// full-rate redrawing during a gesture competes with MapLibre's own render for
+// the main thread. At drag speeds 25fps is visually indistinguishable. While
+// idle (including during auto-rotate), throttle down harder still — this is
+// the single biggest lever on sustained CPU/GPU load, since idle auto-rotate
+// used to force a full MapLibre re-render plus a from-scratch lighting repaint
+// 60 times a second, forever, even with the phone just sitting on a table.
+const CELESTIAL_FRAME_MS_ACTIVE = 1000 / 25;
 const CELESTIAL_FRAME_MS_IDLE = 1000 / 15;
-const LIGHTING_FRAME_MS_ACTIVE = 1000 / 60;
+const LIGHTING_FRAME_MS_ACTIVE = 1000 / 15;
 const LIGHTING_FRAME_MS_IDLE = 1000 / 15;
 // Idle auto-rotation itself doesn't need a fresh jumpTo() every animation
 // frame either — updating the camera 15x/sec still reads as smooth rotation
@@ -142,19 +142,13 @@ const GlobeEffects = ({ active }) => {
         if (projected
           && projected.x > -180 && projected.x < width + 180
           && projected.y > -180 && projected.y < height + 180) {
-          const bloom = sunLimbBloom({
-            sunX: projected.x,
-            sunY: projected.y,
-            cameraPosition: mapInstance.transform?.cameraPosition,
-            matrix,
-            width,
-            height,
-          });
           sunElement.style.opacity = String(projectionTransition);
+          // Position/scale only, via translate3d — this runs on the GPU
+          // compositor and never invalidates paint. The glow is a STATIC CSS
+          // drop-shadow on #oh-globe-sun (see World.jsx); recomputing the
+          // filter string here re-rasterized the element's shadow every frame
+          // during drags, which cost far more than the blur it varied.
           sunElement.style.transform = `translate3d(${projected.x.toFixed(1)}px, ${projected.y.toFixed(1)}px, 0) translate(-50%, -50%) scale(${projected.scale.toFixed(3)})`;
-          const glowRadius = 12 + bloom * 28;
-          const glowOpacity = 0.65 + bloom * 0.3;
-          sunElement.style.filter = `drop-shadow(0 0 ${glowRadius.toFixed(1)}px rgba(255,218,145,${glowOpacity.toFixed(3)}))`;
         } else {
           sunElement.style.opacity = "0";
         }
@@ -194,8 +188,12 @@ const GlobeEffects = ({ active }) => {
     let lastRotateTick = performance.now();
     const tick = (now) => {
       if (disposed || contextLost || !mapInstance.style) return;
+      if (autoRotateDisabled) {
+        autoRotationActive = false;
+        return;
+      }
       const idle = now - lastInteraction > INTERACTION_GRACE_MS;
-      autoRotationActive = idle && !autoRotateDisabled && !mapInstance.isMoving();
+      autoRotationActive = idle && !mapInstance.isMoving();
       if (autoRotationActive) {
         // Advancing the camera on every animation frame forces MapLibre to
         // fully re-render 60x/sec forever while idle. Stepping at ~15fps

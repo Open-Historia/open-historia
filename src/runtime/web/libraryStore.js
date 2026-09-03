@@ -403,6 +403,58 @@ const fetchDefaultRegionsGeojson = () => {
   return defaultRegionsGeojsonPromise;
 };
 
+// Raw region-seed delivery for the worker-backed indexer (src/runtime/regionSeed.js).
+// Returns the scenario's regions.geojson in its STORED form — an uploaded string
+// stays a string, the default scenario's CDN copy arrives as BYTES — so the
+// 55-220 MB JSON.parse runs in the worker, not on the main thread, and the
+// json(text)->parse(json) round-trip the fetch interceptor would otherwise
+// perform never happens. Mirrors the SCENARIO_GEOJSON_ASSET_KEYS branch of
+// readRuntimeJsonAsset (including the Modern-Day borrow and the owner-schema
+// migration triggers) but skips every parse. Null = no geometry stored.
+export const readRuntimeGeojsonRaw = async (assetKey = "regionsGeojson") => {
+  if (!SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) return null;
+  // Same migration triggers as readRuntimeJsonAsset's geojson branch: a legacy
+  // record must be owner-migrated BEFORE its raw geojson is handed out, or the
+  // map would paint code-space owners against a name-space world.
+  const activeForMigration = await getActiveGameRecord();
+  if (activeForMigration && ensureOwnerSchema(activeForMigration, "game")) {
+    await idbPut(STORES.games, activeForMigration);
+  }
+  const scenario = await getActiveRuntimeScenarioRecord();
+  if (scenario && ensureOwnerSchema(scenario, "scenario")) await idbPut(STORES.scenarios, scenario);
+  let value = scenario?.geojson?.[assetKey];
+  if (value === undefined && assetKey === "regionsGeojson" && scenario && scenario.id !== DEFAULT_SCENARIO_ID) {
+    const fallback = await getScenario(DEFAULT_SCENARIO_ID);
+    if (fallback && ensureOwnerSchema(fallback, "scenario")) await idbPut(STORES.scenarios, fallback);
+    value = fallback?.geojson?.[assetKey];
+  }
+  if (typeof value === "string") {
+    return value.length ? { kind: "text", payload: value } : null;
+  }
+  if (value && Array.isArray(value.features)) {
+    return { kind: "object", payload: value };
+  }
+  if (assetKey === "regionsGeojson" && scenario?.id === DEFAULT_SCENARIO_ID) {
+    // Same CDN fallback as fetchDefaultRegionsGeojson, but read as bytes so the
+    // parse stays in the worker; HTTP-cached per session like that path.
+    const response = await fetch(`${CONTENT_BASE}/default-regions.geojson`, { cache: "force-cache" });
+    if (!response.ok) return null;
+    return { kind: "bytes", payload: await response.arrayBuffer() };
+  }
+  return null;
+};
+
+const inferRecordCustomGeometry = (record) => {
+  const value = record?.geojson?.regionsGeojson;
+  if (typeof value === "string") {
+    return /"edited"\s*:\s*true|"id"\s*:\s*"reg_/i.test(value);
+  }
+  return Array.isArray(value?.features) && value.features.some((feature) => {
+    const props = feature?.properties ?? {};
+    return props.edited === true || String(props.id ?? feature?.id ?? "").startsWith("reg_");
+  });
+};
+
 // --- Owner schema migration (mirror of the server's ensureOwnerSchema) ---
 // Rewrites a record whose owners are GADM codes into one whose owners are country
 // names. Imports server/ownerMigration.js rather than restating it: that module is
@@ -514,11 +566,25 @@ const readRuntimeJsonAsset = async (assetKey) => {
 
   const activeGame = await getActiveGameRecord();
   const gameValue = activeGame ? runtimeValueFromRecord(activeGame, assetKey) : undefined;
-  if (gameValue !== undefined) return normalizeRuntimeWorld(assetKey, coerceRuntimeValue(assetKey, gameValue));
+  if (gameValue !== undefined) {
+    const value = coerceRuntimeValue(assetKey, gameValue);
+    let scenarioCustomGeometry;
+    if (assetKey === "world" && value?.customGeometry == null) {
+      const scenario = await getActiveRuntimeScenarioRecord();
+      scenarioCustomGeometry = scenario?.json?.world?.customGeometry ?? inferRecordCustomGeometry(scenario);
+    }
+    return normalizeRuntimeWorld(assetKey, value, scenarioCustomGeometry);
+  }
 
   const scenario = await getActiveRuntimeScenarioRecord();
   const scenarioValue = scenario ? runtimeValueFromRecord(scenario, assetKey, /*scenarioScope*/ true) : undefined;
-  if (scenarioValue !== undefined) return normalizeRuntimeWorld(assetKey, coerceRuntimeValue(assetKey, scenarioValue));
+  if (scenarioValue !== undefined) {
+    const value = coerceRuntimeValue(assetKey, scenarioValue);
+    const scenarioCustomGeometry = assetKey === "world" && value?.customGeometry == null
+      ? inferRecordCustomGeometry(scenario)
+      : undefined;
+    return normalizeRuntimeWorld(assetKey, value, scenarioCustomGeometry);
+  }
 
   if (assetKey === "colors") {
     // Server falls back to the immutable app palette (public/assets/colors.json),
