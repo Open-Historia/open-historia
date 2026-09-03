@@ -13,6 +13,8 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
 import { buildCanonicalWarContext } from "./nativeWarLedger.js";
 import { isContextDiagnosticsEnabled, logContextDiagnostics } from "./contextDiagnostics.js";
+import { foreignAgentBrief } from "../../runtime/spycraft.js";
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -945,6 +947,7 @@ async function callOpenAIStyleChatCompletions({
     history,
     providerLabel,
     customParams = {},
+    toolStrict = false,
     retries = 3,
     retryDelay = 15000,
     deadline,
@@ -1006,6 +1009,7 @@ async function callOpenAIStyleChatCompletions({
                         name: tool.name,
                         description: tool.description,
                         parameters: tool.schema,
+                        ...(toolStrict ? { strict: true } : {}),
                     } }],
                     // The string form, NOT OpenAI's {type:"function",function:{name}}
                     // object: llama.cpp-based servers (LM Studio, Jan, local Qwen et
@@ -1169,6 +1173,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         history,
         providerLabel: "OpenAI Compatible",
         customParams: parseCustomParams(settings.customParams, "OpenAI Compatible"),
+        toolStrict: settings.toolStrict === true,
         allowJsonSchemaFallback: true,
         tokenLimitField: "max_tokens",
         ...opts,
@@ -1669,11 +1674,29 @@ async function buildDiplomaticPromptBundle(countries, playerCountry, speakingAs 
         readJson(JSON_URLS.advisor, { defaultValue: [] }),
     ]);
 
-    // Phase 9.3A: diplomacy is the first production task to receive focused context.
-    // Bind THIS_CHAT_HISTORY to the actual addressed thread before building generic
-    // variables. If a brand-new thread has not been persisted yet, use an empty
-    // synthetic focus chat rather than accidentally borrowing another country's chat.
-    const matchingThread = findDiplomaticThreadForParticipants(chatData, participantNames);
+    // Phase 9.3A: diplomacy gets focused context, but only from conversations the
+    // speaking polity is actually part of. Private chats stay private unless a spy
+    // explicitly earns access to them below.
+    const speakingPolity = speakingAs || participantNames.find((country) => country !== playerCountry) || "";
+    const resolveCampaignKey = (token) => {
+        const raw = String(token ?? "").trim();
+        if (!raw) return "";
+        const resolved = resolvePolityIdentity(raw, worldData, {
+            allowUnknown: false,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        return resolved.resolved || raw.toLowerCase();
+    };
+    const speakingKey = resolveCampaignKey(speakingPolity);
+    const playerKey = resolveCampaignKey(playerCountry || gameData?.country || "");
+    const isSpeakingParticipant = (chat) => (Array.isArray(chat?.countries) ? chat.countries : [])
+        .some((country) => resolveCampaignKey(country?.name || country?.code || country) === speakingKey);
+    const ownChats = Array.isArray(chatData) ? chatData.filter(isSpeakingParticipant) : [];
+    const otherChats = Array.isArray(chatData) ? chatData.filter((chat) => !isSpeakingParticipant(chat)) : [];
+
+    const matchingThread = findDiplomaticThreadForParticipants(ownChats, participantNames);
     const focusChat = matchingThread || buildSyntheticDiplomaticFocusChat(countries);
     const diplomaticContext = buildBoundedDiplomaticContext(worldData, {
         playerPolity: String(gameData?.country ?? "").trim(),
@@ -1686,11 +1709,11 @@ async function buildDiplomaticPromptBundle(countries, playerCountry, speakingAs 
         actionData,
         advisorData,
         chat: focusChat,
-        chatData,
+        chatData: ownChats,
         contextOptions: DIPLOMACY_CONTEXT_BUDGETS,
         eventData,
         gameData,
-        speakingAs: speakingAs || participantNames.find((country) => country !== playerCountry) || "",
+        speakingAs: speakingPolity,
         worldData,
     });
     const variables = {
@@ -1708,9 +1731,33 @@ async function buildDiplomaticPromptBundle(countries, playerCountry, speakingAs 
         diplomaticContext: diplomaticContext.text,
         warContext: canonicalWarContext,
     });
+
+    const stolenMaterial = [
+        ...otherChats.slice(-4).map((chat) => {
+            const who = (chat.countries || []).map((country) => country?.name || country?.code).filter(Boolean).join(", ");
+            const last = (chat.messages || []).slice(-4)
+                .map((message) => `${message.speaker || message.role || "Unknown"}: ${message.text || ""}`)
+                .filter(Boolean)
+                .join(" | ");
+            return last ? `Talks between ${who}: ${last}` : "";
+        }),
+        ...(Array.isArray(actionData) ? actionData : [])
+            .filter((action) => action?.status === "planned")
+            .slice(-5)
+            .map((action) => `Planned by ${playerCountry || "the player"}: ${action.title || action.text || action.description || ""}`),
+    ].filter(Boolean).join("\n");
+    const foreignIntel = speakingKey
+        ? foreignAgentBrief(worldData, speakingKey, {
+            playerPolity: playerKey,
+            material: stolenMaterial,
+        })
+        : "";
+    const espionageGrounding = foreignIntel ? `[Your Intelligence]\n${foreignIntel}` : "";
+
     const systemPrompt = [
         renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
         canonicalGrounding,
+        espionageGrounding,
         difficultyDirective(gameData?.difficulty, "diplomacy"),
     ].filter(Boolean).join("\n\n");
 

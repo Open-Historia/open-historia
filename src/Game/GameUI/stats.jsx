@@ -6,6 +6,7 @@ import { isPolityLandless, readGameData, readWorldState, readWorldStateView, wri
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
@@ -1651,6 +1652,7 @@ const StatsPaneBody = ({ active }) => {
     // This preserves capital/government/leader text without triggering heavy Stats
     // generation on the default Diplomacy tab.
     const headerSheet = sheet || worldSnapshot?.countryStats?.[targetCountry] || null;
+    const intelligence = targetCountry && worldSnapshot ? intelligenceOf(worldSnapshot, targetCountry) : null;
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
     // custom era polity shows the flag its map-maker drew instead of initials.
@@ -1816,6 +1818,18 @@ const StatsPaneBody = ({ active }) => {
                 </div>
                 <Bar value={sheet.stability} color={stabilityColor(clamp01(sheet.stability))} />
                 </div>
+
+                {intelligence !== null && (
+                <div style={{ ...cardStyle, marginTop: "0.6rem" }}>
+                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.45rem" }}>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                🕵 Intelligence service
+                </span>
+                <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>{intelligence}/100</span>
+                </div>
+                <Bar value={intelligence} color="#a78bfa" />
+                </div>
+                )}
 
                 {/* Strategic indices */}
                 <div style={sectionTitleStyle}>⚑ Strategic indices</div>

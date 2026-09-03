@@ -620,6 +620,22 @@ const ProviderAdvancedSettingsPanel = ({ provider, settings, onSettingChange, on
             placeholder={field.placeholder}
             helperText="Optional. Merged into the provider request body. Invalid JSON is ignored. Keep this empty unless you know the provider-specific parameter you need."
             />
+            {provider === "openai-compatible" && (
+                <>
+                <Toggle
+                label="Strict tool schema"
+                enabled={settings.openaiCompatibleToolStrict === "1"}
+                onToggle={() => onSettingChange(
+                    "openaiCompatibleToolStrict",
+                    settings.openaiCompatibleToolStrict === "1" ? "" : "1",
+                )}
+                />
+                <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+                Sends strict:true with the tool call so a self-hosted backend constrains generation to the schema.
+                Leave this off for OpenAI/Azure-compatible endpoints that reject strict schemas.
+                </div>
+                </>
+            )}
         </div>
     );
 };

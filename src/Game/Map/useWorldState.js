@@ -64,6 +64,10 @@ const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
   customRegions: Boolean(state?.customRegions),
+  customGeometry: Boolean(
+    state?.customGeometry ??
+    Object.keys(state?.regionOwnershipOverrides ?? EMPTY_OBJECT).some((id) => !String(id).includes(".")),
+  ),
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
@@ -72,6 +76,7 @@ const deriveMapState = (state) => ({
   polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
+  cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
   labelFont: state?.labelFont ?? "",
   labelHaloColor: state?.labelHaloColor ?? "",
   labelTextColor: state?.labelTextColor ?? "",
@@ -81,6 +86,7 @@ const sameMapState = (prev, next) =>
   Boolean(prev) &&
   prev.worldKnown === next.worldKnown &&
   prev.customRegions === next.customRegions &&
+  prev.customGeometry === next.customGeometry &&
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
   prev.background === next.background &&
@@ -91,6 +97,7 @@ const sameMapState = (prev, next) =>
   prev.regionClaimants === next.regionClaimants &&
   prev.markers === next.markers &&
   prev.cityRenames === next.cityRenames &&
+  prev.cityPopulations === next.cityPopulations &&
   prev.polityOverrides === next.polityOverrides;
 
 const stabilizeMapStateReferences = (prev, next) => {
@@ -118,6 +125,9 @@ const stabilizeMapStateReferences = (prev, next) => {
     cityRenames: areEqualStructured(prev.cityRenames, next.cityRenames)
       ? prev.cityRenames
       : next.cityRenames,
+    cityPopulations: areEqualStructured(prev.cityPopulations, next.cityPopulations)
+      ? prev.cityPopulations
+      : next.cityPopulations,
   };
 };
 
@@ -212,6 +222,56 @@ export function useWorldState() {
 
     if (publishedState) {
       setState(publishedState);
+    } else if (effectiveState()) {
+      publish({ force: true });
+    } else {
+      void bootstrap();
+    }
+
+    return () => {
+      subscribers.delete(handler);
+    };
+  }, []);
+
+  return state;
+}
+
+export function useWorldBackground() {
+  const [state, setState] = useState(() => {
+    const current =
+      publishedState ??
+      (effectiveState() ? deriveMapState(effectiveState()) : null);
+
+    return {
+      background: current?.background ?? null,
+      basemap: current?.basemap || null,
+    };
+  });
+
+  useEffect(() => {
+    installListeners();
+
+    const handler = (data) => {
+      const background = data?.background ?? null;
+      const basemap = data?.basemap || null;
+
+      setState((prev) => {
+        const backgroundSame =
+          prev.background === background ||
+          areEqualStructured(prev.background, background);
+
+        if (backgroundSame && prev.basemap === basemap) {
+          return prev;
+        }
+
+        return { background, basemap };
+      });
+    };
+
+    subscribers.add(handler);
+
+    if (publishedState) {
+      handler(publishedState);
     } else if (effectiveState()) {
       publish({ force: true });
     } else {

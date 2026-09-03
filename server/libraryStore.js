@@ -342,6 +342,10 @@ const OPTIONAL_JSON_ASSET_FILES = {
 // be large. Read/written only through the /api/runtime/json/snapshots endpoint.
 const RUNTIME_ONLY_JSON_ASSET_FILES = {
   snapshots: "storage/snapshots.json",
+  // What the player's spies have intercepted, keyed by target polity. Its own
+  // file on purpose: it is refreshed AFTER a jump's world write lands, and a
+  // second writer on world.json would race it.
+  intercepts: "storage/intercepts.json",
 };
 
 const PMTILES_ASSET_FILES = {
@@ -399,6 +403,7 @@ const JSON_ASSET_DEFAULTS = {
   prompts: {},
   world: {},
   snapshots: [],
+  intercepts: {},
 };
 
 const TEMPLATE_WORLD_OVERRIDE_KEYS = [
@@ -723,6 +728,9 @@ const readGameMeta = (gameId) => {
 
   return {
     accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_GAME_META.accentColor,
+    // Hidden from the library but fully intact on disk — the "I want it out of
+    // the way, not gone" case that delete cannot serve.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? new Date().toISOString(),
     description,
@@ -1803,6 +1811,7 @@ const updateGame = (
   gameId,
   {
     accentColor,
+    archived,
     description,
     eyebrow,
     game,
@@ -1828,6 +1837,7 @@ const updateGame = (
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
+                archived: typeof archived === "boolean" ? archived : currentMeta.archived,
                 description: String(description ?? currentMeta.description).trim() || currentMeta.description,
                 eyebrow: String(eyebrow ?? currentMeta.eyebrow).trim() || currentMeta.eyebrow,
                 heroSubtitle:
@@ -1836,6 +1846,29 @@ const updateGame = (
                 name: String(name ?? currentMeta.name).trim() || currentMeta.name,
                 subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
+
+  // Archiving the game you are currently IN would hide it from the library while
+  // leaving it active: the player is dropped into a session they can no longer
+  // see, or switch away from, because switching happens from the list it just
+  // left. Hand the active slot to the most recently played game that is still
+  // visible. Enforced here rather than in the UI so a direct API call cannot
+  // skip it, and only on the archive transition so unarchiving stays inert.
+  if (archived === true && !currentMeta.archived) {
+    const manifest = getGameManifest();
+    if (manifest.activeGameId === gameId) {
+      const fallback = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID)
+        .filter((id) => id !== gameId && fs.existsSync(getGameMetaPath(id)))
+        .map((id) => readGameMeta(id))
+        .filter((meta) => !meta.archived)
+        .sort((left, right) => String(right.lastPlayedAt ?? "").localeCompare(String(left.lastPlayedAt ?? "")))[0];
+      // Only reassign when there is somewhere to go. Archiving the LAST visible
+      // game leaves it active on purpose: you have to be in some game, and it is
+      // still reachable and marked Current on the Archived shelf. Blanking the id
+      // instead would just make buildGameCatalog re-elect games[0] anyway, which
+      // is the same outcome reached by accident.
+      if (fallback) saveGameManifest({ ...manifest, activeGameId: fallback.id });
+    }
+  }
 
   // See the note in updateScenario: game.country is an owner reference and needs
   // the world to resolve a preset's polity.
@@ -2503,7 +2536,17 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
   // forever, which looks exactly like "my game saved nothing". Refusing is safe —
   // writeJson throws on a non-ok response, so the caller sees a real failure
   // instead of silently corrupting a save.
-  const expectsArray = assetKey in STORAGE_JSON_ASSET_FILES || assetKey in RUNTIME_ONLY_JSON_ASSET_FILES;
+  //
+  // The expectation comes from the asset's DECLARED DEFAULT, not from which
+  // registry it sits in. This used to read "storage or runtime-only means an
+  // array", which was only accidentally true: every asset in those two sets
+  // happened to be an array until `intercepts` — an object keyed by polity —
+  // joined the runtime-only set, at which point every write of it was rejected
+  // with a 400 and the Spy tab could not save what a spy had gathered.
+  // JSON_ASSET_DEFAULTS already states each asset's shape, so deriving it there
+  // cannot drift apart again. A key with no declared default (flags, tags) is an
+  // object, which is what it was before.
+  const expectsArray = Array.isArray(JSON_ASSET_DEFAULTS[assetKey]);
   const shapeOk = expectsArray
     ? Array.isArray(value)
     : Boolean(value) && typeof value === "object" && !Array.isArray(value);

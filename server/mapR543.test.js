@@ -7,29 +7,28 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nations = fs.readFileSync(path.resolve(here, "../src/Game/Map/Nations.jsx"), "utf8");
 
-test("R5.4.3 no curved polity is pre-hidden by theoretical warp eligibility", () => {
+test("R5.4.6 has no theoretical owner pre-hide list", () => {
   assert.doesNotMatch(nations, /const expectedWarpOwnerList|const pointNotWarpedFilter/);
+  assert.match(nations, /renderConfirmedCurveOwners/);
 });
 
-test("R5.4.3 every curve-capable polity uses managed point fallback", () => {
-  const managedStart = nations.indexOf("const livePointManagedFilter");
-  const overlapStart = nations.indexOf("const livePointOverlapFilter");
-  const lineStart = nations.indexOf("const liveWorldLineFilter");
-  const managed = nations.slice(managedStart, overlapStart);
-  const overlap = nations.slice(overlapStart, lineStart);
-
-  assert.match(managed, /\["!=", \["coalesce", \["get", "curveBand"\], "none"\], "none"\]/);
-  assert.match(overlap, /\["==", \["coalesce", \["get", "curveBand"\], "none"\], "none"\]/);
+test("R5.4.6 movement clears render confirmation so point fallback becomes guaranteed again", () => {
+  assert.match(nations, /const clearRenderConfirmation = \(\) => \{/);
+  assert.match(nations, /setRenderConfirmedCurveOwners\(\(current\) => \(current\.length \? \[\] : current\)\)/);
+  assert.match(nations, /mapInstance\.on\("movestart", clearRenderConfirmation\)/);
 });
 
-test("R5.4.3 curved source keeps placement priority over point fallback", () => {
-  const line = nations.indexOf('id="country-live-polity-line-label-source"');
-  const point = nations.indexOf('id="country-live-polity-point-label-source"');
-  assert.ok(line >= 0 && point >= 0 && line < point);
+test("R5.4.6 renderer confirmation refuses to inspect while moving or zooming", () => {
+  const start = nations.indexOf("const confirmRenderedCurves");
+  const end = nations.indexOf('mapInstance.on("movestart"', start);
+  const handoff = nations.slice(start, end);
+
+  assert.match(handoff, /mapInstance\.isMoving\?\.\(\) \|\| mapInstance\.isZooming\?\.\(\)/);
+  assert.match(handoff, /queryRenderedFeatures\(\{ layers: curveLayers \}\)/);
 });
 
-test("R5.4.3 hot label handoff contains no rendered-feature function call", () => {
-  const start = nations.indexOf("const rawLivePolityPointLabelData");
-  const end = nations.indexOf("const activePointLabelData", start);
-  assert.doesNotMatch(nations.slice(start, end), /\.\s*queryRenderedFeatures\s*\(/);
+test("R5.4.6 curve confirmation is attached to idle, not the hot camera loop", () => {
+  assert.match(nations, /mapInstance\.on\("idle", confirmRenderedCurves\)/);
+  assert.doesNotMatch(nations, /mapInstance\.on\("move", confirmRenderedCurves\)/);
+  assert.doesNotMatch(nations, /mapInstance\.on\("zoom", confirmRenderedCurves\)/);
 });

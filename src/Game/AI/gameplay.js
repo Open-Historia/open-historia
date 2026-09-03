@@ -52,6 +52,9 @@ import {
 } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
   appendCountryStatHistorySample,
   captureCountryStatsHistory,
@@ -96,6 +99,7 @@ import {
   normalizeEvents,
   normalizeGameData,
   normalizeWorldState,
+  normalizeEventEntry,
   readActionsState,
   readChatsState,
   readChatsStateView,
@@ -104,6 +108,7 @@ import {
   resolveChatParticipantIdentity,
   readEventsState,
   readGameData,
+  readInterceptsState,
   readCountryStatsBundle,
   readGameStateBundle,
   readWorldState,
@@ -113,6 +118,7 @@ import {
   writeChatsState,
   writeEventsState,
   writeGameData,
+  writeInterceptsState,
   writeWorldState,
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
@@ -255,6 +261,20 @@ const cloneValue = (value) => {
 };
 
 const normalizeString = (value) => String(value ?? "").trim();
+
+const canonicalCampaignPolity = (value, world, identityIndex = null) => {
+  const raw = normalizeString(value);
+  if (!raw) return "";
+  const normalizedWorld = world && typeof world === "object" ? world : {};
+  const resolved = resolvePolityIdentity(raw, normalizedWorld, {
+    allowUnknown: true,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+    identityIndex,
+  });
+  return normalizeString(resolved?.resolved) || toCountryName(raw) || raw;
+};
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 const relationPairKeyForHistory = (a, b) => [normalizeString(a), normalizeString(b)]
   .filter(Boolean)
@@ -906,7 +926,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — LEGAL SOVEREIGNTY only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final territorial settlement. Shape: {"regionId":"<exact id/name when known; otherwise exact grounded place wording>","regionName":"","fromCode":"<current legal sovereign>","toCode":"<new legal sovereign>"}. Do NOT use regionTransfers for a temporary battlefield capture or occupation.\n\n• regionControlOps — DE-FACTO CONTROL / ACTIVE FRONT state. Three ops:\n    {"op":"contest","regionId":"<region/place>","fromCode":"<current controller>","actorCode":"<challenger>","note":""}\n    {"op":"control","regionId":"<region/place>","fromCode":"<previous controller>","toCode":"<new controller>","note":""}\n    {"op":"clear_contest","regionId":"<region/place>","fromCode":"<current controller>","claimantCode":"<claimant to remove>","clearAll":false,"note":""}\n  Use contest when fighting makes a named region actively disputed without a decisive control change. Use control for wartime capture/occupation/liberation/retaking. Use clear_contest when withdrawal, ceasefire or settlement ends the active contest. ALWAYS set fromCode when you know the current controller so the geography resolver is bounded to that side's actual regions. The existing map stripes regionClaimants automatically; do not fake a legal treaty just to make the front move.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won in wartime, pair the advance with regionControlOps control; use regionTransfers only if that same event also legally settles sovereignty.\n\n• markerOps — Persistent PHYSICAL world features. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase: factory / naval yard / logistics hub / laboratory / base / port / embassy / airfield / city / etc.>\",\"ownerCode\":\"\",\"status\":\"planned|under_construction|active|damaged|inactive|abandoned|destroyed\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"update\",\"markerId\":\"<EXISTING stable id>\",\"status\":\"active\",\"note\":\"<new current state>\"}\n    {\"op\":\"rename\",\"markerId\":\"<existing stable id when known>\",\"name\":\"<fallback current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"remove\",\"markerId\":\"<existing id>\",\"name\":\"<fallback name>\",\"note\":\"<canonical cleanup only>\"}\n  BUILD only a genuinely new, significant, named, geographically concrete feature likely to matter again. Do NOT mint map clutter for routine activity and do NOT rebuild an existing feature. When CURRENT MAP STRUCTURES supplies an id, REUSE that id with update/rename. Expansion, completion, capture/change of operator, conversion, damage, abandonment, reconstruction and destruction are updates to the SAME object. Destruction normally means update status=destroyed — it remains historical canon; remove is for correcting/deleting something that should no longer exist in canon. Existing features may participate in events without being updated: when relevant, naturally use their exact canonical name in the event prose. Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.
+const ACTIONS_REFERENCE = `[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — LEGAL SOVEREIGNTY only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final territorial settlement. Shape: {"regionId":"<exact id/name when known; otherwise exact grounded place wording>","regionName":"","fromCode":"<current legal sovereign>","toCode":"<new legal sovereign>"}. Do NOT use regionTransfers for a temporary battlefield capture or occupation.\n\n• regionControlOps — DE-FACTO CONTROL / ACTIVE FRONT state. Three ops:\n    {"op":"contest","regionId":"<region/place>","fromCode":"<current controller>","actorCode":"<challenger>","note":""}\n    {"op":"control","regionId":"<region/place>","fromCode":"<previous controller>","toCode":"<new controller>","note":""}\n    {"op":"clear_contest","regionId":"<region/place>","fromCode":"<current controller>","claimantCode":"<claimant to remove>","clearAll":false,"note":""}\n  Use contest when fighting makes a named region actively disputed without a decisive control change. Use control for wartime capture/occupation/liberation/retaking. Use clear_contest when withdrawal, ceasefire or settlement ends the active contest. ALWAYS set fromCode when you know the current controller so the geography resolver is bounded to that side's actual regions. The existing map stripes regionClaimants automatically; do not fake a legal treaty just to make the front move.\n\n• polityChanges — Explicit polity lifecycle or metadata changes. EVERY entry must include operation:\"update|create|rename|restore|dissolve\" and code:\"<FULL polity name, never an abbreviation>\". update changes metadata/stats/tags/reputation on an EXISTING polity only; create explicitly establishes a genuinely NEW current polity/breakaway state; rename reconstitutes an existing polity under a new current/display name while preserving its stable campaign identity; restore explicitly brings a dormant/dissolved polity back; dissolve explicitly ends a polity after its territory is separately settled. Example: {\"operation\":\"update\",\"code\":\"German Empire\",\"reputation\":60,\"intelligence\":55,\"tags\":[\"...\"],\"stats\":{},\"note\":\"<why>\"}. A same-event create/restore happens before that event\'s regionTransfers, so a newborn polity may immediately receive only the territory the event actually establishes. Never mint a new polity merely because you used a stale/sloppy alternate name. On an ideological/alignment shift rewrite the COMPLETE tags list. Set intelligence (0-100) only when an event actually changes the quality/capacity of that polity's intelligence service. National statistics change only through stats; when leadership changes, update stats.leader.\n\n• unitOps — Move the war on the map with PERSISTENT battalions. Five ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"attack\",\"unitId\":\"<existing attacker id>\",\"targetUnitId\":\"<existing enemy id>\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  REUSE existing units by id. An offensive, retreat, redeployment or continuing war normally MOVES the units that already exist; do not spawn a fresh army every time the prose says forces act. Spawn only for a genuinely new formation/mobilization/reinforcement that is not already represented. Use attack when two existing opposing units actually fight: the runtime resolves casualties deterministically, so NEVER invent post-battle strength values for those participants in the same event. strength is for explicit non-combat reinforcement/attrition/reorganization; remove only for destruction/disbandment/demobilization. When a front is decisively won in wartime, pair the advance with regionControlOps control; use regionTransfers only if that same event also legally settles sovereignty.\n\n• markerOps — Persistent PHYSICAL world features. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase: factory / naval yard / logistics hub / laboratory / base / port / embassy / airfield / city / etc.>\",\"ownerCode\":\"\",\"status\":\"planned|under_construction|active|damaged|inactive|abandoned|destroyed\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"update\",\"markerId\":\"<EXISTING stable id>\",\"status\":\"active\",\"note\":\"<new current state>\"}\n    {\"op\":\"rename\",\"markerId\":\"<existing stable id when known>\",\"name\":\"<fallback current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"remove\",\"markerId\":\"<existing id>\",\"name\":\"<fallback name>\",\"note\":\"<canonical cleanup only>\"}\n    {\"op\":\"population\",\"markerId\":\"<existing city id when known>\",\"name\":\"<city name>\",\"population\":<new total>,\"note\":\"<why>\"}\n  BUILD only a genuinely new, significant, named, geographically concrete feature likely to matter again. Do NOT mint map clutter for routine activity and do NOT rebuild an existing feature. When CURRENT MAP STRUCTURES supplies an id, REUSE that id with update/rename. Expansion, completion, capture/change of operator, conversion, damage, abandonment, reconstruction and destruction are updates to the SAME object. Destruction normally means update status=destroyed — it remains historical canon; remove is for correcting/deleting something that should no longer exist in canon. Existing features may participate in events without being updated: when relevant, naturally use their exact canonical name in the event prose. Use population only for an actual city-population change and send the NEW TOTAL, not a delta. Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground.
   PHYSICAL-WORLD COMPLETENESS AUDIT — REQUIRED FOR EVERY EVENT: before finalizing each event, silently ask whether the event (a) establishes a significant persistent physical facility/place, or (b) materially changes one already supplied in CURRENT MAP STRUCTURES. Qualifying changes include major expansion/completion, conversion, capture/change of operator, damage, abandonment, reconstruction or destruction. If YES, the matching markerOps mutation is REQUIRED in that same event; do not leave the physical consequence only in prose. If an existing feature merely participates without changing, mention its exact canonical name naturally but emit no markerOp. If NO significant persistent physical feature is created or changed, emit no markerOp. This is a completeness rule, NOT a quota and NOT a reason to invent an event.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWAR EVENT METADATA:\n• warId — REQUIRED on an event that declares/joins/ends a war OR depicts actual battlefield combat. It must identify the canonical conflict in world.wars.\n• combatants — REQUIRED ONLY for actual battle/offensive/invasion/bombardment/front-combat events. List the polity names DIRECTLY FIGHTING EACH OTHER; at least one must come from each opposing side of warId.\n• Force-description vocabulary is NOT combat. Phrases such as combat battlegroup, combat-ready unit, combat capability, deployment, forward presence, deterrence, exercise, training, readiness, reinforcement, air policing, or allied military cooperation do NOT authorize warId/combatants/warUpdates unless the same event explicitly says the named sides are fighting one another.\n• A new war must have an explicit causal event that narrates declaration/commencement of hostilities or direct adversarial battlefield action. Never infer belligerency merely because two armed allied/rival polities appear in the same military event.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• warUpdates — AUTHORITATIVE BELLIGERENCY changes. This is NOT a storyline and NOT optional when war status changes. One compact record per line:\n    warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note\n  ops: start | join-a | join-b | leave | ceasefire | resume | end\n  start: actors=Side A and opponents=Side B. join-a/join-b: actors are the joining polities. leave: actors are the leaving polities.\n  eventNumbersCSV is a compatibility hint only. Leave it blank (keep the positional ~~ separators) unless convenient; native Javascript binds the war update to the causal event from event.warId and transition semantics. Every war transition must still have a real causal event. A defensive alliance, mobilization, storyline, historical expectation, or hostile rhetoric does NOT itself create belligerency.\n• relationUpdates — MATERIAL BILATERAL POLITICAL CLIMATE changes only. The ledger is sparse: do NOT create neutral-zero rows for untouched countries and do NOT update a pair merely because diplomats met. One compact record per line:\n    polityA~polityB~absoluteScore~status~eventNumbersCSV~summary\n  absoluteScore is -100..100; status is friendly | cordial | neutral | cautious | strained | hostile | rival. eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the update to the unique causal event from the actors and summary. Formal alliance status is NOT encoded here; that lives in agreementUpdates. An alliance can be politically strained, and friendly states can have no alliance.\n• agreementUpdates — FORMAL TREATY / ALLIANCE / GUARANTEE lifecycle. One compact record per line:\n    agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms\n  ops: start | update | suspend | resume | end | expire\n  types: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other\n  eventNumbersCSV is a compatibility hint only and may be blank; native Javascript binds the agreement lifecycle change to the unique causal event from its parties/title/terms. A NEW signed/ratified/concluded formal commitment MUST use start and have a real establishing event. BEFORE using start, inspect CURRENT FORMAL AGREEMENTS: if that stable agreementId already exists and is active, NEVER start it again. If a later event merely implements, discusses, staffs, exercises, or administratively follows an existing pact without changing its formal terms/status, emit NO agreementUpdates row. Use update only for a genuine formal amendment/terms change; suspend/resume/end/expire only for those actual lifecycle changes. Negotiations/proposals alone create NO agreement. For guarantee, partiesCSV order is guarantor first, beneficiary second. For later operations reuse the stable agreementId; unchanged type/parties/title may be blank where runtime preserves them.\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.`;
 
 const CANONICAL_UPDATE_ENVELOPE_TASKS = new Set(["pregameHistory"]);
@@ -1046,6 +1066,23 @@ const runJsonTask = async (taskKey, {
       systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScope)}`;
     } catch {
       // Missing game data leaves the task neutral rather than inventing a level.
+    }
+  }
+
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    try {
+      const [rawWorld, game] = await Promise.all([
+        readWorldState({ force: false }),
+        readGameData(),
+      ]);
+      const world = normalizeWorldState(rawWorld);
+      const playerPolity = canonicalCampaignPolity(game.country, world);
+      const brief = espionageBrief(world, await readOpenedIntercepts(), { playerPolity });
+      if (brief) {
+        systemPrompt += `\n\n[Espionage]\nThis is simulator-only intelligence. Let it affect decisions and consequences, but never reveal a turned agent to the player unless the agent is discovered.\n${brief}`;
+      }
+    } catch {
+      // espionage is additive; a broken report must never kill the turn.
     }
   }
 
@@ -2393,6 +2430,7 @@ const regionKey = (value) => normalizeString(value)
 const GEOGRAPHY_RESOLVER_BATCH_SIZE = 6;
 const GEOGRAPHY_RESOLVER_MAX_CANDIDATES = 140;
 const GEOGRAPHY_RESOLVER_MAX_AREA_REGIONS = 12;
+const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
 
 const resolveRegionTransfers = async (containers, world, {
   ownershipMode = "sovereignty",
@@ -2874,15 +2912,25 @@ const resolveRegionTransfers = async (containers, world, {
       // If a polity name was used as shorthand for a total takeover, preserve the
       // old compatibility behavior. Explicit wholeCountry remains strongly preferred.
       const expanded = expandWholeCountry(transfer);
-      if (expanded.length) {
+      if (expanded.length && expanded.length <= IMPLICIT_WHOLE_COUNTRY_LIMIT) {
         console.info(
-          `[ai] ${path}.regionTransfers treated "${normalizeString(transfer?.regionId)}" as a whole ` +
+          `[ai] ${path}.regionTransfers treated "${normalizeString(transfer?.regionId)}" as a small whole ` +
             `country -> ${normalizeString(transfer?.toCode)}: ${expanded.length} region(s).`,
         );
         for (const item of expanded) {
           pushUniqueTransfer(resolved, item);
           destinationByRegion.set(item.regionId, regionKey(item.toCode));
         }
+        continue;
+      }
+      if (expanded.length > IMPLICIT_WHOLE_COUNTRY_LIMIT) {
+        unresolved.push({
+          label: normalizeString(transfer?.regionName) || normalizeString(transfer?.regionId),
+          fromCode: normalizeString(transfer?.fromCode),
+          path,
+          candidates: regionsOwnedBy(transfer?.fromCode),
+          reason: `implicit whole-country expansion would move ${expanded.length} regions; use wholeCountry:true or an exact region`,
+        });
         continue;
       }
 
@@ -4621,6 +4669,77 @@ const nextEvents = [...priorEvents, ...territoryEvents];
       ].slice(0, 12),
     },
   });
+
+  // espionage resolves against the world THIS turn produced. Continuum already
+  // has real wars, so use them instead of upstream's old "bad reputation = war-ish"
+  // guess. Cold hostility still nudges the odds; an active canonical war is 1.0.
+  const espionageWorld = normalizeWorldState(worldWithImpacts);
+  const espionageIdentityIndex = buildPolityIdentityIndex(espionageWorld);
+  const playerPolity = canonicalCampaignPolity(baseGame.country, espionageWorld, espionageIdentityIndex);
+  const candidateNames = new Set([
+    ...Object.keys(espionageWorld.polityOverrides ?? {}),
+    ...Object.keys(espionageWorld.intelligence ?? {}),
+    ...Object.values(espionageWorld.regionOwnershipOverrides ?? {}),
+    ...Object.values(espionageWorld.regionSovereigntyOverrides ?? {}),
+    ...normalizeChats(baseChats).flatMap((chat) =>
+      normalizeArray(chat?.countries).flatMap((country) => [country?.name, country?.code])),
+    ...normalizeArray(espionageWorld.wars).flatMap((war) => [
+      ...normalizeArray(war?.sideA),
+      ...normalizeArray(war?.sideB),
+    ]),
+    ...normalizeArray(espionageWorld.relations).flatMap((relation) => [relation?.a, relation?.b]),
+  ]);
+  const canonicalCandidates = [...candidateNames]
+    .map((name) => canonicalCampaignPolity(name, espionageWorld, espionageIdentityIndex))
+    .filter((name) => name && name !== playerPolity);
+  const uniqueCandidates = [...new Set(canonicalCandidates)];
+  const relationHostility = (polity) => {
+    let hostility = 0;
+    for (const war of normalizeArray(espionageWorld.wars)) {
+      const sideA = new Set(normalizeArray(war?.sideA).map((name) => canonicalCampaignPolity(name, espionageWorld, espionageIdentityIndex)));
+      const sideB = new Set(normalizeArray(war?.sideB).map((name) => canonicalCampaignPolity(name, espionageWorld, espionageIdentityIndex)));
+      const opponents = (sideA.has(playerPolity) && sideB.has(polity)) || (sideB.has(playerPolity) && sideA.has(polity));
+      if (!opponents) continue;
+      const status = normalizeString(war?.status).toLowerCase();
+      if (status === "active") return 1;
+      if (status === "ceasefire") hostility = Math.max(hostility, 0.55);
+    }
+    for (const relation of normalizeArray(espionageWorld.relations)) {
+      const a = canonicalCampaignPolity(relation?.a, espionageWorld, espionageIdentityIndex);
+      const b = canonicalCampaignPolity(relation?.b, espionageWorld, espionageIdentityIndex);
+      if (!((a === playerPolity && b === polity) || (b === playerPolity && a === polity))) continue;
+      const score = Number(relation?.score);
+      if (Number.isFinite(score) && score <= -70) hostility = Math.max(hostility, 0.6);
+      else if (Number.isFinite(score) && score <= -40) hostility = Math.max(hostility, 0.4);
+    }
+    if (Number(espionageWorld.internationalReputation?.[polity] ?? 50) <= 30) {
+      hostility = Math.max(hostility, 0.35);
+    }
+    return hostility;
+  };
+  const espionage = resolveEspionage(espionageWorld, {
+    round: nextGame.round,
+    date: nextGame.gameDate,
+    playerPolity,
+    candidates: uniqueCandidates.map((polity) => {
+      const hostility = relationHostility(polity);
+      return { polity, hostility, hostile: hostility >= 0.75 };
+    }),
+  });
+  worldWithImpacts.spies = espionage.spies;
+  if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) {
+    worldWithImpacts.spySeal = newSeal();
+  }
+  for (const event of espionage.events) {
+    const entry = normalizeEventEntry(
+      { ...event, id: `espionage-${nextGame.round}-${territoryEvents.length}` },
+      territoryEvents.length,
+    );
+    if (!entry) continue;
+    territoryEvents.push(entry);
+    nextEvents.push(entry);
+  }
+
   endTurnPerfStage(impactApplyStage);
   await yieldToUiFrame(signal);
   const ledgerMergeStage = beginTurnPerfStage("final.ledger-merges");
@@ -4949,6 +5068,12 @@ const nextEvents = [...priorEvents, ...territoryEvents];
   // through (jump, auto-jump, catalyst, game-master) — means the sync's full scan
   // sees the committed round.
   if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
+  // reports are best-effort; persistence is already complete at this point.
+  try {
+    await refreshSpyIntercepts();
+  } catch (error) {
+    console.warn("[spycraft] intercept refresh failed after turn:", error?.message || error);
+  }
 
   // Snapshot the state we just replaced so it can be rolled back to (best-effort).
   const rollbackStage = beginTurnPerfStage("final.rollback-snapshot");
@@ -7071,6 +7196,118 @@ const statsTerritorialPlanMatchesSheet = (sheet, plan = []) => {
   return expected.every((geography, index) => actual[index] === geography);
 };
 
+const ensureSpySeal = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  if (isSeal(world.spySeal)) return world.spySeal;
+  const spySeal = newSeal();
+  await writeWorldState({ ...world, spySeal });
+  return spySeal;
+};
+
+export const gatherIntelligence = async (target, { signal } = {}) => {
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const identityIndex = buildPolityIdentityIndex(world);
+  const player = canonicalCampaignPolity(bundle.game?.country, world, identityIndex);
+  const targetKey = canonicalCampaignPolity(target, world, identityIndex);
+  if (!player || !targetKey || player === targetKey) {
+    throw new Error("Choose another polity to gather intelligence from.");
+  }
+  const spy = normalizeSpies(world.spies).find((entry) =>
+    entry.owner === player &&
+    entry.target === targetKey &&
+    (entry.status === "active" || entry.status === "turned"));
+  if (!spy) throw new Error(`No agent of yours is in ${targetKey}.`);
+
+  const targetDisplay = normalizeString(world.polityOverrides?.[targetKey]?.name) || targetKey;
+  const disinformation = spy.status === "turned"
+    ? normalizeString(spy.coverStory)
+    : "";
+  const { payload } = await runJsonTask("spyIntercept", {
+    signal,
+    userMessage: [
+      `Report what the spy in ${targetDisplay} intercepted this period.`,
+      disinformation ? `The target has turned this spy. Feed this planted story instead of the truth: ${disinformation}` : "",
+    ].filter(Boolean).join("\n\n"),
+    variables: await buildTemplateVariables(bundle, { taskKey: "spyIntercept" }),
+  });
+
+  const exchanges = normalizeArray(payload?.exchanges).filter((exchange) => {
+    const counterpart = canonicalCampaignPolity(exchange?.counterpart, world, identityIndex);
+    return counterpart && counterpart !== player;
+  });
+  const seal = isSeal(world.spySeal) ? world.spySeal : await ensureSpySeal();
+  const sealed = await Promise.all(
+    exchanges.map((exchange, index) => sealExchange(seal, {
+      ...exchange,
+      id: normalizeString(exchange?.id) || `${targetKey}:${bundle.game?.round || 0}:${index}`,
+    })),
+  );
+  const entry = {
+    gatheredAt: normalizeString(bundle.game?.gameDate),
+    round: Number(bundle.game?.round) || 0,
+    planted: spy.status === "turned",
+    exchanges: sealed,
+  };
+  const current = normalizeIntercepts(await readInterceptsState({ force: true }));
+  await writeInterceptsState({ ...current, [targetKey]: entry });
+  return entry;
+};
+
+export const readOpenedIntercepts = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: false }));
+  const intercepts = normalizeIntercepts(await readInterceptsState({ force: false }));
+  if (!isSeal(world.spySeal)) return intercepts;
+  const out = {};
+  for (const [target, entry] of Object.entries(intercepts)) {
+    out[target] = {
+      ...entry,
+      exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))),
+    };
+  }
+  return out;
+};
+
+const SPY_REPORT_CHANCE = 1 / 20;
+let spyReportInFlight = false;
+
+export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {}) => {
+  if (spyReportInFlight || isSimulationBusy()) return null;
+  if (Math.random() >= chance) return null;
+  spyReportInFlight = true;
+  try {
+    const world = normalizeWorldState(await readWorldState({ force: true }));
+    const player = canonicalCampaignPolity((await readGameData()).country, world);
+    if (!player) return null;
+    const agents = activeSpies(world, player);
+    if (!agents.length || isSimulationBusy()) return null;
+    const agent = agents[Math.floor(Math.random() * agents.length)];
+    await gatherIntelligence(agent.target);
+    return agent.target;
+  } catch {
+    return null;
+  } finally {
+    spyReportInFlight = false;
+  }
+};
+
+export const refreshSpyIntercepts = async () => {
+  let world;
+  try {
+    world = normalizeWorldState(await readWorldState({ force: true }));
+  } catch {
+    return;
+  }
+  const player = canonicalCampaignPolity((await readGameData()).country, world);
+  for (const spy of activeSpies(world, player)) {
+    try {
+      await gatherIntelligence(spy.target);
+    } catch (error) {
+      console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
+    }
+  }
+};
+
 export const generateCountryStats = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, {
@@ -7653,10 +7890,11 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   return guarded.sheet || finalized;
 };
 
-export const refinePlayerAction = async (rawInput, { persist = true } = {}) => {
+export const refinePlayerAction = async (rawInput, { persist = true, signal } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { taskKey: "descriptionToAction", actionInput: rawInput });
   const { payload } = await runJsonTask("descriptionToAction", {
+    signal,
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
     userMessage: "Convert the player's raw intent into one structured in-game command as JSON only.",
     variables,
@@ -11754,6 +11992,16 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       playerRelated: Boolean(event.playerRelated),
     });
 
+    const openChats = normalizeChats(bundle.chats);
+    const conversationContext = [
+      "",
+      "These are the conversations already open with the player, oldest message first:",
+      "",
+      renderOpenChatsForPrompt(openChats),
+      "",
+      "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing line.",
+    ].join("\n");
+
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy" })),
       idleDiplomacyBlockedParticipantSets: "None.",
@@ -12033,7 +12281,9 @@ export const maybeSendIdleDiplomacy = async ({
       maxTokens: 1024,
       reasoningEnabled: false,
       userMessage:
-        "A quiet moment between rounds. Decide whether one eligible polity or small joint group would send the player a short diplomatic note right now. Respect the blocked participant sets in the system instructions. Return JSON only.",
+        "A quiet moment between rounds. Decide whether one eligible polity or small joint group would send the player a short diplomatic note right now. Respect the blocked participant sets in the system instructions."
+        + conversationContext
+        + "\n\nReturn JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
@@ -12113,6 +12363,16 @@ export const maybeSendIdleDiplomacy = async ({
           : message
       ),
     };
+
+    const existingThread = builtParticipantKey
+      ? chats.find((chat) =>
+          normalizeString(chat?.status).toLowerCase() !== "closed" &&
+          chatParticipantSetKey(chat, bundle.world) === builtParticipantKey)
+      : null;
+    const generatedNote = datedBuilt.messages[0];
+    if (existingThread && generatedNote && echoesExistingMessage(generatedNote.text, existingThread.messages)) {
+      return idleDiplomacyNoop(debug, "echoed-existing-message");
+    }
 
     // Same reconciliation path as full turns: 1:1 and GROUP approaches reuse an
     // existing open thread when the stable participant set is the same, regardless

@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 
 import {
@@ -10,12 +9,26 @@ import {
   reconcileStableChatsForPlayer,
 } from "../src/runtime/gameState.js";
 
-const world = JSON.parse(fs.readFileSync("/mnt/data/world.json", "utf8"));
 const player = "Republic of Latvia";
+const actorNames = Array.from(
+  { length: 120 },
+  (_, index) => `Continuum Test Polity ${String(index + 1).padStart(3, "0")}`,
+);
 
-const actorNames = Object.keys(world.polityOverrides || {})
-  .filter((name) => name !== player)
-  .slice(0, 120);
+const world = {
+  ownerSchemaVersion: 4,
+  polityOverrides: Object.fromEntries(
+    [player, ...actorNames].map((name) => [
+      name,
+      {
+        name,
+        code: name,
+        status: "active",
+      },
+    ]),
+  ),
+  regionOwnershipOverrides: {},
+};
 
 const makeMessage = (actor, i) => ({
   id: `m-${actor}-${i}`,
@@ -36,7 +49,7 @@ const makeChat = (actor, index, { closed = true } = {}) => ({
   title: `Talks with ${actor}`,
 });
 
-test("stable participant key never needs to reconcile message history", () => {
+test("stable participant key never needs an external world fixture", () => {
   const chat = makeChat(actorNames[0], 0);
   assert.equal(chatParticipantSetKey(chat, world), actorNames[0].toLowerCase());
 });

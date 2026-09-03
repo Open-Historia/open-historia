@@ -4,6 +4,12 @@ import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { appendDiplomaticPlayerMessage, sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker, processPendingEventOutreach } from "../AI/gameplay.js";
+import {
+    MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
+    recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
+} from "../../runtime/spycraft.js";
+import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
+import { dedupeByName } from "../../runtime/countryList.js";
 import { Actions } from "./actions";
 import {
     getNationColors,
@@ -16,6 +22,7 @@ import {
     chatParticipantSetKey,
     mergeIncomingChats,
     readChatsState,
+    readInterceptsState,
     readChatsStateView,
     readGameData,
     readWorldState,
@@ -23,6 +30,7 @@ import {
     reconcileChatsForPlayer,
     resolveChatParticipantIdentity,
     writeChatsState,
+    writeWorldState,
 } from "../../runtime/gameState.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -561,10 +569,26 @@ const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
     );
 };
 
-const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
+const CountrySelectorModal = ({
+    countries, loading, onStart, onCancel,
+    title = "Start New Diplomatic Chat",
+    subtitle = "Select countries to invite to the conversation",
+    selectedLabel = "Selected Countries",
+    emptyLabel = "No countries selected yet",
+    confirmLabel = (n) => `Chat with ${n} ${n === 1 ? "country" : "countries"}`,
+    single = false,
+}) => {
     const [search, setSearch]     = React.useState("");
     const [selected, setSelected] = React.useState([]);
-    const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
+    const filtered = useMemo(() => {
+        const seen = new Set();
+        return dedupeByName(countries || []).filter((country) => {
+            const key = String(country?.polityKey || country?.code || country?.name || "").trim().toLowerCase();
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return String(country?.name || "").toLowerCase().includes(search.toLowerCase());
+        });
+    }, [countries, search]);
     const filteredFlags = useCountryFlags(filtered);
     const selectedFlags = useCountryFlags(selected);
     const selectionKey = (country) => country?.polityKey || country?.code || country?.name || "";
@@ -572,7 +596,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
     const toggle = (country) => setSelected(prev =>
         prev.some(s => selectionKey(s) === selectionKey(country))
             ? prev.filter(s => selectionKey(s) !== selectionKey(country))
-            : [...prev, country]
+            : single ? [country] : [...prev, country]
     );
 
     return (
@@ -580,17 +604,17 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
-        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>Start New Diplomatic Chat</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Select countries to invite to the conversation</div>
+        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
+        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
         </div>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
         </div>
         <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>Selected Countries ({selected.length}):</div>
+        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
         <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem" }}>
-        {selected.length === 0 ? "No countries selected yet" : (
+        {selected.length === 0 ? emptyLabel : (
             <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem" }}>
             {selected.map((c, index) => {
                 const key = selectionKey(c);
@@ -628,7 +652,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "#3b82f6" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
-        Chat with {selected.length} {selected.length === 1 ? "country" : "countries"}
+        {confirmLabel(selected.length)}
         </button>
         </div>
         </div>
@@ -1502,7 +1526,259 @@ export const requestDiplomaticChat = (country) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country); } catch { /* noop */ } });
 };
 
+const spyBtn = (accent) => ({
+    padding: "0.35rem 0.6rem", borderRadius: "8px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif",
+    border: "1px solid " + (accent ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,0.12)"),
+    background: accent ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)", color: accent ? "#e9d5ff" : "rgba(255,255,255,0.8)",
+});
+
+const spyDisplayName = (world, key) =>
+    String(world?.polityOverrides?.[key]?.name || key || "").trim();
+
+const ClarityMeter = ({ clarity }) => {
+    const pct = Math.round(clarity * 100);
+    return (
+        <div title="How much of the intercept your service could decode">
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem" }}>
+        <span>Signal clarity</span><span data-no-translate style={{ color: "#c4b5fd", fontWeight: 700 }}>{pct}%</span>
+        </div>
+        <div style={{ height: "0.3rem", borderRadius: "999px", background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <div style={{ width: pct + "%", height: "100%", background: "linear-gradient(90deg,#7c3aed,#c4b5fd)" }} />
+        </div>
+        </div>
+    );
+};
+
+const InterceptView = ({ target, targetLabel, exchange, clarity, seal, onBack }) => {
+    const [opened, setOpened] = useState(null);
+    useEffect(() => {
+        let live = true;
+        (isSeal(seal) ? openExchange(seal, exchange) : Promise.resolve(exchange))
+            .then((value) => { if (live) setOpened(value); })
+            .catch(() => { if (live) setOpened(exchange); });
+        return () => { live = false; };
+    }, [exchange, seal]);
+    const shown = useMemo(() => redactExchange(opened ?? { ...exchange, messages: [] }, clarity), [opened, exchange, clarity]);
+    return (
+        <>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
+        <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>🕵 {targetLabel} ↔ {exchange.counterpart}</div>
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</div>
+        </div>
+        </div>
+        <div style={{ padding: "0.6rem 1rem 0.2rem", flexShrink: 0 }}><ClarityMeter clarity={clarity} /></div>
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.6rem 1rem 1rem", display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+        {shown.messages.map((message, index) => {
+            const mine = message.speaker === target || message.speaker === targetLabel;
+            return (
+                <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
+                <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
+                <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none", background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {message.text}
+                </div>
+                </div>
+            );
+        })}
+        <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", marginTop: "0.4rem", textAlign: "center" }}>
+        Improve your intelligence service to decode more of this exchange.
+        </div>
+        </div>
+        </>
+    );
+};
+
+const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, ensureCountries }) => {
+    const [world, setWorld] = useState(null);
+    const [intercepts, setIntercepts] = useState({});
+    const [open, setOpen] = useState(null);
+    const [choosing, setChoosing] = useState(false);
+    const [error, setError] = useState("");
+    const [storyDraft, setStoryDraft] = useState({});
+
+    const refreshIntercepts = useCallback(async ({ force = false } = {}) => {
+        try {
+            const nextIntercepts = await readInterceptsState({ force });
+            setIntercepts(normalizeIntercepts(nextIntercepts));
+        } catch {
+            // keep the last good view; espionage UI should never take diplomacy down.
+        }
+    }, []);
+
+    const refresh = useCallback(async () => {
+        try {
+            const [nextWorld, nextIntercepts] = await Promise.all([
+                readWorldStateView({ force: false }),
+                readInterceptsState({ force: false }),
+            ]);
+            setWorld(nextWorld);
+            setIntercepts(normalizeIntercepts(nextIntercepts));
+        } catch {
+            // keep the last good view; espionage UI should never take diplomacy down.
+        }
+    }, []);
+
+    useEffect(() => {
+        void refresh();
+        if (typeof window === "undefined") return undefined;
+        const onWorld = (event) => {
+            const next = event?.detail?.world;
+            if (next && typeof next === "object") setWorld(next);
+        };
+        const onTurn = () => void refreshIntercepts({ force: false });
+        const onIntercepts = () => void refreshIntercepts({ force: false });
+        window.addEventListener("oh:world-updated", onWorld);
+        window.addEventListener("oh:turn-complete", onTurn);
+        window.addEventListener("oh:spy-intercepts-updated", onIntercepts);
+        return () => {
+            window.removeEventListener("oh:world-updated", onWorld);
+            window.removeEventListener("oh:turn-complete", onTurn);
+            window.removeEventListener("oh:spy-intercepts-updated", onIntercepts);
+        };
+    }, [refresh, refreshIntercepts]);
+
+    const playerIdentity = resolveChatParticipantIdentity({ name: playerCountry }, world || {});
+    const playerKey = playerIdentity?.safe && playerIdentity?.polityKey ? playerIdentity.polityKey : playerCountry;
+    const myIntel = intelligenceOf(world, playerKey);
+    const spies = activeSpies(world, playerKey);
+    const foreign = foreignSpies(world, playerKey);
+    const history = normalizeSpies(world?.spies).filter((spy) => spy.owner === playerKey && spy.status === "exposed").slice(-3);
+
+    const commitSpies = async (next) => {
+        const fresh = await readWorldState({ force: true });
+        const written = await writeWorldState({
+            ...fresh,
+            spies: next,
+            spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal(),
+        });
+        if (written && typeof written === "object") setWorld(written);
+        await refreshIntercepts({ force: false });
+    };
+
+    const handleExpel = async (spy) => {
+        setError("");
+        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleTurn = async (spy) => {
+        setError("");
+        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleStory = async (spy) => {
+        setError("");
+        try { await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory)); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleDeploy = async (selected) => {
+        setChoosing(false);
+        setError("");
+        const picked = selected?.[0];
+        const targetKey = String(picked?.polityKey || picked?.code || picked?.name || "").trim();
+        try {
+            const next = deploySpy(world, targetKey, { date: gameDate, playerPolity: playerKey });
+            await commitSpies(next);
+        } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleRecall = async (spy) => {
+        setError("");
+        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const chooseTarget = async () => {
+        setError("");
+        try { await ensureCountries?.(); } catch { /* the last good catalog is still usable */ }
+        setChoosing(true);
+    };
+
+    if (open) {
+        const clarity = signalClarity(myIntel, intelligenceOf(world, open.target));
+        return <InterceptView target={open.target} targetLabel={spyDisplayName(world, open.target)} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
+    }
+
+    const targets = Object.keys(intercepts);
+    const liveTargets = new Set(spies.map((spy) => spy.target));
+    const candidates = (countries || []).filter((country) => {
+        const key = String(country?.polityKey || country?.code || country?.name || "").trim();
+        return key && key !== playerKey && !liveTargets.has(key);
+    });
+    const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
+    const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
+    const full = spies.length >= MAX_ACTIVE_SPIES;
+
+    return (
+        <>
+        {choosing && (
+            <CountrySelectorModal
+                countries={candidates}
+                loading={loadingCountries}
+                onStart={handleDeploy}
+                onCancel={() => setChoosing(false)}
+                single
+                title="Deploy a Spy"
+                subtitle="Choose the polity to plant an agent in"
+                selectedLabel="Target"
+                emptyLabel="No target chosen yet"
+                confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
+            />
+        )}
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
+        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
+        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#e9d5ff" }}>{myIntel}/100</span>
+        </div>
+
+        <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Deployed spies · {spies.length}/{MAX_ACTIVE_SPIES}</div>
+        {spies.length === 0 && <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>No spies in the field. Deploy one to read a polity's private diplomacy with others.</div>}
+        {spies.map((spy) => (
+            <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spyDisplayName(world, spy.target)}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ possibly compromised</span>}</div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100</div>
+            </div>
+            <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+            </div>
+        ))}
+        {history.length > 0 && <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>{history.map((spy) => "Agent expelled by " + spyDisplayName(world, spy.target) + (spy.exposedAt ? " on " + spy.exposedAt : "")).join(" · ")}</div>}
+
+        {foreign.filter((spy) => spy.status !== "active").length > 0 && <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Foreign agents in {playerCountry}</div>}
+        {foreign.filter((spy) => spy.status !== "active").map((spy) => (
+            <div key={spy.id} style={{ padding: "0.55rem 0.7rem", borderRadius: "10px", background: spy.status === "discovered" ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (spy.status === "discovered" ? "rgba(251,191,36,0.35)" : "rgba(255,255,255,0.08)") }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{spy.status === "discovered" ? "🚨 " : "🎭 "}{spyDisplayName(world, spy.owner)}</div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{spy.status === "discovered" ? "agent in custody - decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " - " + spyDisplayName(world, spy.owner) + " still trusts them"}</div>
+            </div>
+            {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+            {spy.status === "discovered" && <button onClick={() => handleTurn(spy)} style={spyBtn(true)}>Turn</button>}
+            </div>
+            {spy.status !== "exposed" && (
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                <input value={storyOf(spy)} onChange={(e) => setStoryDraft((draft) => ({ ...draft, [spy.id]: e.target.value }))} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : "What your double agent tells " + spyDisplayName(world, spy.owner)} style={inputStyle} />
+                {spy.status === "turned" && <button onClick={() => handleStory(spy)} style={spyBtn(true)}>Save</button>}
+                </div>
+            )}
+            </div>
+        ))}
+
+        {error && <div style={{ fontSize: "0.74rem", color: "#fca5a5", padding: "0.3rem 0.1rem" }}>{error}</div>}
+        {targets.length > 0 && <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Intercepts</div>}
+        {targets.flatMap((target) => (intercepts[target]?.exchanges || []).map((exchange) => (
+            <button key={exchange.id} onClick={() => setOpen({ target, exchange })} style={{ width: "100%", padding: "0.6rem 0.8rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer", fontFamily: "sans-serif", textAlign: "left", color: "white" }}>
+            <span aria-hidden="true" style={{ fontSize: "1rem" }}>📡</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spyDisplayName(world, target)} ↔ {exchange.counterpart}</span>
+            <span style={{ display: "block", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</span>
+            </span>
+            </button>
+        )))}
+        </div>
+        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={chooseTarget} disabled={full} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(167,139,250,0.35)", background: "rgba(139,92,246,0.18)", color: "#e9d5ff", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>🕵 Deploy a spy</button>
+        </div>
+        </>
+    );
+};
+
 const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, onConsumeRequest, requestedChatId, onConsumeRequestedChat }) {
+    const [view, setView]                         = useState("chats");
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -1972,6 +2248,16 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
         }
     };
 
+    const ensureSpyCountries = async () => {
+        if (countries.length > 0 && !loadingCountries) return;
+        setLoadingCountries(true);
+        try {
+            await refreshDiplomaticIdentityState({ preserveActiveChat: true });
+        } finally {
+            setLoadingCountries(false);
+        }
+    };
+
     const handleStartChat = (selected) => {
         if (!world) return;
         const candidate = reconcileChatsForPlayer([{
@@ -2108,11 +2394,21 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <span style={{ fontWeight: 700, fontSize: "1rem" }}>Diplomacy</span>
+                <div style={{ display: "flex", gap: "0.35rem" }}>
+                {[["chats", "Diplomacy"], ["spy", "Spy"]].map(([key, label]) => (
+                    <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (view === key ? "rgba(167,139,250,0.45)" : "transparent"), background: view === key ? "rgba(139,92,246,0.22)" : "transparent", color: view === key ? "white" : "rgba(255,255,255,0.5)" }}>
+                    {label}
+                    </button>
+                ))}
+                </div>
                 <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
+                {view === "spy" ? (
+                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={availableCountries} loadingCountries={loadingCountries} ensureCountries={ensureSpyCountries} />
+                ) : (
+                <>
                 <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                 {!hasLoadedInitialData ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.32)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
@@ -2168,6 +2464,8 @@ const ChatPanel = memo(function ChatPanel({ isOpen, onClose, requestedCountry, o
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
+                </>
+                )}
                 </>
             )}
             </div>

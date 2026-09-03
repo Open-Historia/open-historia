@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:web": "vite preview --outDir dist-web",
-    "test": "node --test \"server/**/*.test.js\"",
+    "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\"",
     "electron": "electron .",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
@@ -23,8 +23,6 @@
   },
   "dependencies": {
     "@noble/ed25519": "^2.3.0",
-    "@vitejs/plugin-react": "^5.1.4",
-    "babel-plugin-react-compiler": "^1.0.0",
     "@turf/area": "^7.3.5",
     "@turf/boolean-point-in-polygon": "^7.3.5",
     "@turf/centroid": "^7.3.5",
@@ -33,9 +31,12 @@
     "@turf/line-split": "^7.3.5",
     "@turf/polygon-to-line": "^7.3.5",
     "@turf/simplify": "^7.3.5",
+    "@vitejs/plugin-react": "^5.1.4",
+    "babel-plugin-react-compiler": "^1.0.0",
     "chart.js": "^4.5.1",
     "d3-geo": "^3.1.1",
     "dayjs": "^1.11.19",
+    "electron-updater": "^6.8.9",
     "eslint": "^9.39.3",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.26",
@@ -91,6 +92,13 @@
     "asarUnpack": [
       "scripts/**"
     ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable",
+        "channel": "latest"
+      }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -131,9 +139,16 @@
       "artifactName": "Open-Historia-mac-${arch}.${ext}"
     },
     "linux": {
+      "maintainer": "Arkniem <nichojkrol@gmail.com>",
       "target": [
         {
           "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
           "arch": [
             "x64"
           ]

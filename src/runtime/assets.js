@@ -76,6 +76,7 @@ export const JSON_URLS = {
   citiesGeojson: "",
   backgroundData: "",
   world: "",
+  intercepts: "",
 };
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
@@ -331,6 +332,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.citiesGeojson = withRuntimeToken("/api/runtime/json/citiesGeojson");
   JSON_URLS.backgroundData = withRuntimeToken("/api/runtime/json/backgroundData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
+  JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
 
   PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");
   PMTILES_ARCHIVES.countries = buildAbsoluteUrl("/api/runtime/pmtiles/countries");
@@ -597,7 +599,7 @@ const createPmtilesArchive = (url) => {
   return new PMTiles(source, pmtilesCache);
 };
 
-const registerPmtilesArchive = (url) => {
+export const registerPmtilesArchive = (url) => {
   ensurePmtilesProtocol();
   const archive = createPmtilesArchive(url);
   pmtilesArchives.set(url, archive);

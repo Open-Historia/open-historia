@@ -12,6 +12,7 @@ import {
   moveUnitTo,
   attackWith,
   attackFeature,
+  attackRegion,
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import {
@@ -978,24 +979,63 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const activeCurvedLabelData = worldKnown && !customFlag
     ? curvedLabelData
     : EMPTY_FEATURE_COLLECTION;
-  const handleRegionClick = useCallback((event) => {
+  const handleRegionClick = useCallback(async (event) => {
     const unitsAt = () =>
       map.getLayer("units-fill")
         ? map.queryRenderedFeatures(event.point, { layers: ["units-fill"] })
         : [];
 
-    // A city or built structure under the cursor. Point features are tiny
-    // targets, so a hit is always deliberate; built structures (world.markers)
-    // outrank cities when the two overlap. Shared between normal selection and
-    // attack targeting, so anything clickable is also attackable.
+    // Resolve the province under this click using Continuum's existing R5 layer
+    // stack. Fully authored worlds must never fall through to leftover GADM Earth.
+    const resolveRegionHit = () => {
+      const candidateLayers = (hasDrawnGeometry
+        ? [
+          "custom-regions-fill",
+          "custom-regions-disputed-vnext",
+          "custom-regions-disputed",
+          "custom-regions-fill-far",
+          "custom-regions-disputed-far",
+        ]
+        : [
+          "custom-regions-fill",
+          "custom-regions-disputed-vnext",
+          "custom-regions-disputed",
+          "regions-fill",
+          "regions-disputed",
+          "custom-regions-fill-far",
+          "custom-regions-disputed-far",
+        ]
+      ).filter((id) => map.getLayer(id));
+      if (!candidateLayers.length) return null;
+      const hits = map.queryRenderedFeatures(event.point, { layers: candidateLayers });
+      if (!hits.length) return null;
+      const props = hits[0].properties ?? {};
+      const regionId = String(props.GID_1 ?? props.id ?? "");
+      if (!regionId) return null;
+      const lookupOwner = ownerLookupRef.current.size
+        ? ownerLookupRef.current.get(regionId)
+        : undefined;
+      const owner = lookupOwner !== undefined ? lookupOwner : props.owner;
+      const gid0 = String(props.gid0 ?? props.GID_0 ?? "");
+      return {
+        props,
+        regionId,
+        gid0,
+        owner: owner ?? "",
+        regionName: resolveRegionName(regionId, props.NAME_1 ?? props.name ?? ""),
+        country: props.COUNTRY ?? toCountryName(gid0),
+        lngLat: event.lngLat,
+      };
+    };
+
+    // A city or built structure under the cursor. Query only the point glyphs,
+    // not city text: a giant label bounding box should not steal a province click.
     const featureAt = () => {
       const featureLayers = [
         ...V_NEXT_MARKER_SHAPE_LAYER_IDS,
         "markers-shapes",
         "cities-shapes",
-        "cities-labels",
-      ]
-        .filter((id) => map.getLayer(id));
+      ].filter((id) => map.getLayer(id));
       const featureHits = featureLayers.length
         ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
         : [];
@@ -1003,14 +1043,30 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       const hit = featureHits.find((entry) => entry.layer.id.startsWith("markers-shapes")) ?? featureHits[0];
       const props = hit.properties ?? {};
       const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
+      const host = resolveRegionHit();
+      const hostCountry = host?.owner || (host?.owner === "" ? "" : toCountryName(host?.gid0 ?? ""));
       return hit.layer.id.startsWith("markers-shapes")
-        ? { source: "marker", id: props.id, name: props.name, kind: props.kind, ownerCode: props.ownerCode, lng, lat }
+        ? {
+          source: "marker",
+          id: props.id,
+          name: props.name,
+          kind: props.kind,
+          ownerCode: props.ownerCode || hostCountry,
+          note: props.note || "",
+          hostRegionId: host?.regionId || "",
+          hostRegionName: host?.regionName || "",
+          lng,
+          lat,
+        }
         : {
           source: "city",
           name: props.city || props.name || "",
           population: props.population,
           capital: props.capital,
           tier: props.tier,
+          ownerCode: hostCountry,
+          hostRegionId: host?.regionId || "",
+          hostRegionName: host?.regionName || "",
           lng,
           lat,
         };
@@ -1018,10 +1074,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
 
     const mode = getInteractionMode();
 
-    // Active troop command modes intercept the click as a target, not a selection.
-    // Cheats 2.0 admin placement is an authoritative relocation, distinct from
-    // normal movement: it must work anywhere on the map without creating an
-    // order, changing status, or applying era/logistics movement limits.
     if (mode.kind === "admin-place") {
       placeUnitAdmin(mode.unitId, event.lngLat.lng, event.lngLat.lat);
       clearInteractionMode();
@@ -1034,26 +1086,38 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       return;
     }
     if (mode.kind === "move") {
-      moveUnitTo(mode.unitId, event.lngLat.lng, event.lngLat.lat);
+      const hit = resolveRegionHit();
+      moveUnitTo(mode.unitId, event.lngLat.lng, event.lngLat.lat, hit);
       clearInteractionMode();
       return;
     }
     if (mode.kind === "attack") {
-      // An enemy unit under the cursor is the target; otherwise a city or
-      // structure is — troops can be directed against objectives, not just
-      // other troops.
       const target = unitsAt();
-      const feature = target.length ? null : featureAt();
       if (target.length) {
         attackWith(mode.unitId, target[0].properties.id);
-      } else if (feature) {
-        attackFeature(mode.unitId, feature);
+        clearInteractionMode();
+        return;
       }
-      clearInteractionMode();
+      const feature = featureAt();
+      if (feature) {
+        const result = await attackFeature(mode.unitId, feature);
+        if (!result?.ownTarget) clearInteractionMode();
+        return;
+      }
+      const hit = resolveRegionHit();
+      if (hit) {
+        const result = await attackRegion(mode.unitId, {
+          regionId: hit.regionId,
+          regionName: hit.regionName,
+          owner: hit.owner,
+          lng: event.lngLat.lng,
+          lat: event.lngLat.lat,
+        });
+        if (!result?.ownTarget) clearInteractionMode();
+      }
       return;
     }
 
-    // Normal selection: a unit click wins over the region beneath it.
     const unitHits = unitsAt();
     if (unitHits.length) {
       dismissRegionPopup();
@@ -1072,54 +1136,27 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     }
 
     dismissFeaturePopup();
-    // Custom (editor) regions render on top of the stock regions. On a map with its
-    // OWN drawn/generated geometry, query only the custom layers — a click on empty
-    // sea must resolve to nothing, not the leftover Earth country underneath. On a
-    // re-ownership map (stock GADM geometry), prefer regions-fill but keep the
-    // seed layer queryable too. a visible fallback should not become an unclickable
-    // patch just because its detail tile is still loading.
-    const queryLayers = (hasDrawnGeometry
-      ? ["custom-regions-fill", "custom-regions-fill-far"]
-      : ["custom-regions-fill", "regions-fill", "custom-regions-fill-far"]
-    ).filter((id) => map.getLayer(id));
-    const features = map.queryRenderedFeatures(event.point, { layers: queryLayers });
-    if (!features.length) {
+    const hit = resolveRegionHit();
+    if (!hit) {
       onOceanClicked();
       return;
     }
 
-    const props = features[0].properties ?? {};
-    const regionId = props.GID_1 ?? props.id ?? "";
-    // On custom maps, stock-tile hits carry modern props only — resolve the era
-    // owner (possibly "" = unclaimed) from the ownership lookup.
-    const lookupOwner = ownerLookupRef.current.size ? ownerLookupRef.current.get(regionId) : undefined;
-    const owner = lookupOwner !== undefined ? lookupOwner : props.owner;
-    // The region's underlying real country, as GADM knows it. A code, and staying
-    // one: it comes off the baked tiles.
-    const gid0 = props.gid0 ?? props.GID_0 ?? "";
+    const { props, regionId, gid0, owner } = hit;
+    const rawClaimants = regionClaimants?.[regionId] ?? (Array.isArray(props.claimants) ? props.claimants : []);
+    const claimants = Array.isArray(rawClaimants) ? rawClaimants : [];
     onRegionSelected({
-      // Despite the name, this field carries the OWNER — every downstream reader
-      // (the flag lookup, the country panel) treats it that way. Resolved to a
-      // NAME here so it is one namespace: it used to hand back the owner's name
-      // when there was an owner and a raw GADM code when there wasn't, and the
-      // difference only showed up as an occasional "RUS" where a country name
-      // belonged. owner === "" means genuinely unclaimed and must stay empty.
       GID_0: owner || (owner === "" ? "" : toCountryName(gid0)),
-      // A stock-tile hit carries GADM's own COUNTRY attribute; a custom region has
-      // no such property (and no longer carries `country` at all), so name it from
-      // the provenance rather than handing the panel a blank.
-      COUNTRY: props.COUNTRY ?? toCountryName(gid0),
-      // Corrects the GADM regions whose stored name is the placeholder "NA" (England
-      // is one), so the panel names the place instead of showing the marker verbatim.
-      NAME_1: resolveRegionName(regionId, props.NAME_1 ?? props.name ?? ""),
+      COUNTRY: hit.country,
+      NAME_1: hit.regionName,
       GID_1: regionId,
-      // Kept as the flag fallback when the owner is an invented polity: "Roman
-      // Empire" has no flag, but the land underneath it is still Italy.
       gid0,
       owner,
+      claimants,
+      isDisputed: Boolean(props._stripes || claimants.length > 0),
       lngLat: event.lngLat,
     });
-  }, [hasDrawnGeometry, map]);
+  }, [hasDrawnGeometry, map, regionClaimants]);
 
   useEffect(() => {
     if (!map) return;

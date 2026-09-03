@@ -267,6 +267,13 @@ const polityChangeSchema = {
       description:
         "International reputation 0-100, only when it changes. 0 is a pariah state, 100 is universally trusted.",
     },
+    intelligence: {
+      type: "number",
+      description:
+        "Intelligence service capability 0-100, only when it changes: a purge, a new bureau, a defector, "
+        + "funding, a foreign penetration exposed. Decides how much of others' diplomacy this polity can "
+        + "read, and how much of its own it can keep secret.",
+    },
     tags: stringArraySchema(
       "The country's defining traits after this change — ideology, alignment, posture "
       + "(e.g. socialist, authoritarian, anti-nato). Only when they change: send the "
@@ -488,6 +495,22 @@ const markerOpSchema = {
       required: ["op", "newName"],
       additionalProperties: false,
     },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["population"] },
+        markerId: textSchema("Existing stable marker identifier, preferred when known."),
+        name: nonEmptyTextSchema("Name of the city whose population changed."),
+        population: {
+          type: "integer",
+          description: "The city's new total population, as a whole number of people.",
+          minimum: 0,
+        },
+        note: textSchema("Why it changed: siege, famine, industrial boom, refugees."),
+      },
+      required: ["op", "name", "population"],
+      additionalProperties: false,
+    },
   ],
 };
 
@@ -527,7 +550,7 @@ const impactsSchema = {
     markerOps: {
       type: "array",
       description:
-        "Persistent physical-world lifecycle changes. Build significant new named facilities/places; update existing ones when they are expanded, captured, damaged, converted, completed, abandoned, or destroyed; rename without replacing identity. Remove is canonical cleanup, not ordinary destruction.",
+        "Persistent physical-world lifecycle changes. Build significant new named facilities/places; update existing ones when they are expanded, captured, damaged, converted, completed, abandoned, or destroyed; rename without replacing identity; use population when a city's population changes. Remove is canonical cleanup, not ordinary destruction.",
       items: markerOpSchema,
     },
   },
@@ -2017,7 +2040,48 @@ const TERRITORY_DIRECTOR_SCHEMA = {
   additionalProperties: false,
 };
 
+// What a deployed spy reports: the target's private diplomatic traffic with third parties.
+// Redaction is deterministic game logic; the model writes the full intercepted exchange.
+const SPY_INTERCEPT_SCHEMA = {
+  type: "object",
+  description: "Intercepted diplomatic exchanges between the target polity and other polities.",
+  properties: {
+    exchanges: {
+      type: "array",
+      minItems: 1,
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          counterpart: nonEmptyTextSchema("The OTHER polity in this exchange. Never the target itself, never the player's polity."),
+          date: nonEmptyTextSchema("When the exchange took place, YYYY-MM-DD, within the last period."),
+          subject: nonEmptyTextSchema("What the exchange is about, in a few words."),
+          messages: {
+            type: "array",
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: {
+                speaker: nonEmptyTextSchema("The polity speaking - the target or the counterpart."),
+                text: nonEmptyTextSchema("What was said, in that leader's voice: intentions and terms, not public statements."),
+              },
+              required: ["speaker", "text"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["counterpart", "date", "subject", "messages"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["exchanges"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
+  spyIntercept: SPY_INTERCEPT_SCHEMA,
   geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
@@ -2149,7 +2213,14 @@ export const PREGAME_HISTORY_TOOL = makeTool(
   PREGAME_HISTORY_SCHEMA,
 );
 
+export const SPY_INTERCEPT_TOOL = makeTool(
+  "submit_spy_intercept",
+  "Submit the diplomatic exchanges a planted spy intercepted between the target polity and others.",
+  SPY_INTERCEPT_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
+  spyIntercept: SPY_INTERCEPT_TOOL,
   geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,

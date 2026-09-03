@@ -385,6 +385,12 @@ const OlMap = ({
   const interactionsRef = useRef([]);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
+  // The live Draw interaction and the points the map-maker has actually CLICKED
+  // during the current sketch. Tracked here rather than read off the sketch
+  // geometry because trace mode appends a run of vertices per click: "the point
+  // you just placed" means the click, not each traced vertex.
+  const activeDrawRef = useRef(null);
+  const placedPointsRef = useRef([]);
   const onFeatureCreateRef = useRef(onFeatureCreate);
   onFeatureCreateRef.current = onFeatureCreate;
   const onFeatureEditRef = useRef(onFeatureEdit);
@@ -787,7 +793,19 @@ const OlMap = ({
       // Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo
       if ((e.ctrlKey || e.metaKey) && !typing) {
         const k = e.key.toLowerCase();
-        if (k === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); return; }
+        if (k === "z" && !e.shiftKey) {
+          e.preventDefault();
+          // Mid-sketch, Ctrl+Z belongs to the sketch. Undoing a whole region
+          // operation out from under an unfinished outline is never what the
+          // map-maker meant, and there is no way back to the half-drawn shape.
+          if (activeDrawRef.current && placedPointsRef.current.length > 0) {
+            activeDrawRef.current.removeLastPoint();
+            placedPointsRef.current.pop();
+            return;
+          }
+          doUndo();
+          return;
+        }
         if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); doRedo(); return; }
       }
       // Delete / Backspace removes the current selection
@@ -1691,8 +1709,58 @@ const OlMap = ({
       // and shares their exact vertices — which is what keeps borders gap-free.
       // Snap is still added below: trace follows a border once you are ON it,
       // Snap is what gets you onto it.
-      const draw = new Draw({ source, type: "Polygon", trace: true, traceSource: source });
+      // Clicking the point you just placed takes it back, rather than finishing
+      // the polygon on it (OL's default). Overshooting a corner is the common
+      // mistake and it had no cheap fix — the shape had to be finished wrong and
+      // redrawn. Finishing still works by clicking the FIRST point or by
+      // double-clicking, so there are two ways out.
+      const CLICK_SLOP_PX = 12;
+      const atLastPlaced = (event) => {
+        const placed = placedPointsRef.current;
+        // Needs at least two points: taking back the only point would leave a
+        // sketch with nothing in it, which OL has no state for.
+        if (placed.length < 2 || !event.map) return false;
+        const lastPixel = event.map.getPixelFromCoordinate(placed[placed.length - 1]);
+        if (!lastPixel || !event.pixel) return false;
+        return Math.hypot(event.pixel[0] - lastPixel[0], event.pixel[1] - lastPixel[1]) <= CLICK_SLOP_PX;
+      };
+
+      const draw = new Draw({
+        source,
+        type: "Polygon",
+        trace: true,
+        traceSource: source,
+        condition: (event) => {
+          // Modifier-clicks stay OL's business (this mirrors its default
+          // noModifierKeys) so ctrl-click never silently drops a point.
+          const oe = event.originalEvent;
+          if (oe && (oe.ctrlKey || oe.metaKey || oe.altKey || oe.shiftKey)) return false;
+          if (atLastPlaced(event)) {
+            draw.removeLastPoint();
+            placedPointsRef.current.pop();
+            return false; // consumed: take the point back instead of adding one
+          }
+          placedPointsRef.current.push(event.coordinate);
+          return true;
+        },
+        // No finishCondition on purpose. OL evaluates condition on pointerdown
+        // and only reaches the finish check if it returned TRUE, so a click that
+        // takes the last point back can never also finish the polygon — the
+        // remove already short-circuits it. Adding one here actively broke
+        // closing: condition pushes the clicked coordinate, and a finishCondition
+        // recomputed in the same event then sees that point as "the last placed"
+        // and refuses to close on the first vertex.
+      });
+      activeDrawRef.current = draw;
+      draw.on("drawstart", () => {
+        // The click that starts a sketch already went through condition above,
+        // so the first point is recorded; anything left from an aborted sketch
+        // is not.
+        placedPointsRef.current = placedPointsRef.current.slice(-1);
+      });
+      draw.on("drawabort", () => { placedPointsRef.current = []; });
       draw.on("drawend", (e) => {
+        placedPointsRef.current = [];
         const f = e.feature;
         f.setId(newId());
         if (f.get("typeId") == null) f.set("typeId", defaultTypeIdRef.current || "land");
@@ -1964,6 +2032,11 @@ const OlMap = ({
       });
       borderAssistSourceRef.current?.clear();
       interactionsRef.current = [];
+      // Switching tools abandons any half-drawn sketch, so Ctrl+Z has to go back
+      // to meaning "undo the last region operation" rather than calling into a
+      // Draw the map no longer owns.
+      activeDrawRef.current = null;
+      placedPointsRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool, selectionKey]);

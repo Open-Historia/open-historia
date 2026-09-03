@@ -227,6 +227,37 @@ const Main = ({
     };
   }, [hasNoGames]);
 
+  // Spy reports follow the same idle lane as diplomacy. The once-a-minute tick
+  // only schedules the roll; actual work waits until the tab is visible and the
+  // map is not moving, so a lucky spy roll cannot randomly mug a drag frame.
+  // Time skips also refresh every deployed spy explicitly.
+  useEffect(() => {
+    if (hasNoGames) return undefined;
+    let idleHandle = null;
+    const run = () => {
+      idleHandle = null;
+      if (document.visibilityState !== "visible" || window.__OH_MAP_MOVING__) return;
+      import("../AI/gameplay.js")
+        .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
+        .catch(() => {});
+    };
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible" || window.__OH_MAP_MOVING__) return;
+      if (typeof window.requestIdleCallback === "function") {
+        idleHandle = window.requestIdleCallback(run, { timeout: 10000 });
+      } else {
+        idleHandle = window.setTimeout(run, 750);
+      }
+    }, 60000);
+    return () => {
+      clearInterval(iv);
+      if (idleHandle != null) {
+        window.cancelIdleCallback?.(idleHandle);
+        window.clearTimeout?.(idleHandle);
+      }
+    };
+  }, [hasNoGames]);
+
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);
@@ -406,7 +437,7 @@ const Main = ({
       {isSettingsOpen && (
         <React.Profiler id="SettingsMenu" onRender={reportReactRender}>
         <SettingsMenu
-          discordUrl="https://discord.gg/C3AVwHacZ4"
+          discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
           githubUrl="https://github.com/Open-Historia/open-historia"
           reportBugUrl="https://github.com/Open-Historia/open-historia/issues/new"

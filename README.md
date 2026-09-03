@@ -2,14 +2,14 @@
 <h1 align="center">Open Historia</h1>
 
 <div align="center">
-  <strong>An open-source, community-driven alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
+  <strong>An open-source, better alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
 </div>
 
 <br />
 
 <div align="center">
   <!-- Discord -->
-  <a href="https://discord.gg/C3AVwHacZ4">
+  <a href="https://discord.gg/QaqAK7fQAg">
     <img src="https://img.shields.io/badge/discord-join-5865F2.svg?style=flat-square&logo=discord&logoColor=white"
       alt="Discord" />
   </a>

@@ -1,10 +1,10 @@
 /*! Open Historia — custom map background loader © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
-import { useWorldState } from "./useWorldState.js";
+import { useWorldBackground } from "./useWorldState.js";
 
 export function useCustomBackground() {
-  const { background: bgDescriptor, basemap: worldBasemap } = useWorldState();
+  const { background: bgDescriptor, basemap: worldBasemap } = useWorldBackground();
   const [state, setState] = useState({ background: null, declared: false, basemap: null });
   const keyRef = useRef("");
 

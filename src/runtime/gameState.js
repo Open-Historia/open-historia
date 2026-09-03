@@ -26,6 +26,13 @@ export const WORLD_DEFAULTS = {
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
   internationalReputation: {},
+  // Per-polity intelligence service (0-100). Kept next to reputation because
+  // it has the same lifecycle, but spy visibility lives in spycraft/intercepts.
+  intelligence: {},
+  // Every spy in the world, in either direction. Intercepts stay in their own
+  // sealed runtime asset so they cannot race world.json writes.
+  spies: [],
+  spySeal: "",
   // Immutable audit trail of explicitly applied GM Console transactions. This is
   // administrative history, not a second world-state model: the transaction snapshot
   // records what the administrator previewed/applied while canonical state still lives
@@ -43,6 +50,9 @@ export const WORLD_DEFAULTS = {
   // lowercased original city name -> new display name. world.markers cities are
   // renamed in place by applyMarkerOps; this is the override layer for the rest.
   cityRenames: {},
+  // Population overrides for stock/authored cities. Keyed by lowercase source
+  // city name so both map sources read the same canonical value.
+  cityPopulations: {},
   // Country-label styling, set in the scenario settings. Empty = the defaults
   // (Impact, white letters, half-black outline). The font renders from the
   // PLAYER's local fonts — the style has no glyphs endpoint, so MapLibre v5
@@ -1150,6 +1160,10 @@ const normalizePolityChange = (entry) => {
   const reputation = Number.isFinite(rawReputation)
     ? Math.max(0, Math.min(100, Math.round(rawReputation)))
     : null;
+  const rawIntelligence = Number(entry.intelligence ?? entry.intelligenceService);
+  const intelligence = Number.isFinite(rawIntelligence)
+    ? Math.max(0, Math.min(100, Math.round(rawIntelligence)))
+    : null;
 
   // The AI sends the complete new list, so an empty array is meaningful ("this
   // country no longer has defining tags") while undefined means "unchanged" —
@@ -1180,6 +1194,7 @@ const normalizePolityChange = (entry) => {
     code,
     color: normalizeOptionalString(entry.color),
     name: normalizeOptionalString(entry.name || entry.newName),
+    intelligence,
     note: normalizeOptionalString(entry.note || entry.reason),
     operation,
     reputation,
@@ -1452,6 +1467,20 @@ const normalizeMarkerOp = (entry) => {
     const newName = normalizeOptionalString(entry.newName || entry.to);
     if ((!markerId && !name) || !newName) return null;
     return { op: "rename", markerId, name, newName, note: normalizeOptionalString(entry.note) };
+  }
+
+  if (op === "population") {
+    const markerId = normalizeOptionalString(entry.markerId || entry.id);
+    const name = normalizeOptionalString(entry.name || entry.city);
+    const population = Number(entry.population ?? entry.value);
+    if ((!markerId && !name) || !Number.isFinite(population) || population < 0) return null;
+    return {
+      op: "population",
+      markerId,
+      name,
+      population: Math.round(population),
+      note: normalizeOptionalString(entry.note),
+    };
   }
 
   return null;
@@ -2310,6 +2339,32 @@ export const normalizeWorldState = (world) => {
       .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]),
   );
 
+  const rawIntelligence = Object.entries(nextWorld.intelligence ?? {})
+    .map(([polityCode, value]) => [normalizeOptionalString(polityCode), Number(value)])
+    .filter(([polityCode, value]) => polityCode && Number.isFinite(value))
+    .map(([polityCode, value]) => [polityCode, Math.max(0, Math.min(100, Math.round(value)))]);
+  const SPY_STATUSES = ["active", "discovered", "turned", "exposed", "recalled"];
+  const rawSpies = normalizeArray(nextWorld.spies)
+    .map((spy, index) => {
+      const target = normalizeOptionalString(spy?.target || spy?.polity);
+      if (!target) return null;
+      return {
+        id: normalizeOptionalString(spy?.id) || `spy-${index + 1}`,
+        owner: normalizeOptionalString(spy?.owner),
+        target,
+        deployedAt: normalizeOptionalString(spy?.deployedAt),
+        status: SPY_STATUSES.includes(spy?.status) ? spy.status : "active",
+        turnedAt: normalizeOptionalString(spy?.turnedAt),
+        exposedAt: normalizeOptionalString(spy?.exposedAt),
+        coverStory: normalizeOptionalString(spy?.coverStory),
+        suspected: spy?.suspected === true,
+      };
+    })
+    .filter(Boolean);
+  const spySeal = /^[0-9a-f]{64}$/i.test(String(nextWorld.spySeal ?? ""))
+    ? String(nextWorld.spySeal)
+    : "";
+
   // Keyed by country NAME, verbatim — same namespace as internationalReputation
   // above, polityOverrides and colors. This used to uppercase while its neighbours
   // did not, so one applyEventImpacts change.code landed under two different keys
@@ -2336,6 +2391,33 @@ export const normalizeWorldState = (world) => {
     regionOwnershipOverrides,
     regionSovereigntyOverrides,
   };
+  const identityIndex = buildPolityIdentityIndex(diplomaticIdentityWorld);
+  const canonicalPolityKey = (value) => {
+    const raw = normalizeOptionalString(value);
+    if (!raw) return "";
+    const resolution = resolvePolityIdentity(raw, diplomaticIdentityWorld, {
+      allowUnknown: true,
+      identityIndex,
+    });
+    return normalizeOptionalString(resolution?.resolved) || toCountryName(raw) || raw;
+  };
+
+  // spy/intelligence state lives in the same stable campaign-identity namespace as
+  // the rest of Continuum. a regime rename should not magically create a second
+  // intelligence service or strand an agent under an obsolete display name.
+  const intelligence = {};
+  for (const [polityCode, value] of rawIntelligence) {
+    const key = canonicalPolityKey(polityCode);
+    if (key) intelligence[key] = value;
+  }
+  const spies = rawSpies
+    .map((spy) => ({
+      ...spy,
+      owner: canonicalPolityKey(spy.owner),
+      target: canonicalPolityKey(spy.target),
+    }))
+    .filter((spy) => spy.owner && spy.target && spy.owner !== spy.target);
+
   const relations = normalizeWorldRelations(nextWorld.relations, diplomaticIdentityWorld);
   const agreements = normalizeWorldAgreements(nextWorld.agreements, diplomaticIdentityWorld);
 
@@ -2348,6 +2430,9 @@ export const normalizeWorldState = (world) => {
     activeCatalyst: normalizeCatalyst(nextWorld.activeCatalyst),
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     internationalReputation,
+    intelligence,
+    spies,
+    spySeal,
     gmAudit: normalizeGameMasterAudit(nextWorld.gmAudit),
     labelFont: normalizeOptionalString(nextWorld.labelFont),
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
@@ -2396,6 +2481,11 @@ export const normalizeWorldState = (world) => {
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
         .filter(([key, value]) => key && value),
+    ),
+    cityPopulations: Object.fromEntries(
+      Object.entries(nextWorld.cityPopulations && typeof nextWorld.cityPopulations === "object" ? nextWorld.cityPopulations : {})
+        .map(([city, value]) => [normalizeOptionalString(city).toLowerCase(), Number(value)])
+        .filter(([city, value]) => city && Number.isFinite(value) && value >= 0),
     ),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
@@ -2679,6 +2769,23 @@ export const writeEventsState = async (events, options = {}) => {
   return writeJson(JSON_URLS.events, normalized, { pretty: false, ...options });
 };
 
+export const readInterceptsState = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.intercepts, { defaultValue: {}, force });
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+};
+
+export const writeInterceptsState = async (intercepts, options = {}) => {
+  const result = await writeJson(
+    JSON_URLS.intercepts,
+    intercepts && typeof intercepts === "object" ? intercepts : {},
+    { pretty: false, ...options },
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("oh:spy-intercepts-updated"));
+  }
+  return result;
+};
+
 let chatViewRaw = null;
 let chatViewNormalized = null;
 let chatViewPromise = null;
@@ -2867,6 +2974,11 @@ export const applyCountryStatPatchToWorld = (world, canonicalName, patch, option
 };
 
 const applyPolityMetadataStores = (world, change, canonicalName, { eventId = "" } = {}) => {
+  if (Number.isFinite(change.intelligence)) {
+    if (!world.intelligence || typeof world.intelligence !== "object") world.intelligence = {};
+    world.intelligence[canonicalName] = change.intelligence;
+  }
+
   if (Number.isFinite(change.reputation)) {
     world.internationalReputation[canonicalName] = change.reputation;
 
@@ -3158,7 +3270,7 @@ const applyPolityChangeToWorld = ({ change, colors, event = null, phase, world }
     const found = findPolityOverrideEntry(world, source.resolved);
     if (found) delete world.polityOverrides[found[0]];
 
-    for (const field of ["countryStats", "countryTags", "internationalReputation"]) {
+    for (const field of ["countryStats", "countryTags", "internationalReputation", "intelligence"]) {
       const store = world[field];
       if (!store || typeof store !== "object" || Array.isArray(store)) continue;
       delete store[source.resolved];
@@ -3356,6 +3468,7 @@ const cloneWorldForPresentationPreview = (world) => {
     countryStats: { ...(source.countryStats || {}) },
     countryTags: { ...(source.countryTags || {}) },
     internationalReputation: { ...(source.internationalReputation || {}) },
+    intelligence: { ...(source.intelligence || {}) },
     regionOwnershipOverrides: { ...(source.regionOwnershipOverrides || {}) },
     regionSovereigntyOverrides: { ...(source.regionSovereigntyOverrides || {}) },
     regionClaimants: { ...(source.regionClaimants || {}) },
@@ -3363,6 +3476,7 @@ const cloneWorldForPresentationPreview = (world) => {
     units: Array.isArray(source.units) ? [...source.units] : [],
     markers: Array.isArray(source.markers) ? [...source.markers] : [],
     cityRenames: { ...(source.cityRenames || {}) },
+    cityPopulations: { ...(source.cityPopulations || {}) },
   };
 };
 
@@ -3434,11 +3548,17 @@ export const applyEventImpactsToWorld = ({
       // the label layer can show the new name (see Cities.jsx / cityRenames).
       for (const raw of normalizeArray(event.impacts.markerOps)) {
         const op = normalizeMarkerOp(raw);
-        if (!op || op.op !== "rename" || !op.name) continue;
+        if (!op || !op.name) continue;
         const matched = before.some((m) =>
           op.markerId ? m.id === op.markerId : m.name.toLowerCase() === op.name.toLowerCase());
-        if (!matched) {
+        if (op.op === "rename" && !matched) {
           nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [op.name.toLowerCase()]: op.newName };
+        }
+        if (op.op === "population") {
+          nextWorld.cityPopulations = {
+            ...(nextWorld.cityPopulations || {}),
+            [op.name.toLowerCase()]: op.population,
+          };
         }
       }
     }

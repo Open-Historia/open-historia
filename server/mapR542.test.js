@@ -7,31 +7,38 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nations = fs.readFileSync(path.resolve(here, "../src/Game/Map/Nations.jsx"), "utf8");
 
-test("R5.4.2 world-band curves never pre-hide their point fallback", () => {
-  assert.match(nations, /if \(props\.curveBand === "world"\) continue;/);
-});
-
-test("R5.4.2 world-band point fallback is collision-managed", () => {
+test("R5.4.6 curve-capable polities never enter the collision-managed point fallback", () => {
   const managedStart = nations.indexOf("const livePointManagedFilter");
   const overlapStart = nations.indexOf("const livePointOverlapFilter");
-  const lineStart = nations.indexOf("const liveWorldLineFilter");
   const managed = nations.slice(managedStart, overlapStart);
+
+  assert.match(managed, /\["==", \["coalesce", \["get", "curveBand"\], "none"\], "none"\]/);
+  assert.doesNotMatch(managed, /\["!=", \["coalesce", \["get", "curveBand"\], "none"\], "none"\]/);
+});
+
+test("R5.4.6 curve-capable point fallback stays guaranteed until the renderer confirms its owner", () => {
+  const overlapStart = nations.indexOf("const livePointOverlapFilter");
+  const lineStart = nations.indexOf("const liveWorldLineFilter");
   const overlap = nations.slice(overlapStart, lineStart);
 
-  assert.match(managed, /\["==", \["coalesce", \["get", "curveBand"\], "none"\], "world"\]/);
-  assert.match(overlap, /\["!=", \["coalesce", \["get", "curveBand"\], "none"\], "world"\]/);
+  assert.match(overlap, /\["!=", \["coalesce", \["get", "curveBand"\], "none"\], "none"\]/);
+  assert.match(overlap, /renderedCurveOwnersLiteral/);
+  assert.match(overlap, /\["!", \["in", \["get", "owner"\], renderedCurveOwnersLiteral\]\]/);
 });
 
-test("R5.4.2 curved labels get collision priority over point fallbacks", () => {
+test("R5.4.6 curved labels keep placement priority over point fallbacks", () => {
   const line = nations.indexOf('id="country-live-polity-line-label-source"');
   const point = nations.indexOf('id="country-live-polity-point-label-source"');
-  assert.ok(line >= 0 && point >= 0);
-  assert.ok(line < point);
+  assert.ok(line >= 0 && point >= 0 && line < point);
 });
 
-test("R5.4.2 label handoff block contains no rendered-feature scan", () => {
-  const start = nations.indexOf("const expectedWarpOwnerList");
-  const end = nations.indexOf("const activePointLabelData", start);
+test("R5.4.6 renderer inspection is bounded to the two live curve layers", () => {
+  const start = nations.indexOf("const confirmRenderedCurves");
+  const end = nations.indexOf('mapInstance.on("movestart"', start);
   const handoff = nations.slice(start, end);
-  assert.doesNotMatch(handoff, /queryRenderedFeatures\s*\(/);
+
+  assert.match(handoff, /"country-line-labels-live-world"/);
+  assert.match(handoff, /"country-line-labels-live-detail"/);
+  assert.match(handoff, /queryRenderedFeatures\(\{ layers: curveLayers \}\)/);
+  assert.doesNotMatch(handoff, /\.setData\s*\(/);
 });

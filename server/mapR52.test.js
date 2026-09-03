@@ -8,7 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const nations = fs.readFileSync(path.resolve(here, "../src/Game/Map/Nations.jsx"), "utf8");
 const world = fs.readFileSync(path.resolve(here, "../src/Game/Map/World.jsx"), "utf8");
 
-test("R5.2 polity label sources are static across camera zoom", () => {
+test("R5.4.6 polity label sources stay static across camera zoom", () => {
   assert.match(nations, /data=\{rawLivePolityPointLabelData\}/);
   assert.match(nations, /data=\{rawLivePolityLineLabelData\}/);
   assert.doesNotMatch(nations, /activeLivePolityPointLabelData|activeLivePolityLineLabelData/);
@@ -17,14 +17,12 @@ test("R5.2 polity label sources are static across camera zoom", () => {
   assert.doesNotMatch(nations, /mapInstance\.on\("moveend", update\)/);
 });
 
-test("R5.2+ warp handoff never runs after every pan idle", () => {
-  assert.doesNotMatch(nations, /on\?\.\("idle", inspectRenderedWarps\)/);
-  // R5.3 removed renderer inspection entirely; either the old zoom-only guard
-  // or the deterministic metadata handoff satisfies the no-pan-churn invariant.
-  assert.ok(
-    /on\?\.\("zoomend", inspectRenderedWarps\)/.test(nations)
-    || /expectedWarpOwnerList/.test(nations),
-  );
+test("R5.4.6 renderer confirmation runs only after idle and never during movement", () => {
+  assert.match(nations, /mapInstance\.on\("idle", confirmRenderedCurves\)/);
+  assert.match(nations, /mapInstance\.on\("movestart", clearRenderConfirmation\)/);
+  assert.match(nations, /mapInstance\.isMoving\?\.\(\) \|\| mapInstance\.isZooming\?\.\(\)/);
+  assert.doesNotMatch(nations, /mapInstance\.on\("moveend", confirmRenderedCurves\)/);
+  assert.doesNotMatch(nations, /mapInstance\.on\("zoom", confirmRenderedCurves\)/);
 });
 
 test("R5.2 uses one ESRI raster source across the zoom range", () => {
