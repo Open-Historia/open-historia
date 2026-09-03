@@ -23,7 +23,11 @@ import {
   isPlayerProject,
   signedDaysBetween,
   sortProjects,
+  describeDoubtedForPrompt,
+  doubtedAwaitingFreshSource,
+  spyIntelDoubtOps,
   spyOperationOps,
+  spyProvenanceOps,
 } from "./projects.js";
 
 const project = (overrides = {}) => ({
@@ -542,4 +546,84 @@ test("recalling and redeploying opens a fresh operation, because the id changes"
 test("no spies and no board is no work", () => {
   assert.deepEqual(spyOperationOps([], [], {}), []);
   assert.deepEqual(spyOperationOps(null, null, {}), []);
+});
+
+// ---- doubting what a compromised agent told us -----------------------------
+
+const foreignEntry = (over = {}) => ({
+  id: "f1", name: "Prussian Rocket Programme", ownerCode: "Prussia", status: "active", verification: "", linkedSpyIds: [], ...over,
+});
+
+test("a foreign entry gets tied to the agent that must have produced it", () => {
+  const [op] = spyProvenanceOps([spy()], [foreignEntry()], { playerPolity: "France" });
+  assert.equal(op.op, "update");
+  assert.equal(op.id, "f1");
+  assert.deepEqual(op.linkedSpyIds, ["spy-france-prussia-1"]);
+});
+
+test("the player's own work is never attributed to a spy", () => {
+  // A blank ownerCode is the player's; no agent told them about their own programme.
+  assert.deepEqual(spyProvenanceOps([spy()], [foreignEntry({ ownerCode: "" })], { playerPolity: "France" }), []);
+});
+
+test("provenance is not restamped, and not applied where there is no agent", () => {
+  assert.deepEqual(spyProvenanceOps([spy()], [foreignEntry({ linkedSpyIds: ["other"] })], { playerPolity: "France" }), []);
+  assert.deepEqual(spyProvenanceOps([spy()], [foreignEntry({ ownerCode: "Austria" })], { playerPolity: "France" }), []);
+  assert.deepEqual(spyProvenanceOps([spy({ status: "exposed" })], [foreignEntry()], { playerPolity: "France" }), []);
+});
+
+test("a suspected agent casts doubt on what it sourced, without saying why", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const [op] = spyIntelDoubtOps([spy({ suspected: true })], [linkedForeign], { playerPolity: "France", date: "1741-06-01" });
+  assert.equal(op.verification, "doubted");
+  assert.equal(op.status, "stalled");
+  assert.match(op.lastUpdate, /no longer trust how we came by this/);
+  // The player is never told the agent was turned; neither is the board.
+  assert.ok(!/turned|double agent|planted/i.test(op.lastUpdate));
+});
+
+test("doubt is cast once, so the model's verdict is never overwritten", () => {
+  const settled = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"], verification: "confirmed" });
+  assert.deepEqual(spyIntelDoubtOps([spy({ suspected: true })], [settled], { playerPolity: "France" }), []);
+});
+
+test("an agent that is merely live casts no doubt", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  assert.deepEqual(spyIntelDoubtOps([spy()], [linkedForeign], { playerPolity: "France" }), []);
+});
+
+test("a doubted entry waits for a FRESH agent, not the one that caused the doubt", () => {
+  const doubted = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"], verification: "doubted" });
+
+  // The compromised agent is still the only one in place: nothing to settle with.
+  assert.deepEqual(
+    doubtedAwaitingFreshSource([spy({ suspected: true })], [doubted], { playerPolity: "France" }),
+    [],
+  );
+
+  // A new, clean agent in the same polity is what makes it answerable.
+  const pending = doubtedAwaitingFreshSource(
+    [spy({ status: "recalled" }), spy({ id: "spy-france-prussia-2" })],
+    [doubted],
+    { playerPolity: "France" },
+  );
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].spy.id, "spy-france-prussia-2");
+  assert.match(describeDoubtedForPrompt(pending), /Prussian Rocket Programme.*fresh agent inside Prussia/);
+});
+
+test("a replacement agent who is themselves suspected cannot settle anything", () => {
+  const doubted = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"], verification: "doubted" });
+  const pending = doubtedAwaitingFreshSource(
+    [spy({ id: "spy-france-prussia-2", suspected: true })],
+    [doubted],
+    { playerPolity: "France" },
+  );
+  assert.deepEqual(pending, [], "a suspect source is not a second opinion");
+});
+
+test("an entry nobody doubts is never offered for settling", () => {
+  const pending = doubtedAwaitingFreshSource([spy()], [foreignEntry()], { playerPolity: "France" });
+  assert.deepEqual(pending, []);
+  assert.equal(describeDoubtedForPrompt(pending), "");
 });

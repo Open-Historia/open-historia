@@ -4,7 +4,13 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
-import { spyOperationOps } from "../../runtime/projects.js";
+import {
+  describeDoubtedForPrompt,
+  doubtedAwaitingFreshSource,
+  spyIntelDoubtOps,
+  spyOperationOps,
+  spyProvenanceOps,
+} from "../../runtime/projects.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
@@ -405,7 +411,7 @@ const runJsonTask = async (taskKey, {
       const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
       if (brief) {
         const framing = taskKey === "projects"
-          ? "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n"
+          ? "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n"
           : "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n";
         systemPrompt = systemPrompt + framing + brief;
       }
@@ -891,11 +897,24 @@ const generateProjectOps = async (bundle, events, { signal } = {}) => {
     .map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`)
     .join("\n\n");
 
+  // Doubted entries the player now has a clean pair of eyes on. Named explicitly
+  // rather than left for the model to notice, because settling one is only honest
+  // when a fresh source genuinely exists — and that is a fact about world state,
+  // not something readable from the board text.
+  const pendingDoubts = doubtedAwaitingFreshSource(
+    normalizeSpies(bundle.world?.spies),
+    board,
+    { playerPolity: normalizeString(bundle.game?.country) },
+  );
+  const doubtBlock = pendingDoubts.length
+    ? `\n\nThese doubted entries can now be settled — a fresh agent is in place:\n${describeDoubtedForPrompt(pendingDoubts)}`
+    : "";
+
   const { generation, payload } = await runJsonTask("projects", {
     signal,
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved.\n\n${eventList}`,
+      + `{"projectOps":[]} if nothing on it genuinely moved.\n\n${eventList}${doubtBlock}`,
     variables,
     // No fallback: an empty board is exactly what a failed call should leave
     // behind, and runJsonTask throwing is what lets the caller tell the player
@@ -2408,20 +2427,42 @@ const applySimulationResult = async ({
   // matches this turn's espionage rather than one describing an agent that was
   // caught a moment ago. Engine bookkeeping, not narrative: it only opens an
   // entry and closes it (projects.js spyOperationOps says why).
-  const spyOps = spyOperationOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
-    date: nextGame.gameDate,
-    playerPolity: normalizeString(baseGame.country),
-  });
-  if (spyOps.length) {
-    const applied = applyProjectOpsToWorld({
+  const playerPolity = normalizeString(baseGame.country);
+  const spySync = [
+    // Order matters: provenance first, so an entry stamped this turn can be
+    // doubted in the same pass rather than a turn later.
+    ...spyOperationOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
       date: nextGame.gameDate,
-      ops: spyOps,
-      playerCountry: normalizeString(baseGame.country),
+      playerPolity,
+    }),
+    ...spyProvenanceOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, { playerPolity }),
+  ];
+  if (spySync.length) {
+    worldWithImpacts = applyProjectOpsToWorld({
+      date: nextGame.gameDate,
+      ops: spySync,
+      playerCountry: playerPolity,
       round: nextGame.round,
       world: worldWithImpacts,
-    });
-    worldWithImpacts = applied.world;
-    logDebugEvent("turn", `Covert operations synced to the board: ${spyOps.length} op(s).`, undefined, { verbose: true });
+    }).world;
+  }
+  // Doubt runs on the world the two passes above just produced, so a foreign entry
+  // linked a moment ago is covered by the same turn's suspicion.
+  const doubtOps = spyIntelDoubtOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
+    playerPolity,
+    date: nextGame.gameDate,
+  });
+  if (doubtOps.length) {
+    worldWithImpacts = applyProjectOpsToWorld({
+      date: nextGame.gameDate,
+      ops: doubtOps,
+      playerCountry: playerPolity,
+      round: nextGame.round,
+      world: worldWithImpacts,
+    }).world;
+  }
+  if (spySync.length || doubtOps.length) {
+    logDebugEvent("turn", `Covert operations synced to the board: ${spySync.length} op(s), ${doubtOps.length} doubted.`, undefined, { verbose: true });
   }
 
   // The board, in its own call, once for the whole round — after the segments
@@ -2430,7 +2471,16 @@ const applySimulationResult = async ({
   // ride in on the events that caused them.
   if (projects) {
     try {
-      const { ops, skipped } = await generateProjectOps(projects.bundle, freshEvents, { signal: projects.signal });
+      const { ops, skipped } = await generateProjectOps(
+        // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
+        // read before the turn ran, so its board carries none of this turn's
+        // impacts and none of the covert-operation sync just above — the model
+        // would be asked about entries that no longer look like that, and could
+        // not see a doubt stamped moments earlier.
+        { ...projects.bundle, game: nextGame, world: worldWithImpacts },
+        freshEvents,
+        { signal: projects.signal },
+      );
       if (!skipped && ops.length) {
         const attached = attachProjectOpsToEvents(freshEvents, ops);
         logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });

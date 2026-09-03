@@ -139,6 +139,15 @@ const progressColor = (project, flags) => {
 
 const SECRECY_GLYPH = { restricted: "🔒", covert: "🕵" };
 
+// How far an entry can be trusted, when it came from a spy at all. Never says
+// WHY — the player is not told their agent was turned, only that the analysts
+// stopped trusting the channel, which is the same thing the Spy tab shows.
+const VERIFICATION_BADGE = {
+  doubted: { label: "Doubtful", color: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "rgba(251,191,36,0.4)", title: "Our analysts do not trust how we came by this. Put someone else in place to settle it." },
+  confirmed: { label: "Confirmed", color: "#86efac", background: "rgba(34,197,94,0.14)", border: "rgba(34,197,94,0.4)", title: "A second source stands this up." },
+  refuted: { label: "Fabricated", color: "#fca5a5", background: "rgba(248,113,113,0.14)", border: "rgba(248,113,113,0.4)", title: "A second source showed there was never anything here." },
+};
+
 const cardStyle = {
   backgroundColor: "rgba(255,255,255,0.045)",
   border: "1px solid rgba(255,255,255,0.08)",
@@ -410,6 +419,25 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
             {project.name}
           </span>
           {secrecy && <span title={project.secrecy}>{secrecy}</span>}
+          {VERIFICATION_BADGE[project.verification] && (
+            <span
+              title={VERIFICATION_BADGE[project.verification].title}
+              style={{
+                background: VERIFICATION_BADGE[project.verification].background,
+                border: `1px solid ${VERIFICATION_BADGE[project.verification].border}`,
+                borderRadius: "999px",
+                color: VERIFICATION_BADGE[project.verification].color,
+                fontSize: "0.62rem",
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                padding: "0.1rem 0.4rem",
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {VERIFICATION_BADGE[project.verification].label}
+            </span>
+          )}
         </div>
         <div style={{ alignItems: "center", display: "flex", gap: "0.25rem" }}>
           {priorityPill && (
