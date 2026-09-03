@@ -97,7 +97,7 @@ Stored in world so they share every read/write/poll/normalize path with no serve
 
 | Field | Type | Default | Element shape (normalizer) |
 |---|---|---|---|
-| `projects` | `Project[]` | `[]` | `normalizeProjectEntry`: `{id,name,kind,ownerCode,summary,status,progress,tags,secrecy,startedAt,targetDate,milestones,nextMilestone,lastUpdate,eventIds,linkedUnitIds,linkedMarkerIds,focus,note,createdAt,updatedAt,updatedRound}`. |
+| `projects` | `Project[]` | `[]` | `normalizeProjectEntry`: `{id,name,kind,ownerCode,summary,status,progress,tags,secrecy,startedAt,targetDate,milestones,nextMilestone,lastUpdate,eventIds,linkedUnitIds,linkedMarkerIds,linkedSpyIds,focus,note,createdAt,updatedAt,updatedRound}`. |
 
 The **Projects & Operations board**: long-running efforts that span rounds — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns. Deliberately distinct from the actions queue, which holds one round's orders and is resolved by the next jump.
 
@@ -116,6 +116,16 @@ If a board ever genuinely needs more than this, the answer is not a bigger numbe
 Everything date-derived — overdue, due-soon, a slipped milestone, a programme untouched for several rounds — is **not stored**. It is computed from the game clock by `src/runtime/projects.js` (import-free, unit-tested in a bare checkout), so it cannot go stale between AI turns. That split is the point of the feature: the model owns what only it can know, the calendar owns the rest.
 
 Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately — `buildFreshWorldSeedFromScenario` carries *authored settings* across, and projects are play state, exactly like `units` and `markers`.
+
+#### Espionage on the board
+
+`linkedSpyIds` ties a covert operation to the agent it is actually running. The split is deliberate: the **engine** owns whether such an entry exists and whether it has ended (`spyOperationOps` in `projects.js`, called from the turn and from the Spy tab, so the two cannot disagree), and the **model** owns the story — progress, milestones, `lastUpdate` — because once the entry exists it is an ordinary board entry. The field is engine-written only: it is absent from `projectSchema`, so a strict provider cannot emit it, and absent from `PROJECT_PATCHABLE_FIELDS`, so no update can rewrite the link.
+
+Three cases are deliberately left alone. A `turned` agent changes nothing — the player is never told, and an entry that closed itself would say so louder than any message. A `suspected` one is left alone too, because the model is free to set it back to active on the next jump and the two would flip-flop; the Spy tab already flags it. And another polity's agent inside the player is not the player's programme.
+
+Espionage also reaches the board **through the events it produces**: `resolveEspionage` runs inside `applySimulationResult`, and the `projects` task now runs there too, after it — so an exposure can stall the operation it belonged to on the same turn rather than a turn later. The `projects` task additionally receives the `[Espionage]` brief (framed for the board rather than the simulator), which is the one source that can put a **rival's** programme on the board as a foreign entry.
+
+`world.intelligence` is reachable from the board rather than only from a bare `polityChange`: a sustained build-up belongs in a programme whose `onComplete.polityChanges` carries the new rating, so it lands when the work finishes and can be funded, watched, or wrecked first. A sudden shock — a purge, a defector, a ring rolled up — still changes it directly. `onComplete` releases on completion only, never on a cancel or a fail, so abandoning the programme delivers nothing.
 
 ### 2e-ter. Espionage (rides inside world state, except the intercepts)
 

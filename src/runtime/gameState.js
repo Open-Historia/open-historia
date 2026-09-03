@@ -1220,6 +1220,11 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     eventIds: normalizeIdList(entry.eventIds, MAX_PROJECT_EVENT_IDS),
     linkedUnitIds: normalizeIdList(entry.linkedUnitIds, 12),
     linkedMarkerIds: normalizeIdList(entry.linkedMarkerIds, 12),
+    // The agent a covert operation is actually tracking (projects.js
+    // spyOperationOps). Engine-written only: it is absent from projectSchema, so
+    // a strict provider cannot emit it, and absent from PROJECT_PATCHABLE_FIELDS,
+    // so no update can rewrite or clear the link out from under the entry.
+    linkedSpyIds: normalizeIdList(entry.linkedSpyIds, 12),
     focus: normalizeProjectCoords(entry.focus),
     note: normalizeTextLike(entry.note),
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -1288,6 +1293,9 @@ const PROJECT_FIELD_ALIASES = {
   lastUpdate: ["lastUpdate"],
   linkedUnitIds: ["linkedUnitIds"],
   linkedMarkerIds: ["linkedMarkerIds"],
+  // Listed so the engine's own create carries the link through listProvidedFields
+  // when it restates an entry that already exists. Not patchable — see above.
+  linkedSpyIds: ["linkedSpyIds"],
   focus: ["focus"],
   note: ["note"],
 };

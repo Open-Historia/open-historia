@@ -23,6 +23,7 @@ import {
   isPlayerProject,
   signedDaysBetween,
   sortProjects,
+  spyOperationOps,
 } from "./projects.js";
 
 const project = (overrides = {}) => ({
@@ -458,4 +459,87 @@ test("the Mine and Foreign filters partition the board exactly", () => {
   assert.deepEqual(mine.map((entry) => entry.id), ["a", "b"]);
   assert.deepEqual(foreign.map((entry) => entry.id), ["c"]);
   assert.equal(mine.length + foreign.length, board.length, "every entry belongs to exactly one column");
+});
+
+// ---- covert operations that track a real agent -----------------------------
+
+const spy = (over = {}) => ({ id: "spy-france-prussia-1", owner: "France", target: "Prussia", status: "active", deployedAt: "1740-05-01", ...over });
+const linked = (over = {}) => ({ id: "p1", name: "Agent in Prussia", status: "active", linkedSpyIds: ["spy-france-prussia-1"], ...over });
+
+test("deploying an agent opens a covert operation on the board", () => {
+  const [op] = spyOperationOps([spy()], [], { date: "1740-06-01", playerPolity: "France" });
+  assert.equal(op.op, "create");
+  assert.equal(op.name, "Agent in Prussia");
+  assert.equal(op.kind, "operation");
+  assert.equal(op.secrecy, "covert");
+  assert.equal(op.ownerCode, "", "blank means the player's own");
+  assert.equal(op.ongoing, true, "an agent runs until pulled or caught, so it can never be overdue");
+  assert.equal(op.startedAt, "1740-05-01", "the deployment date, not today");
+  assert.deepEqual(op.linkedSpyIds, ["spy-france-prussia-1"]);
+});
+
+test("an agent already on the board does not open a second entry", () => {
+  assert.deepEqual(spyOperationOps([spy()], [linked()], { playerPolity: "France" }), []);
+});
+
+test("a caught agent fails its operation; a withdrawn one cancels it", () => {
+  const [failed] = spyOperationOps([spy({ status: "exposed" })], [linked()], { playerPolity: "France" });
+  assert.equal(failed.op, "fail");
+  assert.equal(failed.id, "p1");
+  assert.match(failed.note, /caught/);
+
+  const [cancelled] = spyOperationOps([spy({ status: "recalled" })], [linked()], { playerPolity: "France" });
+  assert.equal(cancelled.op, "cancel");
+  assert.match(cancelled.note, /withdrawn/);
+});
+
+test("a turned agent changes nothing — ending the entry would leak the secret", () => {
+  // The player is never told their agent has been turned. A board entry that
+  // closed itself would say so louder than any message.
+  assert.deepEqual(spyOperationOps([spy({ status: "turned" })], [linked()], { playerPolity: "France" }), []);
+});
+
+test("a suspected agent is left alone, so the board and the model cannot flip-flop", () => {
+  assert.deepEqual(spyOperationOps([spy({ suspected: true })], [linked()], { playerPolity: "France" }), []);
+});
+
+test("an operation already closed is not closed twice", () => {
+  const closed = linked({ status: "failed" });
+  assert.deepEqual(spyOperationOps([spy({ status: "exposed" })], [closed], { playerPolity: "France" }), []);
+});
+
+test("another polity's agent inside the player is not the player's operation", () => {
+  const foreign = spy({ id: "spy-prussia-france-1", owner: "Prussia", target: "France" });
+  assert.deepEqual(spyOperationOps([foreign], [], { playerPolity: "France" }), []);
+});
+
+test("a pre-ownership record with no owner is treated as the player's", () => {
+  const [op] = spyOperationOps([spy({ owner: "" })], [], { playerPolity: "France" });
+  assert.equal(op?.op, "create");
+});
+
+test("owner matching ignores case, like the rest of the polity namespace", () => {
+  const [op] = spyOperationOps([spy({ owner: "FRANCE" })], [], { playerPolity: "france" });
+  assert.equal(op?.op, "create");
+});
+
+test("a spy with no id is skipped rather than opening a linkless entry", () => {
+  assert.deepEqual(spyOperationOps([spy({ id: "" })], [], { playerPolity: "France" }), []);
+});
+
+test("recalling and redeploying opens a fresh operation, because the id changes", () => {
+  // recallSpy keeps the record and a redeploy mints a new id (spycraft.js), so
+  // the closed entry stays as history and the new agent gets its own.
+  const ops = spyOperationOps(
+    [spy({ status: "recalled" }), spy({ id: "spy-france-prussia-2" })],
+    [linked()],
+    { playerPolity: "France" },
+  );
+  assert.equal(ops.length, 2);
+  assert.deepEqual(ops.map((o) => o.op).sort(), ["cancel", "create"]);
+});
+
+test("no spies and no board is no work", () => {
+  assert.deepEqual(spyOperationOps([], [], {}), []);
+  assert.deepEqual(spyOperationOps(null, null, {}), []);
 });

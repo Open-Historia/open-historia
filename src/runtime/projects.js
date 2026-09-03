@@ -408,3 +408,81 @@ export const describeTimeline = (project, gameDate) => {
   if (delta < 0) return `${started} → ${target} (${Math.abs(delta)}d overdue)`;
   return `${started} → ${target} (${delta}d left)`;
 };
+
+// ---- covert operations that track a real agent -----------------------------
+// A spy in the field IS a long-running covert operation, so it belongs on the
+// board next to everything else the player is running — and the board is where
+// the AI can then act on it (an exposed ring stalls the programme it served).
+//
+// The split of responsibility is deliberate. The ENGINE owns whether an entry
+// exists and whether it has ended, because that is bookkeeping and must never
+// drift from world.spies. The MODEL owns the story: progress, milestones and
+// lastUpdate arrive through the ordinary projects task, because the entry is an
+// ordinary board entry once it exists.
+//
+// Deliberately NOT handled here:
+//  * `turned`. A double agent still looks alive to its owner, and the player is
+//    never told — so the entry carries on exactly as it was. Ending it would
+//    leak the one fact the whole mechanic depends on hiding.
+//  * `suspected`. Stalling the entry on suspicion reads well, but the model is
+//    free to set it back to active on the next jump and the two would flip-flop
+//    forever. The Spy tab already flags it, which is the honest place for it.
+//  * foreign agents. Another polity's operation inside the player is not the
+//    player's programme, and the board is the player's.
+const spyIdOf = (project) => asArray(project?.linkedSpyIds).map(asText).find(Boolean) ?? "";
+
+const LIVE_SPY_STATUSES = new Set(["active", "turned"]);
+
+export const spyOperationOps = (spies, projects, { date = "", playerPolity = "" } = {}) => {
+  const ops = [];
+  const bySpyId = new Map();
+  for (const project of asArray(projects)) {
+    const id = spyIdOf(project);
+    if (id) bySpyId.set(id, project);
+  }
+
+  const player = asText(playerPolity).toLowerCase();
+  for (const spy of asArray(spies)) {
+    const id = asText(spy?.id);
+    if (!id) continue;
+    // A blank owner is a pre-ownership record, which was always the player's.
+    const owner = asText(spy?.owner).toLowerCase();
+    if (owner && player && owner !== player) continue;
+
+    const target = asText(spy?.target);
+    const project = bySpyId.get(id);
+    const live = LIVE_SPY_STATUSES.has(asText(spy?.status) || "active");
+
+    if (live && !project) {
+      ops.push({
+        op: "create",
+        name: `Agent in ${target}`,
+        kind: "operation",
+        secrecy: "covert",
+        // Blank means the player's own, so the model is never made to restate it.
+        ownerCode: "",
+        status: "active",
+        // A planted agent runs until it is pulled or caught; it has no target
+        // date, and `ongoing` is what stops the board calling that overdue.
+        ongoing: true,
+        startedAt: asText(spy?.deployedAt) || asText(date),
+        summary: `An agent of ours is in place inside ${target}, reading its private diplomacy.`,
+        linkedSpyIds: [id],
+      });
+      continue;
+    }
+
+    if (!live && project && isProjectOpen(project)) {
+      const exposed = asText(spy?.status) === "exposed";
+      ops.push({
+        op: exposed ? "fail" : "cancel",
+        id: asText(project.id),
+        name: asText(project.name),
+        note: exposed
+          ? `Our agent in ${target} was caught and the operation is over.`
+          : `Our agent in ${target} was withdrawn.`,
+      });
+    }
+  }
+  return ops;
+};
