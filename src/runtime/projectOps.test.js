@@ -689,3 +689,56 @@ test("the player's door refuses a lever on their own CLOSED project", () => {
 
   assert.equal(refusedProjectIds.length, 1);
 });
+
+// ---- an intelligence programme is how a service is built up ----------------
+
+test("completing a programme raises the polity's intelligence through onComplete", () => {
+  // The espionage stat is deliberately reachable from the board: ACTIONS_REFERENCE
+  // sends a sustained build-up here rather than to a bare polityChange, so the
+  // player can see it coming, fund it, or have a rival wreck it first. A sudden
+  // shock (a purge, a defector) still goes direct.
+  const world = normalizeWorldState({
+    intelligence: { France: 40 },
+    projects: [{
+      id: "proj-bureau",
+      name: "The Deuxieme Bureau",
+      status: "active",
+      progress: 90,
+      onComplete: { polityChanges: [{ code: "France", intelligence: 72 }] },
+    }],
+  });
+  const event = {
+    id: "e-bureau",
+    date: "1740-06-01",
+    title: "The bureau opens its doors",
+    description: "",
+    impacts: { projectOps: [{ op: "complete", id: "proj-bureau", name: "The Deuxieme Bureau", note: "Done." }] },
+  };
+  const { world: next } = applyEventImpactsToWorld({ colors: {}, events: [event], world, round: 3 });
+  assert.equal(next.intelligence.France, 72, "the finished programme moved the service");
+  assert.equal(next.projects[0].status, "complete");
+});
+
+test("an intelligence programme that is only cancelled changes nothing", () => {
+  // onComplete releases on completion and never on a cancel or a fail — giving up
+  // on the programme must not hand over the capability anyway.
+  const world = normalizeWorldState({
+    intelligence: { France: 40 },
+    projects: [{
+      id: "proj-bureau",
+      name: "The Deuxieme Bureau",
+      status: "active",
+      onComplete: { polityChanges: [{ code: "France", intelligence: 72 }] },
+    }],
+  });
+  const event = {
+    id: "e-scrapped",
+    date: "1740-06-01",
+    title: "The bureau is scrapped",
+    description: "",
+    impacts: { projectOps: [{ op: "cancel", id: "proj-bureau", name: "The Deuxieme Bureau", note: "Defunded." }] },
+  };
+  const { world: next } = applyEventImpactsToWorld({ colors: {}, events: [event], world, round: 3 });
+  assert.equal(next.intelligence.France, 40, "an abandoned programme delivers nothing");
+  assert.equal(next.projects[0].status, "cancelled");
+});

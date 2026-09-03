@@ -21,7 +21,8 @@ import {
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState, applyProjectOpsToWorld } from "../../runtime/gameState.js";
+import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -1229,7 +1230,21 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         // the first deployment, so every report ever stored has one to be sealed
         // under.
         const fresh = await readWorldState({ force: true });
-        await writeWorldState({ ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() });
+        const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
+        // Open (or close) the covert operation on the Projects board in the same
+        // write, so deploying an agent shows up there immediately instead of on
+        // the next jump. The turn does the same sync for the agents espionage
+        // itself moves — both call spyOperationOps, so they cannot disagree.
+        const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });
+        const toWrite = ops.length
+            ? applyProjectOpsToWorld({
+                date: gameDate,
+                ops,
+                playerCountry,
+                world: committed,
+            }).world
+            : committed;
+        await writeWorldState(toWrite);
         await refresh();
     };
 
