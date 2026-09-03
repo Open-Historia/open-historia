@@ -9,6 +9,7 @@ import {
   doubtedAwaitingFreshSource,
   spyIntelDoubtOps,
   spyOperationOps,
+  isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
@@ -2792,12 +2793,35 @@ export const gatherIntelligence = async (target, { signal } = {}) => {
   const variables = { ...(await buildTemplateVariables(bundle)), targetPolity: name, disinformation };
   const dossier = await buildTargetDossier(bundle, name);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
+  // Standing orders. A doubted entry can only be settled from material that
+  // actually bears on it, and nothing was sending the agent to look: this task
+  // wrote whatever traffic seemed plausible, so a replacement could report for
+  // months about rail corridors and rare earths while the question that cost the
+  // player an agent went unanswered — and the board, told to settle only on
+  // material that bears on it, correctly declined every turn. Forever.
+  //
+  // Appended to the user message rather than put in the prompt template, so it
+  // reaches campaigns whose prompts are already frozen.
+  const openQuestions = normalizeArray(bundle.world?.projects)
+    .filter((project) => project.verification === "doubted"
+      && isProjectOpen(project)
+      && regionKey(project.ownerCode) === regionKey(name))
+    .map((project) => `- "${project.name}": ${project.summary || "no detail on record"}`);
+  const orders = openQuestions.length
+    ? "STANDING ORDERS — these sit on our books from a source we no longer trust, and this agent was sent to settle them."
+      + " At least one exchange must bear on them: either show the programme discussed as real work, with money, people and"
+      + " dates behind it, or show the traffic of a government that plainly has no such programme."
+      + " Never have anyone mention our interest in it.\n"
+      + openQuestions.join("\n")
+    : "";
+
   const { payload } = await runJsonTask("spyIntercept", {
     signal,
     userMessage: [
       `Report what the spy in ${name} intercepted this period.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      orders,
     ].filter(Boolean).join("\n\n"),
     variables,
   });
