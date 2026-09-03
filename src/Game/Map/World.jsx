@@ -248,27 +248,24 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     activeTerrain.exaggeration = next;
     mapRef.current.getMap().triggerRepaint?.();
   }, [mapRef]);
-  // Render at reduced pixel density when zoomed far out: the whole-world view
-  // draws every region, border and label at once, and full native resolution
-  // there spends frames on detail nobody can see at that scale. Hysteresis
-  // (re-sharpen at 5, soften below 4.5) prevents flapping at the boundary.
-  const pixelRatioModeRef = useRef(null);
-  const applyDynamicPixelRatio = useCallback((zoom) => {
-    const map = mapRef?.current?.getMap?.();
-    if (!map || typeof map.setPixelRatio !== "function") return;
-    const mode = zoom <= 4.5 ? "low" : zoom >= 5 ? "native" : pixelRatioModeRef.current;
-    if (!mode || mode === pixelRatioModeRef.current) return;
-    pixelRatioModeRef.current = mode;
-    const native = window.devicePixelRatio || 1;
-    map.setPixelRatio(mode === "low" ? Math.min(native, 1) * 0.75 : native);
-  }, [mapRef]);
-
+  // There is deliberately no dynamic pixel ratio here any more.
+  //
+  // It used to render at reduced density below z4.5 to save fill-rate at world
+  // view. The saving was real, but map.setPixelRatio resizes the canvas, and ONE
+  // resize causes three things at once: the WebGL framebuffer is re-allocated (a
+  // visible black or white frame), everything redraws at the new density (a
+  // sudden, obvious drop in sharpness across borders AND label glyphs), and
+  // MapLibre has to redo symbol placement — so country names vanish until
+  // placement finishes, which under load is long enough to look broken and to
+  // come back only when the map is moved again.
+  //
+  // Softening the ratio does not help: any CHANGE re-allocates, so a smaller step
+  // costs the same flash and the same missing labels. The only version of this
+  // that does not interrupt the map is not having it. If fill-rate at world view
+  // ever needs addressing again, do it with something that does not resize the
+  // drawing buffer — fewer layers or simpler paint at low zoom, not fewer pixels.
   const handleMove = useCallback(({ viewState }) => {
-    // Pixel ratio is deliberately NOT touched here: setPixelRatio destroys and
-    // re-allocates the WebGL framebuffer mid-gesture, which hitched every zoom
-    // crossing 4.5/5.0. The new ratio applies once the camera settles (handleIdle).
-    //
-    // Terrain exaggeration IS applied live, and is not the same cost: it assigns
+    // Terrain exaggeration IS applied live, and is cheap: it assigns
     // Terrain.exaggeration directly (never map.setTerrain, which would rebuild the
     // render-to-texture cache) and no-ops below a 0.02 delta. It has to taper as
     // the camera moves — deferring it to idle would pop the relief at the end of
@@ -277,9 +274,6 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     applyTerrainExaggeration(viewState.zoom);
   }, [applyTerrainExaggeration]);
   const handleIdle = useCallback(() => {
-    // The soft ratio applies from the very first frame settled at world zoom —
-    // not only after the player first moves the camera.
-    applyDynamicPixelRatio(viewStateRef.current?.zoom ?? 0);
     // Terrain can finish loading after the camera settled (or straight after a
     // projection/style swap re-made it), so the curve is re-applied here too.
     applyTerrainExaggeration(viewStateRef.current?.zoom ?? 3.5);
@@ -287,7 +281,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
     setLoading(false);
-  }, [applyDynamicPixelRatio, applyTerrainExaggeration, onInitialIdle]);
+  }, [applyTerrainExaggeration, onInitialIdle]);
   const handleLoading = useCallback(() => {
     setLoading(true);
     clearTimeout(loadTimerRef.current);
@@ -368,7 +362,8 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         // case ~3x while barely trimming 1080p, and is a no-op on phone-sized viewports
         // (dynamic size there is well under 256). In-view tiles live in a separate
         // structure and are never evicted by this, so it never re-fetches what's on
-        // screen. Orthogonal to applyDynamicPixelRatio (which bounds framebuffer pixels).
+        // screen. This bounds retained TEXTURES; nothing bounds framebuffer pixels any
+        // more (the dynamic pixel ratio that used to is gone — see above).
         maxTileCacheSize={256}
         projection={mapProjection}
         terrain={terrain}

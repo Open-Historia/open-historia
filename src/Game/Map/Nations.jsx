@@ -1461,7 +1461,18 @@ const WorldMap = ({ isGlobe = false }) => {
         id="custom-regions-far-source"
         type="geojson"
         data={farTierActive ? regionSeed.coarseFC : EMPTY_FEATURE_COLLECTION}
-        tolerance={0}
+        // maxzoom caps how deep geojson-vt splits. Left at MapLibre's default of
+        // 18 it keeps subdividing this world-covering set long past z7, where the
+        // layers below stop drawing — pure work for tiles nobody renders.
+        maxzoom={7}
+        // Matching the authored source rather than the 0 this started with. At 0
+        // every tile keeps every vertex, and tiling ~41k rings across the whole
+        // world is enough main-thread-adjacent work to starve the SAME worker that
+        // places labels: symbols then arrive late, which shows up as country names
+        // vanishing and reappearing when the map moves. The input here is already
+        // globally simplified to 0.64px at z5.5, so what geojson-vt trims on top is
+        // far below the tile simplification this tier exists to paint over.
+        tolerance={0.6}
       >
         <Layer
           id="custom-regions-fill-far"
