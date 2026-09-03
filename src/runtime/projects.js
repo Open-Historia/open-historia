@@ -567,6 +567,12 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
   const ops = [];
   for (const project of asArray(projects)) {
     if (!isProjectOpen(project)) continue;
+    // FOREIGN entries only. A blank ownerCode is the player's own work — including
+    // the covert operation the agent itself IS (spyOperationOps), which is linked
+    // to the same spy and would otherwise be doubted alongside what it reported.
+    // That operation is not in question: the agent really is there. What cannot be
+    // trusted is what they have been sending back.
+    if (!asText(project?.ownerCode)) continue;
     if (asText(project?.verification)) continue;
     if (!spyIdsOf(project).some((id) => compromised.has(id))) continue;
     ops.push({
