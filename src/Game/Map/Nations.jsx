@@ -208,10 +208,31 @@ const TILE_FILL_OPACITY = 0.72;
 // apart and the map shows sliver gaps between provinces. The far tier paints the
 // same provinces from the scenario's own geometry instead, coarsened in the
 // worker (regionSeedCore.js), and the two swap over z5.5 -> z6.5 rather than
-// cutting, so no border ever pops. Reciprocal on purpose: total ink stays at
-// TILE_FILL_OPACITY right through the handover instead of dipping or doubling.
+// cutting, so no border ever pops.
+//
+// The tile side is NOT the mirror image of the far side, and mirroring it is
+// visible as a pulse of brightness on every zoom through the band. Two fills
+// stacked at the same colour do not add, they composite:
+//
+//     a_total = a_far + a_tile * (1 - a_far)
+//
+// Mirroring 0.72->0 against 0->0.72 puts both at 0.36 in the middle, which
+// composites to 0.59 rather than 0.72: the map lightens halfway through the
+// handover and comes back. Holding a_total at TILE_FILL_OPACITY means the tile
+// side has to run AHEAD of the far side —
+//
+//     a_tile = (TILE_FILL_OPACITY - a_far) / (1 - a_far)
+//
+// evaluated at quarter-zoom steps below. MapLibre interpolates linearly between
+// them, which tracks the true curve closely enough to be invisible.
 const FAR_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, TILE_FILL_OPACITY, 6.5, 0];
-const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, TILE_FILL_OPACITY];
+const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"],
+  5.5, 0,
+  5.75, 0.3913,
+  6.0, 0.5625,
+  6.25, 0.6585,
+  6.5, TILE_FILL_OPACITY,
+];
 
 // ---- Owner labels for custom maps -----------------------------------------
 // The stock label pipeline labels modern countries from countries.pmtiles, which
@@ -1291,8 +1312,15 @@ const WorldMap = ({ isGlobe = false }) => {
   const regionsOutlinePaint = {
     "line-color": "#000",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.6, 12, 1.0],
+    // Held OFF below the crossfade whenever the far tier is drawing, because that
+    // tier paints its own hairlines from its own geometry. Two black lines tracing
+    // the same border a fraction of a pixel apart is the shimmer you see while
+    // zooming, and it darkens every border it doubles. Upstream can start this at
+    // z2 precisely because it has no far tier to collide with.
     "line-opacity": worldKnown
-      ? ["interpolate", ["linear"], ["zoom"], 2, 0.35, 8, 0.7]
+      ? (farTierActive
+        ? ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.6, 8, 0.7]
+        : ["interpolate", ["linear"], ["zoom"], 2, 0.35, 8, 0.7])
       : 0,
   };
 
