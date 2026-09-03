@@ -5,12 +5,12 @@ import LayerOrder from "./LayerOrder.jsx";
 import Nations from "./Nations";
 import { useCustomBackground } from "./useCustomBackground.js";
 import GlobeEffects from "./GlobeEffects.jsx";
-import RegionPopup from "../Selection/Regions";
-import CountryInfoPanel from "../Selection/CountryPanel.jsx";
 import Cities from "./Cities";
 import Units from "./Units";
-import UnitPopup from "../Selection/Units";
 import MarkersLayer from "./MarkersLayer.jsx";
+import RegionPopup from "../Selection/Regions";
+import CountryInfoPanel from "../Selection/CountryPanel.jsx";
+import UnitPopup from "../Selection/Units";
 import FeaturePopup from "../Selection/Features.jsx";
 import {
   DEFAULT_BASEMAP_ID,
@@ -264,10 +264,18 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, [mapRef]);
 
   const handleMove = useCallback(({ viewState }) => {
+    // Pixel ratio is deliberately NOT touched here: setPixelRatio destroys and
+    // re-allocates the WebGL framebuffer mid-gesture, which hitched every zoom
+    // crossing 4.5/5.0. The new ratio applies once the camera settles (handleIdle).
+    //
+    // Terrain exaggeration IS applied live, and is not the same cost: it assigns
+    // Terrain.exaggeration directly (never map.setTerrain, which would rebuild the
+    // render-to-texture cache) and no-ops below a 0.02 delta. It has to taper as
+    // the camera moves — deferring it to idle would pop the relief at the end of
+    // every zoom instead of easing it.
     viewStateRef.current = viewState;
-    applyDynamicPixelRatio(viewState.zoom);
     applyTerrainExaggeration(viewState.zoom);
-  }, [applyDynamicPixelRatio, applyTerrainExaggeration]);
+  }, [applyTerrainExaggeration]);
   const handleIdle = useCallback(() => {
     // The soft ratio applies from the very first frame settled at world zoom —
     // not only after the player first moves the camera.
@@ -327,7 +335,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
             opacity: 0,
             background: "radial-gradient(circle, #fff 0 7%, #fff6cf 8% 12%, rgba(255,219,142,0.8) 15%, rgba(255,185,93,0.26) 31%, rgba(255,154,65,0.07) 52%, transparent 72%)",
             filter: "drop-shadow(0 0 12px rgba(255,218,145,0.75))",
-            willChange: "transform, opacity, filter",
+            willChange: "transform, opacity",
           }}
         />
       )}

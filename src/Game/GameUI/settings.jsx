@@ -634,6 +634,21 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             value={settings.openaiCompatibleStructuredMode ?? "auto"}
             onChange={(value) => onSettingChange("openaiCompatibleStructuredMode", value)}
             />
+            <Toggle
+            label="Strict tool schema"
+            enabled={settings.openaiCompatibleToolStrict === "1"}
+            onToggle={() => onSettingChange(
+                "openaiCompatibleToolStrict",
+                settings.openaiCompatibleToolStrict === "1" ? "" : "1",
+            )}
+            />
+            <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+            Sends strict:true with the tool call so a self-hosted backend constrains
+            generation to the schema (SGLang/xgrammar, vLLM). Stops malformed or
+            mistyped tool arguments. Leave off for OpenAI and Azure: they reject a
+            schema that does not list every property as required. Only affects the
+            tool rung of the structured-output ladder above.
+            </div>
             </>
         )}
 

@@ -10,7 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-web
-# `npm run build:site` output (landing page + /play/), assembled from dist-web
+# Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and
+# big enough that a stray `git add -A` commits a whole copy of the website.
 dist-site
 dist-ssr
 # electron-builder output (the packaged app + installer)

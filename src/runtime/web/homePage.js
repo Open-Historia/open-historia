@@ -153,12 +153,20 @@ const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { 
 // the only way through, and it is remembered for the tab session so a player who
 // has read it is not asked again.
 const DEMO_ACK_KEY = "oh:demo-ack";
+
+// The Android app is this same bundle packaged with Capacitor, so it inherits a
+// notice written for the WEBSITE: "this is a demo, get the desktop app, expect
+// lag". None of that is true there — the app IS the real thing, it keeps its own
+// games and its own copy of the map, and there is no desktop app to send an
+// Android player to. Capacitor injects window.Capacitor before the bundle runs,
+// which is the same signal the API router uses to pick native HTTP.
+const isNativeApp = () => typeof window !== "undefined" && Boolean(window.Capacitor);
 const demoAcknowledged = () => {
   try { return sessionStorage.getItem(DEMO_ACK_KEY) === "1"; } catch { return false; }
 };
 
 const showDemoNotice = (onContinue) => {
-  if (demoAcknowledged()) return onContinue();
+  if (isNativeApp() || demoAcknowledged()) return onContinue();
 
   const close = () => {
     try { sessionStorage.setItem(DEMO_ACK_KEY, "1"); } catch { /* private mode */ }

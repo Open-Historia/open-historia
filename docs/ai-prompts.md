@@ -143,7 +143,7 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `CATALYST_PREMISE_DESCRIPTION` | `catalystPremise` | The catalyst's premise text | catalystExecutor, catalystSummary |
 | `CATALYST_SIMULATION_HISTORY` | `catalystHistory` | Choice→summary log so far | catalystExecutor, catalystSummary |
 
-Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (all tasks), and in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `catalystExecutor` — `${catalystChoice}`.
+Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (all tasks), and in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `catalystExecutor` — `${catalystChoice}`; in `spyIntercept` — `${targetPolity}` and `${disinformation}` (the latter non-empty **only** when the agent has been turned, which is what makes a double agent's reports read as plausible fabrications rather than nothing at all).
 
 ---
 
@@ -243,6 +243,9 @@ Concatenated onto the system prompt in `runJsonTask` / `callAI` **after** the te
 | **[Projects & Operations]** — how to move the board with `impacts.projectOps`. **Game master only** now: the jump hands the board to the separate `projects` task, and `catalystExecutor`/`catalystSummary` were removed because neither schema has an `impacts` field at all | `gameMaster` | `gameplay.js` |
 | **[Durable Canon]** + **[Player Orders Being Consolidated]** — the summary REPLACES what it covers, so divergences and standing commitments must survive it | `eventConsolidator` | `gameplay.js` |
 | **[World Pulse]** — minutes have passed, not months: at most two `unitOps`, never a garrison, never the player's own units | `idleDiplomacy` | `gameplay.js` |
+| **[Espionage]** — the simulator's uncensored, both-directions view of who has an agent where, plus the decrypted intercepts (`espionageBrief`). Appended at call time, inside a try/catch, so a frozen-prompt campaign gets it and a failure costs the turn nothing | jumps | `gameplay.js` |
+| **[Your Intelligence]** — the other direction: what ONE foreign leader has learned about the player through their own agent (`foreignAgentBrief`) — the cover story if the agent is turned, redacted stolen material if it is live, nothing if there is none | leader replies | `AI/main.jsx` |
+| **Open conversations** — the idle pulse is shown the actual threads (`renderOpenChatsForPrompt`), not just one line each, because a note to a polity already talking to the player is APPENDED to that thread and must read as the next thing they say | `idleDiplomacy` | `gameplay.js` |
 | **[What the Sender Knows]** — the pulse sees every chat so it can judge who would plausibly speak, but the polity it writes AS knows only its own conversations, what is public, and what the player told it directly | `idleDiplomacy` | `gameplay.js` |
 | **`ACTIONS_REFERENCE`** (`[Actions You Can Take]`) — the full lever menu. Deliberately NOT de-duplicated against the template's tail: the bundled template predates `regionClaims`, `actionIds` and `projectOps`, so this block is the only place a frozen campaign is told those exist | `jumpForward`, `autoJumpForward` | `gameplay.js` |
 | **Language** — write all human-readable text in the UI language; keep JSON keys/ISO codes/dates unchanged | every `callAI` call (advisor, leader, all tasks, intel briefing) when language ≠ `en` | `callAI` `main.jsx`; text `i18n.js` |

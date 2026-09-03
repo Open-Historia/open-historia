@@ -132,6 +132,7 @@ jobs:
             release/*.exe
             release/*-mac-*.zip
             release/*.AppImage
+            release/*.deb
           if-no-files-found: error
 
       - name: Attach to the beta release
@@ -251,15 +252,21 @@ jobs:
           # three racing jobs cannot overwrite each other's. latest-mac.yml is
           # uploaded too and simply never read — mac cannot self-update unsigned,
           # so nothing there asks for it.
-          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/latest*.yml)
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/*.deb release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot
           # each publish a different view of the same release. The filenames here
           # must match the artifactNames in electron-builder.beta.yml exactly — a
           # mismatch breaks self-update silently, with no failing build to notice.
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             B="https://github.com/${{ github.repository }}/releases/download/$TAG"
-            printf '{\n  "build": "%s",\n  "notes": "%s",\n  "windows": "%s/Open-Historia-SeventhDread-Beta-Setup.exe",\n  "mac": "%s/Open-Historia-SeventhDread-Beta-mac-arm64.zip",\n  "linux": "%s/Open-Historia-SeventhDread-Beta-x86_64.AppImage"\n}\n' \
-              "${{ github.run_id }}" "A newer SeventhDread beta build is available." "$B" "$B" "$B" > latest.json
+            # linuxDeb mirrors the stable manifest for parity. Nothing reads it
+            # yet (the updater uses "linux"), so a wrong name here cannot break
+            # self-update — but confirm it against the first Linux beta run's
+            # artifacts before anything starts consuming it. electron-builder
+            # renders ${arch} as amd64 for deb and x86_64 for AppImage, from the
+            # single linux artifactName template in electron-builder.beta.yml.
+            printf '{\n  "build": "%s",\n  "notes": "%s",\n  "windows": "%s/Open-Historia-SeventhDread-Beta-Setup.exe",\n  "mac": "%s/Open-Historia-SeventhDread-Beta-mac-arm64.zip",\n  "linux": "%s/Open-Historia-SeventhDread-Beta-x86_64.AppImage",\n  "linuxDeb": "%s/Open-Historia-SeventhDread-Beta-amd64.deb"\n}\n' \
+              "${{ github.run_id }}" "A newer SeventhDread beta build is available." "$B" "$B" "$B" "$B" > latest.json
             cat latest.json
             files+=(latest.json)
           fi

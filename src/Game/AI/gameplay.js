@@ -4,6 +4,9 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
+import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -26,7 +29,10 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   enforceUnitVolume,
+  readInterceptsState,
+  writeInterceptsState,
   normalizeActionEntry,
+  normalizeEventEntry,
   normalizeActions,
   normalizeChatEntry,
   normalizeChats,
@@ -312,7 +318,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then stores the new one; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then stores the new one; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -388,6 +394,18 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
   }
 
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    try {
+      const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
+      const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
+      if (brief) {
+        systemPrompt = systemPrompt + "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n" + brief;
+      }
+    } catch {
+      /* no espionage context this turn */
+    }
+  }
+
   // The consolidator's summary REPLACES what it covers, so anything it leaves out
   // is gone from the campaign for good. Existing games carry frozen prompts, so
   // both the instruction and the order list have to arrive at call time.
@@ -454,7 +472,7 @@ const runJsonTask = async (taskKey, {
   // the template itself, not by dropping the block that carries the newer rules.
   if (["jumpForward", "autoJumpForward"].includes(taskKey) && !templateAlreadySays(systemPrompt, UNIT_CONTRACT_MARKER)) {
     const playerName = normalizeString(variables.playerPolity) || "the player's polity";
-    systemPrompt = `${systemPrompt}\n\n[Units on the Map]\nUnits are EVIDENCE OF YOUR OWN EVENTS. The player cannot move or fight their own formations - the map is there to show them what is happening - so every unit you spawn or move must be something one of this jump's events actually describes. Reach for them readily: a mobilization, a build-up on a border, a fleet sailing, an offensive, a withdrawal all deserve to be visible. But keep the map legible - only formations that matter to the story. A great power at war might show five or six; a country at peace shows one or two, or none.\nstrength is a PERCENTAGE of established strength (100 = fresh and full, 60 = worn down, 20 = a shell), and composition says what the formation actually is ("1 aircraft carrier, 2 frigates", "3 tank regiments"). Write both, plus a one-sentence note on what it is doing and where. A counter that does not say what it is tells the player nothing.\nDo not teleport. A move may only cover what that unit could really travel between the previous event's date and this one's. The engine enforces this: an over-long move becomes a partial advance that continues automatically on later turns, so ordering the full distance is safe and correct.\nThe map is what ${playerName} KNOWS, not omniscience. A force may legitimately appear far from its own territory when it is being DETECTED rather than arriving - a submarine that has shadowed a fleet for weeks, infiltrators already in country, a deployment only now confirmed. Such a unit is drawn as unconfirmed, which is correct and not a penalty. The one thing you cannot conjure is a fixed installation: use markerOps build for a base, and never spawn a far-flung garrison.\nSet posture whenever you place or move a unit - holding, massing, patrol, transit, exercise, blockade, withdrawing. It is how the player reads intent off the map. "patrol" is special: the engine keeps a patrolling unit working its station on its own, turn after turn, so state it once and leave it.`;
+    systemPrompt = `${systemPrompt}\n\n[Units on the Map]\nUnits are EVIDENCE OF YOUR OWN EVENTS. The player cannot move or fight their own formations - the map is there to show them what is happening - so every unit you spawn or move must be something one of this jump's events actually describes. Reach for them readily: a mobilization, a build-up on a border, a fleet sailing, an offensive, a withdrawal all deserve to be visible. But keep the map legible - only formations that matter to the story. A great power at war might show five or six; a country at peace shows one or two, or none.\nstrength is a PERCENTAGE of established strength (100 = fresh and full, 60 = worn down, 20 = a shell), and composition says what the formation actually is ("1 aircraft carrier, 2 frigates", "3 tank regiments"). Write both, plus a one-sentence note on what it is doing and where. A counter that does not say what it is tells the player nothing.\nDo not teleport. A move may only cover what that unit could really travel between the previous event's date and this one's. The engine enforces this: an over-long move becomes a partial advance that continues automatically on later turns, so ordering the full distance is safe and correct.\nThe map is what ${playerName} KNOWS, not omniscience. A force may legitimately appear far from its own territory when it is being DETECTED rather than arriving - a submarine that has shadowed a fleet for weeks, infiltrators already in country, a deployment only now confirmed. Such a unit is drawn as unconfirmed, which is correct and not a penalty. The one thing you cannot conjure is a fixed installation: use markerOps build for a base, and never spawn a far-flung garrison.\nSet posture whenever you place or move a unit - holding, massing, patrol, transit, exercise, blockade, withdrawing, assaulting. It is how the player reads intent off the map. "patrol" is special: the engine keeps a patrolling unit working its station on its own, turn after turn, so state it once and leave it.\n\"assaulting\" is the other special one: a formation that ARRIVES under it is marked engaged, in contact at the objective, instead of idle. Use it when an event has a force actually storming a province rather than massing near it — including when the player has ordered an assault in words (\"Attack Provence\"), which is how they commit troops to a province, since they cannot move their own formations. You still own the OUTCOME: resolve the fighting on a later turn with casualties, and a regionTransfer only if the province genuinely falls. An order you judge infeasible is refused in an event that says why, never silently dropped.`;
   }
 
   // The map reading as if only the player fields an army: unitOps is fully general
@@ -1394,9 +1412,20 @@ const logGeneratedChat = (built, outcome) => {
 // own `time`, so an unstamped opener left the whole chat looking dateless
 // (and, sorted as "no date yet", indistinguishable from a chat with no
 // messages at all — see chat.jsx's chatGroupLabel).
-const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "" } = {}) => {
+// `dropEchoes` discards a note that merely parrots something already in the
+// thread it would land in. Even when told not to, a model hands back the line it
+// was just shown, and posting it has the polity repeat the player to their face —
+// worse than saying nothing. It lives HERE rather than at one call site so every
+// path that folds generated chats gets it, including the turn commit, which had
+// no echo guard on either side of the merge.
+//
+// `dropped` on the returned array counts the notes discarded this way, so a
+// caller that must know whether anything actually landed can tell without
+// diffing the result.
+const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "", dropEchoes = false } = {}) => {
   let chats = [...storageChats];
   const created = [];
+  let dropped = 0;
   const stamp = (messages) => (stampTime
     ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
     : messages);
@@ -1406,6 +1435,12 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
     const existingIdx = key ? chats.findIndex((chat) =>
       chat.status !== "closed" && chatParticipantKey(chat.countries) === key) : -1;
     if (existingIdx !== -1) {
+      if (dropEchoes && built.messages.some((msg) =>
+        echoesExistingMessage(msg.text, chats[existingIdx].messages))) {
+        logGeneratedChat(built, "dropped — it echoed a message already in the thread");
+        dropped += 1;
+        continue;
+      }
       logGeneratedChat(built, "appended to an existing thread");
       chats = chats.map((chat, index) => (index === existingIdx
         ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
@@ -1422,7 +1457,10 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
     created.push({ ...built, messages: stamp(built.messages) });
   }
 
-  return [...created, ...chats];
+  const result = [...created, ...chats];
+  // Non-enumerable so this never rides along into a JSON write of the chats.
+  Object.defineProperty(result, "dropped", { value: dropped, enumerable: false });
+  return result;
 };
 
 const resolveRegionTransfers = async (containers, world) => {
@@ -2156,7 +2194,6 @@ const applySimulationResult = async ({
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
   const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
-  const nextEvents = [...priorEvents, ...freshEvents];
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -2176,6 +2213,61 @@ const applySimulationResult = async ({
 
   // Which unit system this session is running, pinned at startup.
   const betaUnits = isBetaUnits();
+
+  // Espionage resolves on the world the turn produced, deterministically (keyed
+  // on the round), and its consequences are EVENTS the model reads next turn —
+  // an exposed ring, a suspected agent — so what was found out changes what
+  // happens.
+  //
+  // HOSTILITY IS A STAND-IN. There is no war state in the world yet, so
+  // `hostile` is guessed: a polity the player spies on, or one whose reputation
+  // is in the gutter, goes looking for a spy of its own.
+  //
+  // ── For whoever wires real wars in ──────────────────────────────────────
+  // This block is the ONLY place hostility is derived; spycraft.js just takes
+  // what it is handed. When world state carries wars, replace the two-line
+  // heuristic below with the real thing and leave the rest alone:
+  //
+  //   1. Keep the contract: candidates is [{ polity, hostile }], one entry per
+  //      polity that could plant an agent this round. Every polity in the
+  //      world should be a candidate — being at peace only lowers the odds.
+  //
+  //   2. hostile: true for every polity currently AT WAR with the player. Keep
+  //      the reputation clause as an OR if you like (a pariah state still spies
+  //      on everyone); drop the "spiedOn" tit-for-tat, which only exists because
+  //      nothing better was available.
+  //
+  //   3. If wars carry a scale (skirmish vs total war, or belligerent vs
+  //      co-belligerent), pass `hostility` as a 0..1 number instead of the
+  //      boolean and read it in spycraft.js foreignDeployChance — the note
+  //      there says how. Do NOT change the seeded roll keys (`${polity}:deploy`)
+  //      or every existing save replays its next round differently.
+  //
+  //   4. Consider a target at war EXPELLING rather than turning a caught agent
+  //      (spycraft.js resolveEspionage, the turnChance branch): wartime
+  //      counter-intelligence tends to make arrests public. That is a design
+  //      choice, not a bug fix — leave it if you want double agents in wartime.
+  //
+  //   5. The simulator's [Espionage] block (spycraft.js espionageBrief) should
+  //      say who is at war with whom next to the agent list, so the model can
+  //      connect a stolen plan to the front it matters on. That is one line
+  //      added to the brief, fed from the same war state.
+  //
+  // What NOT to touch: detectionChance / suspicionChance are about the two
+  // services, not the relationship, and should stay independent of war.
+  const espionageCandidates = (() => {
+    const player = normalizeString(baseGame.country);
+    const named = new Set([
+      ...Object.keys(baseWorld.polityOverrides ?? {}),
+      ...Object.keys(baseWorld.intelligence ?? {}),
+      ...normalizeChats(baseChats).flatMap((chat) => chat.countries.map((country) => normalizeString(country.name))),
+    ]);
+    const spiedOn = new Set(normalizeSpies(baseWorld.spies).filter((spy) => spy.owner === player && (spy.status === "active" || spy.status === "turned")).map((spy) => spy.target));
+    return [...named].filter((polity) => polity && polity !== player).map((polity) => ({
+      polity,
+      hostile: spiedOn.has(polity) || Number(baseWorld.internationalReputation?.[polity] ?? 50) <= 30,
+    }));
+  })();
 
   const { colors: nextColors, world: impactedWorld } = applyEventImpactsToWorld({
     colors: baseColors,
@@ -2256,6 +2348,48 @@ const applySimulationResult = async ({
       { playerCode: baseGame.country },
     )
     : impactedWorld;
+
+  // Espionage resolves LAST, on the world the whole turn produced — after the
+  // standing orders above have advanced, so an agent's round is decided against
+  // where the fleets actually ended up rather than where they started. It is
+  // deterministic (keyed on the round), and its consequences are EVENTS the model
+  // reads next turn, so what was found out changes what happens.
+  const espionage = resolveEspionage(worldWithImpacts, {
+    round: nextGame.round,
+    date: nextGame.gameDate,
+    playerPolity: normalizeString(baseGame.country),
+    candidates: espionageCandidates,
+  });
+  worldWithImpacts.spies = espionage.spies;
+  // A spy in the world needs a seal for what it will report under.
+  if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
+  const espionageEventIds = [];
+  for (const event of espionage.events) {
+    const entry = normalizeEventEntry({ ...event, id: "espionage-" + nextGame.round + "-" + freshEvents.length }, freshEvents.length);
+    if (entry) {
+      freshEvents.push(entry);
+      espionageEventIds.push(entry.id);
+    }
+  }
+  // This turn's simulationHistory entry was built as an argument to
+  // applyEventImpactsToWorld, which has to run BEFORE espionage (espionage
+  // resolves on its output) — so its eventIds snapshot predates the loop above.
+  // Left alone, an exposure would reach the event feed but be missing from the
+  // turn's own record, and time.jsx renders a turn's events from exactly this
+  // list. Replaced rather than mutated: the standing-order pipeline spread-copies
+  // the world, so the array itself is still shared with `impactedWorld`.
+  if (espionageEventIds.length && worldWithImpacts.simulationHistory?.[0]) {
+    const [turnEntry, ...olderTurns] = worldWithImpacts.simulationHistory;
+    worldWithImpacts.simulationHistory = [
+      { ...turnEntry, eventIds: [...turnEntry.eventIds, ...espionageEventIds] },
+      ...olderTurns,
+    ];
+  }
+  // Built HERE, not next to freshEvents above, because the espionage loop has
+  // just appended to freshEvents. Upstream computes this before that loop, so its
+  // exposures and discoveries never reach writeEventsState and are gone on the
+  // next reload — the world remembers the spy was caught, the event log does not.
+  const nextEvents = [...priorEvents, ...freshEvents];
   let nextWorld = worldWithImpacts;
 
   for (const event of freshEvents) {
@@ -2328,6 +2462,10 @@ const applySimulationResult = async ({
   // through (jump, auto-jump, catalyst, game-master) — means the sync's full scan
   // sees the committed round.
   if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
+
+  // Spies report on the world the turn just produced. Awaited so the reports are
+  // there when the player opens the Spy tab, but never allowed to fail the turn.
+  await refreshSpyIntercepts();
 
   // Snapshot the state we just replaced so it can be rolled back to (best-effort).
   await captureRollbackSnapshot({
@@ -2499,6 +2637,137 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
   ]);
   return String(raw || "").trim();
+};
+
+// What a planted spy brings back from one target: that polity's private
+// diplomacy with third parties this period, as the model imagines it from the
+// world state. Stored UNredacted — redaction is applied at render time from the
+// player's intelligence stat, so a better service later reveals more of the
+// same intercept rather than needing a new one.
+// The seal the intercepts are stored under. Minted at deploy time by the UI and
+// by the jump when a foreign agent appears; this is the fallback for a save that
+// has spies from before seals existed. A world write, so it runs only where
+// nothing else is writing the world.
+const ensureSpySeal = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  if (isSeal(world.spySeal)) return world.spySeal;
+  const spySeal = newSeal();
+  await writeWorldState({ ...world, spySeal });
+  return spySeal;
+};
+
+export const gatherIntelligence = async (target, { signal } = {}) => {
+  const name = normalizeString(target);
+  if (!name) throw new Error("No target polity.");
+  const bundle = await readGameStateBundle({ force: true });
+  const player = normalizeString(bundle.game?.country);
+  const spy = normalizeSpies(bundle.world?.spies).find((entry) => entry.owner === player && entry.target === name && (entry.status === "active" || entry.status === "turned"));
+  if (!spy) throw new Error("No agent of yours is in " + name + ".");
+  // A turned agent still "reports" — what the target wants believed. The same
+  // task writes the lie; the player is not told which kind they are reading.
+  const disinformation = spy.status === "turned"
+    ? "IMPORTANT: this agent has been TURNED by " + name + " and now works for them. Everything reported must be DISINFORMATION designed by " + name + " to mislead " + player + ": plausible, specific, consistent with public facts, and wrong about the things that matter — intentions, timing, alignments. Never hint that it is false."
+    : "";
+  const variables = { ...(await buildTemplateVariables(bundle)), targetPolity: name, disinformation };
+  const dossier = await buildTargetDossier(bundle, name);
+  const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
+  const { payload } = await runJsonTask("spyIntercept", {
+    signal,
+    userMessage: [
+      `Report what the spy in ${name} intercepted this period.`,
+      era ? `ERA & WORLD RULES:\n${era}` : "",
+      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+    ].filter(Boolean).join("\n\n"),
+    variables,
+  });
+  const exchanges = normalizeArray(payload?.exchanges)
+    // The schema forbids it, but a model that names the target or the player as
+    // the counterpart has produced a chat the player already has or nonsense.
+    // A spy reports on what the target says to OTHERS; the player's own dealings
+    // with them are already in the player's inbox. Case- and space-insensitive,
+    // because the model writes a display name and the old comparison was exact.
+    .filter((exchange) => {
+      const counterpart = regionKey(exchange?.counterpart);
+      return counterpart && counterpart !== regionKey(name) && counterpart !== regionKey(bundle.game?.country);
+    })
+    .map((exchange, index) => ({
+      ...exchange,
+      id: `${name}:${bundle.game?.round ?? 0}:${index}`.toLowerCase().replace(/\s+/g, "-"),
+    }));
+  // Stored sealed: the file, the network reply and the React tree hold ciphertext,
+  // so copying the page or opening intercepts.json gives up nothing the player's
+  // service did not decode. Only the renderer and the jump prompt open it.
+  const seal = isSeal(bundle.world?.spySeal) ? bundle.world.spySeal : await ensureSpySeal();
+  const sealed = await Promise.all(exchanges.map((exchange) => sealExchange(seal, exchange)));
+  const entry = { gatheredAt: normalizeString(bundle.game?.gameDate), round: Number(bundle.game?.round) || 0, planted: spy.status === "turned", exchanges: sealed };
+  // Re-read at write time: another gather may have landed for a different target.
+  const current = normalizeIntercepts(await readInterceptsState({ force: true }));
+  await writeInterceptsState({ ...current, [name]: entry });
+  return entry;
+};
+
+// Everything the player's agents have brought back, opened — for the simulator
+// and the renderer only. Never written anywhere.
+export const readOpenedIntercepts = async () => {
+  const world = normalizeWorldState(await readWorldState({ force: false }));
+  const intercepts = normalizeIntercepts(await readInterceptsState({ force: false }));
+  if (!isSeal(world.spySeal)) return intercepts;
+  const out = {};
+  for (const [target, entry] of Object.entries(intercepts)) {
+    out[target] = { ...entry, exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))) };
+  }
+  return out;
+};
+
+// After a jump, every active spy reports again. Sequential and best-effort:
+// a failed report never fails the turn, and the writes go to the intercepts
+// asset only — never to world.json, whose turn write has just landed.
+// One roll per real-world minute, so an agent reports roughly every 20 minutes
+// the game is open. Deliberately slow: each report is a full AI call, and the
+// point of an agent is a steady trickle rather than something the player farms
+// by pressing a button. The player-facing Gather button is gone for the same
+// reason.
+const SPY_REPORT_CHANCE = 1 / 20;
+let spyReportInFlight = false;
+
+// Called on a timer by the UI. Picks ONE live agent and has it report, or does
+// nothing at all — every failure is silent, exactly like the diplomacy drip.
+export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {}) => {
+  if (spyReportInFlight || isSimulationBusy()) return null;
+  if (Math.random() >= chance) return null;
+  spyReportInFlight = true;
+  try {
+    const world = normalizeWorldState(await readWorldState({ force: true }));
+    const player = normalizeString((await readGameData()).country);
+    if (!player) return null;
+    const agents = activeSpies(world, player);
+    if (agents.length === 0) return null;
+    const agent = agents[Math.floor(Math.random() * agents.length)];
+    if (isSimulationBusy()) return null;
+    await gatherIntelligence(agent.target);
+    return agent.target;
+  } catch {
+    return null; // silence is the safe outcome
+  } finally {
+    spyReportInFlight = false;
+  }
+};
+
+export const refreshSpyIntercepts = async () => {
+  let world;
+  try {
+    world = normalizeWorldState(await readWorldState({ force: true }));
+  } catch {
+    return;
+  }
+  const player = normalizeString((await readGameData()).country);
+  for (const spy of activeSpies(world, player)) {
+    try {
+      await gatherIntelligence(spy.target);
+    } catch (error) {
+      console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
+    }
+  }
 };
 
 // Structured national stat sheet for the Stats tab, grounded in the same
@@ -3381,9 +3650,34 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
       ...(await buildTemplateVariables(bundle)),
       idleChatAllowed: allowChat ? "yes" : "no",
     };
+    const openChats = normalizeChats(bundle.chats);
+    // The prompt template shows only ONE line per chat (chatSummary: the last
+    // message, prefixed by its speaker), and a note sent to a polity the player
+    // is already talking to gets APPENDED to that thread. So the model was asked
+    // for an opener while its note became a reply, with almost none of the
+    // conversation in view — which is how a polity ended up answering a hostile
+    // message with an unrelated pleasantry, and how it ended up repeating the
+    // player's own line back at them.
+    const conversationContext = [
+      "",
+      "These are the conversations already open with the player, oldest message first:",
+      "",
+      renderOpenChatsForPrompt(openChats),
+      "",
+      "A note addressed to a polity the player is ALREADY talking to is appended to that"
+      + " conversation, so it must read as the next thing that polity says: answer what was"
+      + " actually said, never restate or quote it back, and never open as though the exchange"
+      + " were new. If nothing there warrants a reply and no polity has a fresh reason to"
+      + " write, return {\"chat\": null}.",
+    ].join("\n");
+    // No timeoutMs here on purpose: the stopwatch upstream still passes was
+    // replaced by the silence-based idle deadline (taskIdleTimeoutMs), which does
+    // not cut off a model that is still writing.
     const { payload } = await runJsonTask("idleDiplomacy", {
       userMessage: allowChat
-        ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move. Return JSON only."
+        ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
+          + conversationContext
+          + "\n\nReturn JSON only."
         : "A quiet moment between rounds. Decide whether any forces would visibly move right now. Return chat as null. Return JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
@@ -3432,8 +3726,15 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
     const chats = normalizeChats(await readChatsState({ force: true }));
     // A note from a country the player already has an open thread with (1:1 or a
     // standing group) lands in that thread; only a genuinely new set of
-    // participants opens a fresh chat.
-    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], { stampTime: normalizeString(bundle.game?.gameDate) });
+    // participants opens a fresh chat. Upstream matched 1:1 threads only, so a
+    // group approach always opened a duplicate — the participant-set key here
+    // handles both. dropEchoes discards a note that just repeats what is already
+    // in that thread; silence is what this whole path defaults to anyway.
+    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {
+      stampTime: normalizeString(bundle.game?.gameDate),
+      dropEchoes: true,
+    });
+    if (nextChats.dropped) return null;
     if (isSimulationBusy()) return null;
     await writeChatsState(nextChats);
     return built;

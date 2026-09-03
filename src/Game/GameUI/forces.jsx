@@ -46,6 +46,7 @@ export const POSTURE_LABEL = {
   exercise: "On exercise",
   blockade: "Blockading",
   withdrawing: "Withdrawing",
+  assaulting: "Assaulting",
 };
 
 // Deploy exists in both unit systems. Move and attack are CLASSIC-only, but they

@@ -1,19 +1,27 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker, isChatGenerationLikely } from "../AI/gameplay.js";
+import {
+    MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
+    recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
+} from "../../runtime/spycraft.js";
+import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
 import { Projects } from "./projects";
 import {
     JSON_URLS,
     getNationColors,
+    getNationFlags,
     loadCountryNames as loadCachedCountryNames,
     readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { readChatsState, writeChatsState } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState } from "../../runtime/gameState.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -44,25 +52,112 @@ const countryMatchesIdentity = (country, identity) => {
 };
 
 // ── Flags ─────────────────────────────────────────────────────────────────────
-// Flag emoji are derived locally from each nation's GID_0 country code. (The
-// previous source, restcountries.com, deprecated its public API and no longer
-// returns flag data.)
+// Country flags render as images rather than emoji. Resolution order per
+// country: 1 flagcdn.com artwork via countryFlags.js 2. for a custom nation that table doesn't know, the map
+// author's own flag for that owner code, from the scenario's flags.json getNationFlags) 
 
-const FALLBACK_FLAG = "🏳";
+const FALLBACK_FLAG_EMOJI = "🏳";
 
-const getCountryFlag = ({ code } = {}) => flagEmojiFromGid(code) ?? FALLBACK_FLAG;
+// "code::name" -> Promise<string|null>. Module-level so every component asking
+// about the same country shares one resolution, and the hub/flags.json are
+// each fetched once.
+const flagUrlCache = new Map();
+let communityFlagsPromise = null;
+let nationFlagsPromise = null;
 
-const useCountryFlag = ({ code } = {}) =>
-    useMemo(() => getCountryFlag({ code }), [code]);
+const getCommunityFlagPosts = () => {
+    if (!communityFlagsPromise) communityFlagsPromise = fetchCommunityFlags().catch(() => []);
+    return communityFlagsPromise;
+};
 
-const useCountryFlags = (countries) => {
+// getNationFlags() itself memoizes on the scenario token and is invalidated on
+// write (see assets.js), so this wrapper only needs its own promise for the
+// duration of one resolveFlagImageUrl batch
+const getScenarioFlagMap = () => {
+    if (!nationFlagsPromise) nationFlagsPromise = getNationFlags().catch(() => ({}));
+    return nationFlagsPromise;
+};
+
+const findCommunityFlagPost = (posts, { code, name }) => {
+    const normalizedCode = String(code ?? "").trim().toUpperCase();
+    const normalizedName = String(name ?? "").trim().toLowerCase();
+    return posts.find((post) => {
+        if (post.fromScenario || !post.imageUrl) return false;
+        if (normalizedCode && post.code && post.code.toUpperCase() === normalizedCode) return true;
+        return normalizedName && String(post.title ?? "").trim().toLowerCase() === normalizedName;
+    }) ?? null;
+};
+
+const resolveFlagImageUrl = ({ code, name } = {}) => {
+    if (!code && !name) return Promise.resolve(null);
+    const key = `${code ?? ""}::${name ?? ""}`;
+    if (flagUrlCache.has(key)) return flagUrlCache.get(key);
+
+    const builtIn = flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name);
+    const promise = builtIn
+        ? Promise.resolve(builtIn)
+        : getScenarioFlagMap()
+            .then((flags) => (code && flags?.[code]) || null)
+            .catch(() => null)
+            .then((scenarioFlag) => {
+                if (scenarioFlag) return scenarioFlag;
+                return getCommunityFlagPosts()
+                    .then((posts) => {
+                        const match = findCommunityFlagPost(posts, { code, name });
+                        return match ? loadCommunityFlagDataUrl(match).catch(() => null) : null;
+                    })
+                    .catch(() => null);
+            });
+
+    flagUrlCache.set(key, promise);
+    return promise;
+};
+
+const useCountryFlagUrl = ({ code, name } = {}) => {
+    const [url, setUrl] = useState(null);
+    useEffect(() => {
+        let cancelled = false;
+        setUrl(null);
+        resolveFlagImageUrl({ code, name }).then((resolved) => { if (!cancelled) setUrl(resolved); });
+        return () => { cancelled = true; };
+    }, [code, name]);
+    return url;
+};
+
+const useCountryFlagUrls = (countries) => {
     const depsKey = countries.map(c => `${c.name}:${c.code ?? ""}`).join(",");
-    return useMemo(() => {
-        const flags = {};
-        for (const { name, code } of countries) flags[name] = getCountryFlag({ code });
-        return flags;
+    const [urls, setUrls] = useState({});
+    useEffect(() => {
+        let cancelled = false;
+        Promise.all(
+            countries.map(({ name, code }) => resolveFlagImageUrl({ code, name }).then((url) => [name, url])),
+        ).then((entries) => { if (!cancelled) setUrls(Object.fromEntries(entries)); });
+        return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [depsKey]);
+    return urls;
+};
+
+// Renders the resolved flag image, or the fallback glyph while unresolved/unmatched.
+const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
+    const w = width ?? size;
+    const h = height ?? size;
+    return url ? (
+        <img
+            src={url}
+            alt={alt}
+            style={{
+                width: w, height: h, objectFit: "cover", borderRadius: "2px",
+                display: "inline-block", verticalAlign: "middle",
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.12)", flexShrink: 0,
+            }}
+        />
+    ) : (
+        <span aria-hidden="true" style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: w, height: h, verticalAlign: "middle", fontSize: size, flexShrink: 0,
+        }}>{FALLBACK_FLAG_EMOJI}</span>
+    );
 };
 
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
@@ -183,9 +278,9 @@ const EnvelopeIcon = ({ filled }) => (
 const MessageBubble = ({ msg, onRetry }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
-    const flag     = useCountryFlag(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
+    const flagUrl  = useCountryFlagUrl(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
     const reactions = Object.entries(msg.reactions ?? {});
-    const reactionFlags = useCountryFlags(reactions.map(([name, { code }]) => ({ name, code })));
+    const reactionFlags = useCountryFlagUrls(reactions.map(([name, { code }]) => ({ name, code })));
     const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
 
@@ -195,20 +290,22 @@ const MessageBubble = ({ msg, onRetry }) => {
 
         {!isPlayer && (
             <span style={{
-                display: "block",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
                 fontSize: "0.7rem",
                 color: "rgba(255,255,255,0.4)",
                        marginBottom: "0.25rem",
                        whiteSpace: "nowrap",
             }}>
-            {isError ? "⚠️ Error" : `${flag} ${msg.speaker}`}
+            {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size="0.95em" />{msg.speaker}</>}
             </span>
         )}
 
         {isPlayer && reactions.length > 0 && (
             <div style={{ display: "flex", flexDirection: "row-reverse", gap: "0.15rem", marginBottom: "0.3rem" }}>
             {reactions.map(([country, { emoji, code }]) => (
-                <ReactionBubble key={country} country={country} emoji={emoji} flag={reactionFlags[country] ?? "🏳"} code={code} />
+                <ReactionBubble key={country} country={country} emoji={emoji} flagUrl={reactionFlags[country] ?? null} code={code} />
             ))}
             </div>
         )}
@@ -260,7 +357,7 @@ const MessageBubble = ({ msg, onRetry }) => {
 
 // ── Reaction bubble ───────────────────────────────────────────────────────────
 
-const ReactionBubble = ({ country, emoji, flag, code }) => {
+const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
@@ -289,8 +386,11 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
                                                     whiteSpace: "nowrap",
                                                     pointerEvents: "none",
                                                     zIndex: 99999,
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    gap: "0.3rem",
         }}>
-        {flag} {country}
+        <FlagImg url={flagUrl} alt={country} size="0.9em" /> {country}
         </div>,
         document.body
     ) : null;
@@ -321,10 +421,10 @@ const ReactionBubble = ({ country, emoji, flag, code }) => {
 };
 
 const TypingBubble = ({ speaker, code }) => {
-    const flag = useCountryFlag({ code, name: speaker });
+    const flagUrl = useCountryFlagUrl({ code, name: speaker });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>{flag} {speaker}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}><FlagImg url={flagUrl} alt={speaker} size="0.95em" /> {speaker}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
         <ThinkingDots />
         </div>
@@ -334,7 +434,7 @@ const TypingBubble = ({ speaker, code }) => {
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
-const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
+const CountryTile = ({ country, code, flagUrl, isSelected, onToggle }) => {
     const [hovered, setHovered] = React.useState(false);
     const shortName = country.length > 12 ? country.slice(0, 11) + "…" : country;
     return (
@@ -372,37 +472,61 @@ const CountryTile = ({ country, code, flag, isSelected, onToggle }) => {
         {isSelected && (
             <div style={{ position: "absolute", top: "0.3rem", right: "0.3rem", width: "14px", height: "14px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.55rem", color: "white", fontWeight: 700 }}>✓</div>
         )}
-        <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>{flag}</span>
+        <FlagImg url={flagUrl} alt={country} width="2.3rem" height="1.6rem" />
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.8)", textAlign: "center", lineHeight: 1.3 }}>{shortName}</span>
         </button>
     );
 };
 
-const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
+const CountrySelectorModal = ({
+    countries, loading, onStart, onCancel,
+    title = "Start New Diplomatic Chat",
+    subtitle = "Select countries to invite to the conversation",
+    selectedLabel = "Selected Countries",
+    emptyLabel = "No countries selected yet",
+    confirmLabel = (n) => `Chat with ${n} ${n === 1 ? "country" : "countries"}`,
+    single = false,
+}) => {
     const [search, setSearch]     = React.useState("");
     const [selected, setSelected] = React.useState([]);
-    const filtered      = useMemo(() => countries.filter(c => c.name.toLowerCase().includes(search.toLowerCase())), [countries, search]);
-    const filteredFlags = useCountryFlags(filtered);
-    const selectedFlags = useCountryFlags(selected);
+    // Deduped before anything is rendered: the tiles and the selection are both
+    // keyed by name, so a repeated name collides React keys — the same country
+    // appears several times, a search misses what it matched, and clicking one
+    // tile marks another selected without highlighting it. countryList.js fixes
+    // the source of the duplicates; this makes the picker safe from any source.
+    const filtered = useMemo(
+        () => dedupeByName(countries).filter(c => c.name.toLowerCase().includes(search.toLowerCase())),
+        [countries, search],
+    );
+    const filteredFlagUrls = useCountryFlagUrls(filtered);
+    const selectedFlagUrls = useCountryFlagUrls(selected);
     const isSelectedName = (name) => selected.some(s => s.name === name);
-    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name) ? prev.filter(s => s.name !== name) : [...prev, { name, code }]);
+    // single: a spy goes to ONE country, so picking another replaces the pick
+    // rather than adding to it, and picking the same one again clears it.
+    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name)
+        ? prev.filter(s => s.name !== name)
+        : single ? [{ name, code }] : [...prev, { name, code }]);
 
     return (
         <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(17,24,39,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
         <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
-        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>Start New Diplomatic Chat</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Select countries to invite to the conversation</div>
+        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
+        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
         </div>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
         </div>
         <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>Selected Countries ({selected.length}):</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem" }}>
-        {selected.length === 0 ? "No countries selected yet" : selected.map(c => `${selectedFlags[c.name] ?? "🏳"} ${c.name}`).join(", ")}
+        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
+        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
+        {selected.length === 0 ? emptyLabel : selected.map((c, i) => (
+            <span key={c.name} style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+            <FlagImg url={selectedFlagUrls[c.name]} alt={c.name} size="0.9em" />{c.name}{i < selected.length - 1 ? "," : ""}
+            </span>
+        ))}
         </div>
         </div>
         <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
@@ -416,7 +540,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.5rem 1rem", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "5.5rem", gap: "0.5rem", alignContent: "start" }}>
         {loading && <p style={{ gridColumn: "1/-1", color: "rgba(255,255,255,0.35)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center" }}>Loading countries…</p>}
         {filtered.map(c => (
-            <CountryTile key={c.name} country={c.name} code={c.code} flag={filteredFlags[c.name] ?? "🏳"} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
+            <CountryTile key={c.name} country={c.name} code={c.code} flagUrl={filteredFlagUrls[c.name] ?? null} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
         ))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
@@ -427,7 +551,7 @@ const CountrySelectorModal = ({ countries, loading, onStart, onCancel }) => {
         style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "#3b82f6" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
-        Chat with {selected.length} {selected.length === 1 ? "country" : "countries"}
+        {confirmLabel(selected.length)}
         </button>
         </div>
         </div>
@@ -466,7 +590,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const composerRef       = useRef(null);
 
     useEffect(() => {
-        countries.forEach(({ name, code }) => getCountryFlag({ code, name }));
+        countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
     }, [countries]);
 
     // Grows the composer to fit what is in it, up to the 12rem the stylesheet
@@ -798,10 +922,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 };
 
 const CountryTurnLabel = ({ country, remaining }) => {
-    const flag = useCountryFlag({ code: country.code, name: country.name });
+    const flagUrl = useCountryFlagUrl({ code: country.code, name: country.name });
     return (
         <>
-        {flag} <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
+        <FlagImg url={flagUrl} alt={country.name} size="0.95em" /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
         {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
         </>
     );
@@ -949,8 +1073,7 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false })
     // delete never sits waiting to catch a later click.
     const [confirming, setConfirming] = React.useState(false);
     const previewCountries = chat.countries.slice(0, 4);
-    const flagMap  = useCountryFlags(previewCountries);
-    const flags    = previewCountries.map(c => flagMap[c.name] ?? "🏳").join(" ");
+    const flagUrlMap = useCountryFlagUrls(previewCountries);
     const names    = chat.countries.map(c => c.name).join(", ");
     const lastMsg  = chat.messages?.at(-1);
     const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
@@ -962,7 +1085,11 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false })
         <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
         {unread && <div style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "#60a5fa" }} />}
         </div>
-        <div style={{ fontSize: "1.3rem", flexShrink: 0, lineHeight: 1 }}>{flags}</div>
+        <div style={{ display: "flex", gap: "0.15rem", flexShrink: 0 }}>
+        {previewCountries.map((c) => (
+            <FlagImg key={c.name} url={flagUrlMap[c.name] ?? null} alt={c.name} width="1.3rem" height="0.9rem" />
+        ))}
+        </div>
         <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "0.82rem", fontWeight: unread ? 700 : 600, color: unread ? "#fff" : "rgba(255,255,255,0.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}{unread && <span style={{ fontWeight: 400, fontSize: "0.7rem", color: "#60a5fa", marginLeft: "0.4rem" }}>new</span>}</div>
         <div style={{ fontSize: "0.75rem", color: unread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)", marginTop: "0.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preview}</div>
@@ -1002,7 +1129,253 @@ export const requestDiplomaticChat = (country, { draft = "" } = {}) => {
     _chatOpenSubs.forEach((fn) => { try { fn(country, draft); } catch { /* noop */ } });
 };
 
+// ---- Spy tab ----------------------------------------------------------------
+// The player's intelligence service. Plant a spy in a polity and its private
+// diplomacy with third parties shows up here as intercepts — redacted word by
+// word, with the player's intelligence stat against the target's deciding how
+// much survives. The AI moves that stat like reputation (polityChanges), so a
+// player who builds the service up reads more of the SAME intercepts: redaction
+// is applied at render time, never baked into what was stored.
+
+const spyBtn = (accent) => ({
+    padding: "0.35rem 0.6rem", borderRadius: "8px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif",
+    border: "1px solid " + (accent ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,0.12)"),
+    background: accent ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)", color: accent ? "#e9d5ff" : "rgba(255,255,255,0.8)",
+});
+
+const ClarityMeter = ({ clarity }) => {
+    const pct = Math.round(clarity * 100);
+    return (
+        <div title="How much of the intercept your service could decode">
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem" }}>
+        <span>Signal clarity</span><span data-no-translate style={{ color: "#c4b5fd", fontWeight: 700 }}>{pct}%</span>
+        </div>
+        <div style={{ height: "0.3rem", borderRadius: "999px", background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <div style={{ width: pct + "%", height: "100%", background: "linear-gradient(90deg,#7c3aed,#c4b5fd)" }} />
+        </div>
+        </div>
+    );
+};
+
+const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
+    const [opened, setOpened] = useState(null);
+    useEffect(() => {
+        let live = true;
+        // No seal (a record from before sealing) reads as-is; otherwise open it here
+        // and nowhere else. The plaintext lives in this component's state only for
+        // as long as the view is on screen.
+        (isSeal(seal) ? openExchange(seal, exchange) : Promise.resolve(exchange))
+            .then((value) => { if (live) setOpened(value); })
+            .catch(() => { if (live) setOpened(exchange); });
+        return () => { live = false; };
+    }, [exchange, seal]);
+    const shown = useMemo(() => redactExchange(opened ?? { ...exchange, messages: [] }, clarity), [opened, exchange, clarity]);
+    return (
+        <>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
+        <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>🕵 {target} ↔ {exchange.counterpart}</div>
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</div>
+        </div>
+        </div>
+        <div style={{ padding: "0.6rem 1rem 0.2rem", flexShrink: 0 }}><ClarityMeter clarity={clarity} /></div>
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.6rem 1rem 1rem", display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+        {shown.messages.map((message, index) => {
+            const mine = message.speaker === target;
+            return (
+                <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
+                <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
+                <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none",
+                    background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {message.text}
+                </div>
+                </div>
+            );
+        })}
+        <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", marginTop: "0.4rem", textAlign: "center" }}>
+        Improve your intelligence service to decode more of this exchange.
+        </div>
+        </div>
+        </>
+    );
+};
+
+const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
+    const [world, setWorld]           = useState(null);
+    const [intercepts, setIntercepts] = useState({});
+    const [open, setOpen]             = useState(null); // { target, exchange }
+    const [choosing, setChoosing]     = useState(false);
+    const [error, setError]           = useState("");
+
+    const refresh = async () => {
+        try {
+            const [w, i] = await Promise.all([readWorldState({ force: true }), readInterceptsState({ force: true })]);
+            setWorld(w); setIntercepts(normalizeIntercepts(i));
+        } catch { /* keep what we have */ }
+    };
+    useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
+
+    const myIntel = intelligenceOf(world, playerCountry);
+    // Pre-ownership records (no owner) were all the player's.
+    const spies = activeSpies(world).filter((spy) => !spy.owner || spy.owner === playerCountry);
+    const foreign = foreignSpies(world, playerCountry);
+    const history = normalizeSpies(world?.spies).filter((spy) => (!spy.owner || spy.owner === playerCountry) && spy.status === "exposed").slice(-3);
+    const [storyDraft, setStoryDraft] = useState({}); // spy id -> cover story being typed
+
+    const commitSpies = async (next) => {
+        // Re-read at write time so a jump's world write is never clobbered with
+        // the copy this tab happened to load earlier. The seal is minted here, on
+        // the first deployment, so every report ever stored has one to be sealed
+        // under.
+        const fresh = await readWorldState({ force: true });
+        await writeWorldState({ ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() });
+        await refresh();
+    };
+
+    const handleExpel = async (spy) => {
+        setError("");
+        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleTurn = async (spy) => {
+        setError("");
+        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); } catch (err) { setError(err?.message || String(err)); }
+    };
+    const handleStory = async (spy) => {
+        setError("");
+        try { await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory)); } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    const handleDeploy = async (selected) => {
+        setChoosing(false); setError("");
+        const target = selected?.[0]?.name;
+        try {
+            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
+            await commitSpies(next);
+        } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    const handleRecall = async (spy) => {
+        setError("");
+        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+    };
+
+    if (open) {
+        const clarity = signalClarity(myIntel, intelligenceOf(world, open.target));
+        return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
+    }
+
+    const targets = Object.keys(intercepts);
+    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+    const candidates = countries.filter((c) =>
+        !sameCountry(c.name, playerCountry) && !spies.some((s) => sameCountry(s.target, c.name)));
+    const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
+    const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
+    const full = spies.length >= MAX_ACTIVE_SPIES;
+
+    return (
+        <>
+        {choosing && (
+            <CountrySelectorModal
+                countries={candidates}
+                loading={loadingCountries}
+                onStart={handleDeploy}
+                onCancel={() => setChoosing(false)}
+                single
+                title="Deploy a Spy"
+                subtitle="Choose the country to plant an agent in"
+                selectedLabel="Target"
+                emptyLabel="No target chosen yet"
+                confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
+            />
+        )}
+        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
+        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
+        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#e9d5ff" }}>{myIntel}/100</span>
+        </div>
+
+        <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Deployed spies · {spies.length}/{MAX_ACTIVE_SPIES}</div>
+        {spies.length === 0 && (
+            <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>No spies in the field. Deploy one to read a country's private diplomacy with others.</div>
+        )}
+        {spies.map((spy) => (
+            <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ possibly compromised</span>}
+            </div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
+            {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
+            </div>
+            </div>
+            <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+            </div>
+        ))}
+        {history.length > 0 && (
+            <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>
+            {history.map((spy) => "Agent expelled by " + spy.target + (spy.exposedAt ? " on " + spy.exposedAt : "")).join(" · ")}
+            </div>
+        )}
+
+        {/* Agents other polities have in the player. An undiscovered one is not
+            listed — that is what makes the intelligence stat matter on defence.
+            A discovered one waits for a decision; a turned one is fed whatever
+            the player types here. */}
+        {foreign.filter((spy) => spy.status !== "active").length > 0 && (
+            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Foreign agents in {playerCountry}</div>
+        )}
+        {foreign.filter((spy) => spy.status !== "active").map((spy) => (
+            <div key={spy.id} style={{ padding: "0.55rem 0.7rem", borderRadius: "10px", background: spy.status === "discovered" ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (spy.status === "discovered" ? "rgba(251,191,36,0.35)" : "rgba(255,255,255,0.08)") }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{spy.status === "discovered" ? "🚨 " : "🎭 "}{spy.owner}</div>
+            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
+            {spy.status === "discovered" ? "agent in custody — decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " — " + spy.owner + " still trusts them"}
+            </div>
+            </div>
+            {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+            {spy.status === "discovered" && <button onClick={() => handleTurn(spy)} style={spyBtn(true)}>Turn</button>}
+            </div>
+            {spy.status !== "exposed" && (
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                <input value={storyOf(spy)} onChange={(e) => setStoryDraft((d) => ({ ...d, [spy.id]: e.target.value }))} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : "What your double agent tells " + spy.owner}
+                    style={inputStyle} />
+                {spy.status === "turned" && <button onClick={() => handleStory(spy)} style={spyBtn(true)}>Save</button>}
+                </div>
+            )}
+            </div>
+        ))}
+
+        {error && <div style={{ fontSize: "0.74rem", color: "#fca5a5", padding: "0.3rem 0.1rem" }}>{error}</div>}
+
+        {targets.length > 0 && (
+            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Intercepts</div>
+        )}
+        {targets.map((target) => intercepts[target].exchanges.map((exchange) => (
+            <button key={exchange.id} onClick={() => setOpen({ target, exchange })}
+                style={{ width: "100%", padding: "0.6rem 0.8rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer", fontFamily: "sans-serif", textAlign: "left", color: "white" }}>
+            <span aria-hidden="true" style={{ fontSize: "1rem" }}>📡</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{target} ↔ {exchange.counterpart}</span>
+            <span style={{ display: "block", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</span>
+            </span>
+            </button>
+        )))}
+        </div>
+        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+        <button onClick={() => setChoosing(true)} disabled={full}
+            style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(167,139,250,0.35)", background: "rgba(139,92,246,0.18)", color: "#e9d5ff", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
+        🕵 Deploy a spy
+        </button>
+        </div>
+        </>
+    );
+};
+
 const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onConsumeRequest, isGenerating = false }) => {
+    // "chats" is the diplomacy the player is party to; "spy" is everyone else's.
+    const [view, setView] = useState("chats");
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -1351,11 +1724,25 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <span style={{ fontWeight: 700, fontSize: "1rem" }}>Diplomatic Chats</span>
+                <div style={{ display: "flex", gap: "0.35rem" }}>
+                {[["chats", "Diplomacy"], ["spy", "Spy"]].map(([key, label]) => (
+                    <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
+                        border: "1px solid " + (view === key ? "rgba(167,139,250,0.45)" : "transparent"), background: view === key ? "rgba(139,92,246,0.22)" : "transparent", color: view === key ? "white" : "rgba(255,255,255,0.5)" }}>
+                    {label}
+                    </button>
+                ))}
+                </div>
                 <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
+                {view === "spy" ? (
+                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} />
+                ) : (
+                <>
+                {/* The unread filter belongs to the diplomacy list only — the Spy
+                    tab has no read/unread notion, so it sits inside this branch
+                    rather than above the tab switch. */}
                 {openChats.length > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
                     <button onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
@@ -1393,6 +1780,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
+                </>
+                )}
                 </>
             )}
             </div>

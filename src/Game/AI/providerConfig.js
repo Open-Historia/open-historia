@@ -86,6 +86,7 @@ const PROVIDER_SETTINGS = {
         },
         customParams: { storageKey: "openai_compatible_custom_params", defaultValue: "" },
         structuredMode: { storageKey: "openai_compatible_structured_mode", defaultValue: "auto" },
+        toolStrict: { storageKey: "openai_compatible_tool_strict", defaultValue: "" },
     },
 };
 
@@ -112,6 +113,7 @@ const FORM_FIELD_MAP = {
     openaiCompatibleModel: { provider: "openai-compatible", field: "model" },
     openaiCompatibleCustomParams: { provider: "openai-compatible", field: "customParams" },
     openaiCompatibleStructuredMode: { provider: "openai-compatible", field: "structuredMode" },
+    openaiCompatibleToolStrict: { provider: "openai-compatible", field: "toolStrict" },
 };
 
 function isSupportedProvider(value) {
@@ -234,6 +236,10 @@ export function getProviderSettings(provider) {
         // ladder still walks down from wherever it starts, so a setting chosen
         // months ago cannot permanently break a campaign.
         structuredMode: getProviderField(normalized, "structuredMode") || "auto",
+        // Opt-in, so anything other than an explicit "1" leaves it off. Independent
+        // of the ladder above: this only decides whether the "tool" rung sends
+        // strict:true with the schema, not which rung is tried first.
+        toolStrict: getProviderField(normalized, "toolStrict") === "1",
     };
 }
 
