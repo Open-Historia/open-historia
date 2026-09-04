@@ -9,6 +9,7 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
+import { attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -684,6 +685,7 @@ async function callGemini(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
     taskKey,
     tool,
@@ -701,6 +703,7 @@ async function callGemini(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
 
@@ -1278,6 +1281,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         signal: opts.signal,
         taskKey: opts.taskKey,
     });
+    opts.onModel?.(model);
 
     return callOpenAIStyleChatCompletions({
         endpoint: OPENAI_API_ENDPOINT,
@@ -1315,6 +1319,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         signal: opts.signal,
         taskKey: opts.taskKey,
     });
+    opts.onModel?.(model);
 
     return callOpenAIStyleChatCompletions({
         endpoint,
@@ -1365,6 +1370,7 @@ async function callAnthropic(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
     staticPrefixEnd,
     taskKey,
@@ -1387,6 +1393,7 @@ async function callAnthropic(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     const headers = {
         "Content-Type": "application/json",
@@ -1556,6 +1563,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
     staticPrefixEnd,
     taskKey,
@@ -1579,6 +1587,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     // Self-hosted proxy: tried directly first, falling back to the local relay
     // if it refuses the browser call (providerFetch). The browser-access opt-in
@@ -1831,7 +1840,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // line up with the message entries their callers write. It is stripped here
     // alongside languageMode because it is ours: no provider function should
     // ever see it, and callGemini would silently drop it anyway.
-    const { languageMode = "ui", logLabel = "", ...providerOpts } = opts;
+    // `__debug` (task, attempt, simulated days) and `__debugSink` (where the
+    // task runner wants the record back, to attach the validation outcome)
+    // are ours too, and stripped for the same reason.
+    const { languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, ...providerOpts } = opts;
     const directive = languageMode === "none" ? ""
         : languageMode === "chat" ? chatLanguageDirective()
         : languageDirective();
@@ -1842,6 +1854,22 @@ export async function callAI(systemPrompt, history, opts = {}) {
     const provider = getStoredProvider();
     const label = logLabel || "AI call";
     const startedAt = Date.now();
+    // Telemetry (Settings → AI debug console): one record per call — prompt,
+    // answer, model, usage, latency — in memory and, while recording is on, in
+    // IndexedDB. A task-runner call is judged by its validator afterwards, so
+    // it stays "pending" until that outcome lands through the sink.
+    const record = isTelemetryEnabled()
+        ? startAiRecord({
+            ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
+            taskKey: debugMeta?.taskKey ?? providerOpts.taskKey ?? (logLabel || "direct"),
+            provider,
+            systemPrompt,
+            userMessage: Array.isArray(history) ? history.at(-1)?.parts?.[0]?.text ?? "" : "",
+            staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
+            awaitingOutcome: Boolean(debugSink),
+        })
+        : null;
+    if (debugSink && typeof debugSink === "object") debugSink.record = record;
     logDebugEvent("ai-call", `${label}: request to ${provider}.`, {
         ...conversationShape(systemPrompt, history),
         streaming: Boolean(providerOpts.onChunk),
@@ -1868,6 +1896,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...providerOpts,
             onActivity: timer.note,
             onUsage: (data) => { usage = normalizeUsage(data) ?? usage; },
+            // The model the provider actually resolved (overrides, discovery).
+            onModel: (model) => { if (record) record.model = String(model ?? ""); },
         });
         logDebugEvent("ai-call", `${label}: ${provider} answered in ${elapsedSeconds(startedAt)}.`, {
             replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
@@ -1877,6 +1907,13 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
             ...(usage ?? {}),
         }, { verbose: true });
+        attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
+        finishAiRecord(record, {
+            ok: true,
+            rawResponse: typeof result === "string"
+                ? result
+                : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : ""),
+        });
         return result;
     } catch (error) {
         // NOT verbose-only. A call that failed is the thing a bug report is most
@@ -1890,6 +1927,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
             `${label}: ${provider} ${cancelled ? "call cancelled" : "call FAILED"} after ${elapsedSeconds(startedAt)}.`,
             error,
             { verbose: cancelled });
+        attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
+        finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
         throw error;
     }
 }
@@ -2517,6 +2556,18 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         } : {}),
     };
 
+    const record = isTelemetryEnabled()
+        ? startAiRecord({
+            taskKey,
+            provider: "anthropic",
+            model,
+            systemPrompt,
+            userMessage: history?.[0]?.parts?.[0]?.text ?? "",
+            awaitingOutcome: true,
+            batch: true,
+        })
+        : null;
+
     try {
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages/batches`, {
             method: "POST",
@@ -2526,6 +2577,7 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
             logDebugEvent("ai-call", `Batch submission for "${taskKey}" refused (${response.status}): ${extractErrorMessage(payload, "unknown error")}`);
+            finishAiRecord(record, { ok: false, error: `batch submission refused (${response.status})` });
             return null;
         }
         const batch = await response.json();
@@ -2533,9 +2585,10 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         if (!batchId) return null;
         pendingBatchIds.set(customId, batchId);
         logDebugEvent("ai-call", `Batch submission for "${taskKey}" accepted as ${batchId}.`);
-        return { customId, batchId };
+        return { customId, batchId, record };
     } catch (error) {
         logDebugEvent("ai-call", `Batch submission for "${taskKey}" failed: ${error?.message || error}`);
+        finishAiRecord(record, { ok: false, error: String(error?.message || error) });
         return null;
     }
 }
@@ -2583,7 +2636,7 @@ export async function retrieveAIBatch(customId) {
             const result = row?.result;
             if (result?.type !== "succeeded") {
                 logDebugEvent("ai-call", `Batch request ${customId} ended with "${result?.type ?? "unknown"}".`);
-                return { status: "failed", payload: null, rawText: "", usage: result?.message?.usage ?? null };
+                return { status: "failed", payload: null, rawText: "", usage: normalizeUsage(result?.message) };
             }
             const toolUse = (result?.message?.content ?? []).find((block) => block?.type === "tool_use");
             const rawText = extractAnthropicText(result?.message);
@@ -2591,7 +2644,7 @@ export async function retrieveAIBatch(customId) {
                 status: "done",
                 payload: toolUse?.input && typeof toolUse.input === "object" ? toolUse.input : null,
                 rawText,
-                usage: result?.message?.usage ?? null,
+                usage: normalizeUsage(result?.message),
             };
         }
         return { status: "failed", payload: null, rawText: "" };

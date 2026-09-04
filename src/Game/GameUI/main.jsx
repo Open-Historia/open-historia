@@ -1,5 +1,6 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
@@ -53,6 +54,11 @@ const LazyAdvisorPanel = lazy(() =>
 );
 const LazyCheatsPanel = lazy(() =>
   import("./cheats").then((module) => ({ default: module.CheatsPanel })),
+);
+// The AI debug console (telemetry review) is a lazy chunk like the cheats
+// panel: most sessions never open it.
+const LazyDebugConsole = lazy(() =>
+  import("./debugConsole.jsx").then((module) => ({ default: module.DebugConsole })),
 );
 
 const checkWebGL = () => {
@@ -138,6 +144,8 @@ const Main = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
+  const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
+  const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
   // A starter message queued for the advisor's input box — set when something
@@ -359,6 +367,12 @@ const Main = ({
           <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
         )}
       </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadDebugConsole && (
+          <LazyDebugConsole open={isDebugConsoleOpen} onClose={() => setIsDebugConsoleOpen(false)} />
+        )}
+      </Suspense>
+      <GenerationRatingToast />
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
@@ -371,6 +385,11 @@ const Main = ({
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);
+            setIsSettingsOpen(false);
+          }}
+          onOpenDebugConsole={() => {
+            setShouldLoadDebugConsole(true);
+            setIsDebugConsoleOpen(true);
             setIsSettingsOpen(false);
           }}
           topOffset={TOP_BAR_OFFSET}

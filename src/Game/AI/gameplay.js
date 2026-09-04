@@ -61,6 +61,7 @@ import {
   resolveHelperValues,
 } from "./promptContext.js";
 import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
+import { attachAttemptOutcome, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
   loadCountryNames,
@@ -1296,6 +1297,15 @@ const difficultyScopeForTask = (taskKey) => {
   return "simulation";
 };
 
+// Telemetry: how much in-game time this task's prompt covers, from the round
+// dates the template variables carry. Null for tasks without a window.
+const computeSimulatedDays = (variables) => {
+  const origin = Date.parse(String(variables?.date ?? ""));
+  const target = Date.parse(String(variables?.targetDate ?? ""));
+  if (!Number.isFinite(origin) || !Number.isFinite(target)) return null;
+  return Math.max(0, Math.round((target - origin) / 86400000));
+};
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
@@ -1812,7 +1822,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         tool: batchTool,
       });
       if (submitted) {
-        registerPendingBatch({ customId, fallback, onBatchResult, taskKey, validatePayload });
+        registerPendingBatch({ customId, fallback, onBatchResult, record: submitted.record ?? null, taskKey, validatePayload });
         return { deferred: true, generation: { source: "batch", fallbackReason: "", deferred: true }, payload: null };
       }
       // Submission refused (no key, provider hiccup): the synchronous path
@@ -1908,6 +1918,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         // answerable from the log rather than by re-deriving it.
         systemPrompt,
       });
+      // Telemetry: the record for THIS attempt comes back through the sink, so
+      // the validation outcome below lands on the call that produced it.
+      const attemptSink = {};
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
@@ -1932,6 +1945,8 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         // cache_control block; OpenAI and Gemini cache identical prefixes on
         // their own, so the layout alone helps them.
         staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
+        __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
+        __debugSink: attemptSink,
       });
       // This attempt is answered: stop counting silence against it. Validation,
       // salvage and the retry's own prompt evaluation all happen with nothing on
@@ -2128,6 +2143,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       }
 
       if (validation.valid) {
+        attachAttemptOutcome(attemptSink.record, { ok: true, parsedSummary: normalizeParsedSummary(taskKey, parsed) });
         logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
         // The payload that was ACCEPTED, not only the ones that were rejected.
         // A turn that validates cleanly and still produces the wrong world — a
@@ -2143,6 +2159,11 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       // Every rejection, including the one attempt 2 goes on to fix. A turn that
       // came out right on the retry still tells you which rule the model keeps
       // breaking, and that is invisible in a log that only records failures.
+      attachAttemptOutcome(attemptSink.record, {
+        ok: false,
+        validationError: validation.error,
+        parsedSummary: normalizeParsedSummary(taskKey, parsed),
+      });
       logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} REJECTED: ${validation.error}`, {
         clearedSchema: schemaValid,
         rawResponse: rawText,
@@ -2629,6 +2650,7 @@ export const pollPendingBatches = async () => {
     pendingBatches.delete(customId);
     try {
       let result = null;
+      if (entry.record && outcome.usage) entry.record.usage = outcome.usage;
       if (outcome.status === "done") {
         const candidate = outcome.payload ?? (outcome.rawText ? extractJsonPayload(outcome.rawText) : null);
         let validation = candidate
@@ -2640,9 +2662,17 @@ export const pollPendingBatches = async () => {
           const taskError = normalizeString(await entry.validatePayload(candidate, { attempt: 1, finalAttempt: true }));
           if (taskError) validation = { valid: false, error: taskError };
         }
-        if (validation.valid) result = { value: candidate, source: "batch" };
-        else logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") failed validation: ${validation.error} Applying the deterministic fallback.`);
+        if (validation.valid) {
+          result = { value: candidate, source: "batch" };
+          attachAttemptOutcome(entry.record, { ok: true, parsedSummary: normalizeParsedSummary(entry.taskKey, candidate) });
+          finishAiRecord(entry.record, { ok: true, rawResponse: outcome.rawText ?? "" });
+        } else {
+          attachAttemptOutcome(entry.record, { ok: false, validationError: validation.error });
+          finishAiRecord(entry.record, { ok: false, error: "The batch answer failed validation.", rawResponse: outcome.rawText ?? "" });
+          logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") failed validation: ${validation.error} Applying the deterministic fallback.`);
+        }
       } else {
+        finishAiRecord(entry.record, { ok: false, error: "The batch request did not succeed." });
         logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") did not succeed. Applying the deterministic fallback.`);
       }
       if (!result) {

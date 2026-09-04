@@ -17,6 +17,12 @@ import {
     updatePreset,
 } from "../AI/providerConfig.js";
 import {
+    isRatingEnabled,
+    isTelemetryEnabled,
+    setRatingEnabled,
+    setTelemetryEnabled,
+} from "../AI/telemetry.js";
+import {
     STRUCTURED_MODES,
     STRUCTURED_MODE_HINTS,
     STRUCTURED_MODE_INTRO,
@@ -1438,6 +1444,7 @@ const SettingsMenu = ({
     providerSettings,
     onProviderSettingChange,
     onOpenCheats,
+    onOpenDebugConsole,
     discordUrl,
     redditUrl,
     githubUrl,
@@ -1464,6 +1471,10 @@ const SettingsMenu = ({
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
+
+    // Telemetry switches (telemetry.js): their own keys, both on by default.
+    const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
+    const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
 
     // The save's own value arrives asynchronously (library.js reads game.json),
     // and it changes again whenever a different save is activated — both of them
@@ -1619,6 +1630,23 @@ const SettingsMenu = ({
         applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
         </div>
         <Toggle
+        label="Record AI telemetry"
+        enabled={telemetryOn}
+        onToggle={() => { const next = !telemetryOn; setTelemetryOn(next); setTelemetryEnabled(next); }}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        Keeps every AI call — prompt, answer, model, tokens, latency, validation verdict — in this browser for the AI debug console
+        (200 across sessions). Off: the console sees this session only. Keys are never recorded.
+        </div>
+        <Toggle
+        label="Rate AI generations"
+        enabled={ratingOn}
+        onToggle={() => { const next = !ratingOn; setRatingOn(next); setRatingEnabled(next); }}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        A small 1-10 bar after each time skip, Game Master edit and catalyst. Ratings sit beside the call in the console and its exports.
+        </div>
+        <Toggle
         label="Generate long time skips in segments"
         enabled={mapSettings.chunkLongJumps}
         onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)}
@@ -1672,6 +1700,31 @@ const SettingsMenu = ({
         <NetworkSharing />
 
         <DiagnosticsPanel />
+
+        {typeof onOpenDebugConsole === "function" && (
+            <button
+            type="button"
+            onClick={onOpenDebugConsole}
+            style={{
+                alignItems: "center",
+                background: "rgba(59,130,246,0.18)",
+                border: "1px solid rgba(96,165,250,0.4)",
+                borderRadius: "8px",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                gap: "0.5rem",
+                justifyContent: "center",
+                marginBottom: "1rem",
+                padding: "0.6rem 0.7rem",
+                width: "100%",
+            }}
+            >
+            📊 AI debug console
+            </button>
+        )}
 
         {typeof onOpenCheats === "function" && (
             <button
