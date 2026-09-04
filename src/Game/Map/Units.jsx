@@ -156,6 +156,26 @@ const Units = ({ vNext = false }) => {
   const [colorMap, setColorMap] = useState({});
   const [orders, setOrders] = useState([]);
   const { current: map } = useMap();
+
+  // The polity label layer is added by the boundary worker once the map is up.
+  // A units layer declared before then must not name it as beforeId, or MapLibre
+  // refuses the layer; once the labels exist the layers are moved under them.
+  const [labelsReady, setLabelsReady] = useState(false);
+  useEffect(() => {
+    const mapInstance = map?.getMap?.() ?? map;
+    if (!mapInstance?.on) return undefined;
+    const check = () => {
+      try {
+        setLabelsReady(Boolean(mapInstance.style && mapInstance.getLayer?.("country-curved-labels")));
+      } catch {
+        setLabelsReady(false);
+      }
+    };
+    check();
+    mapInstance.on("styledata", check);
+    return () => mapInstance.off?.("styledata", check);
+  }, [map]);
+  const labelBeforeId = vNext && labelsReady ? "country-curved-labels" : undefined;
   // Pinned for the session (see runtime/mapSettings.js). Counters, flags and
   // names are the same in both systems — only the standing-order overlay differs.
   const betaUnits = isBetaUnits();
@@ -222,7 +242,17 @@ const Units = ({ vNext = false }) => {
   }, [polityOverrides]);
 
   useEffect(() => {
-    const source = () => map?.getMap?.()?.getSource?.("units-source") ?? map?.getSource?.("units-source");
+    // After the map is torn down (leaving a game) MapLibre's style is gone and
+    // getSource throws; a frame the retry loop queued must not crash on it.
+    const source = () => {
+      const mapInstance = map?.getMap?.() ?? map;
+      if (!mapInstance?.style) return null;
+      try {
+        return mapInstance.getSource?.("units-source") ?? null;
+      } catch {
+        return null;
+      }
+    };
 
     const featuresAt = (progress) => ({
       type: "FeatureCollection",
@@ -423,7 +453,7 @@ const Units = ({ vNext = false }) => {
       <Source id="units-orders-source" type="geojson" data={orderData}>
         <Layer
           id="units-heading"
-          beforeId={vNext ? "country-curved-labels" : undefined}
+          beforeId={labelBeforeId}
           type="line"
           minzoom={3}
           filter={["==", ["get", "kind"], "heading"]}
@@ -436,7 +466,7 @@ const Units = ({ vNext = false }) => {
         />
         <Layer
           id="units-station"
-          beforeId={vNext ? "country-curved-labels" : undefined}
+          beforeId={labelBeforeId}
           type="line"
           filter={["==", ["get", "kind"], "station"]}
           paint={{
@@ -454,7 +484,7 @@ const Units = ({ vNext = false }) => {
       <Source id="units-source" type="geojson" data={EMPTY_FEATURE_COLLECTION}>
         <Layer
           id="units-fill"
-          beforeId={vNext ? "country-curved-labels" : undefined}
+          beforeId={labelBeforeId}
           type="circle"
           paint={{
             // An unconfirmed contact draws smaller as well as fainter — it reads
@@ -490,7 +520,7 @@ const Units = ({ vNext = false }) => {
         />
         <Layer
           id="units-icons"
-          beforeId={vNext ? "country-curved-labels" : undefined}
+          beforeId={labelBeforeId}
           type="symbol"
           layout={{
             "symbol-sort-key": ["-", ["get", "strength"]],
@@ -531,7 +561,7 @@ const Units = ({ vNext = false }) => {
         />
         <Layer
           id="units-name"
-          beforeId={vNext ? "country-curved-labels" : undefined}
+          beforeId={labelBeforeId}
           type="symbol"
           minzoom={3}
           layout={{
