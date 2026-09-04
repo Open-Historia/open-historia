@@ -21,41 +21,54 @@ import { buildTerritoryIndex } from "./territoryOutlines.js";
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
-// Walks BACKWARD from a chat's last message to the first one with a usable
-// `time`, mirroring chat.jsx's chatLastMessageTime (kept as a separate copy
-// here rather than imported — that file is a React/UI module this AI-prompt
-// layer shouldn't depend on). Returns null when nothing in the chat carries a
-// parseable date, so an all-blank chat sorts as "unknown" rather than as
-// artificially ancient (which would bury it) or artificially current (which
-// would crowd out chats that really are active).
-const chatLastMessageTimeMs = (chat) => {
-  const messages = chat.messages ?? [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const raw = messages[i]?.time;
-    if (!raw) continue;
-    const ms = new Date(raw).getTime();
-    if (Number.isFinite(ms)) return ms;
-  }
-  return null;
-};
+const joinWithinCharBudget = (
+  items,
+  {
+    maxChars = 0,
+    separator = "\n",
+    take = "tail",
+    omissionMarker = "",
+  } = {},
+) => {
+  const rows = normalizeArray(items)
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  if (rows.length === 0) return "";
 
-// Most-recently-ACTIVE first. A long-running chat with a country the player
-// has kept talking to for many rounds otherwise stays parked wherever it was
-// first inserted into storage (chats are only ever prepended on creation, not
-// re-ordered on new messages) — so a still-open, actively-updated chat could
-// silently fall outside chatHistoryLong/chatSummary's `limit` slice just
-// because several OTHER chats were started more recently, even though none of
-// them are as current. A chat with no usable date at all sorts to the end,
-// same convention as chat.jsx's "Undated" bucket, rather than winning the
-// front of the list by default.
-const sortChatsByLastActivity = (chats) => [...chats].sort((a, b) => {
-  const ta = chatLastMessageTimeMs(a);
-  const tb = chatLastMessageTimeMs(b);
-  if (ta === null && tb === null) return 0;
-  if (ta === null) return 1;
-  if (tb === null) return -1;
-  return tb - ta;
-});
+  const full = rows.join(separator);
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  if (!budget || full.length <= budget) return full;
+
+  const ordered = take === "head" ? rows : [...rows].reverse();
+  const selected = [];
+  let used = 0;
+
+  for (const row of ordered) {
+    const separatorChars = selected.length ? separator.length : 0;
+    const next = separatorChars + row.length;
+
+    // Never corrupt one canonical record merely to hit a transport target. If one
+    // record is unusually large, keep that record whole and allow this soft budget
+    // to exceed its target rather than cutting an event/chat/summary mid-thought.
+    if (selected.length === 0 && next > budget) {
+      selected.push(row);
+      used = row.length;
+      break;
+    }
+    if (used + next > budget) break;
+
+    selected.push(row);
+    used += next;
+  }
+
+  const kept = take === "head" ? selected : selected.reverse();
+  const omitted = Math.max(0, rows.length - kept.length);
+  if (omitted > 0 && omissionMarker) {
+    if (take === "head") kept.push(omissionMarker.replace("${count}", String(omitted)));
+    else kept.unshift(omissionMarker.replace("${count}", String(omitted)));
+  }
+  return kept.join(separator);
+};
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -63,12 +76,29 @@ export const renderTemplate = (template, variables) =>
     return value == null ? "" : String(value);
   });
 
-export const resolveHelperValues = (helperTemplates, variables) => {
+export const resolveHelperValues = (
+  helperTemplates,
+  variables,
+  { includeKeys = null } = {},
+) => {
+  const requested = includeKeys == null
+    ? null
+    : new Set(
+        (includeKeys instanceof Set ? [...includeKeys] : normalizeArray(includeKeys))
+          .map(normalizeString)
+          .filter(Boolean),
+      );
+  const entries = Object.entries(
+    helperTemplates && typeof helperTemplates === "object" ? helperTemplates : {},
+  ).filter(([key]) => !requested || requested.has(key));
+
   let resolved = {};
 
+  // Preserve the existing two-pass helper semantics exactly. Phase 9.5B only
+  // avoids rendering helper templates that the actual loaded task cannot reach.
   for (let pass = 0; pass < 2; pass += 1) {
     resolved = Object.fromEntries(
-      Object.entries(helperTemplates).map(([key, template]) => [
+      entries.map(([key, template]) => [
         key,
         renderTemplate(template, { ...variables, ...resolved }),
       ]),
@@ -88,13 +118,20 @@ export const getUnconsolidatedEvents = (events, world) => {
   return boundaryIndex >= 0 ? normalizedEvents.slice(boundaryIndex + 1) : normalizedEvents;
 };
 
-export const buildEventHistoryText = (events, { limit = 10, world = null } = {}) => {
+export const buildEventHistoryText = (
+  events,
+  {
+    limit = 10,
+    maxChars = 0,
+    world = null,
+  } = {},
+) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
   if (normalizedEvents.length === 0) {
     return "No unconsolidated events have been recorded yet.";
   }
 
-  return normalizedEvents
+  const rendered = normalizedEvents
     .slice(-limit)
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
@@ -122,80 +159,551 @@ export const buildEventHistoryText = (events, { limit = 10, world = null } = {})
         description ? `  ${description}` : "",
         impactNotes.length > 0 ? `  ${impactNotes.join(" | ")}` : "",
       ].filter(Boolean).join("\n");
-    })
-    .join("\n");
+    });
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n",
+    take: "tail",
+    omissionMarker: "- [${count} earlier event record(s) omitted from this task context; canonical save history is unchanged.]",
+  });
 };
 
-export const buildConsolidatedHistoryText = (world) => {
+const renderConsolidatedHistoryEntry = (entry) =>
+  `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`;
+
+const joinCoverageSelectedHistory = (rows, selectedIndexes) => {
+  const indexes = [...selectedIndexes].sort((a, b) => a - b);
+  const output = [];
+  let priorIndex = -1;
+
+  for (const index of indexes) {
+    const omitted = index - priorIndex - 1;
+    if (omitted > 0) {
+      output.push(
+        `[${omitted} consolidated-history block(s) omitted from this task context; `
+        + "their canonical source history remains in the save.]",
+      );
+    }
+    output.push(rows[index]);
+    priorIndex = index;
+  }
+
+  const trailingOmitted = rows.length - priorIndex - 1;
+  if (trailingOmitted > 0) {
+    output.push(
+      `[${trailingOmitted} newer consolidated-history block(s) omitted from this task context; `
+      + "their canonical source history remains in the save.]",
+    );
+  }
+
+  return output.join("\n\n");
+};
+
+const joinConsolidatedCoverageWithinCharBudget = (rows, { maxChars = 0 } = {}) => {
+  const normalizedRows = normalizeArray(rows)
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  if (normalizedRows.length === 0) return "";
+
+  const full = normalizedRows.join("\n\n");
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  if (!budget || full.length <= budget) return full;
+
+  // Phase 9.3B: older campaign memory should plateau without becoming a pure
+  // "latest N summaries" window. Preserve the campaign foundation, preserve the
+  // newest continuity most heavily, then use deterministic farthest-point sampling
+  // across the middle so decades of history keep broad chronological coverage.
+  // Whole summary blocks are always kept intact; this is a soft transport budget.
+  const selected = new Set();
+  let used = 0;
+  const markerReserve = Math.min(2000, Math.max(512, Math.floor(budget * 0.08)));
+  const rowBudget = Math.max(1, budget - markerReserve);
+
+  const tryAdd = (index, { force = false } = {}) => {
+    if (selected.has(index) || index < 0 || index >= normalizedRows.length) return false;
+    const row = normalizedRows[index];
+    const separatorChars = selected.size > 0 ? 2 : 0;
+    const next = row.length + separatorChars;
+    if (!force && selected.size > 0 && used + next > rowBudget) return false;
+    selected.add(index);
+    used += next;
+    return true;
+  };
+
+  const recentTarget = Math.max(1, Math.floor(rowBudget * 0.60));
+  const foundationTarget = Math.max(1, Math.floor(rowBudget * 0.15));
+
+  let recentUsed = 0;
+  for (let index = normalizedRows.length - 1; index >= 0 && recentUsed < recentTarget; index -= 1) {
+    const before = used;
+    if (tryAdd(index, { force: selected.size === 0 })) {
+      recentUsed += used - before;
+    }
+  }
+
+  let foundationUsed = 0;
+  for (let index = 0; index < normalizedRows.length && foundationUsed < foundationTarget; index += 1) {
+    const row = normalizedRows[index];
+    const separatorChars = selected.size > 0 ? 2 : 0;
+    const next = row.length + separatorChars;
+    if (foundationUsed > 0 && foundationUsed + next > foundationTarget) break;
+
+    const before = used;
+    if (tryAdd(index)) {
+      foundationUsed += used - before;
+    }
+  }
+
+  const fitCandidates = () => normalizedRows
+    .map((_row, index) => index)
+    .filter((index) => {
+      if (selected.has(index)) return false;
+      const separatorChars = selected.size > 0 ? 2 : 0;
+      return used + separatorChars + normalizedRows[index].length <= rowBudget;
+    });
+
+  // Repeatedly take the candidate furthest from anything already selected. This
+  // creates even temporal coverage without semantic guessing, language assumptions,
+  // or turning compressed summaries into a new source of truth.
+  while (true) {
+    const candidates = fitCandidates();
+    if (candidates.length === 0) break;
+
+    let bestIndex = -1;
+    let bestDistance = -1;
+    for (const index of candidates) {
+      const distance = selected.size === 0
+        ? normalizedRows.length
+        : Math.min(...[...selected].map((selectedIndex) => Math.abs(index - selectedIndex)));
+      if (distance > bestDistance || (distance === bestDistance && index > bestIndex)) {
+        bestIndex = index;
+        bestDistance = distance;
+      }
+    }
+    if (bestIndex < 0 || !tryAdd(bestIndex)) break;
+  }
+
+  // If uneven block sizes leave a little capacity, spend it on the newest remaining
+  // continuity first. That biases the final envelope toward what can still cause the
+  // next turn while retaining the broad historical anchors selected above.
+  for (let index = normalizedRows.length - 1; index >= 0; index -= 1) {
+    tryAdd(index);
+  }
+
+  return joinCoverageSelectedHistory(normalizedRows, selected);
+};
+
+export const buildConsolidatedHistoryText = (
+  world,
+  {
+    maxChars = 0,
+    selection = "tail",
+  } = {},
+) => {
   const entries = normalizeWorldState(world).consolidatedHistory;
   if (entries.length === 0) return "No earlier campaign history has been consolidated yet.";
 
-  return entries
-    .map((entry) => `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`)
-    .join("\n\n");
+  const rendered = entries.map(renderConsolidatedHistoryEntry);
+  if (selection === "coverage") {
+    return joinConsolidatedCoverageWithinCharBudget(rendered, { maxChars });
+  }
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n\n",
+    take: "tail",
+    omissionMarker:
+      "[${count} older consolidated-history block(s) omitted from this task context; "
+      + "their canonical source history remains in the save.]",
+  });
 };
 
-export const buildCampaignHistoryText = (events, world, { limit = 24 } = {}) => [
+export const buildCampaignHistoryText = (
+  events,
+  world,
+  {
+    consolidatedMaxChars = 0,
+    consolidatedSelection = "tail",
+    eventMaxChars = 0,
+    limit = 24,
+  } = {},
+) => [
   "STORY SO FAR:",
-  buildConsolidatedHistoryText(world),
+  buildConsolidatedHistoryText(world, {
+    maxChars: consolidatedMaxChars,
+    selection: consolidatedSelection,
+  }),
   "",
   "RECENT EVENTS:",
-  buildEventHistoryText(events, { limit, world }),
+  buildEventHistoryText(events, { limit, maxChars: eventMaxChars, world }),
 ].join("\n");
 
+
+const compactHistoricalAnchorText = (value, maxChars = 260) => {
+  const text = normalizeString(value).replace(/\s+/g, " ");
+  const limit = Math.max(40, Math.trunc(Number(maxChars) || 260));
+  if (text.length <= limit) return text;
+
+  const preview = text.slice(0, limit + 1);
+  const boundaries = [preview.lastIndexOf(". "), preview.lastIndexOf("; "), preview.lastIndexOf(", ")]
+    .filter((index) => index >= Math.floor(limit * 0.6));
+  const cutAt = boundaries.length > 0 ? Math.max(...boundaries) + 1 : limit;
+  return `${text.slice(0, cutAt).trim()}…`;
+};
+
+const hasDurableStructuralEventImpact = (event) => {
+  const lifecycleChange = normalizeArray(event?.impacts?.polityChanges)
+    .some((change) => ["create", "restore", "rename", "dissolve"]
+      .includes(normalizeString(change?.operation).toLowerCase()));
+  if (lifecycleChange) return true;
+
+  return normalizeArray(event?.impacts?.regionTransfers).some((transfer) => {
+    const from = normalizeString(transfer?.fromCode).toLowerCase();
+    const to = normalizeString(transfer?.toCode).toLowerCase();
+    return Boolean(to && (!from || from !== to));
+  });
+};
+
+const buildHistoricallyLinkedEventIds = (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const ids = new Set();
+  const addOrigin = (entry) => {
+    const first = normalizeArray(entry?.sourceEventIds)
+      .map(normalizeString)
+      .find(Boolean);
+    if (first) ids.add(first);
+  };
+
+  normalizeArray(world.storylines)
+    .filter((entry) => ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+  normalizeArray(world.wars)
+    .filter((entry) => ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+  normalizeArray(world.agreements)
+    .filter((entry) => ["active", "suspended"].includes(normalizeString(entry?.status).toLowerCase()))
+    .forEach(addOrigin);
+
+  return ids;
+};
+
+const historicalAnchorCandidateScore = (event, linkedEventIds) => {
+  const importance = normalizeString(event?.importance).toLowerCase();
+  const id = normalizeString(event?.id);
+  const linked = Boolean(id && linkedEventIds.has(id));
+  const structural = hasDurableStructuralEventImpact(event);
+
+  let score = importance === "critical" ? 1200 : importance === "major" ? 360 : 40;
+  if (linked) score += 1000;
+  if (structural) score += 520;
+  if (event?.notable) score += 220;
+  if (event?.playerRelated) score += 100;
+  return { linked, structural, score };
+};
+
+const renderHistoricalAnchorEvent = (event) => {
+  const date = normalizeString(event?.date) || "undated";
+  const title = normalizeString(event?.title) || "Untitled historical event";
+  const description = compactHistoricalAnchorText(event?.description, 260);
+  return `- ${date}: ${title}${description ? ` — ${description}` : ""}`;
+};
+
+export const buildHistoricalAnchorText = (
+  events,
+  worldLike,
+  {
+    maxAnchors = 18,
+    maxChars = 6000,
+  } = {},
+) => {
+  const world = normalizeWorldState(worldLike);
+  const history = normalizeArray(world.consolidatedHistory);
+  const throughEventId = normalizeString(history.at(-1)?.throughEventId);
+  if (!throughEventId) return "";
+
+  const normalizedEvents = normalizeEvents(events);
+  const boundaryIndex = normalizedEvents.findIndex((event) => normalizeString(event?.id) === throughEventId);
+  if (boundaryIndex < 0) return "";
+
+  const historicalEvents = normalizedEvents.slice(0, boundaryIndex + 1);
+  if (historicalEvents.length === 0) return "";
+
+  const linkedEventIds = buildHistoricallyLinkedEventIds(world);
+  const candidates = historicalEvents
+    .map((event, eventIndex) => {
+      const assessment = historicalAnchorCandidateScore(event, linkedEventIds);
+      const importance = normalizeString(event?.importance).toLowerCase();
+      const eligible = assessment.linked || assessment.structural || importance === "critical" ||
+        (importance === "major" && Boolean(event?.notable));
+      if (!eligible) return null;
+      return {
+        event,
+        eventIndex,
+        row: renderHistoricalAnchorEvent(event),
+        ...assessment,
+        critical: importance === "critical",
+      };
+    })
+    .filter(Boolean);
+  if (candidates.length === 0) return "";
+
+  const charBudget = Math.max(1, Math.trunc(Number(maxChars) || 6000));
+  const anchorLimit = Math.max(1, Math.trunc(Number(maxAnchors) || 18));
+  const selected = new Map();
+  let used = 0;
+
+  const tryAdd = (candidate, { force = false } = {}) => {
+    if (!candidate || selected.has(candidate.eventIndex) || selected.size >= anchorLimit) return false;
+    const separatorChars = selected.size > 0 ? 1 : 0;
+    const next = candidate.row.length + separatorChars;
+    if (!force && selected.size > 0 && used + next > charBudget) return false;
+    selected.set(candidate.eventIndex, candidate);
+    used += next;
+    return true;
+  };
+
+  // First protect the rare events whose absence is most likely to make a long
+  // campaign contradict itself: critical turning points and the origin events of
+  // currently active storylines/wars/agreements. This is provenance-driven, not
+  // keyword-driven, and current hard-state ledgers still outrank old event prose.
+  const forcedLimit = Math.max(1, Math.ceil(anchorLimit * 0.5));
+  const forced = candidates
+    .filter((candidate) => candidate.critical || candidate.linked)
+    .sort((a, b) =>
+      (Number(b.critical) - Number(a.critical)) ||
+      (Number(b.linked) - Number(a.linked)) ||
+      (b.score - a.score) ||
+      (b.eventIndex - a.eventIndex)
+    );
+  for (const candidate of forced) {
+    if (selected.size >= forcedLimit) break;
+    tryAdd(candidate, { force: selected.size === 0 });
+  }
+
+  // Spend the remaining slots across the entire consolidated era. Each bucket gets
+  // its strongest canonical event, so a century-long campaign does not turn into
+  // "the latest few years plus one founding paragraph". Structured lifecycle/map
+  // changes naturally outrank routine narrative churn through the candidate score.
+  const remainingSlots = Math.max(0, anchorLimit - selected.size);
+  if (remainingSlots > 0) {
+    const bucketCount = remainingSlots;
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const start = Math.floor((bucket * historicalEvents.length) / bucketCount);
+      const end = Math.max(start + 1, Math.floor(((bucket + 1) * historicalEvents.length) / bucketCount));
+      const bucketCandidates = candidates
+        .filter((candidate) =>
+          candidate.eventIndex >= start &&
+          candidate.eventIndex < end &&
+          !selected.has(candidate.eventIndex)
+        )
+        .sort((a, b) => (b.score - a.score) || (b.eventIndex - a.eventIndex));
+      if (bucketCandidates.length > 0) tryAdd(bucketCandidates[0]);
+    }
+  }
+
+  // Uneven event density / row length can leave budget behind. Use it on the
+  // strongest remaining anchors, with newer events winning only exact score ties.
+  const remaining = candidates
+    .filter((candidate) => !selected.has(candidate.eventIndex))
+    .sort((a, b) => (b.score - a.score) || (b.eventIndex - a.eventIndex));
+  for (const candidate of remaining) {
+    if (selected.size >= anchorLimit) break;
+    tryAdd(candidate);
+  }
+
+  return [...selected.values()]
+    .sort((a, b) => a.eventIndex - b.eventIndex)
+    .map((candidate) => candidate.row)
+    .join("\n");
+};
+
+const buildDiplomaticMessageLine = (message) => {
+  const speaker = normalizeString(message?.speaker || message?.role || "message");
+  const text = normalizeString(message?.text);
+  const date = normalizeString(message?.time);
+  const dateLabel = date ? formatDateReadable(date) : "";
+  return `${dateLabel ? `[${dateLabel}] ` : ""}${speaker}: ${text}`;
+};
+
+const getLatestDiplomaticMemory = (chat) => {
+  const messages = normalizeArray(chat?.messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const summary = normalizeString(messages[index]?.memorySummary);
+    if (!summary) continue;
+    return {
+      summary,
+      time: normalizeString(messages[index]?.time),
+    };
+  }
+  return null;
+};
+
+const buildDiplomaticMemoryLine = (chat, { maxChars = 1400 } = {}) => {
+  const memory = getLatestDiplomaticMemory(chat);
+  if (!memory) return "";
+  const dateLabel = memory.time ? formatDateReadable(memory.time) : "an earlier point";
+  const summary = memory.summary.length > maxChars
+    ? `${memory.summary.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
+    : memory.summary;
+  return `Durable diplomatic memory through ${dateLabel}: ${summary}`;
+};
+
+const diplomaticChatActivityKey = (chat) => {
+  const messages = normalizeArray(chat?.messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const time = normalizeString(messages[index]?.time);
+    if (time) return time;
+  }
+  return "";
+};
+
+const sortDiplomaticChatsByRecentActivity = (chats) =>
+  normalizeChats(chats)
+    .map((chat, index) => ({
+      chat,
+      index,
+      activity: diplomaticChatActivityKey(chat),
+      hasMemory: Boolean(getLatestDiplomaticMemory(chat)),
+    }))
+    .sort((left, right) => {
+      const byActivity = right.activity.localeCompare(left.activity);
+      if (byActivity !== 0) return byActivity;
+
+      // On the same in-game date, prefer a thread that already carries durable
+      // continuity memory. This keeps explicit agreements/commitments visible to
+      // world-generation context instead of letting a routine note crowd them out.
+      if (left.hasMemory !== right.hasMemory) {
+        return left.hasMemory ? -1 : 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map((entry) => entry.chat);
+
+const buildSingleChatHistoryText = (chat, { messageLimit = 10 } = {}) => {
+  if (!chat) return "No chat history.";
+
+  const memoryLine = buildDiplomaticMemoryLine(chat);
+  const recentMessages = normalizeArray(chat.messages)
+    .slice(-messageLimit)
+    .map(buildDiplomaticMessageLine)
+    .join("\n");
+
+  return [
+    memoryLine,
+    recentMessages || "No messages yet.",
+  ].filter(Boolean).join("\n");
+};
+
 export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
-  const normalizedChats = normalizeChats(chats);
+  const normalizedChats = sortDiplomaticChatsByRecentActivity(chats);
   if (normalizedChats.length === 0) return "No diplomatic chats are currently recorded.";
 
   return normalizedChats.slice(0, limit).map((chat) => {
     const participants = chat.countries.map((country) => country.name).join(", ");
     const lastMessage = chat.messages.at(-1);
-    const date = lastMessage?.time ? ` [${formatDateReadable(lastMessage.time)}]` : "";
-    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}${date}: ${lastMessage.text}` : "no messages yet"}`;
+    const memoryLine = buildDiplomaticMemoryLine(chat, { maxChars: 700 });
+    return [
+      `- ${participants}:`,
+      memoryLine ? `  ${memoryLine}` : "",
+      `  Latest: ${lastMessage ? buildDiplomaticMessageLine(lastMessage) : "no messages yet"}`,
+    ].filter(Boolean).join("\n");
   }).join("\n");
 };
 
-// Every message line carries its own in-game date (when the message has one),
-// and every chat header states when that chat last saw activity. Without
-// these, the ONLY signal for "which message is most recent" was a message's
-// position in the transcript — fine for a human skimming top-to-bottom, but a
-// weak, implicit cue for the model to reason about explicitly (especially
-// with several same-named countries' chats in view, or a country the player
-// has talked to across many separate rounds). An explicit date lets the model
-// answer "the recent message from Algeria" by actually comparing dates
-// instead of guessing from list position.
-// `visibleTo` names the polity this transcript is being rendered FOR, and keeps
-// only the chats that polity was actually a participant in. Omit it (the default)
-// for the omniscient readers — the jump narrator, the consolidator, and the
-// player's own advisor, who is in every chat anyway.
-//
-// This is what makes a diplomatic channel private. Without it the `leader` prompt
-// handed every AI power the player's letters to every other power, so no offer
-// could be confidential and every leader wrote in the same borrowed voice. See
-// chatVisibility.js for the field evidence.
-export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10, visibleTo = "" } = {}) => {
-  const normalizedChats = normalizeChats(chats);
+// `visibleTo` names the polity this transcript is rendered FOR; the caller has
+// already limited the chats to the ones that polity took part in
+// (chatVisibility.js). Distinct wording per case: "this polity has no
+// correspondence" is a very different fact from "nothing happened this round",
+// and a leader told the latter when the former is true may invent a
+// conversation to fill the gap.
+export const buildDetailedChatHistoryText = (
+  chats,
+  {
+    limit = 8,
+    maxChars = 0,
+    messageLimit = 10,
+    visibleTo = "",
+  } = {},
+) => {
+  const normalizedChats = sortDiplomaticChatsByRecentActivity(chats);
   if (normalizedChats.length === 0) {
-    // Distinct wording per case: "this polity has no correspondence" is a very
-    // different fact from "nothing happened this round", and a leader told the
-    // latter when the former is true may invent a conversation to fill the gap.
     return visibleTo
       ? "You have exchanged no messages with them in these rounds."
       : "No chats occurred in these rounds.";
   }
 
-  return normalizedChats.slice(0, limit).map((chat, index) => {
-    const lastActivityMs = chatLastMessageTimeMs(chat);
-    const lastActivity = lastActivityMs !== null ? ` (most recent activity: ${formatDateReadable(lastActivityMs)})` : "";
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${lastActivity}`;
-    const body = chat.messages.length > 0
-      ? chat.messages.slice(-messageLimit).map((message) => {
-        const date = message.time ? ` [${formatDateReadable(message.time)}]` : "";
-        return `${message.speaker || message.role}${date}: ${message.text}`;
-      }).join("\n")
-      : "No messages yet.";
-    return `${header}\n${body}`;
-  }).join("\n\n");
+  const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
+    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
+    return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
+  });
+
+  return joinWithinCharBudget(rendered, {
+    maxChars,
+    separator: "\n\n",
+    take: "head",
+    omissionMarker:
+      "[${count} additional lower-priority diplomatic thread(s) omitted from this task context; "
+      + "their canonical chat records remain in the save.]",
+  });
+};
+
+// Compact diplomatic continuity ledger for the world simulator. Long-term meaning
+// comes from rolling memory, while a tiny recent verbatim tail preserves exact
+// actor attribution and modal force when summaries paraphrase too aggressively.
+export const buildDiplomaticContinuityText = (
+  chats,
+  {
+    limit = 12,
+    maxCharsPerThread = 1000,
+    evidenceMessageLimit = 4,
+    maxEvidenceCharsPerThread = 1800,
+    maxTotalChars = 12000,
+  } = {},
+) => {
+  const rows = [];
+  let usedChars = 0;
+
+  for (const chat of sortDiplomaticChatsByRecentActivity(chats)) {
+    const memory = getLatestDiplomaticMemory(chat);
+    if (!memory?.summary) continue;
+
+    const participants = normalizeArray(chat?.countries)
+      .map((country) => normalizeString(country?.name || country?.code))
+      .filter(Boolean)
+      .join(", ") || "Unknown participants";
+    const updated = memory.time ? formatDateReadable(memory.time) : "unknown date";
+    const clippedSummary = memory.summary.length > maxCharsPerThread
+      ? `${memory.summary.slice(0, Math.max(0, maxCharsPerThread - 1)).trimEnd()}…`
+      : memory.summary;
+
+    const recentEvidenceRaw = normalizeArray(chat?.messages)
+      .filter((message) => ["user", "leader"].includes(normalizeString(message?.role)))
+      .slice(-evidenceMessageLimit)
+      .map(buildDiplomaticMessageLine)
+      .join("\n");
+    const recentEvidence = recentEvidenceRaw.length > maxEvidenceCharsPerThread
+      ? `…${recentEvidenceRaw.slice(-Math.max(0, maxEvidenceCharsPerThread - 1)).trimStart()}`
+      : recentEvidenceRaw;
+
+    const row = [
+      `Participants: ${participants}`,
+      `Memory updated: ${updated}`,
+      `Standing diplomatic memory: ${clippedSummary}`,
+      recentEvidence
+        ? `Recent verbatim diplomatic evidence (authoritative for exact wording and modality):\n${recentEvidence}`
+        : "",
+    ].filter(Boolean).join("\n");
+
+    if (rows.length >= limit) break;
+    if (usedChars + row.length > maxTotalChars && rows.length > 0) break;
+
+    rows.push(row);
+    usedChars += row.length;
+  }
+
+  return rows.join("\n\n");
 };
 
 export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
@@ -249,20 +757,6 @@ export const buildActionHistoryText = (actions, { includeResolved = false, limit
     lines.unshift(`- (${omitted} earlier resolved action${omitted === 1 ? "" : "s"} omitted from this excerpt)`);
   }
   return lines.join("\n");
-};
-
-// Planned actions WITH their ids — every other action-history text is written
-// for the simulation model, which never references an action by id, so ids
-// would just be clutter there. The advisor is different: it needs a stable
-// handle to EDIT or REMOVE a specific queued action the player asks it to
-// amend, and copying the id verbatim is the only way to do that precisely
-// (matching by title/text is fragile — titles can collide or get reworded).
-export const buildPlannedActionsWithIdsText = (actions) => {
-  const planned = normalizeActions(actions).filter((action) => action.status === "planned");
-  if (planned.length === 0) return "No planned actions are currently queued.";
-  return planned
-    .map((action) => `- [id ${action.id}] (${action.kind === "chat" ? "chat" : "action"}) ${action.title}: ${buildActionDisplayText(action)}`)
-    .join("\n");
 };
 
 export const formatActionsForPrompt = (actions) => normalizeArray(actions)
@@ -344,6 +838,178 @@ export const buildUnitsSummaryText = (world, { betaUnits = isBetaUnits() } = {})
   }).join("\n");
 };
 
+// Phase 10.1: persistent physical world, bounded object attention. The save keeps
+// every marker; an individual AI task sees only a compact, deterministic subset that
+// is causally/recently relevant plus a rotating background sample. No extra AI call.
+const MARKER_ATTENTION_OPEN_STATUSES = new Set(["planned", "under_construction", "damaged"]);
+const MARKER_ATTENTION_STOP_WORDS = new Set([
+  "about", "after", "again", "against", "along", "another", "because", "before", "being",
+  "between", "current", "during", "event", "forces", "from", "government", "have", "into",
+  "major", "marker", "military", "more", "over", "polity", "should", "state", "their",
+  "there", "these", "they", "this", "through", "under", "with", "world",
+]);
+
+const markerAttentionKey = (value) => normalizeString(value)
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase();
+
+const markerAttentionTokens = (value) => new Set(
+  markerAttentionKey(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
+);
+
+const markerStableHash = (value) => {
+  let hash = 2166136261;
+  const text = String(value ?? "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const compactMarkerNote = (value, maxChars = 180) => {
+  const text = normalizeString(value).replace(/\s+/g, " ");
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(1, maxChars - 1)).trim()}…`;
+};
+
+const markerAttentionLimitForTask = (taskKey) => {
+  const key = normalizeString(taskKey);
+  if (["jumpForward", "autoJumpForward"].includes(key)) return 28;
+  if (key === "gameMaster") return 40;
+  if (key === "actions") return 20;
+  if (["catalystCreation", "catalystExecutor"].includes(key)) return 20;
+  return 16;
+};
+
+const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
+  // readGameStateBundle already gives us canonical world state; avoid a second full
+  // world normalization just to score a bounded marker view.
+  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
+  const recentEvents = normalizeEvents(bundle.events).slice(-12);
+  const recentEventIds = new Set(recentEvents.map((event) => normalizeString(event.id)).filter(Boolean));
+  const pieces = [];
+
+  for (const event of recentEvents) {
+    pieces.push(normalizeString(event.title), compactMarkerNote(event.description, 420));
+  }
+  for (const storyline of normalizeArray(world.storylines).filter((entry) =>
+    ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 20)) {
+    pieces.push(
+      normalizeString(storyline.title),
+      compactMarkerNote(storyline.state || storyline.summary || storyline.note, 260),
+      ...normalizeArray(storyline.participants).slice(0, 8).map(normalizeString),
+    );
+  }
+  for (const war of normalizeArray(world.wars).filter((entry) =>
+    ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 12)) {
+    pieces.push(
+      normalizeString(war.title || war.name || war.id),
+      compactMarkerNote(war.note || war.summary, 220),
+      ...normalizeArray(war.sideA).slice(0, 8).map(normalizeString),
+      ...normalizeArray(war.sideB).slice(0, 8).map(normalizeString),
+    );
+  }
+  for (const action of normalizeActions(bundle.actions).filter((entry) => !entry?.resolved).slice(-10)) {
+    pieces.push(
+      normalizeString(action.title),
+      compactMarkerNote(action.description || action.rawInput || action.text, 320),
+    );
+  }
+
+  const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
+  if (normalizedChat) {
+    pieces.push(...normalizeArray(normalizedChat.countries).slice(0, 8)
+      .map((country) => normalizeString(country?.name || country?.polityKey || country?.code)));
+    for (const message of normalizeArray(normalizedChat.messages).slice(-6)) {
+      pieces.push(normalizeString(message?.speaker), compactMarkerNote(message?.message || message?.text, 320));
+    }
+  }
+
+  const focusText = pieces.filter(Boolean).join("\n");
+  return {
+    focusKey: markerAttentionKey(focusText),
+    focusTokens: markerAttentionTokens(focusText),
+    recentEventIds,
+  };
+};
+
+export const buildMarkersSummaryText = (
+  worldLike,
+  {
+    focusKey = "",
+    focusTokens = new Set(),
+    limit = 16,
+    recentEventIds = new Set(),
+    seed = "",
+  } = {},
+) => {
+  const markers = normalizeArray(worldLike?.markers);
+  if (markers.length === 0) return "No persistent physical world features have been established yet.";
+
+  const boundedLimit = Math.max(1, Math.min(60, Math.trunc(Number(limit) || 16)));
+  const scored = markers.map((marker, index) => {
+    const names = [marker.name, ...normalizeArray(marker.aliases)].map(normalizeString).filter(Boolean);
+    const nameKeys = names.map(markerAttentionKey).filter(Boolean);
+    const blob = [marker.name, ...normalizeArray(marker.aliases), marker.kind, marker.ownerCode, marker.note]
+      .map(normalizeString).filter(Boolean).join(" ");
+    const markerTokens = markerAttentionTokens(blob);
+    let score = 0;
+
+    if (MARKER_ATTENTION_OPEN_STATUSES.has(normalizeString(marker.status).toLowerCase())) score += 260;
+    if (normalizeArray(marker.sourceEventIds).some((eventId) => recentEventIds.has(normalizeString(eventId)))) score += 300;
+    if (focusKey && nameKeys.some((nameKey) => nameKey.length >= 4 && focusKey.includes(nameKey))) score += 520;
+    if (focusKey && normalizeString(marker.ownerCode) && focusKey.includes(markerAttentionKey(marker.ownerCode))) score += 55;
+
+    let overlaps = 0;
+    for (const token of markerTokens) {
+      if (focusTokens.has(token)) overlaps += 1;
+      if (overlaps >= 6) break;
+    }
+    score += overlaps * 34;
+
+    // This changes with the simulation round/task seed, creating a tiny rotating
+    // awareness lane for stable objects that are not currently in the foreground.
+    const rotation = markerStableHash(`${seed}|${marker.id || marker.name}`) % 1000;
+    const touched = normalizeString(marker.updatedDate || marker.foundedAt || marker.updatedAt || marker.createdAt);
+    return { marker, index, rotation, score, touched };
+  });
+
+  scored.sort((a, b) =>
+    b.score - a.score
+    || String(b.touched).localeCompare(String(a.touched))
+    || a.rotation - b.rotation
+    || a.index - b.index);
+
+  const selected = scored.slice(0, boundedLimit).map(({ marker }) => marker);
+  const rows = selected.map((marker) => {
+    const lat = Number(marker.lat);
+    const lng = Number(marker.lng);
+    const coords = Number.isFinite(lat) && Number.isFinite(lng)
+      ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+      : "unknown location";
+    const status = normalizeString(marker.status) || "active";
+    const aliases = normalizeArray(marker.aliases).slice(-3).map(normalizeString).filter(Boolean);
+    const founded = normalizeString(marker.foundedAt);
+    const changed = normalizeString(marker.updatedDate);
+    const dates = [
+      founded ? `founded ${founded}` : "",
+      changed && changed !== founded ? `last changed ${changed}` : "",
+    ].filter(Boolean).join(", ");
+    const note = compactMarkerNote(marker.note, 180);
+    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
+  });
+
+  const omitted = Math.max(0, markers.length - selected.length);
+  if (omitted > 0) {
+    rows.push(`[${omitted} additional persistent world feature${omitted === 1 ? "" : "s"} omitted from this task context; they remain canonical in the save.]`);
+  }
+  return rows.join("\n");
+};
+
 // Standing orders the ENGINE is advancing (world.pendingUnitOrders): a move still
 // under way, or a patrol working its station. Kept separate from the actions
 // queue and its clearActions flag entirely (see gameState.js), so they re-surface
@@ -374,20 +1040,18 @@ export const buildPendingUnitOrdersText = (world, { betaUnits = isBetaUnits() } 
   }).filter(Boolean).join("\n");
 };
 
-// Structures founded during play (world.markers): cities, military bases,
-// bunkers, missile silos, embassies. Listed with coordinates so the model can
-// reference, defend, target, or expand them — and knows their names are taken.
-export const buildMarkersSummaryText = (world) => {
-  const markers = normalizeArray(world?.markers);
-  if (markers.length === 0) return "No structures have been built during play yet.";
-  return markers.slice(0, 60).map((marker) => {
-    const lat = Number(marker.lat);
-    const lng = Number(marker.lng);
-    const coords = Number.isFinite(lat) && Number.isFinite(lng)
-      ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
-      : "unknown location";
-    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}) at ${coords}${marker.note ? ` — ${marker.note}` : ""}`;
-  }).join("\n");
+// Planned actions WITH their ids — every other action-history text is written
+// for the simulation model, which never references an action by id, so ids
+// would just be clutter there. The advisor is different: it needs a stable
+// handle to EDIT or REMOVE a specific queued action the player asks it to
+// amend, and copying the id verbatim is the only way to do that precisely
+// (matching by title/text is fragile — titles can collide or get reworded).
+export const buildPlannedActionsWithIdsText = (actions) => {
+  const planned = normalizeActions(actions).filter((action) => action.status === "planned");
+  if (planned.length === 0) return "No planned actions are currently queued.";
+  return planned
+    .map((action) => `- [id ${action.id}] (${action.kind === "chat" ? "chat" : "action"}) ${action.title}: ${buildActionDisplayText(action)}`)
+    .join("\n");
 };
 
 // The Projects & Operations board (world.projects), written out for the model.
@@ -581,7 +1245,9 @@ let _stockCityCatalogCache = null;
 
 // Same resolution the editor's city importer uses: the seed rides the content
 // node on web builds and same-origin /assets locally.
-const CITY_SEED_URL = `${(import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "")}/cities-seed.json`;
+// import.meta.env is Vite-only; the optional chain keeps this module importable
+// by the node test runner.
+const CITY_SEED_URL = `${(import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "")}/cities-seed.json`;
 
 const formatCityLine = (name, country, lat, lng, extra = "") =>
   `- ${name}${country ? ` (${country})` : ""}: lat ${Number(lat).toFixed(2)}, lng ${Number(lng).toFixed(2)}${extra}`;
@@ -769,132 +1435,367 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
 
 export const buildPromptContext = async (bundle, {
   actionInput = "",
+  actionsToConsolidate = "",
   advisorLimit = 18,
   catalystChoice = "",
   catalystHistory = "",
   catalystOpening = "",
   catalystPremise = "",
   chat = null,
+  chatHistoryLongMaxChars = 0,
   chatLimit = 8,
   chatsToConsolidate = "",
   // The polity this prompt SPEAKS AS, when that limits what it may have read.
   // Set by the leader path so one government cannot read another's private
   // correspondence (chatVisibility.js). Deliberately its own option rather than
   // being inferred from respondingPolityName, which is also filled in as a
-  // fallback on paths that are entitled to see everything — inferring it there
-  // would silently blind the jump narrator.
+  // fallback on paths that are entitled to see everything.
   chatVisibleTo = "",
+  consolidatedHistoryMaxChars = 0,
+  consolidatedHistorySelection = "tail",
+  historicalAnchorActivationChars = 0,
+  historicalAnchorMaxChars = 0,
+  historicalAnchorMaxItems = 18,
+  eventHistoryMaxChars = 0,
   eventLimit = 10,
   eventsToConsolidate = "",
   gameMasterRequest = "",
+  longEventHistoryMaxChars = 0,
   longEventLimit = 24,
+  requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
+  taskKey = "",
 } = {}) => {
-  const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
-  const regionCatalog = await loadRegions();
+  // Phase 9.5B: the save still remembers everything, but each task should only pay
+  // to CONSTRUCT context it can actually see. A null requiredKeys set is the
+  // compatibility path and preserves the legacy "build everything" behavior.
+  const required = requiredKeys == null
+    ? null
+    : new Set(
+        (requiredKeys instanceof Set ? [...requiredKeys] : normalizeArray(requiredKeys))
+          .map(normalizeString)
+          .filter(Boolean),
+      );
+  const wants = (...keys) => !required || keys.some((key) => required.has(key));
+  const result = {};
+  const put = (key, value) => {
+    if (wants(key)) result[key] = value;
+  };
+
   const date = bundle.game.gameDate || "";
   const target = targetDate || date;
-  const worldSummary = await buildWorldSummary(bundle, regionCatalog);
-  // Every power fielding forces, plus the player and whoever they are talking to
-  // — the set the "are X's units near Y's border?" question could be about.
-  // Bounded deliberately: indexing all ~200 countries' geometry would decode a
-  // lot of coastline nobody is going to ask about.
-  //
-  // Beta-only, and skipped wholesale in the classic system rather than merely
-  // unused: buildTerritoryIndex decodes region geometry for every power fielding
-  // forces, which is the single most expensive thing in a prompt build. Nothing
-  // in classic reads the result.
-  const forcePosture = !isBetaUnits() ? "" : await (async () => {
-    const world = normalizeWorldState(bundle.world);
-    const owners = [
-      normalizeString(bundle.game?.country),
-      ...normalizeArray(world.units).map((unit) => normalizeString(unit.ownerCode)),
-      ...normalizeChats(bundle.chats).flatMap((chat) =>
-        normalizeArray(chat.countries).map((country) => normalizeString(country?.name))),
-    ].filter(Boolean);
-    let territories = null;
-    try {
-      territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
-    } catch (error) {
-      // Border proximity is colour on top; never let it break a prompt build.
-      console.warn("[ai] force posture fell back to positions only:", error);
-    }
-    return buildForcePostureText(
-      world.units,
-      world.pendingUnitOrders,
-      territories,
-      normalizeString(bundle.game?.country),
-    );
-  })();
-  const citiesSummary = await buildCityCatalogText(bundle.world);
-  const recentEvents = buildEventHistoryText(bundle.events, { limit: eventLimit, world: bundle.world });
-  const campaignHistory = buildCampaignHistoryText(bundle.events, bundle.world, { limit: longEventLimit });
-  const allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
-  const actionText = formatActionsForPrompt(bundle.actions);
-  const consolidatedChatIds = new Set(
-    normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
-  );
-  const unconsolidatedChats = sortChatsByLastActivity(
-    normalizeChats(bundle.chats).filter((entry) => !consolidatedChatIds.has(entry.id)),
-  );
-  const currentChat = normalizedChat ?? unconsolidatedChats[0] ?? null;
 
-  return {
-    actionInput,
-    actions: actionText,
-    advisorMessages: buildAdvisorHistoryText(bundle.advisor || [], { limit: advisorLimit }),
-    allActions,
-    catalystChoice,
-    catalystDate: date,
-    catalystHistory,
-    catalystOpening,
-    catalystPercent: normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
-      ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
-      : "0%",
-    catalystPremise,
-    citiesSummary,
-    chat: JSON.stringify(unconsolidatedChats),
-    chatHistory: currentChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") || "No chat history.",
-    // The only transcript that is visibility-filtered. `chatsToConsolidate` below
-    // stays unfiltered on purpose: the consolidator is the archivist and must
-    // fold the WHOLE round into canon, not one government's view of it.
-    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit, visibleTo: chatVisibleTo }),
-    chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
-    chatSummary: buildChatSummaryText(unconsolidatedChats),
-    chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(unconsolidatedChats, { limit: 12, messageLimit: 50 }),
-    consolidatedHistory: buildConsolidatedHistoryText(bundle.world),
-    date,
-    dateReadable: formatDateReadable(date),
-    difficulty: bundle.game.difficulty || "standard",
-    forcePosture,
-    difficultyGuidanceChats: buildDifficultyGuidance(bundle.game.difficulty, "chats"),
-    difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
-    eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),
-    gameMasterRequest,
-    language: bundle.world.language || bundle.game.language || "English",
-    lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
-    markersSummary: buildMarkersSummaryText(bundle.world),
-    numberOfRegions: String(regionCatalog.length),
-    pendingUnitOrders: buildPendingUnitOrdersText(bundle.world),
-    plannedActions: buildActionHistoryText(bundle.actions),
-    plannedActionsWithIds: buildPlannedActionsWithIdsText(bundle.actions),
-    playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
-    playerPolity: bundle.game.country || "Unknown polity",
-    playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),
-    projectsSummary: buildProjectsSummaryText(bundle.world, bundle.game),
-    recentEvents,
-    recentEventsLong: campaignHistory,
-    recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
-    respondingPolityName: respondingPolityName || currentChat?.countries.find((country) => country.name !== bundle.game.country)?.name || "",
-    round: String(bundle.game.round || 1),
-    simulationRules: normalizeString(bundle.world.simulationRules) || "No extra simulation rules were provided.",
-    startDate: bundle.game.startDate || "",
-    targetDate: target,
-    targetDateReadable: formatDateReadable(target),
-    unitsSummary: buildUnitsSummaryText(bundle.world),
-    worldBeforeRoundOne: normalizeString(bundle.world.startingTimelineText) || "No pre-game world briefing was provided.",
-    worldSummary,
-    worldSummaryNoCity: worldSummary,
-  };
+  // Geography is one of the most expensive shared inputs. Load the region catalog
+  // only when a demanded variable actually needs it.
+  const needsRegionCatalog = wants(
+    "worldSummary",
+    "worldSummaryNoCity",
+    "playerPolityRegions",
+    "numberOfRegions",
+  );
+  const regionCatalog = needsRegionCatalog ? await loadRegions() : [];
+
+  let worldSummary = "";
+  if (wants("worldSummary", "worldSummaryNoCity")) {
+    worldSummary = await buildWorldSummary(bundle, regionCatalog);
+  }
+
+  if (wants("citiesSummary")) {
+    result.citiesSummary = await buildCityCatalogText(bundle.world);
+  }
+
+  if (wants("recentEvents")) {
+    result.recentEvents = buildEventHistoryText(bundle.events, {
+      limit: eventLimit,
+      maxChars: eventHistoryMaxChars,
+      world: bundle.world,
+    });
+  }
+
+  // Long-history attention is computed only for tasks that actually render one of
+  // its outputs. The selection/budget semantics are unchanged from 9.4A.
+  const needsLongHistory = wants(
+    "consolidatedHistory",
+    "historicalAnchors",
+    "historicalAttentionStatus",
+    "recentEventsLong",
+  );
+  let consolidatedHistory = "";
+  let historicalAnchors = "";
+  let historicalAttentionStatus = "";
+  if (needsLongHistory) {
+    const fullConsolidatedHistory = buildConsolidatedHistoryText(bundle.world);
+    const historicalAnchorThreshold = Math.max(
+      0,
+      Math.trunc(Number(historicalAnchorActivationChars) || 0),
+    );
+    const historicalAnchorBudget = Math.max(
+      0,
+      Math.trunc(Number(historicalAnchorMaxChars) || 0),
+    );
+    const historicalAnchorThresholdReached = Boolean(
+      historicalAnchorThreshold &&
+      historicalAnchorBudget &&
+      fullConsolidatedHistory.length > historicalAnchorThreshold
+    );
+    const candidateHistoricalAnchors = historicalAnchorThresholdReached
+      ? buildHistoricalAnchorText(bundle.events, bundle.world, {
+          maxAnchors: historicalAnchorMaxItems,
+          maxChars: historicalAnchorBudget,
+        })
+      : "";
+    const historicalAttentionActive = Boolean(candidateHistoricalAnchors);
+    const effectiveConsolidatedHistoryMaxChars =
+      historicalAttentionActive && consolidatedHistoryMaxChars
+        ? Math.max(
+            1,
+            Math.max(0, Math.trunc(Number(consolidatedHistoryMaxChars) || 0))
+              - historicalAnchorBudget,
+          )
+        : consolidatedHistoryMaxChars;
+
+    consolidatedHistory = effectiveConsolidatedHistoryMaxChars
+      ? buildConsolidatedHistoryText(bundle.world, {
+          maxChars: effectiveConsolidatedHistoryMaxChars,
+          selection: consolidatedHistorySelection,
+        })
+      : fullConsolidatedHistory;
+    historicalAnchors = historicalAttentionActive ? candidateHistoricalAnchors : "";
+    historicalAttentionStatus = historicalAttentionActive
+      ? `active: ${effectiveConsolidatedHistoryMaxChars || 0} consolidated chars + up to ${historicalAnchorBudget} canonical-anchor chars`
+      : historicalAnchorThresholdReached
+        ? `fallback: long history detected (${fullConsolidatedHistory.length} chars) but no canonical anchor set was resolvable; retaining ${consolidatedHistoryMaxChars || 0}-char summary allowance`
+        : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`;
+
+    put("consolidatedHistory", consolidatedHistory);
+    put("historicalAnchors", historicalAnchors);
+    put("historicalAttentionStatus", historicalAttentionStatus);
+
+    if (wants("recentEventsLong")) {
+      const campaignRecentEvents = buildEventHistoryText(bundle.events, {
+        limit: longEventLimit,
+        maxChars: longEventHistoryMaxChars,
+        world: bundle.world,
+      });
+      result.recentEventsLong = [
+        "STORY SO FAR:",
+        consolidatedHistory,
+        ...(historicalAnchors
+          ? [
+              "",
+              "PERMANENT HISTORICAL ANCHORS:",
+              "Selected directly from older canonical event records to preserve major divergences and origins across long campaigns. Current hard-state ledgers and newer canon override any superseded old wording.",
+              historicalAnchors,
+            ]
+          : []),
+        "",
+        "RECENT EVENTS:",
+        campaignRecentEvents,
+      ].join("\n");
+    }
+  }
+
+  if (wants("actions")) {
+    result.actions = formatActionsForPrompt(bundle.actions);
+  }
+  if (wants("allActions")) {
+    result.allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
+  }
+  if (wants("plannedActions")) {
+    result.plannedActions = buildActionHistoryText(bundle.actions);
+  }
+
+  // Chat normalization/sorting can become substantial in long campaigns. Do it
+  // only for variables that expose chat continuity, or when a consolidation fallback
+  // actually needs to build its own chat batch.
+  const needsChatState = wants(
+    "chat",
+    "chatHistory",
+    "chatHistoryLong",
+    "chatParticipants",
+    "chatSummary",
+    "diplomaticContinuity",
+    "lastSpeaker",
+    "respondingPolityName",
+  ) || (wants("chatsToConsolidate") && !chatsToConsolidate);
+
+  let promptChats = [];
+  let currentChat = null;
+  if (needsChatState) {
+    const normalizedChat =
+      chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
+    const consolidatedChatIds = new Set(
+      normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
+    );
+    const unconsolidatedChats = normalizeChats(bundle.chats)
+      .filter((entry) => !consolidatedChatIds.has(entry.id));
+    promptChats = sortDiplomaticChatsByRecentActivity(unconsolidatedChats);
+    currentChat = normalizedChat ?? promptChats[0] ?? null;
+  }
+
+  if (wants("chat")) result.chat = JSON.stringify(promptChats);
+  if (wants("chatHistory")) {
+    result.chatHistory = currentChat
+      ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
+      : "No chat history.";
+  }
+  if (wants("chatHistoryLong")) {
+    result.chatHistoryLong = buildDetailedChatHistoryText(promptChats, {
+      limit: chatLimit,
+      maxChars: chatHistoryLongMaxChars,
+      visibleTo: chatVisibleTo,
+    });
+  }
+  if (wants("chatParticipants")) {
+    result.chatParticipants =
+      currentChat?.countries?.map((country) => country.name).join(", ") || "";
+  }
+  if (wants("chatSummary")) result.chatSummary = buildChatSummaryText(promptChats);
+  if (wants("diplomaticContinuity")) {
+    result.diplomaticContinuity = buildDiplomaticContinuityText(promptChats);
+  }
+  if (wants("lastSpeaker")) {
+    result.lastSpeaker = currentChat?.messages?.at(-1)?.speaker || "";
+  }
+  if (wants("respondingPolityName")) {
+    result.respondingPolityName =
+      respondingPolityName ||
+      currentChat?.countries.find((country) => country.name !== bundle.game.country)?.name ||
+      "";
+  }
+  if (wants("chatsToConsolidate")) {
+    result.chatsToConsolidate =
+      chatsToConsolidate ||
+      buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 });
+  }
+
+  if (wants("eventsToConsolidate")) {
+    result.eventsToConsolidate =
+      eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 });
+  }
+
+  if (wants("advisorMessages")) {
+    result.advisorMessages = buildAdvisorHistoryText(bundle.advisor || [], {
+      limit: advisorLimit,
+    });
+  }
+
+  // Cheap scalars are still demand-gated so diagnostics can verify that 9.5B did
+  // not merely skip the obvious expensive builders while materializing every alias.
+  put("actionInput", actionInput);
+  put("actionsToConsolidate", actionsToConsolidate);
+  put("catalystChoice", catalystChoice);
+  put("catalystDate", date);
+  put("catalystHistory", catalystHistory);
+  put("catalystOpening", catalystOpening);
+  if (wants("catalystPercent")) {
+    result.catalystPercent =
+      normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
+        ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
+        : "0%";
+  }
+  put("catalystPremise", catalystPremise);
+  put("date", date);
+  if (wants("dateReadable")) result.dateReadable = formatDateReadable(date);
+  put("difficulty", bundle.game.difficulty || "standard");
+  if (wants("difficultyGuidanceChats")) {
+    result.difficultyGuidanceChats = buildDifficultyGuidance(
+      bundle.game.difficulty,
+      "chats",
+    );
+  }
+  if (wants("difficultyGuidanceJumpForward")) {
+    result.difficultyGuidanceJumpForward = buildDifficultyGuidance(
+      bundle.game.difficulty,
+      "jump",
+    );
+  }
+  put("gameMasterRequest", gameMasterRequest);
+  put("language", bundle.world.language || bundle.game.language || "English");
+  if (wants("markersSummary")) {
+    const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
+    result.markersSummary = buildMarkersSummaryText(bundle.world, {
+      ...markerAttention,
+      limit: markerAttentionLimitForTask(taskKey),
+      seed: `${taskKey || "compatibility"}|${target}|${bundle.game.round || 1}|${bundle.game.country || ""}`,
+    });
+  }
+  if (wants("numberOfRegions")) {
+    result.numberOfRegions = String(regionCatalog.length);
+  }
+  put("playerPolity", bundle.game.country || "Unknown polity");
+  if (wants("playerPolityRegions")) {
+    result.playerPolityRegions = await buildPlayerPolityRegionsText(
+      bundle,
+      regionCatalog,
+    );
+  }
+  if (wants("recentRoundsWithDates")) {
+    result.recentRoundsWithDates = buildRecentRoundsWithDates(bundle);
+  }
+  put("round", String(bundle.game.round || 1));
+  put(
+    "simulationRules",
+    normalizeString(bundle.world.simulationRules) ||
+      "No extra simulation rules were provided.",
+  );
+  put("startDate", bundle.game.startDate || "");
+  put("targetDate", target);
+  if (wants("targetDateReadable")) {
+    result.targetDateReadable = formatDateReadable(target);
+  }
+
+  if (wants("playerBattalionSummaries", "unitsSummary")) {
+    const unitsText = buildUnitsSummaryText(bundle.world);
+    put("playerBattalionSummaries", unitsText);
+    put("unitsSummary", unitsText);
+  }
+
+  // Beta unit system context. Border proximity is the single most expensive
+  // thing in a prompt build (region geometry for every power fielding forces),
+  // so it is built only when a task actually renders it.
+  if (wants("forcePosture")) {
+    result.forcePosture = !isBetaUnits() ? "" : await (async () => {
+      const world = normalizeWorldState(bundle.world);
+      const owners = [
+        normalizeString(bundle.game?.country),
+        ...normalizeArray(world.units).map((unit) => normalizeString(unit.ownerCode)),
+        ...normalizeChats(bundle.chats).flatMap((entry) =>
+          normalizeArray(entry.countries).map((country) => normalizeString(country?.name))),
+      ].filter(Boolean);
+      let territories = null;
+      try {
+        territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
+      } catch (error) {
+        // Border proximity is colour on top; never let it break a prompt build.
+        console.warn("[ai] force posture fell back to positions only:", error);
+      }
+      return buildForcePostureText(
+        world.units,
+        world.pendingUnitOrders,
+        territories,
+        normalizeString(bundle.game?.country),
+      );
+    })();
+  }
+  if (wants("pendingUnitOrders")) {
+    result.pendingUnitOrders = buildPendingUnitOrdersText(bundle.world);
+  }
+  if (wants("plannedActionsWithIds")) {
+    result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
+  }
+  if (wants("projectsSummary")) {
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game);
+  }
+
+  const worldBeforeRoundOne =
+    normalizeString(bundle.world.startingTimelineText) ||
+    "No pre-game world briefing was provided.";
+  put("worldBeforeRoundOne", worldBeforeRoundOne);
+  put("worldBeforeRoundOneText", worldBeforeRoundOne);
+  put("worldSummary", worldSummary);
+  put("worldSummaryNoCity", worldSummary);
+
+  return result;
 };

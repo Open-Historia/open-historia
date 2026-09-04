@@ -510,6 +510,7 @@ const normalizeChatMessage = (message, index = 0) => {
       speaker: "",
       text,
       time: "",
+      memorySummary: "",
     };
   }
 
@@ -528,6 +529,10 @@ const normalizeChatMessage = (message, index = 0) => {
     reactions: normalizeReactionMap(message.reactions),
     role: normalizeOptionalString(message.role || message.sender) || "system",
     speaker: normalizeOptionalString(message.speaker || message.senderName),
+    // Rolling durable diplomatic memory attached to a message: never rendered as
+    // chat text, it lets long negotiations stay bounded without forgetting
+    // agreements, threats or unresolved proposals (promptContext reads the latest).
+    memorySummary: normalizeOptionalString(message.memorySummary || message.diplomaticMemorySummary),
     text,
     time: normalizeOptionalString(message.time || message.date),
   };
