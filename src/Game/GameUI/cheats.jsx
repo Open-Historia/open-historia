@@ -35,7 +35,7 @@ const TOOLS = [
     { id: "annex-regions", title: "Annex Regions", subtitle: "Transfer individual map regions to another country", icon: "⌖" },
     { id: "edit-country", title: "Country Editor", subtitle: "Edit a country's identity and properties", icon: "◆" },
     { id: "add-country", title: "Add Country", subtitle: "Create a new polity for custom or fantasy campaigns", icon: "+", badge: "Advanced" },
-    { id: "regions", title: "Region Inspector", subtitle: "Inspect who holds a region, who claims it, and its identity", icon: "▦" },
+    { id: "regions", title: "Region Inspector", subtitle: "Inspect control, sovereignty, claims, and region identity", icon: "▦" },
     { id: "edit-feature", title: "Map Feature Editor", subtitle: "Inspect and edit runtime features and scenario cities", icon: "◉" },
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
@@ -1046,6 +1046,7 @@ const eventImpactSummary = (event) => {
         ["polity", impacts.polityChanges],
         ["territory", impacts.regionTransfers],
         ["claims", impacts.regionClaims],
+        ["control", impacts.regionControlOps],
         ["units", impacts.unitOps],
         ["markers", impacts.markerOps],
         ["chats", impacts.createdChats],
@@ -2162,6 +2163,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         );
         const transferOps = eventOps("regionTransfers");
         const claimOps = eventOps("regionClaims");
+        const controlOps = eventOps("regionControlOps");
         const polityOps = eventOps("polityChanges");
         const unitOps = eventOps("unitOps");
         const markerOps = eventOps("markerOps");
@@ -2383,12 +2385,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 These are the individual operations the Apply step would execute. Authored prose above is not a substitute for these state changes.
                             </div>
 
-                            {(transferOps.length > 0 || claimOps.length > 0) && (
+                            {(transferOps.length > 0 || claimOps.length > 0 || controlOps.length > 0) && (
                                 <div style={{ marginTop: "0.5rem" }}>
-                                    {subsectionTitle("Territory · holders", transferOps.length, transferOps.length ? "regions changing hands" : "unchanged")}
+                                    {subsectionTitle("Territory · legal sovereignty", transferOps.length, transferOps.length ? "legal owner changes" : "unchanged")}
                                     {transferOps.length === 0 ? (
                                         <div style={{ ...exactRowStyle, color: "rgba(134,239,172,0.72)" }}>
-                                            NONE · every region keeps its current holder.
+                                            NONE · legal sovereignty remains with the current sovereigns.
                                         </div>
                                     ) : transferOps.map((entry, index) => (
                                         <div key={`transfer-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
@@ -2398,6 +2400,24 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                             {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
                                         </div>
                                     ))}
+
+                                    {subsectionTitle("Territory · de-facto control / contest", controlOps.length, "does not change legal sovereignty")}
+                                    {controlOps.length === 0 ? (
+                                        <div style={exactRowStyle}>NONE</div>
+                                    ) : controlOps.map((entry, index) => {
+                                        const region = entry.regionName || entry.regionId || "Unknown region";
+                                        let detail = entry.op || "operation";
+                                        if (entry.op === "contest") detail = `CONTEST · current controller ${entry.fromCode || "unknown"} · challenger ${entry.actorCode || "unknown"}`;
+                                        if (entry.op === "control") detail = `CONTROL · ${entry.fromCode || "unknown"} → ${entry.toCode || "unknown"}`;
+                                        if (entry.op === "clear_contest") detail = `CLEAR CONTEST · controller ${entry.fromCode || "unknown"}${entry.clearAll ? " · all claimants" : ` · claimant ${entry.claimantCode || "unknown"}`}`;
+                                        return (
+                                            <div key={`control-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>{region}</strong> · {detail}
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
+                                            </div>
+                                        );
+                                    })}
 
                                     {subsectionTitle("Territory · claims", claimOps.length, "does not move the border")}
                                     {claimOps.length === 0 ? (
@@ -2999,11 +3019,14 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
     if (tool === "regions") {
         const regionId = String(fields.id ?? "").trim();
-        const owner = String(fields.owner ?? "").trim();
+        const controller = String(fields.controller ?? fields.owner ?? "").trim();
+        const owner = controller;
+        const sovereign = String(fields.sovereign ?? controller).trim();
         const claimants = Array.isArray(fields.claimants) ? fields.claimants : [];
         const isContested = claimants.length > 0;
-        const stateLabel = !owner ? "Unclaimed" : isContested ? "Disputed" : "Held";
-        const stateTone = isContested ? "#c4b5fd" : owner ? "#86efac" : "rgba(255,255,255,0.55)";
+        const isOccupied = Boolean(controller && sovereign && controller !== sovereign);
+        const stateLabel = !controller ? "Unclaimed" : isOccupied ? "Occupied" : isContested ? "Disputed" : "Held";
+        const stateTone = isOccupied ? "#fcd34d" : isContested ? "#c4b5fd" : controller ? "#86efac" : "rgba(255,255,255,0.55)";
 
         const normalizeClaimants = (raw, currentOwner = "") => [...new Set(
             (Array.isArray(raw)
@@ -3030,6 +3053,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
             const world = await readWorldState({ force: true });
             const ownership = world?.regionOwnershipOverrides ?? {};
+            const sovereignty = world?.regionSovereigntyOverrides ?? {};
             const claims = world?.regionClaimants ?? {};
 
             const rawBaseGid0 = String(
@@ -3049,6 +3073,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const currentOwner = Object.prototype.hasOwnProperty.call(ownership, resolvedId)
                 ? String(ownership[resolvedId] ?? "").trim()
                 : baseOwner;
+            // The sovereignty map is sparse: no row means the controller is the sovereign.
+            const currentSovereign = Object.prototype.hasOwnProperty.call(sovereignty, resolvedId)
+                ? String(sovereignty[resolvedId] ?? "").trim()
+                : currentOwner;
             const currentClaimants = normalizeClaimants(claims[resolvedId], currentOwner);
 
             const geojson = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true }).catch(() => null);
@@ -3070,9 +3098,13 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 baseGid0: rawBaseGid0,
                 baseOwner,
                 owner: currentOwner,
+                controller: currentOwner,
+                sovereign: currentSovereign,
                 claimants: currentClaimants,
                 canRename: Boolean(customFeature),
                 ownerTarget: currentOwner,
+                controllerTarget: currentOwner,
+                sovereignTarget: currentSovereign,
                 claimantTarget: "",
             };
             setFields(next);
@@ -3153,34 +3185,91 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: "0.38rem", marginTop: "0.52rem", paddingTop: "0.52rem" }}>
                             {infoRow("Base geography", nameOf(fields.baseOwner) || countryNameFromBaseCode(fields.baseGid0))}
                             {fields.baseGid0 && infoRow("Base GID₀", fields.baseGid0, "rgba(255,255,255,0.58)")}
-                            {infoRow("Held by", nameOf(owner), "#d1fae5")}
+                            {infoRow("Controller", nameOf(controller), isOccupied ? "#fcd34d" : "#d1fae5")}
+                            {infoRow("Sovereign", nameOf(sovereign), isOccupied ? "#fde68a" : "rgba(255,255,255,0.86)")}
                             {infoRow("Claimants", claimants.length ? claimants.map(nameOf).join(", ") : "None", claimants.length ? "#ddd6fe" : "rgba(255,255,255,0.55)")}
                         </div>
                     </div>
 
                     <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
-                        <div style={editorSectionLabelStyle}>Ownership</div>
+                        <div style={editorSectionLabelStyle}>De-facto control</div>
                         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
-                            Changes who holds the region. This is the same regionTransfers operation a simulated conquest, cession or liberation uses, so the map, labels and claims react exactly as they would to an event.
+                            Changes who physically administers the region. This uses the same canonical control semantics as occupation/liberation: legal sovereignty stays put and displaced parties may remain claimants.
                         </div>
-                        <PolitySelect polities={polities} value={fields.ownerTarget ?? owner} onChange={(value) => setFields({ ...fields, ownerTarget: value })} placeholder="Pick the new holder…" />
+                        <PolitySelect polities={polities} value={fields.controllerTarget ?? controller} onChange={(value) => setFields({ ...fields, controllerTarget: value })} placeholder="Unclaimed / no controller" />
                         <button
                             type="button"
-                            disabled={busy || !fields.ownerTarget || fields.ownerTarget === owner}
+                            disabled={busy || !fields.controllerTarget || fields.controllerTarget === controller}
+                            onClick={() => runBusy(() => applyTerritoryImpacts({
+                                regionControlOps: [{
+                                    op: "control",
+                                    regionId,
+                                    regionName: fields.name || "",
+                                    fromCode: controller,
+                                    toCode: fields.controllerTarget,
+                                    note: "Authoritative Region Inspector control edit",
+                                }],
+                            }, `Controller → ${nameOf(fields.controllerTarget)}.`))}
+                            style={{ ...primaryButtonStyle, marginTop: "0.45rem", width: "100%" }}
+                        >
+                            Apply controller change
+                        </button>
+                        {isOccupied && (
+                            <button
+                                type="button"
+                                disabled={busy || !sovereign}
+                                onClick={() => runBusy(() => applyTerritoryImpacts({
+                                    regionControlOps: [
+                                        {
+                                            op: "control",
+                                            regionId,
+                                            regionName: fields.name || "",
+                                            fromCode: controller,
+                                            toCode: sovereign,
+                                            note: "Region Inspector restores legal sovereign control",
+                                        },
+                                        {
+                                            op: "clear_contest",
+                                            regionId,
+                                            regionName: fields.name || "",
+                                            fromCode: sovereign,
+                                            claimantCode: controller,
+                                            clearAll: false,
+                                            note: "Remove displaced foreign controller after restoration",
+                                        },
+                                    ],
+                                }, `Control restored to sovereign ${nameOf(sovereign)}.`))}
+                                style={{ ...buttonStyle, marginTop: "0.4rem", width: "100%" }}
+                            >
+                                Restore sovereign control
+                            </button>
+                        )}
+                    </div>
+
+                    <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                        <div style={editorSectionLabelStyle}>Legal sovereignty</div>
+                        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
+                            Formal title only. A legal transfer also moves administration when the old sovereign still controls the ground; a genuine third-party occupier is preserved.
+                        </div>
+                        <PolitySelect polities={polities} value={fields.sovereignTarget ?? sovereign} onChange={(value) => setFields({ ...fields, sovereignTarget: value })} placeholder="Pick legal sovereign…" />
+                        <button
+                            type="button"
+                            disabled={busy || !fields.sovereignTarget || fields.sovereignTarget === sovereign}
                             onClick={() => runBusy(() => applyTerritoryImpacts({
                                 regionTransfers: [{
                                     regionId,
                                     regionName: fields.name || "",
-                                    fromCode: owner,
-                                    toCode: fields.ownerTarget,
-                                    note: "Authoritative Region Inspector transfer",
+                                    fromCode: sovereign,
+                                    toCode: fields.sovereignTarget,
+                                    note: "Authoritative Region Inspector sovereignty transfer",
                                 }],
-                            }, `Region → ${nameOf(fields.ownerTarget)}.`))}
+                            }, `Legal sovereignty → ${nameOf(fields.sovereignTarget)}.`))}
                             style={{ ...primaryButtonStyle, marginTop: "0.45rem", width: "100%" }}
                         >
-                            Transfer region
+                            Transfer legal sovereignty
                         </button>
                     </div>
+
 
                     <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
                         <div style={editorSectionLabelStyle}>Claims & disputed state</div>

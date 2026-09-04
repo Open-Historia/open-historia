@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import url from "node:url";
 import { after, describe, test } from "node:test";
+import { OWNER_SCHEMA } from "./ownerMigration.js";
 
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
 const STORE_URL = url.pathToFileURL(path.join(SERVER_DIR, "libraryStore.js")).href;
@@ -42,7 +43,7 @@ const buildDataDir = ({ active, ids = ["game-alpha", "game-beta"] }) => {
     });
     // The world carries the owner-schema marker so reading it never triggers the
     // migration, which would delete files this test is watching.
-    writeJson(path.join(dir, "world.json"), { ownerSchema: 2 });
+    writeJson(path.join(dir, "world.json"), { ownerSchema: OWNER_SCHEMA });
     writeJson(path.join(dir, "game.json"), { country: "Testland", gameDate: "2032-11-15", round: 10 });
     writeJson(path.join(dir, "colors.json"), {});
     writeJson(path.join(dir, "prompts.json"), {});

@@ -88,6 +88,7 @@ const structuredImpactReasons = (event) => {
   for (const key of [
     "regionTransfers",
     "regionClaims",
+    "regionControlOps",
     "unitOps",
     "markerOps",
     "createdChats",

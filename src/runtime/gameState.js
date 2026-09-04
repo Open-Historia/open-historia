@@ -120,6 +120,11 @@ export const WORLD_DEFAULTS = {
   // overridable per-world without touching geometry. Wins over feature props.
   regionClaimants: {},
   regionOwnershipOverrides: {},
+  // Legal sovereignty where it differs from the polity administering a region
+  // (an occupation). Sparse: normal territory has no row. Written by legal
+  // regionTransfers and by de-facto regionControlOps, which anchor the lawful
+  // sovereign before control flips.
+  regionSovereigntyOverrides: {},
   // Canonical diplomacy and belligerency, owned by the engine (see
   // AI/nativeDiplomaticDirector.js and AI/nativeWarLedger.js). Relations say
   // how warm a pair of polities is; agreements are the formal instruments in
@@ -672,6 +677,63 @@ const normalizeRegionClaim = (entry) => {
   };
 };
 
+// Polity lifecycle: an ordinary update, a genuinely new polity, a rename that
+// keeps the stable key, a restored historical polity, or a dissolution.
+const POLITY_OPERATION_SET = new Set(["update", "create", "rename", "restore", "dissolve"]);
+const POLITY_STATUS_SET = new Set(["active", "dormant", "dissolved"]);
+
+// A de-facto control operation (contest / control / clear_contest): the
+// wartime layer that leaves legal sovereignty alone. Owners share the claimant
+// namespace, so a bare code is folded onto a country name here too.
+const normalizeRegionControlOp = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  const op = normalizeOptionalString(entry.op).toLowerCase();
+  const regionId = normalizeOptionalString(entry.regionId || entry.id || entry.gid || entry.GID_1);
+  const regionName = normalizeOptionalString(entry.regionName || entry.name);
+  const fromCode = toCountryName(normalizeOptionalString(entry.fromCode || entry.fromPolity));
+  const note = normalizeOptionalString(entry.note || entry.reason);
+
+  if (!regionId) return null;
+
+  if (op === "contest") {
+    const actorCode = toCountryName(normalizeOptionalString(entry.actorCode || entry.claimantCode || entry.toCode));
+    if (!fromCode || !actorCode || fromCode.toLowerCase() === actorCode.toLowerCase()) return null;
+    return { op, regionId, regionName, fromCode, actorCode, note };
+  }
+
+  if (op === "control" || op === "control_flip") {
+    const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
+    if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
+    return {
+      op: "control",
+      regionId,
+      regionName,
+      fromCode,
+      toCode,
+      note,
+      ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
+    };
+  }
+
+  if (op === "clear_contest" || op === "clear") {
+    const claimantCode = toCountryName(normalizeOptionalString(entry.claimantCode || entry.actorCode));
+    const clearAll = entry.clearAll === true || normalizeOptionalString(entry.claimantCode).toLowerCase() === "all";
+    if (!claimantCode && !clearAll) return null;
+    return {
+      op: "clear_contest",
+      regionId,
+      regionName,
+      fromCode,
+      claimantCode,
+      clearAll,
+      note,
+    };
+  }
+
+  return null;
+};
+
 const normalizePolityChange = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -704,6 +766,11 @@ const normalizePolityChange = (entry) => {
     ? entry.stats
     : null;
 
+  // Old saved events predate explicit lifecycle operations; they stay ordinary
+  // updates. New AI output states create/rename/restore/dissolve explicitly.
+  const rawOperation = normalizeOptionalString(entry.operation || entry.op || entry.action).toLowerCase();
+  const operation = POLITY_OPERATION_SET.has(rawOperation) ? rawOperation : "update";
+
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -711,6 +778,7 @@ const normalizePolityChange = (entry) => {
     name: normalizeOptionalString(entry.name || entry.newName),
     intelligence,
     note: normalizeOptionalString(entry.note || entry.reason),
+    operation,
     reputation,
     stats,
     tags,
@@ -2640,6 +2708,7 @@ const normalizeEventImpacts = (value) => {
       polityChanges: [],
       projectOps: [],
       regionClaims: [],
+      regionControlOps: [],
       regionTransfers: [],
       unitOps: [],
     };
@@ -2652,6 +2721,7 @@ const normalizeEventImpacts = (value) => {
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
+    regionControlOps: normalizeArray(value.regionControlOps).map(normalizeRegionControlOp).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
     // event that narrates a deployment and troops that actually appear on the map,
@@ -2764,12 +2834,31 @@ const normalizePolityOverride = (key, value) => {
     return null;
   }
 
+  // mapRefs.gadm0 is the owner migration's provenance (which stock geography a
+  // polity was founded on), status the lifecycle, mapLabel / mapDistinctLabel
+  // the map's authored cartographic names, verbatim the editor's collision
+  // guard: none of them may be lost on a client write.
+  const status = normalizeOptionalString(value.status).toLowerCase();
+  const rawMapRefs = value.mapRefs && typeof value.mapRefs === "object" && !Array.isArray(value.mapRefs)
+    ? value.mapRefs
+    : {};
+  const gadm0 = [...new Set(
+    normalizeArray(rawMapRefs.gadm0)
+      .map((entry) => normalizeOptionalString(entry).toUpperCase())
+      .filter(Boolean),
+  )];
+
   return {
     aliases: normalizeActionParticipants(value.aliases || value.additionalNames),
     code,
     color: normalizeOptionalString(value.color),
+    ...(gadm0.length ? { mapRefs: { ...rawMapRefs, gadm0 } } : {}),
+    ...(normalizeOptionalString(value.mapLabel) ? { mapLabel: normalizeOptionalString(value.mapLabel) } : {}),
+    ...(normalizeOptionalString(value.mapDistinctLabel) ? { mapDistinctLabel: normalizeOptionalString(value.mapDistinctLabel) } : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
+    ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
+    ...(value.verbatim === true ? { verbatim: true } : {}),
   };
 };
 
@@ -3109,6 +3198,20 @@ export const normalizeWorldState = (world) => {
       .filter(([regionId, claimants]) => regionId && claimants.length),
   );
 
+  // Legal sovereignty is SPARSE: only regions whose lawful sovereign differs
+  // from the polity administering them. A row that agrees with the controller
+  // is dropped (a save from before the ledger simply has none), and owners
+  // fold through the same alias map as everything else.
+  const regionSovereigntyOverrides = Object.fromEntries(
+    Object.entries(nextWorld.regionSovereigntyOverrides ?? {})
+      .map(([regionId, ownerCode]) => [normalizeOptionalString(regionId), resolveOwner(ownerCode)])
+      .filter(([regionId, ownerCode]) => {
+        if (!regionId || !ownerCode) return false;
+        const controller = normalizeOptionalString(regionOwnershipOverrides[regionId]);
+        return !controller || controller.toLowerCase() !== ownerCode.toLowerCase();
+      }),
+  );
+
   const internationalReputation = Object.fromEntries(
     Object.entries(nextWorld.internationalReputation ?? {})
       .map(([polityCode, value]) => [normalizeOptionalString(polityCode), Number(value)])
@@ -3200,6 +3303,7 @@ export const normalizeWorldState = (world) => {
     polityOverrides,
     regionClaimants,
     regionOwnershipOverrides,
+    regionSovereigntyOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
       .map((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -3298,7 +3402,9 @@ export const isPolityLandless = (world, code) => {
   if (!polityCode) return false;
   const normalized = normalizeWorldState(world);
   const entries = Object.entries(normalized.regionOwnershipOverrides);
-  const owns = entries.some(
+  // Administering a region or being its lawful sovereign both count: an
+  // occupied homeland is still a homeland.
+  const owns = [...entries, ...Object.entries(normalized.regionSovereigntyOverrides || {})].some(
     ([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === polityCode.toLowerCase(),
   );
   if (owns) return false;
@@ -3639,11 +3745,69 @@ export const applyCountryStatPatchToWorld = (world, canonicalName, patch, option
   return next;
 };
 
+const samePolity = (a, b) =>
+  normalizeOptionalString(a).toLowerCase() === normalizeOptionalString(b).toLowerCase();
+
+// The claimant list of a region: one entry per polity (case-insensitively), at
+// most four, and the key deleted at zero. An empty array left behind is a
+// permanent phantom difference to useWorldState's JSON comparison and a stripe
+// nobody can see (Nations.jsx tests `regionClaimants[id]?.length`).
+const writeRegionClaimants = (world, regionId, values) => {
+  const kept = [];
+  for (const raw of normalizeArray(values)) {
+    const name = normalizeOptionalString(raw);
+    if (!name || kept.some((entry) => samePolity(entry, name))) continue;
+    kept.push(name);
+  }
+  if (kept.length > 0) world.regionClaimants[regionId] = kept.slice(0, 4);
+  else delete world.regionClaimants[regionId];
+};
+
+// Legal sovereignty is stored SPARSELY: an entry exists only while the lawful
+// sovereign differs from the polity administering the region (an occupation, a
+// displaced government's homeland). Normal territory has no row.
+const writeRegionSovereign = (world, regionId, sovereign) => {
+  const name = normalizeOptionalString(sovereign);
+  const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
+  if (!name || (controller && samePolity(controller, name))) delete world.regionSovereigntyOverrides[regionId];
+  else world.regionSovereigntyOverrides[regionId] = name;
+};
+
+const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
+
 const applyPolityAndTerritoryImpacts = ({
-  colors, eventId = "", polityChanges = [], regionClaims = [], regionTransfers = [], resolveOwner, world,
+  colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
 }) => {
+  // Lifecycle first: a polity this event creates or restores exists before the
+  // same event's territory is resolved. Dissolution waits until the end, so the
+  // event can settle the polity's land before it is judged gone.
+  const dissolutions = [];
+  for (const { change, code } of polityChanges) {
+    const operation = change.operation || "update";
+    if (operation === "dissolve") {
+      dissolutions.push({ change, code });
+      continue;
+    }
+    if (operation !== "create" && operation !== "restore") continue;
+    const existing = world.polityOverrides[code];
+    const alive = Boolean(existing) && normalizeOptionalString(existing.status).toLowerCase() !== "dissolved";
+    if (operation === "create" && (alive || !samePolity(code, change.code))) {
+      console.warn(`[polity lifecycle] create of "${change.code}" resolves to the existing polity "${code}"; applied as an update.`);
+      continue;
+    }
+    if (operation === "restore" && alive) {
+      console.warn(`[polity lifecycle] restore of "${change.code}" names the active polity "${code}"; applied as an update.`);
+      continue;
+    }
+    world.polityOverrides[code] = {
+      ...(existing ?? { aliases: [], code, color: "", name: "", note: "" }),
+      status: "active",
+    };
+    console.info(`[polity lifecycle] ${operation === "create" ? "created" : "restored"} "${code}".`);
+  }
+
   // Claims before transfers, so a region claimed and then actually handed over in
-  // the same jump ends up settled rather than striped: the transfer's delete below
+  // the same jump ends up settled rather than striped: the transfer below
   // clears the claim this loop just wrote. The reverse order would leave a border
   // that has already moved still rendering as disputed.
   for (const claim of regionClaims) {
@@ -3653,44 +3817,116 @@ const applyPolityAndTerritoryImpacts = ({
       .filter(Boolean);
 
     if (claim.drop) {
-      const remaining = current.filter((entry) => entry.toLowerCase() !== claimant.toLowerCase());
-      // Delete the key rather than leaving an empty array behind: Nations.jsx
-      // tests `regionClaimants[id]?.length` for the stripe, but useWorldState
-      // diffs the whole object by JSON.stringify, so an empty array left lying
-      // around is a permanent phantom difference nobody can see.
-      if (remaining.length) world.regionClaimants[claim.regionId] = remaining;
-      else delete world.regionClaimants[claim.regionId];
+      writeRegionClaimants(world, claim.regionId, current.filter((entry) => !samePolity(entry, claimant)));
       continue;
     }
 
     // De-duplicated case-insensitively: a claim restated across several jumps is
     // one dispute, not a region striped four times in the same colour.
-    if (current.some((entry) => entry.toLowerCase() === claimant.toLowerCase())) continue;
-    world.regionClaimants[claim.regionId] = [...current, claimant];
+    if (current.some((entry) => samePolity(entry, claimant))) continue;
+    writeRegionClaimants(world, claim.regionId, [...current, claimant]);
   }
 
+  // A transfer is a change of LEGAL SOVEREIGNTY (cession, annexation, sale,
+  // unification, settlement). Administration normally follows the title: the
+  // new sovereign becomes the controller unless a third party still physically
+  // holds the region, in which case the lawful sovereign stays visible as a
+  // claimant and the sparse sovereignty row records the difference.
   for (const transfer of regionTransfers) {
-    world.regionOwnershipOverrides[transfer.regionId] = resolveOwner(transfer.toCode);
-    // A transfer resolves whatever dispute the scenario seed declared for this
-    // region (regionClaimants — see Nations.jsx's stripe rendering): without
-    // this, regionClaimants is never written by anything else, so a region
-    // handed over cleanly (a negotiated cession, a conceded claim) kept
-    // rendering permanently striped with its old claimant forever, out of step
-    // with regionOwnershipOverrides (and the country panel's "Regions Owned")
-    // agreeing the transfer already happened.
-    delete world.regionClaimants[transfer.regionId];
+    const regionId = transfer.regionId;
+    const toCode = resolveOwner(transfer.toCode) || normalizeOptionalString(transfer.toCode);
+    if (!toCode) continue;
+    const fromCode = resolveOwner(transfer.fromCode) || normalizeOptionalString(transfer.fromCode);
+    const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
+    const previousSovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]) || controller || fromCode;
+
+    if (!controller || samePolity(controller, previousSovereign) || samePolity(controller, toCode)) {
+      world.regionOwnershipOverrides[regionId] = toCode;
+    }
+    writeRegionSovereign(world, regionId, toCode);
+
+    const effectiveController = normalizeOptionalString(world.regionOwnershipOverrides[regionId]) || toCode;
+    if (samePolity(effectiveController, toCode)) {
+      // A clean hand-over resolves whatever dispute the scenario seed or an
+      // earlier turn declared for this region: regionClaimants is written by
+      // nothing else, so a negotiated cession kept rendering permanently striped
+      // with its old claimant, out of step with the ownership map.
+      delete world.regionClaimants[regionId];
+    } else {
+      const remaining = normalizeArray(world.regionClaimants[regionId])
+        .filter((name) => !samePolity(name, toCode) && !samePolity(name, previousSovereign));
+      writeRegionClaimants(world, regionId, [...remaining, toCode]);
+    }
+  }
+
+  // De-facto control (AI/nativeTerritoryDirector.js and the simulator's own
+  // regionControlOps): wartime capture, an active contest, a contest cleared.
+  // The lawful sovereign is anchored BEFORE control flips, which is what keeps
+  // an occupied region striped in its sovereign's colour until a settlement.
+  for (const op of regionControlOps) {
+    const regionId = op.regionId;
+    const currentController =
+      normalizeOptionalString(world.regionOwnershipOverrides[regionId]) ||
+      resolveOwner(op.fromCode) ||
+      normalizeOptionalString(op.fromCode);
+    const legalSovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]) || currentController;
+    const existing = normalizeArray(world.regionClaimants[regionId]).map((entry) => normalizeOptionalString(entry)).filter(Boolean);
+
+    if (op.op === "contest") {
+      const actor = resolveOwner(op.actorCode) || normalizeOptionalString(op.actorCode);
+      if (!actor || samePolity(actor, currentController)) continue;
+      const claimants = [...existing, actor];
+      if (legalSovereign && currentController && !samePolity(legalSovereign, currentController)) claimants.push(legalSovereign);
+      writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, currentController)));
+      continue;
+    }
+
+    if (op.op === "control") {
+      const toCode = resolveOwner(op.toCode) || normalizeOptionalString(op.toCode);
+      if (!toCode) continue;
+      world.regionOwnershipOverrides[regionId] = toCode;
+      writeRegionSovereign(world, regionId, legalSovereign);
+      const claimants = existing.filter((name) => !samePolity(name, toCode));
+      if (currentController && !samePolity(currentController, toCode)) claimants.push(currentController);
+      if (legalSovereign && !samePolity(legalSovereign, toCode)) claimants.push(legalSovereign);
+      writeRegionClaimants(world, regionId, claimants);
+      continue;
+    }
+
+    if (op.op === "clear_contest") {
+      const claimant = resolveOwner(op.claimantCode) || normalizeOptionalString(op.claimantCode);
+      let claimants = op.clearAll ? [] : existing.filter((name) => !samePolity(name, claimant));
+      // Clearing a battlefield dispute must not erase the legal sovereign while a
+      // foreign controller still occupies the region: that stripe is the point.
+      const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]) || currentController;
+      if (legalSovereign && controller && !samePolity(legalSovereign, controller)) claimants.push(legalSovereign);
+      writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, controller)));
+    }
   }
 
   for (const { change, code } of polityChanges) {
+    const operation = change.operation || "update";
+    if (operation === "dissolve") continue;
+    const current = world.polityOverrides[code] ?? {
+      aliases: [],
+      code,
+      color: "",
+      name: "",
+      note: "",
+    };
+    // A rename keeps the polity's stable key and remembers the old display name
+    // as an alias, so history written under it still folds onto this polity.
+    const renamedFrom = operation === "rename" && change.name && current.name && !samePolity(current.name, change.name)
+      ? [current.name]
+      : [];
+    const aliases = [...new Set([
+      ...normalizeArray(current.aliases),
+      ...(change.aliases?.length > 0 ? change.aliases : []),
+      ...renamedFrom,
+    ].map(normalizeOptionalString).filter(Boolean))];
     world.polityOverrides[code] = {
-      ...(world.polityOverrides[code] ?? {
-        aliases: [],
-        code,
-        color: "",
-        name: "",
-        note: "",
-      }),
-      ...(change.aliases?.length > 0 ? { aliases: change.aliases } : {}),
+      ...current,
+      ...(aliases.length > 0 || change.aliases?.length > 0 ? { aliases } : {}),
       ...(change.color ? { color: change.color } : {}),
       ...(change.name ? { name: change.name } : {}),
       ...(change.note ? { note: change.note } : {}),
@@ -3758,6 +3994,44 @@ const applyPolityAndTerritoryImpacts = ({
       else delete world.countryTags[code];
     }
   }
+
+  // Dissolution last. A polity that still administers or is sovereign over
+  // mapped territory is not gone: occupation is not a delete button, and the
+  // same event must have settled its land first. A dissolved polity keeps its
+  // record (aliases still fold old history onto it) but leaves the present:
+  // its stats, tags, reputation, intelligence and colour go, and its standing
+  // agreements end on the event's date.
+  for (const { code } of dissolutions) {
+    const holdsTerritory = [
+      ...Object.values(world.regionOwnershipOverrides || {}),
+      ...Object.values(world.regionSovereigntyOverrides || {}),
+    ].some((owner) => samePolity(owner, code));
+    if (holdsTerritory) {
+      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds or is sovereign over mapped territory; transfer or settle that territory in the same event first.`);
+      continue;
+    }
+    world.polityOverrides[code] = {
+      ...(world.polityOverrides[code] ?? { aliases: [], code, color: "", name: "", note: "" }),
+      status: "dissolved",
+    };
+    for (const field of POLITY_LIFECYCLE_STORES) {
+      if (world[field] && typeof world[field] === "object" && !Array.isArray(world[field])) delete world[field][code];
+    }
+    const endedDate = canonicalizeDateString(eventDate);
+    world.agreements = normalizeArray(world.agreements).map((agreement) => {
+      if (!agreement || typeof agreement !== "object") return agreement;
+      if (!["active", "suspended"].includes(normalizeOptionalString(agreement.status).toLowerCase())) return agreement;
+      if (!normalizeArray(agreement.parties).some((party) => samePolity(party, code))) return agreement;
+      return {
+        ...agreement,
+        status: "ended",
+        endedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
+        lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
+      };
+    });
+    delete colors[code];
+    console.info(`[polity lifecycle] dissolved "${code}".`);
+  }
 };
 
 export const applyEventImpactsToWorld = ({
@@ -3806,9 +4080,11 @@ export const applyEventImpactsToWorld = ({
 
     applyPolityAndTerritoryImpacts({
       colors: nextColors,
+      eventDate: event.date,
       eventId: event.id,
       polityChanges,
       regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
+      regionControlOps: [...event.impacts.regionControlOps, ...normalizeArray(released.regionControlOps)],
       regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
       resolveOwner,
       world: nextWorld,

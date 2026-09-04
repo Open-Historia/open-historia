@@ -538,6 +538,7 @@ const hardImpactKeysForEvent = (event) => {
   for (const key of [
     "regionTransfers",
     "regionClaims",
+    "regionControlOps",
     "unitOps",
     "markerOps",
     "createdChats",
