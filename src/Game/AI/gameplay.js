@@ -37,7 +37,7 @@ import {
 } from "./jumpSegments.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
-import { decodeGameMasterTransportPayload, getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
+import { decodeGameMasterTransportPayload, getGameplayTool, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   describeDoubtedForPrompt,
@@ -2021,6 +2021,10 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         transportDecodeError = normalizeString(decoded?.error);
         parsed = decoded?.payload;
       }
+      // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
+      // envelope, a singular event, synonym keys, doubled impacts wrappers —
+      // rewritten to the canonical shape before the schema sees them.
+      parsed = normalizeGameplayPayload(taskKey, parsed);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object

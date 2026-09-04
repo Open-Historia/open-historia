@@ -2718,6 +2718,199 @@ const findBlankString = (value, path = "$") => {
   return "";
 };
 
+// --- Lenient payload shapes (ported from the abdulrahman-2005 fork) ----------
+// Local and gateway models answer a jump in shapes the schema never asked for:
+// the result wrapped in an envelope, a singular "event", snake_case or synonym
+// keys, impacts doubled inside an "impacts"/"effects" wrapper, marker builds
+// written flat with latitude/longitude. One rejected key fails the WHOLE
+// payload and costs the turn, so the shapes are rewritten to the canonical
+// ones before validation. Nothing is ever invented: an answer without events
+// stays without events and fails validation as it should.
+
+const isPlainRecord = (value) => Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const firstDefinedKey = (target, keys) => {
+  if (!isPlainRecord(target) || !Array.isArray(keys)) return undefined;
+  for (const key of keys) {
+    if (target[key] !== undefined) return target[key];
+  }
+  return undefined;
+};
+
+const coordinateNumber = (value) => {
+  if (typeof value === "number") return value;
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().replace(",", ".").replace(/[°º]\s*[NSEW]?$/i, "");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : value;
+};
+
+const normalizeMarkerOperationShape = (entry) => {
+  if (!isPlainRecord(entry)) return entry;
+  const rawOp = String(entry.op ?? entry.action ?? "").trim().toLowerCase();
+  const op = rawOp === "found" || rawOp === "create" || rawOp === "add"
+    ? "build"
+    : rawOp === "destroy" || rawOp === "delete"
+      ? "remove"
+      : rawOp;
+
+  if (op === "build" || (!op && isPlainRecord(entry.marker))) {
+    const source = isPlainRecord(entry.marker) ? entry.marker : entry;
+    const marker = {
+      ...(firstDefinedKey(source, ["id", "markerId"]) ? { id: firstDefinedKey(source, ["id", "markerId"]) } : {}),
+      name: firstDefinedKey(source, ["name", "title"]),
+      kind: firstDefinedKey(source, ["kind", "type"]) || "landmark",
+      ...(firstDefinedKey(source, ["ownerCode", "owner", "code"]) !== undefined
+        ? { ownerCode: firstDefinedKey(source, ["ownerCode", "owner", "code"]) }
+        : {}),
+      lng: coordinateNumber(firstDefinedKey(source, ["lng", "lon", "longitude"])),
+      lat: coordinateNumber(firstDefinedKey(source, ["lat", "latitude"])),
+      ...(firstDefinedKey(source, ["note", "description"]) !== undefined
+        ? { note: firstDefinedKey(source, ["note", "description"]) }
+        : entry.note !== undefined ? { note: entry.note } : {}),
+      ...(firstDefinedKey(source, ["foundedAt", "date"]) !== undefined
+        ? { foundedAt: firstDefinedKey(source, ["foundedAt", "date"]) }
+        : {}),
+    };
+    return { op: "build", marker };
+  }
+
+  if (op === "remove") {
+    const source = isPlainRecord(entry.marker) ? entry.marker : entry;
+    return {
+      op,
+      ...(firstDefinedKey(source, ["id", "markerId"]) ? { markerId: firstDefinedKey(source, ["id", "markerId"]) } : {}),
+      ...(firstDefinedKey(source, ["name", "title"]) ? { name: firstDefinedKey(source, ["name", "title"]) } : {}),
+      ...(entry.note !== undefined ? { note: entry.note } : {}),
+    };
+  }
+
+  if (op === "rename") {
+    const source = isPlainRecord(entry.marker) ? entry.marker : entry;
+    return {
+      op,
+      ...(firstDefinedKey(source, ["id", "markerId"]) ? { markerId: firstDefinedKey(source, ["id", "markerId"]) } : {}),
+      ...(firstDefinedKey(source, ["name", "from", "oldName"]) ? { name: firstDefinedKey(source, ["name", "from", "oldName"]) } : {}),
+      newName: firstDefinedKey(source, ["newName", "to"]),
+      ...(entry.note !== undefined ? { note: entry.note } : {}),
+    };
+  }
+
+  return { ...entry, ...(op ? { op } : {}) };
+};
+
+const PAYLOAD_IMPACT_ARRAYS = [
+  "actionIds",
+  "createdChats",
+  "polityChanges",
+  "regionTransfers",
+  "regionControlOps",
+  "regionClaims",
+  "unitOps",
+  "markerOps",
+  "projectOps",
+];
+
+const flattenImpactWrappers = (value) => {
+  let impacts = { ...value };
+  for (let depth = 0; depth < 4; depth += 1) {
+    const nested = [impacts.impacts, impacts.effects, impacts.changes].find(isPlainRecord);
+    delete impacts.impacts;
+    delete impacts.effects;
+    delete impacts.changes;
+    if (!nested) break;
+
+    const merged = { ...nested, ...impacts };
+    for (const field of PAYLOAD_IMPACT_ARRAYS) {
+      const nestedItems = Array.isArray(nested[field]) ? nested[field] : [];
+      const outerItems = Array.isArray(impacts[field]) ? impacts[field] : [];
+      if (nestedItems.length || outerItems.length) merged[field] = [...nestedItems, ...outerItems];
+    }
+    impacts = merged;
+  }
+  return impacts;
+};
+
+const normalizeEventShape = (entry) => {
+  if (!isPlainRecord(entry)) return entry;
+  const event = { ...entry };
+  const aliases = {
+    date: ["occurredAt", "eventDate", "when"],
+    title: ["headline", "name"],
+    description: ["details", "narrative", "summary"],
+    impacts: ["effects", "changes"],
+  };
+  for (const [field, fieldAliases] of Object.entries(aliases)) {
+    const aliasValue = firstDefinedKey(event, fieldAliases);
+    if (event[field] === undefined && aliasValue !== undefined) event[field] = aliasValue;
+    for (const alias of fieldAliases) delete event[alias];
+  }
+
+  if (isPlainRecord(event.impacts)) {
+    const impacts = flattenImpactWrappers(event.impacts);
+    const impactAliases = {
+      regionTransfers: ["transfers", "territoryChanges"],
+      regionControlOps: ["controlOps", "controlChanges"],
+      regionClaims: ["claims"],
+      polityChanges: ["polities", "countryChanges"],
+      unitOps: ["units", "unitOperations"],
+      markerOps: ["markers", "markerOperations"],
+      createdChats: ["chats", "diplomaticChats"],
+      projectOps: ["projects", "projectOperations"],
+    };
+    for (const [field, fieldAliases] of Object.entries(impactAliases)) {
+      const aliasValue = firstDefinedKey(impacts, fieldAliases);
+      if (impacts[field] === undefined && aliasValue !== undefined) impacts[field] = aliasValue;
+      for (const alias of fieldAliases) delete impacts[alias];
+    }
+    if (Array.isArray(impacts.markerOps)) {
+      impacts.markerOps = impacts.markerOps.map(normalizeMarkerOperationShape);
+    }
+    event.impacts = impacts;
+  }
+  return event;
+};
+
+export const normalizeGameplayPayload = (taskKey, value) => {
+  if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
+  if (!isPlainRecord(value)) return value;
+
+  let source = value;
+  for (const wrapper of ["result", "output", "payload", "data"]) {
+    const nested = value[wrapper];
+    if (isPlainRecord(nested) && ["events", "event", "timeline", "stopDate", "stop_date"].some((key) => nested[key] !== undefined)) {
+      source = nested;
+      break;
+    }
+  }
+
+  const candidate = { ...source };
+  const eventAlias = firstDefinedKey(candidate, ["timeline", "newEvents", "generatedEvents"]);
+  if (!Array.isArray(candidate.events) && Array.isArray(eventAlias)) candidate.events = eventAlias;
+  if (!Array.isArray(candidate.events) && isPlainRecord(candidate.event)) candidate.events = [candidate.event];
+  delete candidate.event;
+  delete candidate.timeline;
+  delete candidate.newEvents;
+  delete candidate.generatedEvents;
+
+  const stopDateAlias = firstDefinedKey(candidate, ["stop_date", "endDate", "targetDate"]);
+  const summaryAlias = firstDefinedKey(candidate, ["overview", "periodSummary"]);
+  const clearActionsAlias = firstDefinedKey(candidate, ["clear_actions", "actionsResolved"]);
+  if (candidate.stopDate === undefined && stopDateAlias !== undefined) candidate.stopDate = stopDateAlias;
+  if (candidate.summary === undefined && summaryAlias !== undefined) candidate.summary = summaryAlias;
+  if (candidate.clearActions === undefined && clearActionsAlias !== undefined) candidate.clearActions = clearActionsAlias;
+  delete candidate.stop_date;
+  delete candidate.endDate;
+  delete candidate.targetDate;
+  delete candidate.overview;
+  delete candidate.periodSummary;
+  delete candidate.clear_actions;
+  delete candidate.actionsResolved;
+
+  if (Array.isArray(candidate.events)) candidate.events = candidate.events.map(normalizeEventShape);
+  return candidate;
+};
+
 export const validateGameplayPayload = (taskKey, value) => {
   const schema = GAMEPLAY_SCHEMAS[taskKey];
   if (!schema) {
