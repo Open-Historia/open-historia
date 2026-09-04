@@ -1723,7 +1723,10 @@ const buildLandmassLabelRecords = ({
   const linePathInfo = worldCurve ? worldWarpPath : lineEligible ? safeWarpPath : null;
 
   const anchorPath = linePathInfo ?? rawPathInfo;
-  const centerSample = anchorPath?.points?.length >= 4
+  // The world curve has three points; the anchor must still be its midpoint,
+  // or the overview label falls back to the interior of the largest piece and
+  // RUSSIA lands in Chukotka.
+  const centerSample = anchorPath?.points?.length >= 2
     ? getPointAlongPolyline(anchorPath.points, anchorPath.length / 2)
     : null;
   const pointTile = centerSample?.point ?? getInteriorLabelPoint(polygonTile);
