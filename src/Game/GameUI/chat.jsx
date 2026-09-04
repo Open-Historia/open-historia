@@ -11,6 +11,7 @@ import {
 import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
 import { Projects } from "./projects";
+import { useMainMenuOpen } from "./libraryBar";
 import {
     JSON_URLS,
     getNationColors,
@@ -2087,6 +2088,9 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const [pendingCountry, setPendingCountry] = useState(null);
     const [pendingDraft, setPendingDraft] = useState("");
     const [unseenCount, setUnseenCount] = useState(0);
+    // The bell and the toasts portal to document.body above the main menu's
+    // layer, so they would sit on the home screen unless told not to.
+    const mainMenuOpen = useMainMenuOpen();
     const [isGenerating, setIsGenerating] = useState(false);
     const setChatOpen = () => { onToggle(); };
     // Incoming diplomacy notifications: a toast and a chime for a foreign message
@@ -2614,7 +2618,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         _chatOpenSubs.add(handler);
         return () => _chatOpenSubs.delete(handler);
     }, [isOpen, onToggle]);
-    const notificationPortal = typeof document !== "undefined"
+    const notificationPortal = typeof document !== "undefined" && !mainMenuOpen
         ? ReactDOM.createPortal(
             <>
             <div

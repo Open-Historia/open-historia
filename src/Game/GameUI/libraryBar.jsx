@@ -1,5 +1,5 @@
 /*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   PROMPT_SECTION_DEFINITIONS,
   normalizePromptPack,
@@ -98,6 +98,15 @@ let menuOpenDefault = true;
 // For background work that should not run for a game the player hasn't
 // actually entered (e.g. pre-game history generation while browsing the menu).
 export const isMainMenuOpen = () => menuOpenDefault;
+// The reactive twin, for HUD pieces that portal to document.body above the
+// menu's own layer (the diplomatic bell and toasts): they follow this rather
+// than juggling z-indexes against the menu.
+const mainMenuListeners = new Set();
+const subscribeMainMenu = (listener) => {
+  mainMenuListeners.add(listener);
+  return () => mainMenuListeners.delete(listener);
+};
+export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isMainMenuOpen, isMainMenuOpen);
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
 // widget, forces panel, editor drawer) starts at the screen edge.
 const TOP_BAR_OFFSET = "0.5rem";
@@ -867,18 +876,19 @@ const EditorDrawer = ({
             </div>
             {/* Country-label styling. Labels rasterize from each player's LOCAL
                 fonts (the map has no glyph server), so any installed family
-                works — the list only suggests safe common ones. Empty = Impact. */}
+                works — the list only suggests safe common ones. Empty = Georgia,
+                the map's default (Nations.jsx labelFontStack). */}
             <div>
               <label style={fieldLabelStyle}>Country Label Font</label>
               <input
                 list="oh-label-font-options"
-                placeholder="Impact (default)"
+                placeholder="Georgia (default)"
                 style={inputStyle}
                 value={formState.labelFont}
                 onChange={(event) => onChange("labelFont", event.target.value)}
               />
               <datalist id="oh-label-font-options">
-                {["Impact", "Arial Black", "Arial", "Georgia", "Times New Roman", "Trebuchet MS", "Verdana", "Courier New", "Garamond", "Comic Sans MS"].map((font) => (
+                {["Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact", "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS"].map((font) => (
                   <option key={font} value={font} />
                 ))}
               </datalist>
@@ -1071,6 +1081,7 @@ const LibraryTopBar = () => {
   const setMenuOpen = (open) => {
     menuOpenDefault = open;
     setMenuOpenState(open);
+    mainMenuListeners.forEach((listener) => listener());
   };
   // Bridge for outside callers: open the main menu on a library tab.
   _openLibraryTab = (tab) => {

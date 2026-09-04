@@ -71,7 +71,7 @@ export const WORLD_DEFAULTS = {
   // siege or a boom moves one number wherever the city came from.
   cityPopulations: {},
   // Country-label styling, set in the scenario settings. Empty = the defaults
-  // (Impact, white letters, half-black outline). The font renders from the
+  // (Georgia, white letters, half-black outline). The font renders from the
   // PLAYER's local fonts — the style has no glyphs endpoint, so MapLibre v5
   // rasterizes every glyph client-side using the stack as a CSS font-family.
   labelFont: "",
