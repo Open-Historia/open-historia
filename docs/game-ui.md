@@ -62,8 +62,8 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; sits at `rightShift` |
 | `AdvisorPanel` | `advisor.jsx` (lazy) | Advisor chat + Stats tabs, resizable drawer |
 | `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from Settings) |
-| `SettingsButton` (⋮) | `settings.jsx` | Toggles the settings menu |
-| `SettingsMenu` | `settings.jsx` | AI provider, language, map/AI toggles, cheats/guides/social |
+| `SettingsButton` (☰) | `settings.jsx` | Toggles the game menu; same corner and size as before, glass finish |
+| `SettingsMenu` | `settings.jsx` | Ported from kernely's Continuum branch as it is there: a quick menu with Game / Tools / Settings / Help tabs (session card, Game Management, Cheats, Events, AI debug console, Guides, bug report, community links) and `SettingsWorkspace`, a full-screen portal with Continuum's four sections — General, Map (with the basemap picker), AI, Advanced. This branch's own settings (profiles, per-task models, segments, batching, telemetry, beta units, network sharing, diagnostics) sit inside those four sections |
 
 ---
 

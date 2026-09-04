@@ -11,8 +11,10 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   ensureBasemapProtocol,
+  isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
+import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -392,18 +394,22 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     pitch: 0,
   });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
-  // the world is fixed to the ocean preset (the in-game basemap picker was removed).
+  // the scenario's basemap does, unless the player picked one in Settings → Map.
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
-  // The scenario author's background and basemap are authoritative. There is no
-  // in-game basemap picker, so a basemap id left in this browser's localStorage
-  // by an older build must not silently replace every scenario's choice.
-  const effectiveCustomBg = customBg;
-  const effectiveBgDeclared = bgDeclared;
+  // The player's basemap pick (Settings → Map) is local to this browser and
+  // reversible. Empty — the default — leaves the scenario author's background
+  // and basemap authoritative; only a real built-in id replaces them, so a
+  // stray value left in localStorage by an older build changes nothing.
+  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
+  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
+  const useScenarioBackground = !validBasemapOverride;
+  const effectiveCustomBg = useScenarioBackground ? customBg : null;
+  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
   const effectiveBasemap = resolveBasemapId({
-    overrideId: "",
+    overrideId: validBasemapOverride,
     scenarioId: worldBasemap,
     fallbackId: DEFAULT_BASEMAP_ID,
   });

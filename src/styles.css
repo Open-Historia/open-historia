@@ -18,6 +18,32 @@ body {
   box-sizing: border-box;
 }
 
+/* -------------------------------------------------------------------------
+   HUD glass surface tokens (ported from kernely's Continuum branch). Every
+   fixed HUD surface — the menu button and game menu, the bottom toolbar, the
+   date widget, the search field, the polity badge, the top session pill —
+   reads its finish from here, so they stay one material.
+   ------------------------------------------------------------------------- */
+:root {
+  --oh-hud-bg: rgba(9, 17, 29, 0.52);
+  --oh-hud-bg-strong: rgba(8, 16, 28, 0.66);
+  --oh-hud-bg-soft: rgba(22, 35, 52, 0.46);
+  --oh-hud-border: rgba(220, 236, 255, 0.17);
+  --oh-hud-border-strong: rgba(228, 240, 255, 0.29);
+  --oh-hud-text: #f8fbff;
+  --oh-hud-muted: rgba(226, 236, 249, 0.64);
+  --oh-hud-faint: rgba(226, 236, 249, 0.38);
+  --oh-hud-blue: #4b91ff;
+  --oh-hud-blue-soft: rgba(75, 145, 255, 0.16);
+  --oh-hud-amber: #f5bd4f;
+  --oh-hud-amber-hover: #ffd06d;
+  --oh-hud-red: #ef4444;
+  --oh-hud-radius: 16px;
+  --oh-hud-shadow: 0 20px 56px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(255,255,255,0.025);
+  --oh-hud-shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,0.095);
+  --oh-hud-blur: blur(14px) saturate(1.18);
+}
+
 .startup-shell {
   position: fixed;
   inset: 0;

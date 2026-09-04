@@ -104,11 +104,11 @@ const TOP_BAR_OFFSET = "0.5rem";
 
 const surfaceStyle = {
   background:
-    "linear-gradient(180deg, rgba(8, 10, 17, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
-  backdropFilter: "blur(18px)",
-  WebkitBackdropFilter: "blur(18px)",
+    "linear-gradient(180deg, rgba(36, 52, 72, 0.58) 0%, rgba(8, 16, 28, 0.48) 100%)",
+  border: "1px solid var(--oh-hud-border)",
+  boxShadow: "var(--oh-hud-shadow-soft)",
+  backdropFilter: "var(--oh-hud-blur)",
+  WebkitBackdropFilter: "var(--oh-hud-blur)",
 };
 
 const actionButtonStyle = {
@@ -2051,26 +2051,29 @@ const LibraryTopBar = () => {
           <div
             style={{
               ...surfaceStyle,
-              borderRadius: "999px",
+              alignItems: "center",
+              borderRadius: "13px",
               color: "rgba(255,255,255,0.72)",
-              fontSize: "0.74rem",
-              fontWeight: 600,
+              display: "flex",
+              gap: "0.55rem",
               // Shrinks to nothing before it can reach under the date widget
               // on narrow desktop windows (the widget owns the top right).
               maxWidth: "min(34rem, max(0rem, calc(100vw - 44rem)))",
               overflow: "hidden",
-              padding: "0.5rem 0.85rem",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              padding: "0.42rem 0.7rem",
             }}
           >
-            {summaryText}
+            <div style={{ alignItems: "center", background: "rgba(59,130,246,0.13)", border: "1px solid rgba(96,165,250,0.18)", borderRadius: "8px", color: "#bfdbfe", display: "flex", flexShrink: 0, fontSize: "0.68rem", fontWeight: 950, height: "1.9rem", justifyContent: "center", width: "1.9rem" }}>OH</div>
+            <div style={{ minWidth: 0, lineHeight: 1.08 }}>
+              <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.72rem", fontWeight: 850 }}>Open Historia</div>
+              <div style={{ color: "rgba(210,226,245,0.42)", fontSize: "0.6rem", marginTop: "0.18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
+            </div>
           </div>
           <button
             onClick={() => setMenuOpen(true)}
             title="Leave this game and return to the main menu"
             type="button"
-            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "999px", fontSize: "0.74rem", minHeight: "0", padding: "0.5rem 0.85rem" }}
+            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "11px", fontSize: "0.68rem", minHeight: "2.85rem", padding: "0 0.85rem" }}
           >
             ⌂ Exit Game
           </button>
@@ -2087,12 +2090,12 @@ const LibraryTopBar = () => {
                 ...surfaceStyle,
                 background: "rgba(220,70,70,0.14)",
                 borderColor: "rgba(248,113,113,0.35)",
-                borderRadius: "999px",
+                borderRadius: "11px",
                 color: "#fca5a5",
                 fontSize: "0.74rem",
-                minHeight: "0",
+                minHeight: "2.85rem",
                 minWidth: "0",
-                padding: "0.5rem 0.7rem",
+                padding: "0 0.7rem",
               }}
             >
               ⏻

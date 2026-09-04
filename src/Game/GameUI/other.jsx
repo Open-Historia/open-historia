@@ -10,17 +10,17 @@ import { useLibraryState } from "../../runtime/library.js";
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
-    backdropFilter: "blur(4px)",
+    backgroundColor: "var(--oh-hud-bg)",
+    backdropFilter: "var(--oh-hud-blur)",
     zIndex: 9999,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     color: "white",
     fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+    borderRadius: "14px",
+    border: "1px solid var(--oh-hud-border)",
+    boxShadow: "var(--oh-hud-shadow-soft)",
 };
 
 // A GID_0 that isn't a real ISO country (custom scenario polities like "HRE",

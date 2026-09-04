@@ -122,7 +122,7 @@ Every branch sets `sky: { "atmosphere-blend": 0 }` — MapLibre's uniform atmosp
 | `terrain-source` | raster-dem | `TERRAIN_TILE_TEMPLATE` (AWS terrarium) | `encoding:"terrarium"`, `maxzoom:5` |
 | `hillshade-source` | raster-dem | same terrarium tiles | for the `hills` layer |
 
-Layers: `satellite-lowres-layer`, `satellite-layer` (both with `SATELLITE_PAINT` grading — brightness cap, slight desaturation/contrast so it sits against the dark UI), and `hills` (hillshade, exaggeration 0.1). The default basemap is `DEFAULT_BASEMAP_ID = "ocean"`; the in-game basemap picker was removed, so stock worlds are fixed to that preset. `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
+Layers: `satellite-lowres-layer`, `satellite-layer` (both with `SATELLITE_PAINT` grading — brightness cap, slight desaturation/contrast so it sits against the dark UI), and `hills` (hillshade, exaggeration 0.1). The default basemap is `DEFAULT_BASEMAP_ID = "ocean"`; Settings → Map has a basemap picker (Continuum's), stored in this browser as `map_basemap_style`; empty (the default) keeps the scenario author's background and basemap, and a built-in id replaces both for this player only. `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
 
 ### World-image corner coordinates
 

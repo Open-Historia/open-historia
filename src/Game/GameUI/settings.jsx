@@ -1,5 +1,6 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
 import {
     AI_TASK_ROUTING,
     DEFAULT_PROVIDER,
@@ -36,15 +37,7 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import {
-    MAP_SETTING_KEYS,
-    applySaveBetaUnits,
-    getMapSetting,
-    getMapSettingDefaultOn,
-    isBetaUnits,
-    resolveBetaUnits,
-    setMapSetting,
-} from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, getMapSettingDefaultOn, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -62,20 +55,22 @@ import {
     setDebugLogVerbose,
     subscribeToDebugLog,
 } from "../../runtime/debugLog.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
-    backdropFilter: "blur(4px)",
+    backgroundColor: "var(--oh-hud-bg)",
+    backdropFilter: "var(--oh-hud-blur)",
     zIndex: 9999,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     color: "white",
     fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+    borderRadius: "14px",
+    border: "1px solid var(--oh-hud-border)",
+    boxShadow: "var(--oh-hud-shadow-soft)",
 };
 
 const labelStyle = {
@@ -741,7 +736,30 @@ const TaskModelOverrides = ({ provider, suggestions }) => {
     );
 };
 
-const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
+// Per-provider expert fields, keyed by the form-state names the settings host
+// persists (providerConfig.js FORM_FIELD_MAP).
+const PROVIDER_EXPERT_FIELDS = {
+    gemini: { customParams: "geminiCustomParams", placeholder: '{"generationConfig": {"topP": 0.9}}' },
+    openai: { customParams: "openaiCustomParams", placeholder: '{"top_p": 0.9}', structuredMode: "openaiStructuredMode" },
+    anthropic: { customParams: "anthropicCustomParams", placeholder: '{"top_p": 0.9}' },
+    "openai-compatible": {
+        customParams: "openaiCompatibleCustomParams",
+        placeholder: '{"top_p": 0.9}',
+        structuredMode: "openaiCompatibleStructuredMode",
+        toolStrict: "openaiCompatibleToolStrict",
+    },
+    "anthropic-compatible": {
+        customParams: "anthropicCompatibleCustomParams",
+        placeholder: '{"top_p": 0.9}',
+        structuredMode: "anthropicCompatibleStructuredMode",
+    },
+};
+
+// The connection: where the provider is and what runs there. Everything a
+// player touches once (credentials, model, profiles, reasoning) lives here;
+// request parameters, the structured-output ladder and per-task routing are
+// in the Advanced section so routine setup stays readable.
+const ProviderConnectionPanel = ({ provider, settings, onSettingChange }) => {
     const meta = getProviderMeta(provider);
     const supportsModelDiscovery = providerSupportsModelDiscovery(provider);
     const recentModels = getRecentModels(provider);
@@ -754,22 +772,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
     };
 
     return (
-        <div
-        style={{
-            marginBottom: "1rem",
-            padding: "0.85rem",
-            borderRadius: "10px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            backgroundColor: "rgba(255,255,255,0.04)",
-        }}
-        >
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.25rem" }}>
-        {meta.label} Settings
-        </div>
-        <div style={{ ...helperStyle, marginTop: 0, marginBottom: "0.85rem" }}>
-        {meta.description}
-        </div>
-
+        <SettingsSection title={`${meta.label} connection`} description={meta.description}>
         <PresetManager key={provider} provider={provider} settings={settings} onSettingChange={onSettingChange} />
 
         {provider === "gemini" && (
@@ -789,14 +792,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             suggestions={recentModels}
             placeholder="gemini-3.5-flash-lite"
             helperText="Leave blank to use the built-in Gemini default."
-            />
-            <SettingsInput
-            label="Custom parameters (JSON)"
-            multiline
-            value={settings.geminiCustomParams ?? ""}
-            onChange={(value) => onSettingChange("geminiCustomParams", value)}
-            placeholder='{"generationConfig": {"topP": 0.9}}'
-            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
@@ -823,18 +818,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
                     : "Enter the exact model id."
             }
             />
-            <SettingsInput
-            label="Custom parameters (JSON)"
-            multiline
-            value={settings.openaiCustomParams ?? ""}
-            onChange={(value) => onSettingChange("openaiCustomParams", value)}
-            placeholder='{"top_p": 0.9}'
-            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
-            />
-            <StructuredModeSelect
-            value={settings.openaiStructuredMode ?? "auto"}
-            onChange={(value) => onSettingChange("openaiStructuredMode", value)}
-            />
             </>
         )}
 
@@ -855,14 +838,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             suggestions={recentModels}
             placeholder="claude-haiku-4-5"
             helperText="Claude model ids are manual here. Leave blank to use the built-in default."
-            />
-            <SettingsInput
-            label="Custom parameters (JSON)"
-            multiline
-            value={settings.anthropicCustomParams ?? ""}
-            onChange={(value) => onSettingChange("anthropicCustomParams", value)}
-            placeholder='{"top_p": 0.9}'
-            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
             </>
         )}
@@ -897,33 +872,6 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="llama / qwen / gpt / mistral"
             helperText="Leave blank to auto-pick a model from /models."
             />
-            <SettingsInput
-            label="Custom parameters (JSON)"
-            multiline
-            value={settings.openaiCompatibleCustomParams ?? ""}
-            onChange={(value) => onSettingChange("openaiCompatibleCustomParams", value)}
-            placeholder='{"top_p": 0.9}'
-            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
-            />
-            <StructuredModeSelect
-            value={settings.openaiCompatibleStructuredMode ?? "auto"}
-            onChange={(value) => onSettingChange("openaiCompatibleStructuredMode", value)}
-            />
-            <Toggle
-            label="Strict tool schema"
-            enabled={settings.openaiCompatibleToolStrict === "1"}
-            onToggle={() => onSettingChange(
-                "openaiCompatibleToolStrict",
-                settings.openaiCompatibleToolStrict === "1" ? "" : "1",
-            )}
-            />
-            <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
-            Sends strict:true with the tool call so a self-hosted backend constrains
-            generation to the schema (SGLang/xgrammar, vLLM). Stops malformed or
-            mistyped tool arguments. Leave off for OpenAI and Azure: they reject a
-            schema that does not list every property as required. Only affects the
-            tool rung of the structured-output ladder above.
-            </div>
             </>
         )}
 
@@ -952,168 +900,121 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder="claude-haiku-4-5"
             helperText="The model id your proxy expects. Leave blank to use the built-in default."
             />
-            <SettingsInput
-            label="Custom parameters (JSON)"
-            multiline
-            value={settings.anthropicCompatibleCustomParams ?? ""}
-            onChange={(value) => onSettingChange("anthropicCompatibleCustomParams", value)}
-            placeholder='{"top_p": 0.9}'
-            helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
-            />
-            <StructuredModeSelect
-            value={settings.anthropicCompatibleStructuredMode ?? "auto"}
-            onChange={(value) => onSettingChange("anthropicCompatibleStructuredMode", value)}
-            />
             </>
         )}
 
-        <TaskModelOverrides key={provider} provider={provider} suggestions={recentModels} />
-
-        <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", marginTop: "0.35rem", paddingTop: "0.8rem" }}>
         <Toggle
         label="Model reasoning"
         enabled={reasoningOn}
         onToggle={toggleReasoning}
         />
-        <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: 0 }}>
         Lets thinking-capable models reason before answering (Gemini thinking, OpenAI
         reasoning effort, Claude extended thinking). Slower and costs more tokens;
         needs a model that supports it.
         </div>
         </div>
+        </SettingsSection>
+    );
+};
+
+// Expert controls for the active provider: the request-body escape hatch, the
+// structured-output ladder (structuredMode.js) and the strict tool schema.
+const ProviderAdvancedPanel = ({ provider, settings, onSettingChange, onOpenAiSettings }) => {
+    const meta = getProviderMeta(provider);
+    const field = PROVIDER_EXPERT_FIELDS[provider] ?? PROVIDER_EXPERT_FIELDS[DEFAULT_PROVIDER];
+
+    return (
+        <SettingsSection
+        title="Custom request parameters"
+        description={`Active provider: ${meta.label}. These values go straight to the provider and should normally be left empty.`}
+        right={(
+            <button
+            type="button"
+            onClick={onOpenAiSettings}
+            style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.24)", borderRadius: "8px", color: "#bfdbfe", cursor: "pointer", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem" }}
+            >
+            AI settings
+            </button>
+        )}
+        >
+        <SettingsInput
+        label="Custom parameters (JSON)"
+        multiline
+        value={settings[field.customParams] ?? ""}
+        onChange={(value) => onSettingChange(field.customParams, value)}
+        placeholder={field.placeholder}
+        helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+        />
+        {field.structuredMode && (
+            <StructuredModeSelect
+            value={settings[field.structuredMode] ?? "auto"}
+            onChange={(value) => onSettingChange(field.structuredMode, value)}
+            />
+        )}
+        {field.toolStrict && (
+            <>
+            <Toggle
+            label="Strict tool schema"
+            enabled={settings[field.toolStrict] === "1"}
+            onToggle={() => onSettingChange(field.toolStrict, settings[field.toolStrict] === "1" ? "" : "1")}
+            />
+            <div style={{ ...helperStyle, marginTop: "-0.6rem" }}>
+            Sends strict:true with the tool call so a self-hosted backend constrains
+            generation to the schema (SGLang/xgrammar, vLLM). Stops malformed or
+            mistyped tool arguments. Leave off for OpenAI and Azure: they reject a
+            schema that does not list every property as required. Only affects the
+            tool rung of the structured-output ladder above.
+            </div>
+            </>
+        )}
+        </SettingsSection>
+    );
+};
+
+const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
+    const links = [
+        discordUrl ? { label: "Discord", href: discordUrl } : null,
+        redditUrl ? { label: "Reddit", href: redditUrl } : null,
+        githubUrl ? { label: "GitHub", href: githubUrl } : null,
+    ].filter(Boolean);
+
+    if (!links.length) return null;
+
+    return (
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+            {links.map((link) => (
+                <a
+                key={link.label}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                    background: "rgba(255,255,255,0.035)",
+                    border: "1px solid rgba(255,255,255,0.075)",
+                    borderRadius: "7px",
+                    color: "rgba(255,255,255,0.58)",
+                    fontSize: "0.68rem",
+                    fontWeight: 700,
+                    padding: "0.38rem 0.55rem",
+                    textDecoration: "none",
+                }}
+                >
+                {link.label}
+                </a>
+            ))}
         </div>
     );
 };
 
-const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => (
-    <div
-    style={{
-        display: "flex",
-        gap: "0.5rem",
-        marginTop: "0.25rem",
-        paddingTop: "1rem",
-        borderTop: "1px solid rgba(255,255,255,0.1)",
-    }}
-    >
-    {discordUrl && (
-        <a
-        href={discordUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Join our Discord"
-        style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.4rem",
-            padding: "0.5rem",
-            borderRadius: "8px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            backgroundColor: "rgba(88, 101, 242, 0.2)",
-            color: "white",
-            textDecoration: "none",
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            transition: "background-color 0.2s, border-color 0.2s",
-            cursor: "pointer",
-        }}
-        onMouseEnter={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(88, 101, 242, 0.45)";
-            event.currentTarget.style.borderColor = "rgba(88, 101, 242, 0.6)";
-        }}
-        onMouseLeave={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(88, 101, 242, 0.2)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-        }}
-        >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-        </svg>
-        Discord
-        </a>
-    )}
-    {redditUrl && (
-        <a
-        href={redditUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Join the subreddit"
-        style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.4rem",
-            padding: "0.5rem",
-            borderRadius: "8px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            backgroundColor: "rgba(255, 69, 0, 0.2)",
-            color: "white",
-            textDecoration: "none",
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            transition: "background-color 0.2s, border-color 0.2s",
-            cursor: "pointer",
-        }}
-        onMouseEnter={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(255, 69, 0, 0.45)";
-            event.currentTarget.style.borderColor = "rgba(255, 69, 0, 0.6)";
-        }}
-        onMouseLeave={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(255, 69, 0, 0.2)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-        }}
-        >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12c-.687 0-1.248.561-1.248 1.25 0 .686.561 1.248 1.249 1.248.688 0 1.249-.562 1.249-1.249 0-.688-.561-1.249-1.25-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .686.561 1.248 1.249 1.248.688 0 1.249-.562 1.249-1.249 0-.688-.561-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.095.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.197-2.512-.73a.326.326 0 0 0-.232-.095z"/>
-        </svg>
-        Reddit
-        </a>
-    )}
-    {githubUrl && (
-        <a
-        href={githubUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="View on GitHub"
-        style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.4rem",
-            padding: "0.5rem",
-            borderRadius: "8px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            backgroundColor: "rgba(255,255,255,0.07)",
-            color: "white",
-            textDecoration: "none",
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            transition: "background-color 0.2s, border-color 0.2s",
-            cursor: "pointer",
-        }}
-        onMouseEnter={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(255,255,255,0.15)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.3)";
-        }}
-        onMouseLeave={(event) => {
-            event.currentTarget.style.backgroundColor = "rgba(255,255,255,0.07)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-        }}
-        >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
-        </svg>
-        GitHub
-        </a>
-    )}
-    </div>
-);
-
+// Same corner and size as always (the top bar's session pill is laid out from
+// it), in the glass finish and with the menu glyph.
 const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
     <button
+    type="button"
+    aria-label="Open game menu"
+    title="Game menu"
     onClick={onToggle}
     style={{
         ...baseStyle,
@@ -1122,11 +1023,12 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
         height: "4rem",
         width: "4rem",
         cursor: "pointer",
-        fontSize: "1.8rem",
-        fontWeight: 700,
+        fontSize: "1.5rem",
+        fontWeight: 800,
+        background: "linear-gradient(180deg, rgba(39,55,75,0.58), rgba(8,16,28,0.48))",
     }}
     >
-    ⋮
+    ☰
     </button>
 );
 
@@ -1140,6 +1042,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
 // something you go and look up.
 //
 // Server-backed builds only: the hosted website has no local server to share.
+// Rendered inside its card in the Advanced section, which owns the heading.
 const NetworkSharing = () => {
     const [state, setState] = useState(null);   // null until we know there is a server
     const [busy, setBusy] = useState(false);
@@ -1161,7 +1064,13 @@ const NetworkSharing = () => {
         return () => { cancelled = true; };
     }, []);
 
-    if (!state) return null;
+    if (!state) {
+        return (
+            <div style={{ ...helperStyle, marginTop: 0 }}>
+            No local server is behind this build, so there is nothing to share.
+            </div>
+        );
+    }
 
     const toggle = async () => {
         if (busy || state.lockedByEnv) return;
@@ -1185,9 +1094,7 @@ const NetworkSharing = () => {
     };
 
     return (
-        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Network</div>
-
+        <div>
         <div style={state.lockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
         <Toggle
         label="Let other devices connect"
@@ -1197,11 +1104,11 @@ const NetworkSharing = () => {
         </div>
 
         {state.lockedByEnv ? (
-            <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+            <div style={helperTextStyle}>
             Set by the OH_HOST environment variable ({state.host}), so this switch is read-only. Unset it to control sharing from here.
             </div>
         ) : (
-            <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+            <div style={helperTextStyle}>
             On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
             </div>
         )}
@@ -1250,7 +1157,7 @@ const NetworkSharing = () => {
     );
 };
 
-// Settings → Diagnostics: the log a player pastes into a bug report.
+// Settings → Advanced → Diagnostics: the log a player pastes into a bug report.
 //
 // Two ways out, because the two report routes want different things. Copy is for
 // Discord, where a paste is one action and an attachment is four. Save is for a
@@ -1330,8 +1237,7 @@ const DiagnosticsPanel = () => {
     };
 
     return (
-        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.35rem" }}>Diagnostics</div>
+        <div>
         <div style={{ marginBottom: "0.55rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         The game keeps a running log of what you did — saves opened, orders queued, turns taken, and anything that went wrong. Send it with a bug report and it says what happened, in order.
         </div>
@@ -1431,6 +1337,413 @@ const diagnosticsButton = {
     padding: "0.45rem 0.6rem",
 };
 
+// --- The game menu -------------------------------------------------------------
+// Ported from kernely's Continuum branch, kept as it is there: a compact quick
+// menu anchored under the menu button (Game / Tools / Settings / Help), and a
+// full-screen settings workspace with the same four sections — General, Map,
+// AI, Advanced. The settings this branch has on top of Continuum's (profiles,
+// per-task models, long-skip segments, batching, telemetry, the beta unit
+// system, network sharing, diagnostics) sit inside those four sections rather
+// than adding sections of their own.
+
+const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
+    const tones = {
+        neutral: { background: "rgba(255,255,255,0.035)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
+        violet: { background: "rgba(124,58,237,0.09)", border: "rgba(167,139,250,0.18)", icon: "rgba(124,58,237,0.18)", color: "#ddd6fe" },
+        blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
+        amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
+    };
+    const palette = tones[tone] ?? tones.neutral;
+    const common = {
+        alignItems: "center",
+        background: palette.background,
+        border: `1px solid ${palette.border}`,
+        borderRadius: compact ? "9px" : "11px",
+        color: palette.color,
+        cursor: "pointer",
+        display: "flex",
+        fontFamily: "inherit",
+        gap: compact ? "0.6rem" : "0.75rem",
+        minHeight: compact ? "3rem" : "4.35rem",
+        padding: compact ? "0.55rem 0.65rem" : "0.72rem 0.8rem",
+        textAlign: "left",
+        textDecoration: "none",
+        width: "100%",
+    };
+    const content = (
+        <>
+            <span aria-hidden="true" style={{ alignItems: "center", background: palette.icon, border: `1px solid ${palette.border}`, borderRadius: "8px", display: "inline-flex", flexShrink: 0, fontSize: compact ? "0.85rem" : "1rem", fontWeight: 900, height: compact ? "1.9rem" : "2.35rem", justifyContent: "center", width: compact ? "1.9rem" : "2.35rem" }}>{symbol}</span>
+            <span style={{ minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: compact ? "0.78rem" : "0.84rem", fontWeight: 850 }}>{title}</span>
+                {description && <span style={{ color: "rgba(255,255,255,0.38)", display: "block", fontSize: compact ? "0.61rem" : "0.64rem", lineHeight: 1.35, marginTop: "0.16rem" }}>{description}</span>}
+            </span>
+        </>
+    );
+
+    if (href) {
+        return <a href={href} target={href.startsWith("/") ? undefined : "_blank"} rel="noopener noreferrer" style={common}>{content}</a>;
+    }
+    return <button type="button" onClick={onClick} style={common}>{content}</button>;
+};
+
+const SettingsSection = ({ title, description, right, children }) => (
+    <section style={{ background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
+        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.88rem", fontWeight: 850 }}>{title}</div>
+                {description && <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.2rem" }}>{description}</div>}
+            </div>
+            {right}
+        </div>
+        {children}
+    </section>
+);
+
+const ExperimentalPill = ({ children = "Experimental" }) => (
+    <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", marginBottom: "0.6rem" }}>
+        <span style={{ backgroundColor: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.28)", borderRadius: "999px", color: "#fbbf24", fontSize: "0.58rem", fontWeight: 850, padding: "0.18rem 0.48rem" }}>{children}</span>
+    </div>
+);
+
+const settingsHelper = { ...helperStyle, marginTop: "-0.55rem", marginBottom: "0.85rem" };
+
+const SETTINGS_SECTIONS = [
+    { key: "general", label: "General", icon: "◫", description: "Language, display and accessibility" },
+    { key: "map", label: "Map", icon: "◇", description: "Basemap, labels, globe and camera" },
+    { key: "ai", label: "AI", icon: "✦", description: "Provider, model, reasoning and limits" },
+    { key: "advanced", label: "Advanced", icon: "⌘", description: "Provider parameters and expert controls" },
+];
+
+const SettingsWorkspace = ({
+    activeSection,
+    onSectionChange,
+    onBack,
+    onClose,
+    onOpenDebugConsole,
+    isFullscreenEnabled,
+    isGlobeEnabled,
+    isTerrainEnabled,
+    onToggleFullscreen,
+    onToggleGlobe,
+    onToggleTerrain,
+    selectedProvider,
+    onApiProviderChange,
+    providerSettings,
+    onProviderSettingChange,
+    mapSettings,
+    updateMapSetting,
+    basemapStyle,
+    updateBasemapStyle,
+    updateBetaUnits,
+    telemetryOn,
+    onToggleTelemetry,
+    ratingOn,
+    onToggleRating,
+    context,
+}) => {
+    const isMobile = useIsMobile();
+
+    useEffect(() => {
+        const priorOverflow = document?.body?.style?.overflow ?? "";
+        if (document?.body) document.body.style.overflow = "hidden";
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") onBack();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            if (document?.body) document.body.style.overflow = priorOverflow;
+        };
+    }, [onBack]);
+
+    const nav = (
+        <nav style={{ display: "flex", flexDirection: isMobile ? "row" : "column", gap: "0.35rem", overflowX: isMobile ? "auto" : "visible", padding: isMobile ? "0.65rem" : "0.85rem", scrollbarWidth: "none" }}>
+            {SETTINGS_SECTIONS.map((section) => {
+                const selected = section.key === activeSection;
+                return (
+                    <button
+                    key={section.key}
+                    type="button"
+                    onClick={() => onSectionChange(section.key)}
+                    style={{
+                        alignItems: "center",
+                        background: selected ? "rgba(59,130,246,0.12)" : "transparent",
+                        border: `1px solid ${selected ? "rgba(96,165,250,0.22)" : "transparent"}`,
+                        borderRadius: "9px",
+                        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.58)",
+                        cursor: "pointer",
+                        display: "flex",
+                        flex: isMobile ? "0 0 auto" : "none",
+                        fontFamily: "inherit",
+                        gap: "0.65rem",
+                        minWidth: isMobile ? "9.6rem" : 0,
+                        padding: "0.62rem 0.65rem",
+                        textAlign: "left",
+                        width: isMobile ? "auto" : "100%",
+                    }}
+                    >
+                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(59,130,246,0.16)" : "rgba(255,255,255,0.045)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
+                        <span>
+                            <span style={{ display: "block", fontSize: "0.74rem", fontWeight: 850 }}>{section.label}</span>
+                            {!isMobile && <span style={{ color: "rgba(255,255,255,0.3)", display: "block", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
+                        </span>
+                    </button>
+                );
+            })}
+        </nav>
+    );
+
+    const page = SETTINGS_SECTIONS.find((section) => section.key === activeSection);
+    const pageTitle = page?.label ?? "Settings";
+    const pageDescription = page?.description ?? "";
+
+    const content = (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <div style={{ marginBottom: "0.1rem" }}>
+                <div style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>{pageTitle}</div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.66rem", marginTop: "0.18rem" }}>{pageDescription}</div>
+            </div>
+
+            {activeSection === "general" && (
+                <>
+                <SettingsSection title="Language" description="Interface language affects the UI. Chat language steers advisor and diplomatic replies.">
+                    <LanguageSelector />
+                    <ChatLanguageSelector />
+                </SettingsSection>
+                <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
+                    <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
+                </SettingsSection>
+                <SettingsSection title="Accessibility" description="Reduce automatic camera motion without changing simulation behavior.">
+                    <Toggle
+                    label="Reduce motion"
+                    enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+                    onToggle={() => {
+                        const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
+                        updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
+                        updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
+                    }}
+                    />
+                </SettingsSection>
+                </>
+            )}
+
+            {activeSection === "map" && (
+                <>
+                <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
+                        <select id="game-basemap-style" data-no-translate value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                            <option value="" style={{ color: "black" }}>Scenario default</option>
+                            {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+                        </select>
+                        <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
+                    </div>
+                    <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                </SettingsSection>
+                <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
+                    <ExperimentalPill />
+                    <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
+                    <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
+                </SettingsSection>
+                <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">
+                    <Toggle label="Disable idle globe rotation" enabled={mapSettings.disableIdleRotation} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
+                    <Toggle label="Disable camera movement during events" enabled={mapSettings.disableEventCamera} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                </SettingsSection>
+                </>
+            )}
+
+            {activeSection === "ai" && (
+                <>
+                <SettingsSection title="Provider" description="Choose which model service Open Historia uses. Provider-specific credentials stay with the selected provider.">
+                    <ApiProviderSelector provider={selectedProvider} onProviderChange={onApiProviderChange ?? (() => {})} />
+                </SettingsSection>
+                <ProviderConnectionPanel provider={selectedProvider} settings={providerSettings ?? {}} onSettingChange={onProviderSettingChange ?? (() => {})} />
+                <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
+                    <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
+                    <div style={settingsHelper}>
+                    On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
+                    </div>
+                    <Toggle label="Generate long time skips in segments" enabled={mapSettings.chunkLongJumps} onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)} />
+                    <div style={settingsHelper}>
+                    On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
+                    </div>
+                    <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                    Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later, applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
+                    </div>
+                </SettingsSection>
+                </>
+            )}
+
+            {activeSection === "advanced" && (
+                <>
+                <SettingsSection title="Expert controls" description="Uncommon provider-level overrides live here so routine configuration stays readable.">
+                    <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.7rem", lineHeight: 1.5 }}>
+                        These values are passed directly to the selected AI provider. They can alter request behavior in provider-specific ways and should normally be left empty.
+                    </div>
+                </SettingsSection>
+                <ProviderAdvancedPanel provider={selectedProvider} settings={providerSettings ?? {}} onSettingChange={onProviderSettingChange ?? (() => {})} onOpenAiSettings={() => onSectionChange("ai")} />
+                <SettingsSection title="Per-task models" description="Route individual AI tasks to a cheaper or a stronger model. Blank means the provider's default model. Saved per provider.">
+                    <TaskModelOverrides key={selectedProvider} provider={selectedProvider} suggestions={getRecentModels(selectedProvider)} />
+                </SettingsSection>
+                <SettingsSection
+                title="Telemetry"
+                description="What the AI debug console can show about every call."
+                right={typeof onOpenDebugConsole === "function" ? (
+                    <button
+                    type="button"
+                    onClick={onOpenDebugConsole}
+                    style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.24)", borderRadius: "8px", color: "#bfdbfe", cursor: "pointer", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
+                    >
+                    Open console
+                    </button>
+                ) : null}
+                >
+                    <Toggle label="Record AI telemetry" enabled={telemetryOn} onToggle={onToggleTelemetry} />
+                    <div style={settingsHelper}>
+                    Keeps every AI call — prompt, answer, model, tokens, latency, validation verdict — in this browser for the AI debug console (200 across sessions). Off: the console sees this session only. Keys are never recorded.
+                    </div>
+                    <Toggle label="Rate AI generations" enabled={ratingOn} onToggle={onToggleRating} />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                    A small 1-10 bar after each time skip, Game Master edit and catalyst. Ratings sit beside the call in the console and its exports.
+                    </div>
+                </SettingsSection>
+                <SettingsSection title="Experimental" description="Work-in-progress systems. Stored with the save, so a copy of the campaign keeps the choice.">
+                    <ExperimentalPill />
+                    <Toggle label="Beta unit system" enabled={mapSettings.betaUnits} onToggle={() => updateBetaUnits(!mapSettings.betaUnits)} />
+                    <div style={{ ...settingsHelper, marginBottom: mapSettings.betaUnits !== isBetaUnits() ? "0.6rem" : 0 }}>
+                    On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing.
+                    </div>
+                    {/* The running session is pinned to what THIS SAVE said when it was opened
+                        (see isBetaUnits), so a flip only means something after the page is
+                        loaded again — the save already has the new value on disk by then.
+                        Shown only while the two actually disagree. Nothing needs quitting: the
+                        pin is module state in the page's own bundle, and every bit of campaign
+                        state lives on the server, so a reload is the whole of it. */}
+                    {mapSettings.betaUnits !== isBetaUnits() && (
+                        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
+                        <span>Takes effect when the game reloads.</span>
+                        <button
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        title="Reloads the page. Your campaign is saved on the server, so nothing is lost — but finish any turn that is still generating first."
+                        style={{
+                            background: "rgba(255,210,74,0.14)",
+                            border: "1px solid rgba(255,210,74,0.5)",
+                            borderRadius: "6px",
+                            color: "#ffd24a",
+                            cursor: "pointer",
+                            fontFamily: "sans-serif",
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            padding: "0.2rem 0.55rem",
+                        }}
+                        >
+                        Reload now
+                        </button>
+                        </div>
+                    )}
+                </SettingsSection>
+                {!import.meta.env.VITE_OH_WEB && (
+                    <SettingsSection title="Network" description="Other devices — the Android app, a browser on another computer — reach this server only while you say so.">
+                        <NetworkSharing />
+                    </SettingsSection>
+                )}
+                <SettingsSection title="Diagnostics" description="The log a bug report needs. Copy it for Discord, save it for a GitHub issue.">
+                    <DiagnosticsPanel />
+                </SettingsSection>
+                </>
+            )}
+        </div>
+    );
+
+    return createPortal(
+        <div role="dialog" aria-modal="true" aria-label="Game settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(32,48,67,0.72), rgba(8,16,28,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+                <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
+                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
+                            <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
+                            {context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
+                        </div>
+                        <div data-no-translate style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                </div>
+                <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
+                    <aside style={{ backgroundColor: "rgba(3,8,18,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
+                    <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
+                </div>
+            </div>
+        </div>,
+        document.body,
+    );
+};
+
+const QUICK_MENU_TABS = [
+    { key: "game", label: "Game" },
+    { key: "tools", label: "Tools" },
+    { key: "settings", label: "Settings" },
+    { key: "help", label: "Help" },
+];
+
+const QuickMenuTabButton = ({ label, selected, onClick }) => (
+    <button
+    type="button"
+    onClick={onClick}
+    style={{
+        background: selected ? "rgba(59,130,246,0.16)" : "transparent",
+        border: `1px solid ${selected ? "rgba(96,165,250,0.28)" : "transparent"}`,
+        borderRadius: "8px",
+        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.56)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontSize: "0.72rem",
+        fontWeight: 850,
+        padding: "0.5rem 0.8rem",
+        textTransform: "uppercase",
+        letterSpacing: "0.04em",
+    }}
+    >
+    {label}
+    </button>
+);
+
+const QuickMenuPanel = ({ title, description, children }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div>
+            <div style={{ color: "#f8fafc", fontSize: "0.82rem", fontWeight: 850 }}>{title}</div>
+            {description && <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.18rem" }}>{description}</div>}
+        </div>
+        {children}
+    </div>
+);
+
+const ContextSummaryCard = ({ context }) => {
+    const rows = [
+        { label: "Scenario", value: context?.scenarioName || context?.gameName || "Open Historia" },
+        { label: "Playing as", value: context?.countryName || "—" },
+        { label: "Date", value: context?.date || "—" },
+    ];
+
+    return (
+        <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", fontWeight: 800, marginBottom: "0.6rem" }}>Current session</div>
+            <div style={{ display: "grid", gap: "0.45rem" }}>
+                {rows.map((row) => (
+                    <div key={row.label} style={{ alignItems: "baseline", display: "grid", gap: "0.4rem", gridTemplateColumns: "5.2rem minmax(0, 1fr)" }}>
+                        <span style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.63rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>{row.label}</span>
+                        <span data-no-translate={row.label !== "Scenario" ? true : undefined} style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.72rem", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.value}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 const SettingsMenu = ({
     topOffset = "0.5rem",
     isFullscreenEnabled,
@@ -1445,11 +1758,23 @@ const SettingsMenu = ({
     onProviderSettingChange,
     onOpenCheats,
     onOpenDebugConsole,
+    onOpenEvents,
+    onOpenGameManagement,
+    onClose,
     discordUrl,
     redditUrl,
     githubUrl,
+    reportBugUrl,
+    context,
 }) => {
     const selectedProvider = apiProvider ?? DEFAULT_PROVIDER;
+    const isMobile = useIsMobile();
+    const [activeSettingsSection, setActiveSettingsSection] = useState(null);
+    const [activeQuickTab, setActiveQuickTab] = useState("tools");
+    // The basemap override is a value setting (a basemap id, or empty for the
+    // scenario's own), read live so the picker follows a change made elsewhere.
+    const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
+    const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) ? storedBasemapStyle : "";
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
@@ -1471,10 +1796,13 @@ const SettingsMenu = ({
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
+    const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
 
     // Telemetry switches (telemetry.js): their own keys, both on by default.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
+    const toggleTelemetry = () => { const next = !telemetryOn; setTelemetryOn(next); setTelemetryEnabled(next); };
+    const toggleRating = () => { const next = !ratingOn; setRatingOn(next); setRatingEnabled(next); };
 
     // The save's own value arrives asynchronously (library.js reads game.json),
     // and it changes again whenever a different save is activated — both of them
@@ -1490,6 +1818,17 @@ const SettingsMenu = ({
         window.addEventListener("mapSettings:updated", onUpdated);
         return () => window.removeEventListener("mapSettings:updated", onUpdated);
     }, []);
+
+    // Escape closes the quick menu; the workspace handles its own (it goes back
+    // to the quick menu first).
+    useEffect(() => {
+        if (activeSettingsSection) return undefined;
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") onClose?.();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [activeSettingsSection, onClose]);
 
     // The unit system is stored in the active save's game.json so it survives a
     // restart and travels with a copied or duplicated save. The localStorage write
@@ -1515,266 +1854,144 @@ const SettingsMenu = ({
             });
     };
 
+    const runAndClose = (action) => {
+        action?.();
+        onClose?.();
+    };
+    const openSettingsSection = (section) => setActiveSettingsSection(section);
+
+    if (activeSettingsSection) {
+        return (
+            <SettingsWorkspace
+            activeSection={activeSettingsSection}
+            onSectionChange={setActiveSettingsSection}
+            onBack={() => setActiveSettingsSection(null)}
+            onClose={() => onClose?.()}
+            onOpenDebugConsole={typeof onOpenDebugConsole === "function" ? () => runAndClose(onOpenDebugConsole) : undefined}
+            isFullscreenEnabled={isFullscreenEnabled}
+            isGlobeEnabled={isGlobeEnabled}
+            isTerrainEnabled={isTerrainEnabled}
+            onToggleFullscreen={onToggleFullscreen}
+            onToggleGlobe={onToggleGlobe}
+            onToggleTerrain={onToggleTerrain}
+            selectedProvider={selectedProvider}
+            onApiProviderChange={onApiProviderChange}
+            providerSettings={providerSettings}
+            onProviderSettingChange={onProviderSettingChange}
+            mapSettings={mapSettings}
+            updateMapSetting={updateMapSetting}
+            basemapStyle={basemapStyle}
+            updateBasemapStyle={updateBasemapStyle}
+            updateBetaUnits={updateBetaUnits}
+            telemetryOn={telemetryOn}
+            onToggleTelemetry={toggleTelemetry}
+            ratingOn={ratingOn}
+            onToggleRating={toggleRating}
+            context={context}
+            />
+        );
+    }
+
+    const grid = { display: "grid", gap: "0.55rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))" };
+    let panelContent = null;
+    if (activeQuickTab === "game") {
+        panelContent = (
+            <QuickMenuPanel title="Game" description="Campaign identity and management actions.">
+                <ContextSummaryCard context={context} />
+                {typeof onOpenGameManagement === "function" && (
+                    <QuickAction title="Game Management" description="Switch, duplicate, import or manage campaigns" symbol="▦" onClick={() => runAndClose(onOpenGameManagement)} />
+                )}
+            </QuickMenuPanel>
+        );
+    } else if (activeQuickTab === "settings") {
+        panelContent = (
+            <QuickMenuPanel title="Settings" description="Jump straight into the options category you want.">
+                <div style={grid}>
+                    <QuickAction title="General" description="Language, display and accessibility" symbol="◫" tone="blue" onClick={() => openSettingsSection("general")} />
+                    <QuickAction title="Map" description="Basemap, labels, globe and camera" symbol="◇" tone="blue" onClick={() => openSettingsSection("map")} />
+                    <QuickAction title="AI" description="Provider, model, reasoning and limits" symbol="✦" onClick={() => openSettingsSection("ai")} />
+                    <QuickAction title="Advanced" description="Provider parameters and expert controls" symbol="⌘" onClick={() => openSettingsSection("advanced")} />
+                </div>
+            </QuickMenuPanel>
+        );
+    } else if (activeQuickTab === "help") {
+        panelContent = (
+            <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
+                <div style={grid}>
+                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
+                </div>
+                <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
+                    <span style={{ color: "rgba(255,255,255,0.24)", fontSize: "0.6rem" }}>Community</span>
+                    <SocialLinks discordUrl={discordUrl} redditUrl={redditUrl} githubUrl={githubUrl} />
+                </div>
+            </QuickMenuPanel>
+        );
+    } else {
+        panelContent = (
+            <QuickMenuPanel title="Tools" description="High-frequency in-game tools should stay one click away.">
+                <div style={grid}>
+                    {typeof onOpenCheats === "function" && (
+                        <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="violet" onClick={() => runAndClose(onOpenCheats)} />
+                    )}
+                    {typeof onOpenEvents === "function" && (
+                        <QuickAction title="Events / Timeline" description="Review the current turn and world history" symbol="◷" tone="blue" onClick={() => runAndClose(onOpenEvents)} />
+                    )}
+                    {/* This branch's own tool, in the same row: every AI call with its prompt,
+                        answer and cost. Continuum has no counterpart. */}
+                    {typeof onOpenDebugConsole === "function" && (
+                        <QuickAction title="AI debug console" description="Every AI call, its prompt, answer and cost" symbol="◈" onClick={() => runAndClose(onOpenDebugConsole)} />
+                    )}
+                </div>
+            </QuickMenuPanel>
+        );
+    }
+
     return (
         <div
         style={{
             ...baseStyle,
             top: `calc(${topOffset} + 4.25rem)`,
             left: "0.5rem",
-            width: "22rem",
+            width: isMobile ? "calc(100vw - 1rem)" : "29rem",
             maxWidth: "calc(100vw - 1rem)",
+            minHeight: isMobile ? "auto" : "22rem",
             // Never taller than the space below the panel's own top edge — the old
             // 100vh-5rem pushed the bottom (Discord/GitHub links) off short screens.
             maxHeight: `calc(100vh - ${topOffset} - 5.25rem)`,
             overflowY: "auto",
-            padding: "1rem",
+            padding: "0.85rem",
             flexDirection: "column",
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
+            background: "linear-gradient(180deg, rgba(32,48,67,0.68), rgba(8,16,28,0.58))",
+            border: "1px solid var(--oh-hud-border)",
+            boxShadow: "var(--oh-hud-shadow)",
         }}
         >
-        <h3
-        style={{
-            margin: "0 -1rem 1rem -1rem",
-            padding: "0 1rem 1rem 1rem",
-            fontSize: "1.1rem",
-            textAlign: "left",
-            borderBottom: "1px solid rgba(255,255,255,0.1)",
-        }}
-        >
-        Game Settings
-        </h3>
-
-        <ApiProviderSelector
-        provider={selectedProvider}
-        onProviderChange={onApiProviderChange ?? (() => {})}
-        />
-
-        <ProviderSettingsPanel
-        provider={selectedProvider}
-        settings={providerSettings ?? {}}
-        onSettingChange={onProviderSettingChange ?? (() => {})}
-        />
-
-        <LanguageSelector />
-        <ChatLanguageSelector />
-
-        <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
-        <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
-        <div style={{ marginTop: "-0.85rem", marginBottom: "1rem" }}>
-        <span
-        style={{
-            backgroundColor: "rgba(245,158,11,0.16)",
-            border: "1px solid rgba(245,158,11,0.45)",
-            borderRadius: "999px",
-            color: "#fbbf24",
-            fontSize: "0.66rem",
-            fontWeight: 700,
-            letterSpacing: "0.02em",
-            padding: "0.16rem 0.55rem",
-        }}
-        >
-        Very Experimental
-        </span>
-        </div>
-        <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
-        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Map</div>
-        <Toggle
-        label="Hide country labels"
-        enabled={mapSettings.hideCountryLabels}
-        onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)}
-        />
-        <Toggle
-        label="Reduce motion"
-        enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
-        onToggle={() => {
-            // Umbrella accessibility control: on = stop both the idle globe spin
-            // and the fly-to during events; the two toggles below stay for
-            // granular control and reflect the result.
-            const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
-            updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
-            updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
-        }}
-        />
-        <Toggle
-        label="Disable idle globe rotation"
-        enabled={mapSettings.disableIdleRotation}
-        onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)}
-        />
-        <Toggle
-        label="Disable camera movement during events"
-        enabled={mapSettings.disableEventCamera}
-        onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)}
-        />
-        </div>
-
-        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>AI</div>
-        <Toggle
-        label="Limit AI generation"
-        enabled={mapSettings.limitAiGeneration}
-        onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
-        </div>
-        <Toggle
-        label="Batch background AI tasks"
-        enabled={mapSettings.batchBackgroundTasks}
-        onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later,
-        applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
-        </div>
-        <Toggle
-        label="Record AI telemetry"
-        enabled={telemetryOn}
-        onToggle={() => { const next = !telemetryOn; setTelemetryOn(next); setTelemetryEnabled(next); }}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        Keeps every AI call — prompt, answer, model, tokens, latency, validation verdict — in this browser for the AI debug console
-        (200 across sessions). Off: the console sees this session only. Keys are never recorded.
-        </div>
-        <Toggle
-        label="Rate AI generations"
-        enabled={ratingOn}
-        onToggle={() => { const next = !ratingOn; setRatingOn(next); setRatingEnabled(next); }}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        A small 1-10 bar after each time skip, Game Master edit and catalyst. Ratings sit beside the call in the console and its exports.
-        </div>
-        <Toggle
-        label="Generate long time skips in segments"
-        enabled={mapSettings.chunkLongJumps}
-        onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
-        </div>
-        </div>
-
-        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Experimental</div>
-        <Toggle
-        label="Beta unit system"
-        enabled={mapSettings.betaUnits}
-        onToggle={() => updateBetaUnits(!mapSettings.betaUnits)}
-        />
-        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing. Set per save: it is stored with this campaign, so it survives a restart and follows a copy of the save.
-        </div>
-        {/* The running session is pinned to what THIS SAVE said when it was opened
-            (see isBetaUnits), so a flip only means something after the page is
-            loaded again — the save already has the new value on disk by then.
-            Shown only while the two actually disagree. Nothing needs quitting: the
-            pin is module state in the page's own bundle, and every bit of campaign
-            state lives on the server, so a reload is the whole of it. */}
-        {mapSettings.betaUnits !== isBetaUnits() && (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
-            <span>Takes effect when the game reloads.</span>
-            <button
-            type="button"
-            onClick={() => window.location.reload()}
-            title="Reloads the page. Your campaign is saved on the server, so nothing is lost — but finish any turn that is still generating first."
-            style={{
-                background: "rgba(255,210,74,0.14)",
-                border: "1px solid rgba(255,210,74,0.5)",
-                borderRadius: "6px",
-                color: "#ffd24a",
-                cursor: "pointer",
-                fontFamily: "sans-serif",
-                fontSize: "0.72rem",
-                fontWeight: 700,
-                padding: "0.2rem 0.55rem",
-            }}
-            >
-            Reload now
-            </button>
+            <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.75rem", margin: "-0.1rem -0.1rem 0.75rem", padding: "0 0.1rem 0.7rem" }}>
+                <div style={{ alignItems: "center", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(96,165,250,0.16)", borderRadius: "9px", color: "#bfdbfe", display: "flex", flexShrink: 0, fontSize: "0.8rem", fontWeight: 950, height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>OH</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.55rem" }}>
+                        <span style={{ color: "#f8fafc", fontSize: "0.92rem", fontWeight: 900 }}>{context?.scenarioName || context?.gameName || "Open Historia"}</span>
+                    </div>
+                    <div data-no-translate style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem", marginTop: "0.15rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game menu"}
+                    </div>
+                </div>
+                <button type="button" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
-        )}
-        </div>
 
-        <NetworkSharing />
+            <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
+                {QUICK_MENU_TABS.map((tab) => (
+                    <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} />
+                ))}
+            </div>
 
-        <DiagnosticsPanel />
-
-        {typeof onOpenDebugConsole === "function" && (
-            <button
-            type="button"
-            onClick={onOpenDebugConsole}
-            style={{
-                alignItems: "center",
-                background: "rgba(59,130,246,0.18)",
-                border: "1px solid rgba(96,165,250,0.4)",
-                borderRadius: "8px",
-                color: "white",
-                cursor: "pointer",
-                display: "flex",
-                fontSize: "0.9rem",
-                fontWeight: 600,
-                gap: "0.5rem",
-                justifyContent: "center",
-                marginBottom: "1rem",
-                padding: "0.6rem 0.7rem",
-                width: "100%",
-            }}
-            >
-            📊 AI debug console
-            </button>
-        )}
-
-        {typeof onOpenCheats === "function" && (
-            <button
-            type="button"
-            onClick={onOpenCheats}
-            style={{
-                alignItems: "center",
-                background: "rgba(124,58,237,0.22)",
-                border: "1px solid rgba(139,92,246,0.45)",
-                borderRadius: "8px",
-                color: "white",
-                cursor: "pointer",
-                display: "flex",
-                fontSize: "0.9rem",
-                fontWeight: 600,
-                gap: "0.5rem",
-                justifyContent: "center",
-                marginBottom: "1rem",
-                padding: "0.6rem 0.7rem",
-                width: "100%",
-            }}
-            >
-            🧪 Cheats
-            </button>
-        )}
-
-        <a
-        href="/guides/"
-        style={{
-            alignItems: "center",
-            background: "rgba(59,130,246,0.18)",
-            border: "1px solid rgba(96,165,250,0.4)",
-            borderRadius: "8px",
-            color: "white",
-            cursor: "pointer",
-            display: "flex",
-            fontSize: "0.9rem",
-            fontWeight: 600,
-            gap: "0.5rem",
-            justifyContent: "center",
-            marginBottom: "1rem",
-            padding: "0.6rem 0.7rem",
-            textDecoration: "none",
-            width: "100%",
-        }}
-        >
-        📖 Guides
-        </a>
-
-        <SocialLinks discordUrl={discordUrl} redditUrl={redditUrl} githubUrl={githubUrl} />
+            <div style={{ flex: 1, minHeight: 0 }}>
+                {panelContent}
+            </div>
         </div>
     );
 };
