@@ -21,7 +21,7 @@ import {
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
-import { toCountryName } from "../../runtime/ownerNames.js";
+import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { loadCountryLabelCollections, loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { loadRegionSeed, emptyRegionSeed } from "../../runtime/regionSeed.js";
@@ -272,34 +272,53 @@ const MIN_CLUSTER_AREA = 1.5; // in lng/lat degrees^2 — skips tiny extra islan
 // mop-up in the label builder heals whatever this still misses. Owner-agnostic
 // (geometry only) so it can be memoized per world and reused across ownership
 // changes.
+// Which regions touch. The z0 label tile simplifies every region on its own,
+// so two neighbours almost never share a vertex there: the shared-vertex test
+// this used to be found 193 of 218 countries in several pieces (Russia in 38),
+// and every piece got its own label. Bounding boxes that overlap, or come within
+// a fifth of a degree, are what "touching" means at that resolution - it keeps
+// Siberia one territory and still leaves a colony across a sea on its own.
+const ADJACENCY_GAP_DEGREES = 0.2;
 const buildRegionAdjacency = (regionsFC) => {
   const features = regionsFC?.features ?? [];
-  const firstSeen = new Map(); // packed vertex -> first feature index
   const neighbors = features.map(() => null);
+  const boxes = features.map((feature, index) => {
+    const geometry = feature?.geometry;
+    const polys = geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+    let west = Infinity;
+    let south = Infinity;
+    let east = -Infinity;
+    let north = -Infinity;
+    for (const poly of polys) {
+      for (const ring of poly ?? []) {
+        for (const pt of ring ?? []) {
+          if (!Array.isArray(pt)) continue;
+          west = Math.min(west, pt[0]);
+          east = Math.max(east, pt[0]);
+          south = Math.min(south, pt[1]);
+          north = Math.max(north, pt[1]);
+        }
+      }
+    }
+    return Number.isFinite(west) ? { index, west, south, east, north } : null;
+  }).filter(Boolean);
+  boxes.sort((a, b) => a.west - b.west);
   const link = (a, b) => {
     (neighbors[a] ??= new Set()).add(b);
     (neighbors[b] ??= new Set()).add(a);
   };
-  for (let index = 0; index < features.length; index += 1) {
-    const geometry = features[index]?.geometry;
-    const polys = geometry?.type === "Polygon"
-      ? [geometry.coordinates]
-      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-    for (const poly of polys) {
-      for (const ring of poly ?? []) {
-        if (!ring) continue;
-        for (let v = 0; v < ring.length; v += 1) {
-          const pt = ring[v];
-          // 1e-4° grid, packed into one number (fits 2^53).
-          const key = Math.round((pt[0] + 180) * 1e4) * 4194304 + Math.round((pt[1] + 90) * 1e4);
-          const seen = firstSeen.get(key);
-          if (seen === undefined) firstSeen.set(key, index);
-          else if (seen !== index) link(seen, index);
-        }
-      }
+  const gap = ADJACENCY_GAP_DEGREES;
+  for (let i = 0; i < boxes.length; i += 1) {
+    const a = boxes[i];
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const b = boxes[j];
+      if (b.west > a.east + gap) break;
+      if (b.south > a.north + gap || b.north < a.south - gap) continue;
+      link(a.index, b.index);
     }
   }
-  firstSeen.clear();
   return neighbors;
 };
 
@@ -372,6 +391,10 @@ const buildOwnerLabelCollection = (
   const countryNameByCode = new Map(); // gid0 -> modern country name (fallback labels)
   const ownerByIndex = new Array(allFeatures.length).fill("");
   const entryByIndex = new Array(allFeatures.length).fill(null);
+  // A polity renamed by the AI is one polity, however a region's owner spells
+  // it: "Russian Federation" folds back onto the "Russia" token here exactly as
+  // it does when the world is read, so the country gets one label, not two.
+  const aliasMap = buildOwnerAliasMap(polityOverrides);
 
   for (let index = 0; index < allFeatures.length; index += 1) {
     const props = allFeatures[index].properties || {};
@@ -382,7 +405,7 @@ const buildOwnerLabelCollection = (
     // Captured-region override stores the AI's owner CODE ("ESP"); the seed stores the NAME
     // ("Spain"). Canonicalize so both share one cluster + label instead of the code splitting
     // off as a phantom new country.
-    const owner = toCountryName(rawOwner);
+    const owner = canonicalOwnerName(rawOwner, aliasMap);
     if (!owner) continue;
 
     let entry = precomputedMetrics ? precomputedMetrics[index] : null;
