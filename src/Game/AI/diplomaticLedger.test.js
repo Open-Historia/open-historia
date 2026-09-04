@@ -116,3 +116,52 @@ test("legacy treaty events seed the ledgers exactly once", () => {
   const second = migrateLegacyDiplomaticState({ world: first.world, events: legacyEvents, chats: [], game: {} });
   assert.equal(second.migrated, false);
 });
+
+test("a declared status that contradicts the absolute score is reconciled in simulation and refused for the GM", () => {
+  const events = [{
+    id: "event-1",
+    date: "2014-04-01",
+    title: "NATO suspends cooperation with Russia",
+    description: "The alliance suspends practical cooperation with Russia over Crimea.",
+  }];
+  const candidate = {
+    events,
+    relationUpdates: ["Russia~France~35~strained~1~Cooperation suspended over Crimea."],
+    agreementUpdates: [],
+  };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "");
+  assert.equal(candidate.relationUpdates[0].score, -35, "a magnitude beside a negative band flips sign");
+  assert.equal(candidate.relationUpdates[0].status, "strained");
+
+  const strict = validateDiplomaticLedgerPayload({
+    events,
+    relationUpdates: ["Russia~France~35~strained~1~Cooperation suspended."],
+    agreementUpdates: [],
+  }, { world });
+  assert.match(strict, /ABSOLUTE new value/);
+
+  const consistent = {
+    events,
+    relationUpdates: ["Russia~France~-35~strained~1~Cooperation suspended."],
+    agreementUpdates: [],
+  };
+  assert.equal(validateDiplomaticLedgerPayload(consistent, { world, allowNativeBinding: true }), "");
+  assert.equal(consistent.relationUpdates[0].score, -35);
+
+  const oneBandOff = {
+    events,
+    relationUpdates: ["Russia~France~-25~strained~1~Cooling."],
+    agreementUpdates: [],
+  };
+  assert.equal(validateDiplomaticLedgerPayload(oneBandOff, { world, allowNativeBinding: true }), "");
+  assert.equal(oneBandOff.relationUpdates[0].score, -25, "an adjacent band is the model's call, not a contradiction");
+
+  const midpoint = {
+    events,
+    relationUpdates: ["Russia~France~10~hostile~1~Expulsions."],
+    agreementUpdates: [],
+  };
+  assert.equal(validateDiplomaticLedgerPayload(midpoint, { world, allowNativeBinding: true }), "");
+  assert.equal(midpoint.relationUpdates[0].score, -75, "when a sign flip does not explain it, the declared band's midpoint does");
+  assert.equal(midpoint.relationUpdates[0].status, "hostile");
+});

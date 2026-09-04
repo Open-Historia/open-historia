@@ -160,6 +160,42 @@ const normalizeRelationStatus = (_value, score = 0) => {
   return "rival";
 };
 
+// Band order and midpoints, for comparing a DECLARED status against the band
+// the score implies.
+const RELATION_BAND_ORDER = ["rival", "hostile", "strained", "cautious", "neutral", "cordial", "friendly"];
+const RELATION_BAND_MIDPOINT = { rival: -95, hostile: -75, strained: -45, cautious: -20, neutral: 5, cordial: 37, friendly: 77 };
+const relationBandIndex = (status) => RELATION_BAND_ORDER.indexOf(lower(status));
+
+// The model sometimes writes a magnitude ("35" beside status strained) or a
+// delta where the contract asks for the absolute new score; trusting the number
+// alone once flipped a hostile pair to cordial in one turn. When the declared
+// status contradicts the score by two bands or more, reconcile: flip the sign
+// when that agrees with the status, otherwise take the declared band's midpoint.
+export const reconcileRelationScoresWithStatus = (updates) => {
+  const repaired = [];
+  const records = decodeRelationUpdates(updates).map((update) => {
+    const declared = relationBandIndex(update.declaredStatus);
+    if (declared < 0 || !Number.isFinite(update.score)) return update;
+    const implied = relationBandIndex(normalizeRelationStatus("", update.score));
+    if (Math.abs(declared - implied) < 2) return update;
+    const flipped = -update.score;
+    const flippedBand = relationBandIndex(normalizeRelationStatus("", flipped));
+    const score = Math.abs(flippedBand - declared) <= 1
+      ? flipped
+      : RELATION_BAND_MIDPOINT[RELATION_BAND_ORDER[declared]];
+    repaired.push({
+      a: update.a,
+      b: update.b,
+      declared: RELATION_BAND_ORDER[declared],
+      implied: RELATION_BAND_ORDER[implied],
+      from: update.score,
+      to: score,
+    });
+    return { ...update, score, status: normalizeRelationStatus("", score) };
+  });
+  return { records, repaired };
+};
+
 const normalizeAgreementType = (value) => {
   const type = lower(value).replace(/[ -]+/g, "_");
   return AGREEMENT_TYPE_SET.has(type) ? type : "other";
@@ -280,6 +316,7 @@ const decodeRelationLine = (line, index) => {
     b: clean(b),
     score: normalizedScore,
     status: normalizeRelationStatus(status, normalizedScore ?? 0),
+    declaredStatus: lower(status),
     eventIndexes: parseEventNumbers(eventNumbers),
     eventIds: [],
     summary: clean(summary),
@@ -299,6 +336,7 @@ export const decodeRelationUpdates = (value) => {
         b: clean(entry.b),
         score: normalizedScore,
         status: normalizeRelationStatus(entry.status, normalizedScore ?? 0),
+        declaredStatus: lower(entry.declaredStatus || entry.status),
         eventIndexes: array(entry.eventIndexes).map(Number).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 16),
         eventIds: unique(entry.eventIds, 24),
         summary: clean(entry.summary),
@@ -896,6 +934,23 @@ export const validateDiplomaticLedgerPayload = (
         `${lifecycleRepair.dropped} redundant start(s) dropped.`,
       );
     }
+  }
+
+  // A declared status that contradicts the absolute score is the model writing
+  // a magnitude or a delta. Ordinary simulation repairs it (and says so); a GM
+  // preview stays fail-closed so the administrator sees the contradiction.
+  const reconciled = reconcileRelationScoresWithStatus(candidate?.relationUpdates);
+  if (reconciled.repaired.length) {
+    const first = reconciled.repaired[0];
+    if (!allowNativeBinding) {
+      return `Relation update ${first.a} ↔ ${first.b} declares status "${first.declared}" but its score ${first.from} means "${first.implied}". ` +
+        "The score is the ABSOLUTE new value from -100 (worst) to 100 (best), not a change; make the score and status agree.";
+    }
+    console.info(
+      "[OH diplomacy score repair] " +
+      reconciled.repaired.map((entry) => `${entry.a} ↔ ${entry.b}: ${entry.from} (${entry.implied}) → ${entry.to} (${entry.declared})`).join("; "),
+    );
+    candidate.relationUpdates = reconciled.records;
   }
 
   let relations = bindRelationUpdatesToEvents(candidate?.relationUpdates, events);

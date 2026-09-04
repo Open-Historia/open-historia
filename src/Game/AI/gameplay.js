@@ -3323,7 +3323,9 @@ const applySimulationResult = async ({
     const baseScore = Number.isFinite(Number(sameTurnUpdate?.score))
       ? Number(sameTurnUpdate.score)
       : Number.isFinite(Number(priorRelation?.score)) ? Number(priorRelation.score) : 0;
-    const score = Math.max(-100, Math.min(100, Math.round(baseScore) - 20));
+    // A public exposure leaves the pair at least strained — the notice says
+    // so — however warm the same turn's diplomacy tried to make it.
+    const score = Math.max(-100, Math.min(-31, Math.round(baseScore) - 20));
     espionageRelationUpdates.push({
       id: `relation-update-espionage-${nextGame.round}-${espionageIndex}`,
       a: owner,
