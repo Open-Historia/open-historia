@@ -81,6 +81,14 @@ If a provider rejects `tools` + `reasoning_effort` together (documented 400/422)
 
 It is deliberately still **one global toggle**, not per task, and that is worth knowing before changing it: measured on Gemini, thinking is 60% of the jump's output budget but **83% of the consolidator's** — which is extraction, not invention. Making it per-task is a real and unclaimed win on the providers that report usage. It was left alone because the provider it would most obviously help (a hosted gateway with slow bookkeeping calls) reports no usage at all, so the change could not be verified there, and its "thinking" does not look like a budgeted channel — it deliberates in plain `content`.
 
+### Per-task model routing
+
+Ported from the abdulrahman-2005 fork. Every AI call names its task — the prompt-pack task key for `runJsonTask` calls (`jumpForward`, `timelineCurator`, `territoryDirector`…), the repair/briefing keys the direct calls pass, and `advisor` / `diplomacy` for the chats — and `resolveModel` (`main.jsx`) asks `getModelForTask(provider, taskKey)` (`providerConfig.js`) which model to run. A task override stored under `<provider>_model_<taskKey>` wins; a blank one falls through to the provider's default model and then to discovery, exactly as before. The field names are synthesized by `getSettingConfig` (`model_<taskKey>`), so `getProviderField`/`setProviderField` work on them with no per-task schema; `AI_TASK_ROUTING` lists the tasks the Settings panel shows (Settings → provider → **Per-task models**, collapsed by default). Overrides are per provider, so switching providers switches the whole set, and changing a task's model does not touch the provider's structured-output choice (only the base `model` field does).
+
+### Configuration profiles and recent models
+
+For `openai-compatible` and `anthropic-compatible`, Settings shows **Configuration profiles**: named endpoint/key/model/custom-params bundles stored as one JSON array under `ai_provider_presets` (`getSavedPresets`/`savePreset`/`updatePreset`/`deletePreset`). Three stock entries (Groq, OpenRouter, Local Ollama) are written on first read so they can be edited or deleted like any other; applying a profile that has no key keeps the key currently entered. `resolveModel` also records the model each call actually ran with (`saveRecentModel`, ten per provider under `ai_recent_models_<provider>`), and every model field — the provider's and the per-task ones — offers those as datalist suggestions (`getRecentModels`).
+
 ---
 
 ## Where the key goes: direct calls, origin, and the relay

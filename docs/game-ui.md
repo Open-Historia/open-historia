@@ -341,7 +341,7 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | Section | Control | Persists to / calls |
 |---|---|---|
 | AI Provider | `ApiProviderSelector` — searchable catalog of `PROVIDER_OPTIONS` | `onApiProviderChange`→`Main.apiProvider`→`localStorage["api_provider"]` |
-| Provider settings | `ProviderSettingsPanel` — per-provider API key/model/custom-params (gemini, openai, anthropic, openai-compatible, anthropic-compatible) + global **Model reasoning** toggle | `persistProviderSetting` (browser localStorage); `setReasoningEnabled` |
+| Provider settings | `ProviderSettingsPanel` — per-provider API key/model/custom-params (gemini, openai, anthropic, openai-compatible, anthropic-compatible), **Configuration profiles** for the two compatible providers (`PresetManager`), recent models as suggestions under every model field, the collapsed **Per-task models** section (`TaskModelOverrides`, see `docs/ai-overview.md`) + global **Model reasoning** toggle | `persistProviderSetting` (browser localStorage); `setReasoningEnabled` |
 | Language | `LanguageSelector` — searchable; applying reloads the page | `setStoredLanguage` (server + browser) |
 | Display | **Fullscreen**, **3D Globe**, **3D Terrain** (labeled "Very Experimental") toggles | `Main` toggles / `App.jsx` state |
 | Map | Hide country labels, **Reduce motion** (umbrella over the two below), Disable idle globe rotation, Disable camera movement during events | `setMapSetting(MAP_SETTING_KEYS.*)` (`src/runtime/mapSettings.js`) |
