@@ -24,10 +24,15 @@ import {
 } from "../../runtime/i18n.js";
 import {
     MAP_SETTING_KEYS,
+    applySaveBetaUnits,
     getMapSetting,
     getMapSettingDefaultOn,
+    isBetaUnits,
+    resolveBetaUnits,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildDebugLogReport,
@@ -1177,11 +1182,54 @@ const SettingsMenu = ({
         limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
         // Same again: ships ON.
         chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
+        // Not getMapSetting: this one belongs to the save, not the browser
+        // profile (see mapSettings.js). resolveBetaUnits falls back to the
+        // localStorage key for a save that has never chosen.
+        betaUnits: resolveBetaUnits(),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
+    };
+
+    // The save's own value arrives asynchronously (library.js reads game.json),
+    // and it changes again whenever a different save is activated — both of them
+    // after this panel's state was seeded. Without this the checkbox keeps
+    // showing the app-wide default, which for a beta save is the wrong box.
+    useEffect(() => {
+        const onUpdated = () =>
+            setMapSettingsState((current) => {
+                const next = resolveBetaUnits();
+                return current.betaUnits === next ? current : { ...current, betaUnits: next };
+            });
+        onUpdated();
+        window.addEventListener("mapSettings:updated", onUpdated);
+        return () => window.removeEventListener("mapSettings:updated", onUpdated);
+    }, []);
+
+    // The unit system is stored in the active save's game.json so it survives a
+    // restart and travels with a copied or duplicated save. The localStorage write
+    // still happens (through updateMapSetting): it is no longer where the setting
+    // lives, only the default handed to the next save that has never chosen one.
+    //
+    // Order matters — applySaveBetaUnits first, because writeGameData re-stamps
+    // the flag from it rather than from the object it is handed, which is what
+    // makes this safe to do while a turn is generating.
+    const updateBetaUnits = (value) => {
+        updateMapSetting("betaUnits", MAP_SETTING_KEYS.betaUnits, value);
+        const gameId = getLibraryState().activeGameId;
+        // With no save open there is nothing to store it on, and writing game.json
+        // anyway would have the server CREATE a session from the selected scenario
+        // — a settings click must not start a campaign. The localStorage default
+        // above is enough: the save the player opens next inherits it.
+        if (!gameId) return;
+        applySaveBetaUnits(gameId, value);
+        readGameData({ force: true })
+            .then((game) => writeGameData(game))
+            .catch((error) => {
+                console.warn("Failed to store the unit system on this save:", error);
+            });
     };
 
     return (
@@ -1305,6 +1353,47 @@ const SettingsMenu = ({
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
         </div>
+        </div>
+
+        <div style={{ margin: "0.5rem 0 1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: "0.84rem", fontWeight: 700, marginBottom: "0.6rem" }}>Experimental</div>
+        <Toggle
+        label="Beta unit system"
+        enabled={mapSettings.betaUnits}
+        onToggle={() => updateBetaUnits(!mapSettings.betaUnits)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        On: the AI drives movement and combat, units hold a posture, and standing orders advance every turn. Work in progress — expect bugs. Off (default): you move and attack your units yourself. Your save works with both, and switching back and forth loses nothing. Set per save: it is stored with this campaign, so it survives a restart and follows a copy of the save.
+        </div>
+        {/* The running session is pinned to what THIS SAVE said when it was opened
+            (see isBetaUnits), so a flip only means something after the page is
+            loaded again — the save already has the new value on disk by then.
+            Shown only while the two actually disagree. Nothing needs quitting: the
+            pin is module state in the page's own bundle, and every bit of campaign
+            state lives on the server, so a reload is the whole of it. */}
+        {mapSettings.betaUnits !== isBetaUnits() && (
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", fontSize: "0.72rem", color: "#ffd24a", lineHeight: 1.35 }}>
+            <span>Takes effect when the game reloads.</span>
+            <button
+            type="button"
+            onClick={() => window.location.reload()}
+            title="Reloads the page. Your campaign is saved on the server, so nothing is lost — but finish any turn that is still generating first."
+            style={{
+                background: "rgba(255,210,74,0.14)",
+                border: "1px solid rgba(255,210,74,0.5)",
+                borderRadius: "6px",
+                color: "#ffd24a",
+                cursor: "pointer",
+                fontFamily: "sans-serif",
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                padding: "0.2rem 0.55rem",
+            }}
+            >
+            Reload now
+            </button>
+            </div>
+        )}
         </div>
 
         <NetworkSharing />

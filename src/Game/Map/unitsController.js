@@ -18,12 +18,15 @@ import {
   readGameData,
   readActionsState,
   writeActionsState,
+  clearStaleUnitMotion,
   normalizeUnitEntry,
 } from "../../runtime/gameState.js";
 import { resolveClash, distanceKm, engagementRangeKm, moveLeashKm } from "./unitCombat.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 
 let units = [];
+// Standing orders the ENGINE is advancing (world.pendingUnitOrders).
+let pendingOrders = [];
 let playerCode = "";
 let round = 1;
 let gameDate = "";
@@ -61,6 +64,12 @@ export const setUnitsOverride = (list) => {
 
 export const getUnits = () => unitsOverride ?? units;
 export const getUnitById = (id) => (unitsOverride ?? units).find((unit) => unit.id === id) ?? null;
+// Standing orders the ENGINE is advancing — a move still under way, or a patrol
+// working its station. Read by the map (heading lines and station rings) and by
+// the unit popup, which turns them into "en route to ..., about N km to go".
+export const getPendingUnitOrders = () => pendingOrders;
+export const getUnitOrder = (unitId) =>
+  pendingOrders.find((order) => order.unitId === unitId) ?? null;
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;
@@ -105,6 +114,27 @@ const sameAllowedUnitTypes = (a, b) => {
   return true;
 };
 
+const sameOrders = (a, b) => {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index] || {};
+    const right = b[index] || {};
+    if (
+      left.id !== right.id ||
+      left.unitId !== right.unitId ||
+      left.kind !== right.kind ||
+      left.toLng !== right.toLng ||
+      left.toLat !== right.toLat ||
+      left.radiusKm !== right.radiusKm ||
+      left.untilRound !== right.untilRound
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const adoptWorld = (world, { notify = true } = {}) => {
   if (!world || typeof world !== "object" || busy) return false;
 
@@ -114,14 +144,19 @@ const adoptWorld = (world, { notify = true } = {}) => {
       ? world.allowedUnitTypes
       : null;
 
+  const nextOrders = Array.isArray(world.pendingUnitOrders) ? world.pendingUnitOrders : [];
+
   const unitsChanged = !sameUnits(units, nextUnits);
   const typesChanged = !sameAllowedUnitTypes(allowedUnitTypes, nextAllowed);
+  const ordersChanged = !sameOrders(pendingOrders, nextOrders);
 
   if (unitsChanged) units = nextUnits;
   if (typesChanged) allowedUnitTypes = nextAllowed;
+  if (ordersChanged) pendingOrders = nextOrders;
 
-  if (notify && (unitsChanged || typesChanged)) emit();
-  return unitsChanged || typesChanged;
+  const changed = unitsChanged || typesChanged || ordersChanged;
+  if (notify && changed) emit();
+  return changed;
 };
 
 const adoptGame = (game, { notify = true } = {}) => {
@@ -144,6 +179,36 @@ const adoptGame = (game, { notify = true } = {}) => {
   return changed;
 };
 
+// Once per session, on the first sync: clear the stale "moving" status that older
+// saves carry on units nothing is actually moving. See clearStaleUnitMotion for
+// what produced them and why a unit under a queued order is left alone. Written
+// back rather than merely displayed, so the save stops lying about it too.
+let motionRepaired = false;
+const repairStaleUnitMotion = async () => {
+  if (motionRepaired) return;
+  motionRepaired = true;
+  busy = true;
+  try {
+    const [world, actions] = await Promise.all([
+      readWorldState({ force: true }),
+      readActionsState({ force: true }),
+    ]);
+    // Every unit an action in the queue is still standing over: the classic
+    // long-range move and approach orders record theirs here (see queueOrder's
+    // unitRevert), and those units really are under orders they have not reached.
+    const queuedUnitIds = actions.map((action) => action?.unitRevert?.unitId).filter(Boolean);
+    const repaired = clearStaleUnitMotion(world, { queuedUnitIds });
+    if (repaired === world) return;
+    const saved = await writeWorldState(repaired);
+    units = saved.units ?? repaired.units;
+    emit();
+  } catch (error) {
+    console.error("Failed to clear stale unit motion:", error);
+  } finally {
+    busy = false;
+  }
+};
+
 const bootstrap = async () => {
   if (bootstrapPromise) return bootstrapPromise;
 
@@ -157,6 +222,7 @@ const bootstrap = async () => {
       const unitsChanged = adoptWorld(world, { notify: false });
       const gameChanged = adoptGame(game, { notify: false });
       if (unitsChanged || gameChanged) emit();
+      void repairStaleUnitMotion();
     })
     .catch((error) => {
       console.error("Failed to bootstrap units:", error);
@@ -217,6 +283,27 @@ const commit = async (mutator) => {
   } catch (error) {
     console.error("Failed to commit units:", error);
     return units;
+  } finally {
+    busy = false;
+  }
+};
+
+// Read-modify-write world.pendingUnitOrders. Nothing the player does creates a
+// standing order — the engine mints them — but revertUnitOrder still has to be
+// able to CANCEL one, because an action queued with a pendingOrderId on it may
+// still be sitting in actions.json when the player deletes it.
+const commitPendingOrders = async (mutator) => {
+  busy = true;
+  try {
+    const world = await readWorldState({ force: true });
+    const nextOrders = mutator(world.pendingUnitOrders ?? []);
+    const saved = await writeWorldState({ ...world, pendingUnitOrders: nextOrders });
+    pendingOrders = saved.pendingUnitOrders ?? nextOrders;
+    emit();
+    return pendingOrders;
+  } catch (error) {
+    console.error("Failed to commit pending unit orders:", error);
+    return pendingOrders;
   } finally {
     busy = false;
   }
@@ -299,6 +386,11 @@ const queueOrder = async (text, unitRevert = null) => {
 export const revertUnitOrder = async (revert) => {
   const unitId = String(revert?.unitId ?? "").trim();
   if (!unitId) return;
+  // A standing order minted by the beta engine for this action: cancel it, or the
+  // unit keeps marching toward a destination whose justification is gone.
+  if (revert.pendingOrderId) {
+    await commitPendingOrders((list) => list.filter((entry) => entry.id !== revert.pendingOrderId));
+  }
   if (revert.remove) {
     await commit((list) => list.filter((u) => u.id !== unitId));
     return;
@@ -310,12 +402,13 @@ export const revertUnitOrder = async (revert) => {
         ...u,
         ...(Number.isFinite(revert.lng) && Number.isFinite(revert.lat) ? { lng: revert.lng, lat: revert.lat } : {}),
         ...(revert.status ? { status: revert.status } : {}),
+        ...(revert.pendingOrderId ? { orderId: "" } : {}),
         updatedAt: new Date().toISOString(),
       };
     }));
 };
 
-export const deployUnit = async ({ type, strength, name, lng, lat }) => {
+export const deployUnit = async ({ type, strength, name, composition, lng, lat }) => {
   if (!playerCode) await bootstrap();
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
@@ -324,6 +417,7 @@ export const deployUnit = async ({ type, strength, name, lng, lat }) => {
     type,
     strength,
     name,
+    composition,
     lng,
     lat,
     ownerCode: playerCode || "PLAYER",
@@ -333,7 +427,8 @@ export const deployUnit = async ({ type, strength, name, lng, lat }) => {
   if (!unit) return units;
   const saved = await commit((list) => [...list, unit]);
   await queueOrder(
-    `Deploy request: ${name || type} (${type}, strength ${strength}, owner ${playerCode || "PLAYER"}) at ` +
+    `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
+      `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
       `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
       `reposition it, or reject it as the front and logistics allow.`,
     { unitId: unit.id, remove: true },
@@ -385,7 +480,12 @@ export const moveUnitTo = async (unitId, lng, lat, region = null) => {
   await commit((list) =>
     list.map((u) =>
       u.id === unitId
-        ? { ...u, lng, lat, status: "moving", updatedAt: new Date().toISOString() }
+        // Within the leash the unit is placed on its destination immediately, so it
+        // has ARRIVED. This used to stamp "moving" on a formation already standing
+        // where it was sent, and classic has no engine to ever take it back off: the
+        // unit kept a yellow moving ring for the rest of the campaign. Saves already
+        // carrying that are repaired on load by clearStaleUnitMotion.
+        ? { ...u, lng, lat, status: "idle", updatedAt: new Date().toISOString() }
         : u,
     ),
   );
@@ -517,6 +617,30 @@ export const attackFeature = async (attackerId, target) => {
   );
   return { resolved: true, distance, range };
 };
+
+// ---- beta system: stated intent ------------------------------------------
+
+// The player asks for something to be done with a formation, in their own words.
+// This is intent, not control: it queues an ordinary action for the AI to weigh
+// against the front, the era and everyone else's plans on the next jump — the
+// same treatment every other action they plan gets. Nothing on the map moves now.
+export const requestUnitOrders = async (unitId, text) => {
+  const request = String(text ?? "").trim();
+  const unit = getUnitById(unitId);
+  if (!unit || !request) return false;
+  await queueOrder(
+    `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+      `situation allow, or explain in an event why it could not be done.`,
+  );
+  return true;
+};
+
+// Round and game date are read by the Forces panel and the unit popup for
+// naming and order text; exported so nothing has to re-read game.json.
+export const getRound = () => round;
+export const getGameDate = () => gameDate;
 
 export const removeUnit = async (unitId) =>
   commit((list) => list.filter((u) => u.id !== unitId));

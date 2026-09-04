@@ -55,6 +55,13 @@ test("an empty marker or prompt never claims the rule is present", () => {
 // someone rewrites that section (Phase 5 does exactly that), this fails and says
 // so, rather than the de-duplication silently going dead and the duplicate
 // quietly returning.
+test("the unit marker still matches the bundled jumpForward template", () => {
+  assert.equal(
+    templateAlreadySays(defaultPrompts.tasks.jumpForward, UNIT_CONTRACT_MARKER),
+    true,
+    "the bundled template no longer contains the unit-contract marker — update UNIT_CONTRACT_MARKER",
+  );
+});
 
 // The other half of the same decision, recorded as a test so it is not "fixed"
 // by someone extending the de-duplication to ACTIONS_REFERENCE. The template's

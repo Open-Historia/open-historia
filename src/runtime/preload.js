@@ -12,6 +12,7 @@ import {
   warmRemoteResources,
 } from "./assets.js";
 import { warmCountryLabelCollections } from "./countryLabels.js";
+import { loadActiveSaveBetaUnits } from "./library.js";
 import { logDebugEvent } from "./debugLog.js";
 
 export const STARTUP_TIME_BUDGET_MS = 30_000;
@@ -113,7 +114,14 @@ const STARTUP_TASKS = [
         warmJson(JSON_URLS.advisor, { defaultValue: [], signal }),
         warmJson(JSON_URLS.events, { defaultValue: [], signal }),
         warmJson(JSON_URLS.world, { defaultValue: {}, signal }),
-      ]),
+      ]).then(() =>
+        // Which unit system this save plays under, resolved before anything can
+        // ask. applyLibraryCatalog already kicked this off when the save became
+        // active, but that is a fire-and-forget; awaiting it here is what
+        // guarantees isBetaUnits() takes its pin from the save rather than from
+        // the app-wide default that stands in until the save is read. Warmed
+        // above, so it costs a cache hit.
+        loadActiveSaveBetaUnits().catch(() => null)),
   },
   {
     id: "textures",
