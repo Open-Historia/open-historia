@@ -7,6 +7,16 @@ const EMPTY_FEATURE_COLLECTION = Object.freeze({ type: "FeatureCollection", feat
 // filling meaningful lakes or enclosed foreign territory. This is presentation
 // cleanup only; canonical region geometry remains untouched and clickable.
 const MIN_DISPLAY_HOLE_AREA = 0.005;
+// Coordinates are snapped to 0.000005° before the union, the same grid the
+// boundary derivation uses. Nearly-coincident vertices from independently
+// simplified seeds are what make the sweep throw "unable to complete output
+// ring" on a big polity (Russia, on the Fault Lines map).
+const SNAP = 2e5;
+// Polygons are unioned a few dozen at a time, as a tree. One union over a
+// polity's thousands of polygons holds every edge of the sweep at once, and
+// when it fails the old fallback re-ran the union once per polygon - O(n²),
+// which on that same map never finished, so the worker never answered.
+const DEFAULT_UNION_CHUNK = 64;
 
 const polygonsOf = (geometry) => {
   if (geometry?.type === "Polygon") return [geometry.coordinates];
@@ -28,6 +38,29 @@ const ringArea = (ring) => {
   return Math.abs(area / 2);
 };
 
+const snapRing = (ring) => {
+  const out = [];
+  for (const point of Array.isArray(ring) ? ring : []) {
+    const x = Math.round(Number(point?.[0]) * SNAP) / SNAP;
+    const y = Math.round(Number(point?.[1]) * SNAP) / SNAP;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const last = out[out.length - 1];
+    if (last && last[0] === x && last[1] === y) continue;
+    out.push([x, y]);
+  }
+  if (out.length < 2) return null;
+  const first = out[0];
+  const last = out[out.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) out.push([first[0], first[1]]);
+  return out.length >= 4 ? out : null;
+};
+
+const snapPolygon = (polygon) => {
+  const rings = polygon.map(snapRing);
+  if (!rings[0]) return null;
+  return rings.filter(Boolean);
+};
+
 const cleanDisplayHoles = (coordinates) => coordinates
   .filter(usablePolygon)
   .map((polygon) => [
@@ -35,26 +68,54 @@ const cleanDisplayHoles = (coordinates) => coordinates
     ...polygon.slice(1).filter((hole) => ringArea(hole) >= MIN_DISPLAY_HOLE_AREA),
   ]);
 
-const incrementalDissolve = (polygons) => {
-  let result = [];
-  let failedPartCount = 0;
-  for (const polygon of polygons) {
-    try {
-      result = result.length > 0
-        ? polygonClipping.union(result, polygon)
-        : [polygon];
-    } catch {
-      // Preserve malformed pieces rather than deleting canonical territory.
-      // They remain a separate polygon in this one polity's MultiPolygon; the
-      // rest of the owner still benefits from a clean dissolve.
-      result.push(polygon);
-      failedPartCount += 1;
-    }
-  }
-  return { coordinates: result, failedPartCount };
+const bboxMinX = (polygon) => {
+  let min = Infinity;
+  for (const point of polygon[0]) if (point[0] < min) min = point[0];
+  return min;
 };
 
-export const derivePolitySurfaces = (regions, ownershipOverrides = {}) => {
+// Union of a small batch. A batch the sweep cannot complete is bisected until
+// the offending piece stands alone; that piece is kept raw rather than deleted,
+// so canonical territory is never lost from the map.
+const unionBatch = (polygons, stats) => {
+  if (polygons.length <= 1) return polygons;
+  try {
+    return polygonClipping.union(...polygons);
+  } catch {
+    if (polygons.length === 2) {
+      stats.failedPartCount += 1;
+      return polygons;
+    }
+    const middle = polygons.length >> 1;
+    const left = unionBatch(polygons.slice(0, middle), stats);
+    const right = unionBatch(polygons.slice(middle), stats);
+    try {
+      return polygonClipping.union(left, right);
+    } catch {
+      stats.failedPartCount += 1;
+      return [...left, ...right];
+    }
+  }
+};
+
+// Tree union: neighbouring polygons (sorted by their western edge) are unioned
+// in batches, the results re-batched, until a level merges nothing more. A
+// polity made of thousands of islands ends after one level; a contiguous one
+// collapses in a few.
+const unionAll = (input, stats, chunk = DEFAULT_UNION_CHUNK) => {
+  let polygons = [...input].sort((left, right) => bboxMinX(left) - bboxMinX(right));
+  while (polygons.length > 1) {
+    const merged = [];
+    for (let index = 0; index < polygons.length; index += chunk) {
+      merged.push(...unionBatch(polygons.slice(index, index + chunk), stats));
+    }
+    if (merged.length >= polygons.length) return merged;
+    polygons = merged.sort((left, right) => bboxMinX(left) - bboxMinX(right));
+  }
+  return polygons;
+};
+
+export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionChunk = DEFAULT_UNION_CHUNK } = {}) => {
   const features = Array.isArray(regions?.features) ? regions.features : [];
   if (features.length === 0) {
     return {
@@ -69,7 +130,7 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}) => {
     const properties = feature?.properties ?? {};
     const regionId = String(properties.id ?? properties.GID_1 ?? feature?.id ?? index);
     const owner = toCountryName(ownershipOverrides?.[regionId] ?? properties.owner ?? "");
-    const polygons = polygonsOf(feature?.geometry).filter(usablePolygon);
+    const polygons = polygonsOf(feature?.geometry).filter(usablePolygon).map(snapPolygon).filter(Boolean);
     if (polygons.length === 0) continue;
     const gadm0 = String(properties.gid0 ?? properties.GID_0 ?? "").trim().toUpperCase();
     const group = groups.get(owner);
@@ -92,22 +153,17 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}) => {
   let failedPartCount = 0;
 
   for (const [owner, group] of groups) {
-    let coordinates;
-    let failedParts = 0;
-    try {
-      coordinates = group.polygons.length === 1
-        ? [group.polygons[0]]
-        : polygonClipping.union(...group.polygons);
-      dissolvedPolityCount += 1;
-    } catch {
-      const fallback = incrementalDissolve(group.polygons);
-      coordinates = fallback.coordinates;
-      failedParts = fallback.failedPartCount;
+    const stats = { failedPartCount: 0 };
+    let coordinates = cleanDisplayHoles(unionAll(group.polygons, stats, unionChunk));
+    // Let the batch structures go before the next polity starts.
+    group.polygons = null;
+    if (stats.failedPartCount > 0) {
       fallbackPolityCount += 1;
-      failedPartCount += failedParts;
+      failedPartCount += stats.failedPartCount;
+    } else {
+      dissolvedPolityCount += 1;
     }
 
-    coordinates = cleanDisplayHoles(coordinates ?? []);
     if (coordinates.length === 0) continue;
     surfaceFeatures.push({
       type: "Feature",
@@ -118,7 +174,7 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}) => {
         gadm0: [...group.gadm0Counts.entries()]
           .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
           .map(([code]) => code),
-        dissolveFallback: failedParts > 0,
+        dissolveFallback: stats.failedPartCount > 0,
       },
       geometry: { type: "MultiPolygon", coordinates },
     });

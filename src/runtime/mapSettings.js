@@ -19,10 +19,6 @@ export const MAP_SETTING_KEYS = {
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
-    // Map vNext is the default renderer path. This kill switch keeps the old
-    // source-by-source placement behaviour available while the replacement is
-    // built in checkpoints; no canonical game state depends on it.
-    disableMapVNext: "map_disable_vnext",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
     // an AI task gives up when the model goes quiet — 5 minutes part-way through
     // an answer, 15 with no answer at all — and falls back to canned events. Off
@@ -99,7 +95,6 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
-    [MAP_SETTING_KEYS.disableMapVNext]: "Use the previous map renderer",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.betaUnits]: "Beta unit system",
 };

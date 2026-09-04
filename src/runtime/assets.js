@@ -3,7 +3,8 @@ import mapLibreGl from "maplibre-gl";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
 import { logDebugEvent } from "./debugLog.js";
-import { resolvePolityIdentity } from "./polityIdentity.js";
+import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
+import { mergeStockAndDeclaredPolities } from "./countryList.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
@@ -1305,52 +1306,13 @@ export const loadCountryNames = async ({ force = false } = {}) => {
         const world = await readJson(JSON_URLS.world, { defaultValue: {} });
 
         // Stock PMTiles and runtime polityOverrides can describe the SAME actor
-        // with different identifiers (for example BEL vs Belgium). Merge them
-        // through the save-aware polity lineage resolver instead of keying one
-        // source by map code and the other by runtime name.
-        const merged = new Map();
-
-        for (const entry of countries) {
-          const token = entry.name || entry.code;
-          const resolution = resolvePolityIdentity(token, world, {
-            allowUnknown: false,
-            requireActive: false,
-            allowCoreMatch: true,
-            allowStockBase: true,
-          });
-
-          // Ambiguous identities deliberately remain distinct. Never collapse a
-          // civil-war/rival-regime situation merely because names look related.
-          const key = resolution.resolved
-            ? `lineage:${resolution.resolved}`
-            : `stock:${entry.code || entry.name}`;
-
-          merged.set(key, entry);
-        }
-
-        // polityOverride keys are the stable campaign lineage identities. If a
-        // stock map entry already represents that lineage, preserve its GID_0
-        // code for flags/map UI while taking the CURRENT runtime display name.
-        for (const [stableKey, polity] of Object.entries(world?.polityOverrides ?? {})) {
-          if (!stableKey) continue;
-
-          const key = `lineage:${stableKey}`;
-          const existing = merged.get(key);
-          const resolvedName =
-            polity?.name ||
-            existing?.name ||
-            polity?.code ||
-            stableKey;
-
-          if (!resolvedName) continue;
-
-          merged.set(key, {
-            code: existing?.code || polity?.code || stableKey,
-            name: resolvedName,
-          });
-        }
-
-        return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name));
+        // with different identifiers (RUS / "Russia" / "Russian Federation").
+        // Merged through the save-aware identity resolvers, one entry per polity
+        // (see countryList.js for the folding rule).
+        return mergeStockAndDeclaredPolities(countries, world, {
+          resolvePolityIdentity,
+          resolveStockCountryCode,
+        });
       } catch {
         return countries;
       }

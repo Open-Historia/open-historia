@@ -75,3 +75,48 @@ test("dedupeByName is the picker's last line of defence", () => {
   assert.deepEqual(dedupeByName(dupes).map((c) => c.code), ["DEU", "FRA"], "the first wins, so a real code is kept");
   assert.deepEqual(dedupeByName(null), []);
 });
+
+import { mergeStockAndDeclaredPolities } from "./countryList.js";
+
+// The Fault Lines map names its Russia "Russian Federation"; the tiles say
+// "Russia". One polity, one picker entry, under the scenario's name.
+test("a stock country folds onto the declared polity that carries its code", () => {
+  const stockCodes = {
+    "Russian Federation": "RUS",
+    "West Germany": "DEU",
+    "East Germany": "DEU",
+    Russia: "RUS",
+    Germany: "DEU",
+    "United States": "USA",
+  };
+  const resolvers = {
+    resolveStockCountryCode: (token) => stockCodes[String(token ?? "").trim()] ?? null,
+    // A stock name is its own base; a declared name is itself.
+    resolvePolityIdentity: (token) => ({ resolved: String(token ?? "").trim() }),
+  };
+  const merged = mergeStockAndDeclaredPolities(
+    [
+      { code: "RUS", name: "Russia" },
+      { code: "USA", name: "United States" },
+      { code: "DEU", name: "Germany" },
+    ],
+    {
+      polityOverrides: {
+        "Russian Federation": { code: "Russian Federation", name: "Russian Federation" },
+        "West Germany": { code: "West Germany", name: "West Germany" },
+        "East Germany": { code: "East Germany", name: "East Germany" },
+        Atlantis: { code: "Atlantis", name: "Atlantis" },
+      },
+    },
+    resolvers,
+  );
+  const names = merged.map((entry) => entry.name);
+  assert.ok(!names.includes("Russia"), "the stock short name is gone");
+  assert.deepEqual(merged.find((entry) => entry.name === "Russian Federation"), { code: "RUS", name: "Russian Federation" });
+  // Two regimes on one homeland stay distinct, and the stock country stays too:
+  // nothing can say which of them "is" Germany.
+  assert.ok(names.includes("Germany") && names.includes("West Germany") && names.includes("East Germany"));
+  assert.ok(names.includes("Atlantis"), "an invented polity is listed beside the stock list");
+  assert.ok(names.includes("United States"));
+  assert.equal(new Set(names.map((name) => name.toLowerCase())).size, names.length, "no duplicates");
+});

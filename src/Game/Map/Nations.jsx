@@ -1324,7 +1324,18 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     const requestId = latestBoundaryRequestRef.current + 1;
     latestBoundaryRequestRef.current = requestId;
 
+    // A worker the browser kills for memory sends neither a message nor an
+    // error; the map would just stay on its per-region fallback fills with
+    // no borders and no polity labels. Two minutes of silence is reported so
+    // a bug report says what happened (the derivation itself takes well under
+    // a minute on the largest maps).
+    const WORKER_SILENCE_WARN_MS = 120000;
+    const silence = setTimeout(() => {
+      if (worker !== polityBoundaryWorkerRef.current) return;
+      console.warn("Map vNext polity-boundary worker has not answered in 120s; the map is on its fallback fills.");
+    }, WORKER_SILENCE_WARN_MS);
     worker.onmessage = ({ data: result }) => {
+      clearTimeout(silence);
       if (worker !== polityBoundaryWorkerRef.current) return;
       if (result?.requestId !== latestBoundaryRequestRef.current) return;
       if (result.error) {
@@ -1365,6 +1376,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       }
     };
     worker.onerror = (error) => {
+      clearTimeout(silence);
       if (worker !== polityBoundaryWorkerRef.current) return;
       console.warn("Map vNext polity-boundary worker failed:", error);
       setCustomRegionMeta(EMPTY_CUSTOM_REGION_META);
@@ -1381,6 +1393,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     });
 
     return () => {
+      clearTimeout(silence);
       worker.terminate();
       if (polityBoundaryWorkerRef.current === worker) polityBoundaryWorkerRef.current = null;
     };
