@@ -15,12 +15,75 @@ const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 
+// Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
+// the beta build (`npm run dist:win:beta` and the beta release workflow); the
+// stable build ships no such file, reads "stable", and every branch below is the
+// behaviour it has always had. OH_CHANNEL overrides it for `npm run electron`,
+// which is the only way to exercise the beta paths unpackaged.
+const CHANNEL = (() => {
+  if (process.env.OH_CHANNEL) return String(process.env.OH_CHANNEL);
+  try {
+    const stamp = fs.readFileSync(path.join(__dirname, "channel.json"), "utf8");
+    return String(JSON.parse(stamp).channel || "stable");
+  } catch {
+    return "stable"; // no stamp: the stable build, or a dev run
+  }
+})();
+const IS_BETA = CHANNEL === "beta";
+// One name for the beta: its Chromium profile, its save library, its window title
+// and the Start Menu shortcut the installer creates. It has to match `productName`
+// in electron-builder.beta.yml, because that is the name the player sees, and
+// nothing derives one from the other.
+const BETA_APP_NAME = "Open Historia Beta";
+
+// Electron derives userData — the Chromium profile, and with it the single-instance
+// lock — from the app name, which for both builds would otherwise be package.json's
+// "name" (%APPDATA%/open-historia). Two builds sharing that profile cannot run
+// independently: whichever starts second sees the first's lock and quits without a
+// window, which reads as "the beta is broken". Renaming the beta is the fix, and it
+// has to happen HERE, before anything reads a path: the installer's productName
+// does NOT reach Electron (it only names the exe, the install folder and the
+// shortcut).
+if (IS_BETA) app.setName(BETA_APP_NAME);
+
+// Where a beta build looks for ITS updates. server.js defaults the desktop track to
+// .../desktop-stable/latest.json, so without this override a tester would be offered
+// the official installer as an "update" and quietly leave the build they signed up
+// to test.
+//
+// This is HALF of the beta's update story, and the halves must not drift apart. This
+// URL is what makes the banner APPEAR: server.js fetches it and the page compares
+// its build id against OH_DESKTOP_BUILD. What then INSTALLS the update is
+// electron-updater, which ignores this entirely and reads the app-update.yml packed
+// into the build from `publish` in electron-builder.beta.yml. That block names the
+// same tag as this line, and has to: point them at different tags and a tester is
+// told an update exists by one feed while the other cannot find it.
+// server/betaPackaging.test.js is what keeps the two honest.
+const BETA_UPDATE_MANIFEST =
+  "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/latest.json";
+
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
 // full stop, so nothing may be written next to the code (see server/dataDir.js).
+//
+// The beta was renamed above, so this resolves to a DIFFERENT folder for it: its
+// saves, scenarios and settings are its own. That is deliberate. This branch is a
+// long way ahead of the released game — ledgers, units, projects, country stats —
+// and a save the beta has written, opened again in the stable app, comes back with
+// every field that app does not know about dropped. Sharing one library would make
+// testing the beta a way to quietly damage a real campaign.
 const USER_ROOT = app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
-const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
+// The world map is the exception, and it is the safe one to share: ~170MB of
+// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches,
+// and written through a temp file and a rename. Pointing the beta at the stable
+// app's copy saves a tester that download; with no stable install the fetcher just
+// creates the folder, and a later stable install finds the map already there.
+// Unpackaged runs keep their own, so a dev build cannot scribble on an install.
+const STABLE_LIBRARY_NAME = "open-historia";
+const ASSETS_DIR = IS_BETA && app.isPackaged
+  ? path.join(app.getPath("appData"), STABLE_LIBRARY_NAME, "public", "assets")
+  : path.join(USER_ROOT, "public", "assets");
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
 // "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
@@ -28,6 +91,12 @@ const ASSETS_DIR = path.join(USER_ROOT, "public", "assets");
 // changes to the fetcher, and one place that decides the layout.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
+
+// Read by server.js, which startServer() imports into THIS process, so setting it
+// here is enough — there is no second process to pass it to. A stable build sets
+// neither and server.js keeps its own defaults.
+process.env.OH_CHANNEL = CHANNEL;
+if (IS_BETA) process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
 
 // Main-process crashes are the ones that reach the player as a bare "A
 // JavaScript error occurred in the main process" dialog with nothing to act on —
@@ -337,7 +406,7 @@ const createMainWindow = () => {
     autoHideMenuBar: true,
     backgroundColor: "#0d1122",
     show: false,
-    title: "Open Historia",
+    title: IS_BETA ? BETA_APP_NAME : "Open Historia",
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },

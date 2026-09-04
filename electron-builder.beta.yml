@@ -1,0 +1,141 @@
+# Packaging config for the beta build made from the `beta` integration branch.
+# Used as `electron-builder --config electron-builder.beta.yml`; passing --config
+# makes electron-builder IGNORE the `build` block in package.json entirely, so
+# this is a complete config rather than a patch — and the stable build's config
+# stays untouched by anything here.
+#
+# What is deliberately different from package.json's `build`:
+#   appId / productName  — a DIFFERENT application to Windows, macOS and Linux, so
+#                          the beta installs BESIDE the official app instead of
+#                          upgrading over it. Uninstalling one leaves the other.
+#   artifactName         — a download nobody can confuse with the official one.
+#   icon                 — the compass with a BETA banner. Windows truncates the
+#                          Start Menu and taskbar labels of two apps whose names
+#                          share a prefix, so the artwork is what actually tells
+#                          a tester which one they are launching.
+#   publish              — the beta's own release tag; see the block below.
+#
+# What tells the RUNNING app it is the beta is NOT here: it is electron/channel.json,
+# stamped by scripts/stamp-channel.mjs (see `npm run dist:win:beta`). electron-builder's
+# `extraMetadata` would have done the same job by editing the packaged package.json,
+# but it gets there by rewriting the project's own package.json mid-build, which can
+# leave the repo's copy stripped if a build is interrupted.
+#
+# What is deliberately NOT shared: the save library. `productName` here and
+# `BETA_APP_NAME` in electron/main.cjs give the beta its own userData folder, so its
+# games, scenarios and settings are separate from the official app's. This branch is
+# far enough ahead of the released game that a save it has written comes back from
+# the stable app with every unknown field dropped — see the comment on USER_ROOT.
+# The downloaded world map IS shared, because it is content, not state.
+appId: io.github.arkniem.openhistoria.beta
+# Deliberately WITHOUT parentheses. This name becomes the Windows install folder,
+# and electron-builder only uses productName for that when it matches its allow-list
+# /^[-_+0-9a-zA-Z .]+$/ (targetUtil.ts, getWindowsInstallationDirName). Parentheses
+# fail it, and the fallback is package.json's `name` — which would put the beta in
+# …\Programs\open-historia, indistinguishable from a stable install's own folder.
+productName: Open Historia Beta
+
+# Identical to package.json's `build.files`. server/** carries the default scenario
+# (server/data/scenarios/default), which the app needs on first run; the ~170MB of
+# map archives are NOT packaged — the app fetches them on first launch.
+files:
+  - dist/**
+  - server/**
+  - electron/**
+  - scripts/fetch-map-assets.mjs
+  - scripts/map-assets.json
+  - public/lang/**
+  - package.json
+  - "!**/*.map"
+
+asarUnpack:
+  - scripts/**
+
+# Ad-hoc code-signs the packaged .app on macOS. Without it the build ships with
+# only the stock Electron binary's linker signature and no sealed resources, and
+# macOS refuses the quarantined download outright as "damaged" instead of showing
+# the ordinary bypassable unsigned-app warning. The stable build sets the same hook
+# in package.json's `build` block; --config replaces that block wholesale, so it
+# has to be repeated here.
+afterPack: ./scripts/mac-adhoc-sign.cjs
+
+# The beta's own update feed, and the reason it needs one HERE rather than
+# inheriting the stable app's. electron-builder turns this block into the
+# app-update.yml it packs inside the build, and app-update.yml is the only thing
+# electron-updater will read — so without a `publish` block the beta ships with no
+# feed at all and cannot update itself. It cannot inherit the stable one either:
+# package.json's `build` block holds that, and --config replaces that block rather
+# than extending it. Nor can electron-builder guess, because package.json carries
+# no `repository` field.
+#
+# `generic` rather than `github`: the github provider resolves the newest release
+# through the GitHub API, which in this repo is the STABLE release — it would walk
+# beta testers straight onto the official app. A generic provider is a dumb URL
+# prefix, so it only ever finds what the beta workflow put at the beta's own tag.
+#
+# The tag is FIXED and deliberately duplicates BETA_UPDATE_MANIFEST in
+# electron/main.cjs, which hardcodes the same one. The two must agree: that URL is
+# what shows the banner, this one is what installs the update behind it, and
+# server/betaPackaging.test.js fails if they drift apart. The workflow's `tag`
+# input deliberately does NOT reach either, so a one-off build published to a
+# private tag still sends its tester back to the main beta line rather than
+# stranding them on a feed nobody will update again.
+#
+# `channel: latest` matches the stable app's, which is safe because the two feeds
+# sit at different tags: this writes latest.yml, latest-linux.yml and latest-mac.yml
+# under the beta tag only, and never touches desktop-stable.
+publish:
+  - provider: generic
+    url: https://github.com/Open-Historia/open-historia/releases/download/desktop-beta
+    channel: latest
+
+directories:
+  output: release
+  buildResources: build
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: electron/beta-assets/icon-beta.png
+  artifactName: Open-Historia-Beta-Setup-${os}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Open Historia Beta
+  # Without this, "Apps & features" falls back to productName. They happen to be
+  # the same string today; stating it means a later rename of one cannot silently
+  # leave the uninstall entry disagreeing with every other label.
+  uninstallDisplayName: Open Historia Beta
+  artifactName: Open-Historia-Beta-Setup.${ext}
+
+mac:
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: electron/beta-assets/icon-beta.png
+  category: public.app-category.strategy-games
+  artifactName: Open-Historia-Beta-mac-${arch}.${ext}
+
+linux:
+  # This file REPLACES package.json's `build` block (it is passed with --config,
+  # not merged), so the .deb target and its maintainer have to be restated here.
+  # Without them the beta would quietly ship AppImage-only while stable ships both.
+  maintainer: Arkniem <nichojkrol@gmail.com>
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: electron/beta-assets/icon-beta.png
+  category: Game
+  artifactName: Open-Historia-Beta-${arch}.${ext}
