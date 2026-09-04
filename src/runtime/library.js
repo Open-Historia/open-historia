@@ -201,6 +201,16 @@ const applyLibraryCatalog = (catalog) => {
     loadActiveSaveBetaUnits().catch((error) => {
       console.warn("Failed to read the save's unit-system setting:", error);
     });
+    // The map's world store (Map/useWorldState.js) bootstraps once and then
+    // follows same-tab writes; a switch to another save is neither, so without
+    // this it kept rendering the previous save's basemap, background and
+    // overrides. Dispatched after the endpoints were repointed, so a listener
+    // that re-reads world.json gets the new save's.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:active-game-changed", {
+        detail: { gameId: activeGameId },
+      }));
+    }
   }
 
   return libraryState;
