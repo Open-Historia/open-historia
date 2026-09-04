@@ -4,6 +4,7 @@ import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
+import { isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -919,26 +920,89 @@ const validateNativeEconomicCalibration = ({
 };
 
 
+// World-simulation transport envelope: young campaigns get their complete
+// consolidated history; once it exceeds the activation ceiling the same budget
+// becomes broad summary coverage plus canonical event anchors, so decisive
+// divergences never disappear merely because they are old.
+const WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS = 24000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS = 24000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS = 6000;
+const WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS = 18;
+
+const perfNow = () =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
 const buildTemplateVariables = async (bundle, options = {}) => {
-  const variables = await buildPromptContext(bundle, options);
+  const startedAt = perfNow();
+  const taskKey = normalizeString(options?.taskKey);
+  const explicitRequiredKeys = options?.requiredKeys;
+
+  // Demand comes from the ACTUAL loaded prompt pack (campaigns carry frozen and
+  // custom templates), so a task pays only to construct the context it can see.
+  // When demand cannot be resolved the build falls open to the full context:
+  // that request may cost more, but model-visible knowledge never shrinks.
+  let demand = null;
+  if (explicitRequiredKeys == null && taskKey) {
+    try {
+      const prompts = await loadPromptCatalog();
+      const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
+      if (promptTemplate) {
+        demand = resolveTemplateVariableDemand({
+          helperTemplates: prompts.helpers,
+          promptTemplate,
+          taskKey,
+          variables: {},
+        });
+      }
+    } catch {
+      demand = null;
+    }
+  }
+  const requiredKeys = explicitRequiredKeys != null
+    ? explicitRequiredKeys
+    : demand?.requiredVariableKeys ?? null;
+  const requiredSet = requiredKeys == null
+    ? null
+    : new Set(
+        (requiredKeys instanceof Set ? [...requiredKeys] : normalizeArray(requiredKeys))
+          .map(normalizeString)
+          .filter(Boolean),
+      );
+  const wants = (key) => !requiredSet || requiredSet.has(key);
+
+  const variables = await buildPromptContext(bundle, { ...options, requiredKeys, taskKey });
   // The diplomatic slice is bounded to the player plus, for a chat task, the
   // polities in the thread; wars are few enough to show whole.
   const focusActors = normalizeArray(options?.chat?.countries)
     .map((country) => normalizeString(country?.name || country?.code))
     .filter(Boolean);
-  return {
-    ...variables,
-    canonicalWarContext: buildCanonicalWarContext(bundle.world),
-    canonicalDiplomaticContext: buildBoundedDiplomaticContext(bundle.world, {
+  if (wants("canonicalWarContext")) {
+    variables.canonicalWarContext = buildCanonicalWarContext(bundle.world);
+  }
+  if (wants("canonicalDiplomaticContext")) {
+    variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
       playerPolity: normalizeString(bundle?.game?.country),
       focusActors,
       maxActors: 8,
-    }).text,
-    playerPolityReputationContext: await buildPlayerPolityReputationText(bundle),
-    unitsSummary:
-      variables.unitsSummary +
-      buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions)),
-  };
+    }).text;
+  }
+  if (wants("playerPolityReputationContext")) {
+    variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
+  }
+  if (wants("unitsSummary")) {
+    variables.unitsSummary =
+      normalizeString(variables.unitsSummary) +
+      buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions));
+  }
+  if (isContextDiagnosticsEnabled()) {
+    console.info(
+      `[context] ${taskKey || "task"}: ${Object.keys(variables).length} variable(s)` +
+      `${requiredSet ? ` for ${requiredSet.size} demanded` : " (full build)"} in ${(perfNow() - startedAt).toFixed(1)} ms`,
+    );
+  }
+  return variables;
 };
 
 // Give the AI real time: local/self-hosted models (and reasoning modes) often
@@ -990,10 +1054,16 @@ const runJsonTask = async (taskKey, {
   variables,
 }) => {
   const prompts = await loadPromptCatalog();
-  const helperValues = resolveHelperValues(prompts.helpers, variables);
   // The GM operational contract is native behaviour: a campaign's frozen
   // gameMaster prompt would silently roll the transaction semantics back.
   const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
+  const liveDemand = resolveTemplateVariableDemand({
+    helperTemplates: prompts.helpers,
+    promptTemplate,
+    taskKey,
+    variables,
+  });
+  const helperValues = resolveHelperValues(prompts.helpers, variables, { includeKeys: liveDemand.helperKeys });
   let systemPrompt = renderTemplate(promptTemplate, {
     ...variables,
     ...helperValues,
@@ -1181,6 +1251,16 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
 [What the Sender Knows]
 You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
 So use the wider picture to choose the sender and the moment — never to give them knowledge they could not have. A polity must not reference, allude to, or react to something said in a conversation it was not part of, and must not echo another leader's turn of phrase. If a private exchange elsewhere is the only reason a message would make sense, that is a message this polity cannot send: pick a different sender, or return chat as null.`;
+  }
+
+  // Durable diplomatic memory becomes causal pressure on the turn: agreed
+  // follow-throughs, declared intents and threats must be weighed, not just
+  // remembered. Appended only when at least one thread carries such memory.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const diplomaticContinuity = normalizeString(variables?.diplomaticContinuity);
+    if (diplomaticContinuity) {
+      systemPrompt = `${systemPrompt}\n\n[Diplomatic Consequence Bridge]\nDiplomatic chats are part of the causal world state, not decorative roleplay. Before choosing this period's events, review EVERY durable diplomatic memory below and ask: "Does anything said or agreed here require a new development during the interval from ${normalizeString(variables.dateReadable) || normalizeString(variables.date) || "the origin date"} through ${normalizeString(variables.targetDateReadable) || normalizeString(variables.targetDate) || "the target date"}?"\n\n${diplomaticContinuity}\n\nEvidence rule: the "Standing diplomatic memory" is a compressed continuity aid. The "Recent verbatim diplomatic evidence" is authoritative for the exact words, actor attribution, deadlines, and modal force of recent exchanges. If a summary weakens, strengthens, or otherwise conflicts with the verbatim evidence, FOLLOW THE VERBATIM EVIDENCE. A later acknowledgement, pleasantry, or statement of mutual understanding does NOT cancel an earlier threat, promise, agreement, or declared intent unless it explicitly retracts, supersedes, or modifies it.\n\nApply these rules:\n1. MUTUAL AGREEMENT + DUE DATE: if the player and another polity explicitly agreed that a meeting, consultation, withdrawal, exchange, conference, hand-over, coordinated operation, or other concrete follow-through WILL occur on a date inside this simulated interval, that follow-through is a PRESUMPTIVE TIMELINE EVENT. Generate it unless the supplied canon shows it was already fulfilled, explicitly cancelled/superseded, prevented by a new event, or genuinely too trivial to be newsworthy. If such a commitment is already OVERDUE at the origin date and no fulfillment/cancellation appears in canon, do not forget it either: generate the belated follow-through, cancellation, breach, postponement, or other concrete explanation that best fits the world.\n2. AGREEMENT WITHOUT A FIXED DATE: preserve it as an active commitment and let it shape events; generate implementation when the period/context naturally reaches it.\n3. UNILATERAL DECLARATION: if a polity explicitly said it WILL take an action, treat that declaration as strong evidence of intent, but still simulate whether circumstances permit execution. For the human-controlled ${normalizeString(variables.playerPolity) || "player polity"}, only treat an explicit player chat statement as authorization when it plainly commits to the action; vague discussion is not an order.\n4. THREAT / WARNING / SUSPICIOUS INFORMATION: these do NOT automatically force one scripted reaction. They create DECISION PRESSURE on the affected A.I. polity. You must evaluate that pressure as part of this jump instead of merely remembering the words.\n   - IMMINENT, EXPLICIT THREAT OR ULTIMATUM: a direct credible statement such as "we will invade you in 24 hours", "withdraw by tomorrow or we attack", or an equally immediate military threat is CRITICAL pressure. Unless there is a concrete reason the target believes the threat is impossible, unserious, already withdrawn, or otherwise neutralized, the threatened A.I. polity should normally take at least one timely protective or diplomatic action BEFORE the threatened deadline: mobilize/redeploy forces, raise military readiness, alert allies, issue a protest/ultimatum, seek guarantees, evacuate exposed assets, or another contextually rational response. Do NOT require it to choose a specific response; choose what that government would realistically do.\n   - AMBIGUOUS MILITARY / LOGISTICAL SIGNAL: information such as new depots, rail improvements, exercises, reconnaissance, or logistical hubs near a frontier is NOT proof of hostile intent. Evaluate trust, alliances, recent crises, geography, military balance, prior assurances, and the actor's reputation. A cautious government may increase readiness or investigate; a trusting government may deliberately do nothing extraordinary. Either is valid. Do not manufacture an event merely to prove that the signal was noticed.\n   - POLITICAL / ECONOMIC / DIPLOMATIC SIGNAL: sanctions threats, alliance feelers, guarantees, recognition disputes, trade pressure, or severe diplomatic warnings should likewise alter the affected A.I. polity's choices when consequential, but rhetoric alone need not create a timeline event.\n   - SILENCE IS A DECISION ONLY WHEN PLAUSIBLE: for serious but ambiguous signals, "no extraordinary action" may be the correct outcome and need not be narrated. For an imminent credible invasion threat, silent inaction should be exceptional and supported by the world context, not the default.\n5. REACTIVE CONSEQUENCES ARE OWN ACTIONS: when an A.I. polity reacts, simulate ITS response as a new world event or diplomatic outreach where appropriate. Do not convert the original speaker's words into the target's action. An A.I. protest/contact with the player may use diplomaticOutreach/createdChats; internal cabinet decisions, mobilization, alliance coordination, deployments, investigations, and similar responses belong in timeline events.\n6. PROPOSAL OR REQUEST: a proposal that was never accepted is NOT an agreement. Do not turn it into accomplished fact. The recipient may still react to the proposal itself if accepting, rejecting, countering, preparing, or seeking clarification would be strategically meaningful.\n7. FOLLOW-THROUGH MUST BE NEW: if the commitment's implementation or the reaction already appears in Event History, do not restate it. If a new event makes the commitment impossible, narrate the cancellation/failure/breach instead when that is important.\n8. STRUCTURE REAL CONSEQUENCES: when follow-through or reaction changes persistent state, emit the proper impacts in the SAME event. A meeting or cabinet decision with no mechanical effect may simply be an event. Actual mobilization/redeployment/reinforcement uses unitOps and should reuse existing units where appropriate; spawn only genuinely new mobilized formations. A legal territorial settlement uses regionTransfers; lasting alignment/reputation changes use polityChanges. Do not narrate a concrete military movement that the structured impacts fail to represent.\n9. REACTION TIMING: consequences should occur when a competent government would actually act. An ultimatum expiring in 24 hours may warrant same-day or next-day response; an ambiguous infrastructure signal may take days or weeks to trigger policy. Do not postpone a clearly time-sensitive reaction until after the danger has passed merely because other storylines are active.\n10. REACTION-TARGET INTEGRITY: for every consequential diplomatic memory, identify (a) the polity that originated the signal/request/threat, (b) the polity or polities affected by it, and (c) any explicit response or declared intent already stated by the affected polity. A new event by the ORIGINAL SIGNALING polity does NOT satisfy the affected polity's reaction audit. Example: Germany announces frontier logistics work to Russia; a later German readiness event is not a Russian reaction. Evaluate Russia separately.\n11. RECIPIENT-DECLARED INTENT: inspect the recent verbatim evidence as well as the summary. If the affected A.I. polity itself has already replied with language such as "we must take measures", "we will mobilize", "we intend to reinforce", "we shall consult our allies", or another clear statement of intended action, treat that as a UNILATERAL DECLARATION by that polity, not merely as generic concern. Unless later dialogue/canon EXPLICITLY retracts or supersedes it, the next suitable simulation interval should normally show concrete follow-through or a concrete reason it was delayed/abandoned. Mere acknowledgement or calmer diplomatic language is not a retraction. Preserve proportionality: "take necessary defensive measures" need not mean full mobilization, but it should not silently collapse into no action by default.\n12. INTERNAL DECISION AUDIT: before finalizing the event set, silently review each durable diplomatic memory that contains a threat, warning, declaration, request, or strategically significant disclosure. For EACH affected A.I. polity decide one of: REACT NOW / REACT LATER / NO EXTRAORDINARY REACTION. Check that any output event actually belongs to the affected polity whose reaction you are evaluating. Only output resulting world events/chats that are newsworthy; never output this audit or filler events saying a government "decided to do nothing."\n\nThis bridge does NOT mean every diplomatic sentence deserves an event. It means explicit commitments and consequential signals must participate in normal event selection instead of being disconnected from the simulation.`;
+    }
   }
 
   // Event Editor NPC reaction: a one-shot evaluation of one authored event. The
@@ -1505,6 +1585,19 @@ This live instruction supersedes older frozen country-stat prompts and all earli
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      // Observational only, and off unless enabled from DevTools: measures the
+      // exact prompt about to be sent; never filters or reorders it.
+      logContextDiagnostics({
+        attempt: outputAttempt,
+        helperTemplates: prompts.helpers,
+        history,
+        promptTemplate,
+        stage: "structured-request",
+        systemPrompt,
+        taskKey,
+        userMessage,
+        variables,
+      });
       // Per attempt, not per task: a retry re-sends the whole prompt and so
       // re-does the wait for a first byte.
       idle.start();
@@ -7033,7 +7126,15 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
-  const variables = await buildTemplateVariables(bundle, { targetDate });
+  const variables = await buildTemplateVariables(bundle, {
+    taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
+    consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
+    consolidatedHistorySelection: "coverage",
+    historicalAnchorActivationChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS,
+    historicalAnchorMaxChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_CHARS,
+    historicalAnchorMaxItems: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS,
+    targetDate,
+  });
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;

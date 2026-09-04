@@ -197,6 +197,16 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js:379`
 
 ---
 
+### 5.1 Context envelope and demand-driven construction
+
+The save remembers everything; a task is shown a bounded, deterministic slice of it (`promptContext.js` + `contextDiagnostics.js`):
+
+- **Demand.** `buildTemplateVariables(bundle, { taskKey })` resolves which variables the ACTUAL loaded prompt pack can reach (the task text, the helpers it references, and the live directives `runJsonTask` appends for that task — `LIVE_RUNTIME_VARIABLE_KEYS` in `contextDiagnostics.js`) and passes them as `requiredKeys`; `buildPromptContext` then builds only those, so the region catalog, world summary, chats and border geometry are skipped when a task never renders them. A caller without a task key, or an unresolvable demand, gets the full build. `resolveHelperValues` renders only reachable helpers.
+- **Budgets.** `buildEventHistoryText`, `buildDetailedChatHistoryText` and `buildConsolidatedHistoryText` accept `maxChars`; whole records are kept and every omission is declared in the text. Jumps run under the world-simulation envelope: 24k chars of consolidated history selected for **coverage** (newest continuity, the campaign foundation, evenly spread middle blocks), and once the full history exceeds 24k, up to 6k chars / 18 **permanent historical anchors** chosen from the consolidated past by provenance (critical events, the origin events of active wars, agreements and storylines, durable structural changes). Variables: `consolidatedHistory`, `historicalAnchors`, `historicalAttentionStatus`, and `recentEventsLong` (which embeds both).
+- **Diplomatic memory.** A chat message may carry `memorySummary` (rolling durable memory of the thread); `diplomaticContinuity` renders the latest memory per thread with a short verbatim tail, and a jump gets the `[Diplomatic Consequence Bridge]` directive only when at least one thread carries memory. `chatHistory` and `chatSummary` show the memory line too.
+- **Marker attention.** `markersSummary` is a bounded, deterministic subset of world features (recently touched, under construction or damaged, named in recent events or chats, plus a rotating background sample), sized per task.
+- **Diagnostics.** Set `globalThis.__OH_CONTEXT_DIAGNOSTICS__ = true` in DevTools: every structured request logs its demand, constructed-versus-required variables and sizes (`logContextDiagnostics`), and `buildTemplateVariables` logs its build time. Observational only.
+
 ## 6. Call-time appended directives
 
 Concatenated onto the system prompt in `runJsonTask` / `callAI` **after** the template renders. They exist in code (not `defaultPrompts.json`) so they reach frozen-prompt campaigns (§2).
