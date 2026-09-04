@@ -513,3 +513,57 @@ test("R11 world warping is scale/geometry driven and keeps the R8 point safety n
     assert.ok(!afterRender.features.some((feature) => feature.properties.owner === owner));
   }
 });
+
+test("R12 a detached landmass of consequence carries the owner's name", () => {
+  const result = buildPolityLabelCollections({
+    type: "FeatureCollection",
+    features: [surface("United States", [
+      [[[-125, 25], [-66, 25], [-66, 49], [-125, 49], [-125, 25]]],
+      [[[-168, 55], [-141, 55], [-141, 71], [-168, 71], [-168, 55]]],
+      [[[-160, 19], [-159.8, 19], [-159.8, 19.2], [-160, 19.2], [-160, 19]]],
+    ])],
+  });
+
+  assert.equal(result.labelData.features.length, 1, "one logical record per polity");
+  const core = byOwner(result, "United States");
+  assert.ok(core.geometry.coordinates[0] > -130 && core.geometry.coordinates[1] < 50,
+    `the logical label stays on the contiguous mainland, got ${core.geometry.coordinates}`);
+
+  const parts = result.pointLabelData.features.filter((feature) => feature.properties.labelKind === "territory");
+  assert.equal(parts.length, 1, "Alaska gets one owner label; the speck island gets none");
+  assert.equal(parts[0].properties.name, "UNITED STATES");
+  assert.equal(parts[0].properties.sourceOwner, "United States");
+  assert.ok(parts[0].geometry.coordinates[0] < -140 && parts[0].geometry.coordinates[1] > 55);
+  assert.equal(summarizePolityLabelDiagnostics(result).length, 1, "part labels stay outside polity diagnostics");
+});
+
+test("R12 the label anchors on the landmass with the most ground, not the most mercator", () => {
+  const result = buildPolityLabelCollections({
+    type: "FeatureCollection",
+    features: [surface("Canada", [
+      [[[-140, 48], [-60, 48], [-60, 62], [-140, 62], [-140, 48]]],
+      [[[-90, 76], [-62, 76], [-62, 83], [-90, 83], [-90, 76]]],
+    ])],
+  });
+
+  const label = byOwner(result, "Canada");
+  assert.ok(label.geometry.coordinates[1] < 70,
+    `Canada should anchor on the mainland, got lat ${label.geometry.coordinates[1]}`);
+  assert.ok(Math.abs(label.properties.rotation) < 10,
+    `a wide mainland reads horizontally, rotation=${label.properties.rotation}`);
+  const arctic = result.pointLabelData.features.find((feature) => feature.properties.labelKind === "territory");
+  assert.ok(arctic && arctic.geometry.coordinates[1] > 76, "the Arctic landmass carries a CANADA label of its own");
+});
+
+test("R12 compact shapes read horizontally; long shapes follow their own axis", () => {
+  const result = buildPolityLabelCollections({
+    type: "FeatureCollection",
+    features: [
+      box("China", 74, 18, 135, 53),
+      box("Chile", -75.5, -55, -67, -17),
+    ],
+  });
+  const d = diagnosticsByOwner(result);
+  assert.ok(Math.abs(d.get("China").rotation) < 10, `China rotation=${d.get("China").rotation}`);
+  assert.ok(Math.abs(d.get("Chile").rotation) > 75, `Chile rotation=${d.get("Chile").rotation}`);
+});
