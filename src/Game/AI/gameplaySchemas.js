@@ -235,6 +235,22 @@ const polityChangeSchema = {
   additionalProperties: false,
 };
 
+// `composition` and `posture` below belong to the beta unit system, and are
+// DELIBERATELY left in the schema when the classic system is running.
+//
+// Stripping them looks tidier and is a trap. Every op object here is
+// additionalProperties: false, so a provider that does not enforce the tool
+// schema server-side (not all of the supported ones do) would have a stray
+// `posture` rejected by validateGameplayPayload — and that fails the WHOLE turn's
+// structured output into a fallback simulation, which is exactly the failure the
+// note field on the spawn op was added to prevent (see its comment below).
+// Trading a guaranteed-safe default mode for a few dozen tokens of schema is a
+// bad deal.
+//
+// Nothing acts on them in classic: applyUnitOpBatch's betaEngine gate ignores
+// posture, and promptContext stops describing either field, so the model is not
+// invited to use them. If one arrives anyway it is stored verbatim and simply
+// waits — which is what makes switching to beta later lossless.
 const unitSchema = {
   type: "object",
   description: "A military unit to create on the map.",
@@ -249,10 +265,19 @@ const unitSchema = {
     ownerCode: nonEmptyTextSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
     strength: {
       type: "integer",
-      description: "Unit strength from 1 to 1000.",
+      description:
+        "How much of its ESTABLISHED strength this formation actually has, as a "
+        + "percentage. 100 is a fresh full-strength formation; 60 is worn down; 20 is "
+        + "a shell. This is not a power score - put the formation's real size in "
+        + "`composition`.",
       minimum: 1,
-      maximum: 1000,
+      maximum: 100,
     },
+    composition: nonEmptyTextSchema(
+      "What the formation is actually made of, in a few words - \"1 aircraft carrier, "
+      + "2 frigates\", \"3 tank regiments\", \"two rifle divisions\". A counter with no "
+      + "composition tells the player nothing.",
+    ),
     lng: {
       type: "number",
       description: "Longitude of the unit location.",
@@ -271,9 +296,20 @@ const unitSchema = {
       description: "Optional unit status.",
       enum: ["idle", "moving", "engaged", "pending"],
     },
-    note: textSchema("Brief operational note."),
+    posture: {
+      type: "string",
+      description:
+        "What this formation is DOING, which is how the player reads intent off the "
+        + "map. \"patrol\" is special: the engine keeps a patrolling unit working its "
+        + "station on its own, turn after turn, so state it once and leave it.",
+      enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing", "assaulting"],
+    },
+    note: textSchema(
+      "One short present-tense sentence on what this formation is doing and where - "
+      + "\"Patrolling the North Atlantic approaches\". Shown to the player verbatim.",
+    ),
   },
-  required: ["name", "type", "ownerCode", "strength", "lng", "lat"],
+  required: ["name", "type", "ownerCode", "strength", "composition", "lng", "lat"],
   additionalProperties: false,
 };
 
@@ -285,6 +321,13 @@ const unitOpSchema = {
       properties: {
         op: { type: "string", enum: ["spawn"] },
         unit: unitSchema,
+        // unitSchema already carries its own `note`; this is here only because a
+        // model that has just written move/strength/remove — which DO take a
+        // top-level note — reaches for the same field out of habit on a spawn.
+        // Previously rejected outright (additionalProperties: false with no
+        // "note" here), which failed the WHOLE turn's structured output and
+        // forced a fallback simulation over one stray field on one op.
+        note: textSchema("Optional operational note (prefer unit.note instead)."),
       },
       required: ["op", "unit"],
       additionalProperties: false,
@@ -297,6 +340,13 @@ const unitOpSchema = {
         toLng: { type: "number", minimum: -180, maximum: 180 },
         toLat: { type: "number", minimum: -90, maximum: 90 },
         regionId: textSchema("Destination region identifier, when known."),
+        posture: {
+          type: "string",
+          description:
+            "Re-state what the formation is doing if the move changes it - a force "
+            + "that was in transit and is now massing on a border, say.",
+          enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing", "assaulting"],
+        },
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "toLng", "toLat"],
@@ -307,7 +357,12 @@ const unitOpSchema = {
       properties: {
         op: { type: "string", enum: ["strength"] },
         unitId: nonEmptyTextSchema("Existing unit identifier."),
-        strength: { type: "integer", minimum: 0, maximum: 1000 },
+        strength: {
+          type: "integer",
+          description: "The formation's remaining percentage of established strength. 0 destroys it.",
+          minimum: 0,
+          maximum: 100,
+        },
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "strength"],
@@ -571,7 +626,7 @@ export const JUMP_FORWARD_SCHEMA = {
     summary: textSchema("Concise summary of the period and its strategic consequences."),
     clearActions: {
       type: "boolean",
-      description: "Whether planned player actions were resolved by this jump.",
+      description: "Whether planned player actions were resolved by this jump. Defaults to true (resolved) when omitted.",
     },
     catalyst: nullableCatalystSchema,
     diplomaticOutreach: {
@@ -584,7 +639,15 @@ export const JUMP_FORWARD_SCHEMA = {
       items: createdChatSchema,
     },
   },
-  required: ["events", "stopDate", "summary", "clearActions"],
+  // clearActions is deliberately NOT required: simulateTimelineJump already
+  // reads it as `payload?.clearActions !== false`, so a missing value already
+  // means "resolved" everywhere it's consumed. Some models (field report: an
+  // openai-compatible endpoint) reliably omit it even after being told
+  // exactly which field is missing on the one retry this task gets — with it
+  // required, that omission failed validation and threw away an otherwise
+  // complete, correct turn (real events, a real summary) to the fallback for
+  // a boolean nothing downstream needed present in the first place.
+  required: ["events", "stopDate", "summary"],
   additionalProperties: false,
 };
 
@@ -627,9 +690,15 @@ export const PREGAME_HISTORY_SCHEMA = {
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
 // may send a short note to their inbox. `chat: null` means nobody plausibly
 // would right now - silence is the common, correct answer.
+// The between-rounds world pulse. Still named idleDiplomacy because the task KEY
+// is stored in every game's frozen prompt pack and every scenario's prompts.json —
+// renaming it would orphan the player's own edits under a key nothing reads.
 export const IDLE_DIPLOMACY_SCHEMA = {
   type: "object",
-  description: "At most one short unprompted diplomatic note to the player, or null for silence.",
+  description:
+    "A quiet moment between rounds: at most one short unprompted diplomatic note, "
+    + "and at most two small unit movements that follow from the world as it already "
+    + "stands. All of it is optional, and silence is a normal answer.",
   properties: {
     chat: {
       anyOf: [
@@ -637,7 +706,33 @@ export const IDLE_DIPLOMACY_SCHEMA = {
         createdChatSchema,
       ],
     },
+    unitOps: {
+      type: "array",
+      description:
+        "At most two unit operations. Prefer moving or re-posturing an EXISTING unit "
+        + "over spawning a new one. An empty array is the normal answer.",
+      maxItems: 2,
+      items: unitOpSchema,
+    },
+    sighting: {
+      anyOf: [
+        { type: "null", description: "Nothing worth reporting to the player." },
+        {
+          type: "object",
+          description:
+            "One short intelligence report, ONLY when the movement is inside or near "
+            + "the player's sphere and their services would plausibly have seen it.",
+          properties: {
+            title: nonEmptyTextSchema("Short headline, e.g. \"Naval build-up off Murmansk\"."),
+            description: nonEmptyTextSchema("One or two sentences in the voice of an intelligence report."),
+          },
+          required: ["title", "description"],
+          additionalProperties: false,
+        },
+      ],
+    },
   },
+  // Only chat is required, so an answer in the old shape still validates.
   required: ["chat"],
   additionalProperties: false,
 };
@@ -908,7 +1003,9 @@ export const COUNTRY_STAT_SHEET_TOOL = makeTool(
 
 export const IDLE_DIPLOMACY_TOOL = makeTool(
   "submit_idle_diplomacy",
-  "Submit at most one short unprompted diplomatic note to the player, or null for silence.",
+  "Submit the quiet-moment world pulse: at most one short unprompted diplomatic note, "
+  + "at most two small unit movements, and at most one intelligence sighting. Every part "
+  + "is optional and silence is a normal answer.",
   IDLE_DIPLOMACY_SCHEMA,
 );
 

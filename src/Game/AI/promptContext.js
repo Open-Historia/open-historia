@@ -4,6 +4,7 @@ import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/country
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionDisplayText,
+  haversineKm,
   isPolityLandless,
   normalizeActionEntry,
   normalizeActions,
@@ -12,9 +13,48 @@ import {
   normalizeWorldState,
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText } from "./regionVocab.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
+import { buildForcePostureText } from "./forcePosture.js";
+import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+
+// Walks BACKWARD from a chat's last message to the first one with a usable
+// `time`, mirroring chat.jsx's chatLastMessageTime (kept as a separate copy
+// here rather than imported — that file is a React/UI module this AI-prompt
+// layer shouldn't depend on). Returns null when nothing in the chat carries a
+// parseable date, so an all-blank chat sorts as "unknown" rather than as
+// artificially ancient (which would bury it) or artificially current (which
+// would crowd out chats that really are active).
+const chatLastMessageTimeMs = (chat) => {
+  const messages = chat.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const raw = messages[i]?.time;
+    if (!raw) continue;
+    const ms = new Date(raw).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+};
+
+// Most-recently-ACTIVE first. A long-running chat with a country the player
+// has kept talking to for many rounds otherwise stays parked wherever it was
+// first inserted into storage (chats are only ever prepended on creation, not
+// re-ordered on new messages) — so a still-open, actively-updated chat could
+// silently fall outside chatHistoryLong/chatSummary's `limit` slice just
+// because several OTHER chats were started more recently, even though none of
+// them are as current. A chat with no usable date at all sorts to the end,
+// same convention as chat.jsx's "Undated" bucket, rather than winning the
+// front of the list by default.
+const sortChatsByLastActivity = (chats) => [...chats].sort((a, b) => {
+  const ta = chatLastMessageTimeMs(a);
+  const tb = chatLastMessageTimeMs(b);
+  if (ta === null && tb === null) return 0;
+  if (ta === null) return 1;
+  if (tb === null) return -1;
+  return tb - ta;
+});
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -109,18 +149,49 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
   return normalizedChats.slice(0, limit).map((chat) => {
     const participants = chat.countries.map((country) => country.name).join(", ");
     const lastMessage = chat.messages.at(-1);
-    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}: ${lastMessage.text}` : "no messages yet"}`;
+    const date = lastMessage?.time ? ` [${formatDateReadable(lastMessage.time)}]` : "";
+    return `- ${participants}: ${lastMessage ? `${lastMessage.speaker || lastMessage.role}${date}: ${lastMessage.text}` : "no messages yet"}`;
   }).join("\n");
 };
 
-export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10 } = {}) => {
+// Every message line carries its own in-game date (when the message has one),
+// and every chat header states when that chat last saw activity. Without
+// these, the ONLY signal for "which message is most recent" was a message's
+// position in the transcript — fine for a human skimming top-to-bottom, but a
+// weak, implicit cue for the model to reason about explicitly (especially
+// with several same-named countries' chats in view, or a country the player
+// has talked to across many separate rounds). An explicit date lets the model
+// answer "the recent message from Algeria" by actually comparing dates
+// instead of guessing from list position.
+// `visibleTo` names the polity this transcript is being rendered FOR, and keeps
+// only the chats that polity was actually a participant in. Omit it (the default)
+// for the omniscient readers — the jump narrator, the consolidator, and the
+// player's own advisor, who is in every chat anyway.
+//
+// This is what makes a diplomatic channel private. Without it the `leader` prompt
+// handed every AI power the player's letters to every other power, so no offer
+// could be confidential and every leader wrote in the same borrowed voice. See
+// chatVisibility.js for the field evidence.
+export const buildDetailedChatHistoryText = (chats, { limit = 8, messageLimit = 10, visibleTo = "" } = {}) => {
   const normalizedChats = normalizeChats(chats);
-  if (normalizedChats.length === 0) return "No chats occurred in these rounds.";
+  if (normalizedChats.length === 0) {
+    // Distinct wording per case: "this polity has no correspondence" is a very
+    // different fact from "nothing happened this round", and a leader told the
+    // latter when the former is true may invent a conversation to fill the gap.
+    return visibleTo
+      ? "You have exchanged no messages with them in these rounds."
+      : "No chats occurred in these rounds.";
+  }
 
   return normalizedChats.slice(0, limit).map((chat, index) => {
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
+    const lastActivityMs = chatLastMessageTimeMs(chat);
+    const lastActivity = lastActivityMs !== null ? ` (most recent activity: ${formatDateReadable(lastActivityMs)})` : "";
+    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${lastActivity}`;
     const body = chat.messages.length > 0
-      ? chat.messages.slice(-messageLimit).map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n")
+      ? chat.messages.slice(-messageLimit).map((message) => {
+        const date = message.time ? ` [${formatDateReadable(message.time)}]` : "";
+        return `${message.speaker || message.role}${date}: ${message.text}`;
+      }).join("\n")
       : "No messages yet.";
     return `${header}\n${body}`;
   }).join("\n\n");
@@ -179,6 +250,20 @@ export const buildActionHistoryText = (actions, { includeResolved = false, limit
   return lines.join("\n");
 };
 
+// Planned actions WITH their ids — every other action-history text is written
+// for the simulation model, which never references an action by id, so ids
+// would just be clutter there. The advisor is different: it needs a stable
+// handle to EDIT or REMOVE a specific queued action the player asks it to
+// amend, and copying the id verbatim is the only way to do that precisely
+// (matching by title/text is fragile — titles can collide or get reworded).
+export const buildPlannedActionsWithIdsText = (actions) => {
+  const planned = normalizeActions(actions).filter((action) => action.status === "planned");
+  if (planned.length === 0) return "No planned actions are currently queued.";
+  return planned
+    .map((action) => `- [id ${action.id}] (${action.kind === "chat" ? "chat" : "action"}) ${action.title}: ${buildActionDisplayText(action)}`)
+    .join("\n");
+};
+
 export const formatActionsForPrompt = (actions) => normalizeArray(actions)
   .map((entry) => {
     if (typeof entry === "string") return entry.trim();
@@ -218,17 +303,74 @@ export const buildRecentRoundsWithDates = (bundle) => {
     .join("; ");
 };
 
-export const buildUnitsSummaryText = (world) => {
+// Posture, composition and covert status are beta-system concepts. In the classic
+// system they are absent from play, so describing them would spend tokens on
+// mechanics the model cannot act on and invite ops the engine would discard.
+export const buildUnitsSummaryText = (world, { betaUnits = isBetaUnits() } = {}) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
+  if (!betaUnits) {
+    return units.slice(0, 60).map((unit) => {
+      const lat = Number(unit.lat);
+      const lng = Number(unit.lng);
+      const coords = Number.isFinite(lat) && Number.isFinite(lng)
+        ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+        : "unknown location";
+      const detail = [
+        `${unit.type}`,
+        `owner ${unit.ownerCode}`,
+        `${unit.strength}% of established strength`,
+        `status ${unit.status}`,
+      ].join(", ");
+      return `- ${unit.name} [id ${unit.id}] (${detail}) at ${coords}` +
+        `${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    }).join("\n");
+  }
   return units.slice(0, 60).map((unit) => {
     const lat = Number(unit.lat);
     const lng = Number(unit.lng);
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
       ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
       : "unknown location";
-    return `- ${unit.name} [id ${unit.id}] (${unit.type}, owner ${unit.ownerCode}, strength ${unit.strength}, status ${unit.status}) at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    const detail = [
+      `${unit.type}`,
+      `owner ${unit.ownerCode}`,
+      `${unit.strength}% of established strength`,
+      unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
+    ].join(", ");
+    return `- ${unit.name} [id ${unit.id}] (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
+      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
   }).join("\n");
+};
+
+// Standing orders the ENGINE is advancing (world.pendingUnitOrders): a move still
+// under way, or a patrol working its station. Kept separate from the actions
+// queue and its clearActions flag entirely (see gameState.js), so they re-surface
+// every jump until the unit arrives or the order lapses. The model is shown these
+// as CONTEXT — advanceStandingOrders already moves them, so a move op for one of
+// these units would advance it twice (see the [Standing Unit Orders] directive).
+export const buildPendingUnitOrdersText = (world, { betaUnits = isBetaUnits() } = {}) => {
+  const orders = normalizeArray(world?.pendingUnitOrders);
+  // The classic system has no engine advancing orders, so there is nothing true
+  // to say here. A save may still CARRY dormant orders from beta play — they are
+  // preserved on disk deliberately, and describing them would invite the model to
+  // act on orders nothing is going to advance.
+  if (!betaUnits || orders.length === 0) {
+    return "No units currently have a standing order.";
+  }
+  const unitById = new Map(normalizeArray(world?.units).map((unit) => [unit.id, unit]));
+  return orders.map((order) => {
+    const unit = unitById.get(order.unitId);
+    if (!unit) return null;
+    const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+    if (order.kind === "patrol") {
+      return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is working a ` +
+        `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;
+    }
+    const destination = order.targetLabel || `lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}`;
+    return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is en route to ${destination} — ` +
+      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}, about ${remaining} km still to go.`;
+  }).filter(Boolean).join("\n");
 };
 
 // Structures founded during play (world.markers): cities, military bases,
@@ -453,6 +595,13 @@ export const buildPromptContext = async (bundle, {
   chat = null,
   chatLimit = 8,
   chatsToConsolidate = "",
+  // The polity this prompt SPEAKS AS, when that limits what it may have read.
+  // Set by the leader path so one government cannot read another's private
+  // correspondence (chatVisibility.js). Deliberately its own option rather than
+  // being inferred from respondingPolityName, which is also filled in as a
+  // fallback on paths that are entitled to see everything — inferring it there
+  // would silently blind the jump narrator.
+  chatVisibleTo = "",
   eventLimit = 10,
   eventsToConsolidate = "",
   gameMasterRequest = "",
@@ -465,6 +614,37 @@ export const buildPromptContext = async (bundle, {
   const date = bundle.game.gameDate || "";
   const target = targetDate || date;
   const worldSummary = await buildWorldSummary(bundle, regionCatalog);
+  // Every power fielding forces, plus the player and whoever they are talking to
+  // — the set the "are X's units near Y's border?" question could be about.
+  // Bounded deliberately: indexing all ~200 countries' geometry would decode a
+  // lot of coastline nobody is going to ask about.
+  //
+  // Beta-only, and skipped wholesale in the classic system rather than merely
+  // unused: buildTerritoryIndex decodes region geometry for every power fielding
+  // forces, which is the single most expensive thing in a prompt build. Nothing
+  // in classic reads the result.
+  const forcePosture = !isBetaUnits() ? "" : await (async () => {
+    const world = normalizeWorldState(bundle.world);
+    const owners = [
+      normalizeString(bundle.game?.country),
+      ...normalizeArray(world.units).map((unit) => normalizeString(unit.ownerCode)),
+      ...normalizeChats(bundle.chats).flatMap((chat) =>
+        normalizeArray(chat.countries).map((country) => normalizeString(country?.name))),
+    ].filter(Boolean);
+    let territories = null;
+    try {
+      territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
+    } catch (error) {
+      // Border proximity is colour on top; never let it break a prompt build.
+      console.warn("[ai] force posture fell back to positions only:", error);
+    }
+    return buildForcePostureText(
+      world.units,
+      world.pendingUnitOrders,
+      territories,
+      normalizeString(bundle.game?.country),
+    );
+  })();
   const citiesSummary = await buildCityCatalogText(bundle.world);
   const recentEvents = buildEventHistoryText(bundle.events, { limit: eventLimit, world: bundle.world });
   const campaignHistory = buildCampaignHistoryText(bundle.events, bundle.world, { limit: longEventLimit });
@@ -473,8 +653,9 @@ export const buildPromptContext = async (bundle, {
   const consolidatedChatIds = new Set(
     normalizeWorldState(bundle.world).consolidatedHistory.flatMap((entry) => entry.chatIds),
   );
-  const unconsolidatedChats = normalizeChats(bundle.chats)
-    .filter((entry) => !consolidatedChatIds.has(entry.id));
+  const unconsolidatedChats = sortChatsByLastActivity(
+    normalizeChats(bundle.chats).filter((entry) => !consolidatedChatIds.has(entry.id)),
+  );
   const currentChat = normalizedChat ?? unconsolidatedChats[0] ?? null;
 
   return {
@@ -493,7 +674,10 @@ export const buildPromptContext = async (bundle, {
     citiesSummary,
     chat: JSON.stringify(unconsolidatedChats),
     chatHistory: currentChat?.messages?.map((message) => `${message.speaker || message.role}: ${message.text}`).join("\n") || "No chat history.",
-    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit }),
+    // The only transcript that is visibility-filtered. `chatsToConsolidate` below
+    // stays unfiltered on purpose: the consolidator is the archivist and must
+    // fold the WHOLE round into canon, not one government's view of it.
+    chatHistoryLong: buildDetailedChatHistoryText(unconsolidatedChats, { limit: chatLimit, visibleTo: chatVisibleTo }),
     chatParticipants: currentChat?.countries?.map((country) => country.name).join(", ") || "",
     chatSummary: buildChatSummaryText(unconsolidatedChats),
     chatsToConsolidate: chatsToConsolidate || buildDetailedChatHistoryText(unconsolidatedChats, { limit: 12, messageLimit: 50 }),
@@ -501,6 +685,7 @@ export const buildPromptContext = async (bundle, {
     date,
     dateReadable: formatDateReadable(date),
     difficulty: bundle.game.difficulty || "standard",
+    forcePosture,
     difficultyGuidanceChats: buildDifficultyGuidance(bundle.game.difficulty, "chats"),
     difficultyGuidanceJumpForward: buildDifficultyGuidance(bundle.game.difficulty, "jump"),
     eventsToConsolidate: eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 }),
@@ -509,7 +694,9 @@ export const buildPromptContext = async (bundle, {
     lastSpeaker: currentChat?.messages?.at(-1)?.speaker || "",
     markersSummary: buildMarkersSummaryText(bundle.world),
     numberOfRegions: String(regionCatalog.length),
+    pendingUnitOrders: buildPendingUnitOrdersText(bundle.world),
     plannedActions: buildActionHistoryText(bundle.actions),
+    plannedActionsWithIds: buildPlannedActionsWithIdsText(bundle.actions),
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),

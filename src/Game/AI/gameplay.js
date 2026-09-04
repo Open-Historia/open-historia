@@ -11,7 +11,7 @@ import {
   planJumpSegments,
   segmentEventRange,
 } from "./jumpSegments.js";
-import { collapseRepeatedBlock } from "./promptDedupe.js";
+import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -37,7 +37,9 @@ import {
   writeJson,
 } from "../../runtime/assets.js";
 import {
+  advanceStandingOrders,
   applyEventImpactsToWorld,
+  enforceUnitVolume,
   readInterceptsState,
   writeInterceptsState,
   normalizeActionEntry,
@@ -54,6 +56,7 @@ import {
   readGameData,
   readGameStateBundle,
   readWorldState,
+  resumeStandingOrders,
   writeActionsState,
   writeChatsState,
   writeEventsState,
@@ -62,7 +65,7 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 
@@ -435,8 +438,53 @@ const runJsonTask = async (taskKey, {
 
   // Units kept landing at 0,0 (null island) because the model copied the lng:0,lat:0
   // placeholder from the output template; guide it to real coordinates.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+  if (["jumpForward", "autoJumpForward", "idleDiplomacy"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nWhenever an event says a force is raised, mobilised, garrisoned, landed, reinforced, redeployed or moved, that event MUST carry the matching impacts.unitOps — a spawn for a force that now exists, a move for one that relocated. An event that describes troops without unitOps produces a story about an army the map never shows.\nWrite every coordinate as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06°E". Every unitOps spawn and move MUST use the real-world longitude and latitude of where the unit actually is or is going. The lng 0 / lat 0 shown in the output template is ONLY a placeholder \u2014 0,0 is open ocean off West Africa, never a valid position, and a unit placed there is discarded. Set lng and lat to the actual coordinates: use the values from [City Coordinates] for a unit at or near one of those cities, or the real coordinates of the region or front where the action happens.`;
+  }
+
+  // Standing orders (world.pendingUnitOrders) survive a jump's single clearActions
+  // flag on purpose - it wipes the actions queue wholesale. The ENGINE advances
+  // them every turn (advanceStandingOrders), so this block exists to tell the model
+  // what is already in motion, NOT to ask it for the legs: a move op for a unit the
+  // engine is already advancing would move that unit twice for the same elapsed time.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const pending = normalizeString(variables.pendingUnitOrders);
+    if (pending && !pending.startsWith("No units")) {
+      systemPrompt = `${systemPrompt}\n\n[Standing Unit Orders]\nEach unit below is already under a standing order and the engine advances it automatically every turn - a move continues toward its destination at that unit's own pace, and a patrol keeps working its station. You do NOT need to emit a move op for any of them, and you should not: doing so would advance the unit twice. Take these as context for what is happening on the map, and write events about them when the story warrants it. Emit a unit op for one of these units only when this jump genuinely REDIRECTS it (a new destination, a change of posture) or ends it (destroyed, recalled, withdrawn) - and say why in an event. An order clears itself once the unit arrives; you never need to remove one yourself.\n${pending}`;
+    }
+  }
+
+  // The unit contract itself. defaultPrompts.json carries the same rules for NEW
+  // games; this is what reaches the campaigns that already exist, whose prompts are
+  // frozen — the same reason [Player Agency] and [Map Truth] are injected here.
+  //
+  // Skipped when the rendered template ALREADY says it: the bundled template's
+  // units section is a near-verbatim copy of this block, so a new game would pay
+  // for both, and a rule repeated in two slightly different wordings invites the
+  // model to look for a distinction that is not there. Beta only — it describes a
+  // map the player cannot move units on, which is not the classic system's map.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey) && isBetaUnits() && !templateAlreadySays(systemPrompt, UNIT_CONTRACT_MARKER)) {
+    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
+    systemPrompt = `${systemPrompt}\n\n[Units on the Map]\nUnits are EVIDENCE OF YOUR OWN EVENTS. The player cannot move or fight their own formations - the map is there to show them what is happening - so every unit you spawn or move must be something one of this jump's events actually describes. Reach for them readily: a mobilization, a build-up on a border, a fleet sailing, an offensive, a withdrawal all deserve to be visible. But keep the map legible - only formations that matter to the story. A great power at war might show five or six; a country at peace shows one or two, or none.\nstrength is a PERCENTAGE of established strength (100 = fresh and full, 60 = worn down, 20 = a shell), and composition says what the formation actually is ("1 aircraft carrier, 2 frigates", "3 tank regiments"). Write both, plus a one-sentence note on what it is doing and where. A counter that does not say what it is tells the player nothing.\nDo not teleport. A move may only cover what that unit could really travel between the previous event's date and this one's. The engine enforces this: an over-long move becomes a partial advance that continues automatically on later turns, so ordering the full distance is safe and correct.\nThe map is what ${playerName} KNOWS, not omniscience. A force may legitimately appear far from its own territory when it is being DETECTED rather than arriving - a submarine that has shadowed a fleet for weeks, infiltrators already in country, a deployment only now confirmed. Such a unit is drawn as unconfirmed, which is correct and not a penalty. The one thing you cannot conjure is a fixed installation: use markerOps build for a base, and never spawn a far-flung garrison.\nSet posture whenever you place or move a unit - holding, massing, patrol, transit, exercise, blockade, withdrawing, assaulting. It is how the player reads intent off the map. "patrol" is special: the engine keeps a patrolling unit working its station on its own, turn after turn, so state it once and leave it.\n"assaulting" is the other special one: a formation that ARRIVES under it is marked engaged, in contact at the objective, instead of idle. Use it when an event has a force actually storming a province rather than massing near it — including when the player has ordered an assault in words ("Attack Provence"), which is how they commit troops to a province, since they cannot move their own formations. You still own the OUTCOME: resolve the fighting on a later turn with casualties, and a regionTransfer only if the province genuinely falls. An order you judge infeasible is refused in an event that says why, never silently dropped.`;
+  }
+
+  // The map reading as if only the player fields an army: unitOps is fully general
+  // (any owner, not just the player), but a low events-per-jump budget plus
+  // player-centric framing meant other powers rarely got a reason to use it -
+  // their militaries existed only when something dramatic happened TO the player.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    systemPrompt = `${systemPrompt}\n\n[Other Powers' Militaries]\nThe map should not read as though only ${normalizeString(variables.playerPolity) || "the player's polity"} fields any forces. When a major or currently-relevant power (a scenario-defined actor, a country the player has clashed or negotiated with, a power actively at war or mobilizing) plausibly has forces in the field this period - mobilizing, patrolling a border, escorting a fleet, garrisoning a front, reinforcing an ally - reflect it with impacts.unitOps even when nothing dramatic is happening to the player specifically. A brief, minor event (or a line folded into a larger one) is enough to justify it; it does not need its own headline. Keep this proportionate: a country at peace far from any conflict does not need forces conjured for their own sake, and this must never be used to manufacture aggression toward the player that their own actions or the wider story do not warrant.`;
+  }
+  // The between-rounds pulse may now move the world's forces a little, so it needs
+  // the same discipline the jump gets — injected here so it reaches existing games
+  // whose stored idleDiplomacy prompt predates any of this.
+  if (taskKey === "idleDiplomacy") {
+    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
+    systemPrompt = `${systemPrompt}\n\n[World Pulse]\nOnly minutes of real time have passed and the game date has NOT advanced, so any movement is a step, never a redeployment. Return at most two unitOps, and an empty list is the normal answer. Move only what already has a reason to move: a war under way, a crisis already named in recent events, a border already tense, a fleet already at sea. Never invent a new conflict here.\nPrefer moving or re-posturing an EXISTING unit over spawning one. Prefer movement ${playerName} can actually see - near their borders, waters, allies and rivals; a division shuffling across the far side of the world is invisible and not worth an operation. Never move a garrison, and never touch a unit owned by ${playerName}.\nWrite composition and a one-sentence note on anything you spawn, and set posture on anything you touch. Return a sighting ONLY when the movement is inside or near ${playerName}'s sphere and their services would plausibly have seen it; otherwise sighting is null and the movement is silent.\n${normalizeString(variables.idleChatAllowed) === "no" ? "This pulse is MOVEMENT ONLY: return chat as null." : ""}
+
+[What the Sender Knows]
+You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
+So use the wider picture to choose the sender and the moment — never to give them knowledge they could not have. A polity must not reference, allude to, or react to something said in a conversation it was not part of, and must not echo another leader's turn of phrase. If a private exchange elsewhere is the only reason a message would make sense, that is a message this polity cannot send: pick a different sender, or return chat as null.`;
   }
 
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
@@ -1741,6 +1789,9 @@ const applySimulationResult = async ({
   // than putting the stale snapshot back. See the re-read before writeChatsState.
   const generatedChats = [];
 
+  // Which unit system this session is running, pinned at startup.
+  const betaUnits = isBetaUnits();
+
   // Espionage resolves on the world the turn produced, deterministically (keyed
   // on the round), and its consequences are EVENTS the model reads next turn —
   // an exposed ring, a suspected agent — so what was found out changes what
@@ -1796,9 +1847,19 @@ const applySimulationResult = async ({
     }));
   })();
 
-  const { colors: nextColors, world: worldWithImpacts } = applyEventImpactsToWorld({
+  const { colors: nextColors, world: impactedWorld } = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
+    // Give every unit op a travel budget of the days between the previous event
+    // and its own, so a move op advances a formation as far as it could actually
+    // have got rather than teleporting it. An over-long move becomes a partial
+    // advance plus a standing order the engine keeps working on later turns.
+    //
+    // Both of these are the beta unit system. In the classic system a unit op
+    // lands where the model put it and no standing order is minted, which is
+    // what motion: null plus betaEngine: false mean.
+    motion: betaUnits ? { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 } : null,
+    betaEngine: betaUnits,
     world: {
       ...baseWorld,
       activeCatalyst: result.catalyst ?? null,
@@ -1829,6 +1890,42 @@ const applySimulationResult = async ({
       ].slice(0, 12),
     },
   });
+  // Advance every standing order the model did NOT touch across the whole jump,
+  // and drift the patrols. This is what keeps a fleet crossing an ocean moving
+  // turn after turn, and a squadron visibly working its station, with none of it
+  // having to come back from the model. Units the model DID move are skipped:
+  // they already stepped once per event against that event's own budget, and
+  // advancing them again here would move them twice for the same elapsed time.
+  //
+  // Both this and the unit-volume cap are beta-only: the classic system has no
+  // standing orders to advance and no cap on how many formations the world may
+  // hold, so it leaves the impacted world exactly as the events left it.
+  const movedThisTurn = freshEvents.flatMap((event) =>
+    normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  let worldWithImpacts = betaUnits
+    ? enforceUnitVolume(
+      advanceStandingOrders(
+        // Rounds may have passed under the classic system since these orders were
+        // issued, which would leave every dormant patrol already expired. Give
+        // them the rest of their life from here before advancing anything.
+        resumeStandingOrders(impactedWorld, {
+          round: nextGame.round,
+          previousSystem: normalizeWorldState(baseWorld).unitSystem,
+        }),
+        {
+          fromDate: baseGame.gameDate,
+          toDate: nextGame.gameDate,
+          round: nextGame.round,
+          skipUnitIds: movedThisTurn,
+        },
+      ),
+      { playerCode: baseGame.country },
+    )
+    : impactedWorld;
+
+  // Espionage resolves on the world the whole turn produced — after the standing
+  // orders above have advanced, so an agent's round is decided against where the
+  // fleets actually ended up rather than where they started.
   const espionage = resolveEspionage(worldWithImpacts, {
     round: nextGame.round,
     date: nextGame.gameDate,
@@ -2985,16 +3082,101 @@ export const maybeGeneratePregameHistory = async () => {
 // filling the inbox while making an idle approach actually plausible; the jump-path
 // cap (see defaultPrompts.json) remains the primary source of diplomacy.
 const IDLE_DIPLOMACY_CHANCE = 1 / 8;
+// How often the pulse RUNS at all. Higher than the chat chance because the call
+// now also moves the world's forces a little, and the map benefits from breathing
+// more often than the inbox does. Splitting the two off one roll keeps the chat
+// cadence the player already has exactly as it was while still being ONE request.
+const IDLE_PULSE_CHANCE = 1 / 4;
 let idleDiplomacyInFlight = false;
+// Narrower than idleDiplomacyInFlight above: true only for the half of a pulse
+// that actually asks whether a polity would send a note (allowChat). A
+// movement-only pulse sets the in-flight guard but not this.
+let idleChatPollInFlight = false;
 
-export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } = {}) => {
+// Whether the model is right now being asked whether a country would reach out
+// unprompted. Deliberately NOT true for a jump, a game-master command or an
+// advisor exchange: those take the same busy lock and MIGHT emit chats, but only
+// a poll whose entire purpose is that question is worth an indicator.
+export const isChatGenerationLikely = () => idleChatPollInFlight;
+
+// Apply a pulse's unit ops to the LIVE world. Routed through
+// applyEventImpactsToWorld with a synthetic event rather than a hand-rolled
+// applier, so the detection gate, the owner-name resolution and the patrol-order
+// minting all behave exactly as they do on a real turn.
+const applyIdlePulseUnitOps = async (bundle, unitOps) => {
+  // Deliberately NOT bundle.world: a jump may have committed while the model was
+  // thinking, and writing a world built on the stale snapshot would undo it.
+  const freshWorld = await readWorldState({ force: true });
+  const tick = (Number(freshWorld.idlePulseTick) || 0) + 1;
+  const gameDate = normalizeString(bundle.game?.gameDate);
+  const round = Number(bundle.game?.round) || 0;
+  const betaUnits = isBetaUnits();
+
+  const { world: impacted } = applyEventImpactsToWorld({
+    colors: {},
+    events: [{ date: gameDate, title: "", description: "", impacts: { unitOps } }],
+    world: freshWorld,
+    motion: betaUnits ? { originDate: gameDate, round, tick } : null,
+    betaEngine: betaUnits,
+  });
+  // The classic system has nothing to drift and no cap to enforce — the pulse's
+  // ops are the whole of its effect.
+  if (!betaUnits) return { ...impacted, idlePulseTick: tick };
+  // fromDate === toDate, so no unit travels: the pulse only re-posts standing
+  // orders and drifts patrols, which is right when no game time has passed.
+  const drifted = advanceStandingOrders(impacted, {
+    fromDate: gameDate,
+    toDate: gameDate,
+    round,
+    tick,
+  });
+  return enforceUnitVolume(
+    { ...drifted, idlePulseTick: tick },
+    { playerCode: normalizeString(bundle.game?.country) },
+  );
+};
+
+// One short intelligence report in the event feed, so a build-up the player can
+// see on the map also tells them WHY it is there. Only ever written when the
+// model judged the movement near enough for their services to have seen it.
+const appendSightingEvent = async (bundle, sighting, unitOps) => {
+  const events = await readEventsState({ force: true });
+  const next = normalizeEvents([
+    ...events,
+    {
+      date: normalizeString(bundle.game?.gameDate),
+      title: normalizeString(sighting.title),
+      description: normalizeString(sighting.description),
+      importance: "minor",
+      kind: "intel",
+      playerRelated: true,
+      notable: false,
+      // The event carries the very ops it is reporting. They have already been
+      // applied to the world above and nothing re-applies an event's impacts from
+      // the log, so this is not a second application — it is what lets the event
+      // camera fly to the sighting instead of guessing from the prose.
+      impacts: { unitOps },
+    },
+  ]);
+  await writeEventsState(next);
+};
+
+export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}) => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
-  if (Math.random() >= chance) return null;
+  const roll = Math.random();
+  if (roll >= chance) return null;
+  // One call, two rates: the chat half keeps the cadence the player already has,
+  // while the movement half runs on every pulse.
+  const allowChat = roll < Math.min(chance, IDLE_DIPLOMACY_CHANCE);
   idleDiplomacyInFlight = true;
+  idleChatPollInFlight = allowChat;
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
-    const variables = await buildTemplateVariables(bundle);
+    const variables = {
+      ...(await buildTemplateVariables(bundle)),
+      idleChatAllowed: allowChat ? "yes" : "no",
+    };
     const openChats = normalizeChats(bundle.chats);
     // The prompt template shows only ONE line per chat (chatSummary: the last
     // message, prefixed by its speaker), and a note sent to a polity the player
@@ -3016,10 +3198,11 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       + " write, return {\"chat\": null}.",
     ].join("\n");
     const { payload } = await runJsonTask("idleDiplomacy", {
-      userMessage:
-        "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now."
-        + conversationContext
-        + "\n\nReturn JSON only.",
+      userMessage: allowChat
+        ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
+          + conversationContext
+          + "\n\nReturn JSON only."
+        : "A quiet moment between rounds. Decide whether any forces would visibly move right now. Return chat as null. Return JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
@@ -3034,7 +3217,29 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       },
       variables,
     });
-    if (!payload?.chat) return null;
+    if (!payload) return null;
+
+    // --- movement ---------------------------------------------------------
+    const unitOps = normalizeArray(payload.unitOps);
+    if (unitOps.length > 0 && !isSimulationBusy()) {
+      try {
+        const nextWorld = await applyIdlePulseUnitOps(bundle, unitOps);
+        // Re-check immediately before the write, exactly as the chat half does:
+        // a jump that started while we were applying owns the world now.
+        if (!isSimulationBusy()) {
+          await writeWorldState(nextWorld);
+          if (payload.sighting && !isSimulationBusy()) {
+            await appendSightingEvent(bundle, payload.sighting, unitOps);
+          }
+        }
+      } catch (error) {
+        // Movement is a bonus; never let it cost the player a diplomatic note.
+        console.warn("[ai] idle pulse could not apply unit movement:", error);
+      }
+    }
+
+    // --- diplomacy --------------------------------------------------------
+    if (!allowChat || !payload.chat) return null;
     // A jump may have started while the model was thinking; its state bundle
     // predates our write, so drop the note rather than race the save.
     if (isSimulationBusy()) return null;
@@ -3074,5 +3279,10 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
     return null; // silence is always the safe outcome
   } finally {
     idleDiplomacyInFlight = false;
+    idleChatPollInFlight = false;
   }
 };
+
+// Clearer name for what this now does. The old export stays because main.jsx
+// imports it dynamically and the docs reference it by name.
+export const maybeRunIdlePulse = maybeSendIdleDiplomacy;
