@@ -3,7 +3,7 @@ import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { dedupeEventLog } from "./eventDedup.js";
-import { toCountryName } from "./ownerNames.js";
+import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -984,19 +984,25 @@ export const normalizeWorldState = (world) => {
       .filter(([, value]) => value),
   );
 
+  // Canonicalise on READ too, so a save written before this migrated - or one
+  // whose owners were split across a polity's token and its display name by a
+  // build that predates this - resolves to the same owner identity as
+  // everything computed now. See ownerNames.js for why a name is an identity.
+  const resolveOwner = createOwnerResolver(buildOwnerAliasMap(polityOverrides));
+
   const regionOwnershipOverrides = Object.fromEntries(
     Object.entries(nextWorld.regionOwnershipOverrides ?? {})
-      // Canonicalise on READ too, so a save written before this migrated still
-      // resolves to the same owner identity as everything computed now.
-      .map(([regionId, ownerCode]) => [normalizeOptionalString(regionId), toCountryName(normalizeOptionalString(ownerCode))])
+      .map(([regionId, ownerCode]) => [normalizeOptionalString(regionId), resolveOwner(ownerCode)])
       .filter(([regionId, ownerCode]) => regionId && ownerCode),
   );
 
   const regionClaimants = Object.fromEntries(
     Object.entries(nextWorld.regionClaimants ?? {})
+      // Claimants share the owner namespace - they are compared against owners
+      // to paint a disputed region's stripes.
       .map(([regionId, claimants]) => [
         normalizeOptionalString(regionId),
-        normalizeArray(claimants).map((name) => normalizeOptionalString(name)).filter(Boolean).slice(0, 4),
+        normalizeArray(claimants).map((name) => resolveOwner(name)).filter(Boolean).slice(0, 4),
       ])
       .filter(([regionId, claimants]) => regionId && claimants.length),
   );
@@ -1272,20 +1278,60 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
   };
 };
 
+// The polity registry as it will stand once this event's changes land, used only
+// to build the alias map. An event's transfers routinely arrive with the rename
+// that names their winner ("Third Reich" takes Austria in the event that renames
+// Germany), so the new name has to be known before the transfers are read, or
+// that one turn's regions land under a second, phantom owner.
+const previewPolityOverrides = (polityOverrides, polityChanges) => {
+  const preview = { ...polityOverrides };
+  for (const { change, code } of polityChanges) {
+    const existing = preview[code] ?? { aliases: [], code, color: "", name: "", note: "" };
+    preview[code] = {
+      ...existing,
+      ...(change.aliases?.length > 0 ? { aliases: change.aliases } : {}),
+      ...(change.name ? { name: change.name } : {}),
+    };
+  }
+  return preview;
+};
+
 export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) => {
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
+  // Every owner written below goes through here first. The model reads the story
+  // it just wrote, so the turn after a polity is renamed it hands back the NEW
+  // name - and storing that verbatim splits one country into two owners, one of
+  // which has none of the country's colour, tags, reputation or stats, and the
+  // map labels both (see ownerNames.js). Rebuilt after each event's polity
+  // changes, since a rename in one event is a name the next event can already
+  // be using.
+  let resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
 
   for (const event of normalizeEvents(events)) {
-    for (const transfer of event.impacts.regionTransfers) {
-      nextWorld.regionOwnershipOverrides[transfer.regionId] = transfer.toCode;
+    // Resolve this event's polity changes first - both to fold the renames they
+    // make into the alias map before any owner is read through it, and so a
+    // change addressed to a polity's current display name lands on that polity
+    // rather than creating a second one beside it.
+    const polityChanges = event.impacts.polityChanges.map((change) => ({
+      change,
+      code: resolveOwner(change.code) || change.code,
+    }));
+    if (polityChanges.length > 0) {
+      resolveOwner = createOwnerResolver(buildOwnerAliasMap(
+        previewPolityOverrides(nextWorld.polityOverrides, polityChanges),
+      ));
     }
 
-    for (const change of event.impacts.polityChanges) {
-      nextWorld.polityOverrides[change.code] = {
-        ...(nextWorld.polityOverrides[change.code] ?? {
+    for (const transfer of event.impacts.regionTransfers) {
+      nextWorld.regionOwnershipOverrides[transfer.regionId] = resolveOwner(transfer.toCode) || transfer.toCode;
+    }
+
+    for (const { change, code } of polityChanges) {
+      nextWorld.polityOverrides[code] = {
+        ...(nextWorld.polityOverrides[code] ?? {
           aliases: [],
-          code: change.code,
+          code,
           color: "",
           name: "",
           note: "",
@@ -1301,7 +1347,7 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
         const hexMatch = /^#?([a-f0-9]{6})$/i.exec(normalizedColor);
         if (hexMatch) {
           const hex = hexMatch[1];
-          nextColors[change.code] = [
+          nextColors[code] = [
             Number.parseInt(hex.slice(0, 2), 16),
             Number.parseInt(hex.slice(2, 4), 16),
             Number.parseInt(hex.slice(4, 6), 16),
@@ -1313,17 +1359,17 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // defector — becomes the polity's authoritative value.
       if (Number.isFinite(change.intelligence)) {
         if (!nextWorld.intelligence || typeof nextWorld.intelligence !== "object") nextWorld.intelligence = {};
-        nextWorld.intelligence[change.code] = change.intelligence;
+        nextWorld.intelligence[code] = change.intelligence;
       }
 
       // Reputation the AI set this turn becomes the polity's authoritative value.
       if (Number.isFinite(change.reputation)) {
-        nextWorld.internationalReputation[change.code] = change.reputation;
+        nextWorld.internationalReputation[code] = change.reputation;
         // Keep the persisted sheet's reputation index in sync with the authoritative value.
-        if (nextWorld.countryStats?.[change.code]?.indices) {
-          nextWorld.countryStats[change.code] = {
-            ...nextWorld.countryStats[change.code],
-            indices: { ...nextWorld.countryStats[change.code].indices, internationalReputation: change.reputation },
+        if (nextWorld.countryStats?.[code]?.indices) {
+          nextWorld.countryStats[code] = {
+            ...nextWorld.countryStats[code],
+            indices: { ...nextWorld.countryStats[code].indices, internationalReputation: change.reputation },
           };
         }
       }
@@ -1333,8 +1379,8 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
       // the nested groups and mirror the reputation index into the authoritative store.
       if (change.stats && typeof change.stats === "object") {
         if (!nextWorld.countryStats || typeof nextWorld.countryStats !== "object") nextWorld.countryStats = {};
-        const prev = nextWorld.countryStats[change.code] && typeof nextWorld.countryStats[change.code] === "object"
-          ? nextWorld.countryStats[change.code]
+        const prev = nextWorld.countryStats[code] && typeof nextWorld.countryStats[code] === "object"
+          ? nextWorld.countryStats[code]
           : {};
         const merged = { ...prev, ...change.stats };
         for (const group of ["indices", "economy", "gdpBreakdown"]) {
@@ -1342,10 +1388,10 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
             merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
           }
         }
-        nextWorld.countryStats[change.code] = merged;
+        nextWorld.countryStats[code] = merged;
         const rep = Number(merged.indices?.internationalReputation);
         if (Number.isFinite(rep)) {
-          nextWorld.internationalReputation[change.code] = Math.max(0, Math.min(100, Math.round(rep)));
+          nextWorld.internationalReputation[code] = Math.max(0, Math.min(100, Math.round(rep)));
         }
       }
 
@@ -1357,18 +1403,26 @@ export const applyEventImpactsToWorld = ({ colors = {}, events = [], world }) =>
         if (!nextWorld.countryTags || typeof nextWorld.countryTags !== "object") {
           nextWorld.countryTags = {};
         }
-        if (change.tags.length) nextWorld.countryTags[change.code] = change.tags;
-        else delete nextWorld.countryTags[change.code];
+        if (change.tags.length) nextWorld.countryTags[code] = change.tags;
+        else delete nextWorld.countryTags[code];
       }
     }
 
     if (event.impacts.unitOps?.length) {
-      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps);
+      // A battalion's owner is the same namespace: spawned under a display name
+      // it would fly a phantom country's colours beside its own army.
+      nextWorld.units = applyUnitOps(nextWorld.units, event.impacts.unitOps.map((op) =>
+        (op.op === "spawn" && op.unit?.ownerCode
+          ? { ...op, unit: { ...op.unit, ownerCode: resolveOwner(op.unit.ownerCode) } }
+          : op)));
     }
 
     if (event.impacts.markerOps?.length) {
       const before = normalizeMarkers(nextWorld.markers);
-      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps);
+      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps.map((op) =>
+        (op.op === "build" && op.marker?.ownerCode
+          ? { ...op, marker: { ...op.marker, ownerCode: resolveOwner(op.marker.ownerCode) } }
+          : op)));
       // A rename that matched no existing structure is a STOCK-map city rename (stock
       // cities live in PMTiles, not world.markers) — record it as an override layer so
       // the label layer can show the new name (see Cities.jsx / cityRenames).
