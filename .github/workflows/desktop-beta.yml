@@ -1,0 +1,120 @@
+# Builds the desktop installers from the `beta` integration branch for Windows,
+# macOS and Linux and leaves them as run artifacts. It publishes nothing: this
+# branch has no beta packaging of its own yet (no electron-builder.beta.yml, no
+# stamp-channel.mjs — that is the S11 work that was deliberately left out), so
+# what comes out installs as "Open Historia" over the stable app and its updater
+# feed still points at `desktop-stable`. Handing those to players from a release
+# page would quietly replace the official build; downloading them from a run and
+# installing them deliberately is fine.
+#
+# Two ways to start it:
+#
+#   * push a tag matching `desktop-beta-v*` at a commit on `beta` — this is the
+#     one that works today, because a tag push runs the workflow file from the
+#     tagged tree, wherever that tree came from;
+#   * Run workflow → `beta`, once a copy of this file also sits on the default
+#     branch. GitHub only lists a workflow_dispatch entry if the file is on the
+#     default branch, which is why the SeventhDread beta keeps a copy on `main`.
+#
+# The tag pattern deliberately does not match the stable `desktop-v*` trigger in
+# desktop-installer.yml: a tag that matched both would publish a beta build to
+# the `desktop-stable` release.
+name: Desktop beta installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-beta-v*"
+
+# No `contents: write`: nothing here creates or uploads a release.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one platform failing must not throw away the other two
+      matrix:
+        include:
+          # Each installer must be built on its own OS: electron-builder shells out
+          # to platform tooling (NSIS on Windows, hdiutil for the .dmg), and a macOS
+          # build simply cannot be produced anywhere but macOS.
+          - os: windows-latest
+            args: --win
+          - os: macos-latest
+            args: --mac
+          - os: ubuntu-latest
+            args: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      # A dispatch run picks its own branch from a dropdown, and `main` is in that
+      # dropdown too — a run from there would package the released code and label
+      # it beta. A tag run is exempt: its ref is the tag, not a branch, and the
+      # tag pattern is what says which line it came from.
+      - name: Refuse to dispatch this from anything but beta
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'Open-Historia/open-historia' && github.ref_name != 'beta'
+        shell: bash
+        run: |
+          echo "::error::Run this with 'Use workflow from: beta'."
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # Building a .dmg mounts a volume and then detaches it, and Spotlight starts
+      # indexing that volume the moment it appears — `hdiutil detach` then fails
+      # with exit 16 and takes the whole macOS build with it. (Same reason as the
+      # stable workflow.)
+      - name: Stop Spotlight indexing the build volume
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The map archives are NOT packaged — they are ~200MB and the app downloads
+      # them on first launch — so nothing here fetches them.
+      - name: Stamp the build id
+        shell: bash
+        run: |
+          echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
+          cat electron/build-id.json
+
+      # package.json ships 0.0.0, and an installer whose version never changes is
+      # one Windows will not cleanly install over. run_number is shared by all
+      # three jobs in a run, so one run is one version on every platform.
+      - name: Stamp the app version
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          node -p "'version: '+require('./package.json').version"
+
+      - name: Run the tests
+        run: npm test
+
+      - name: Build the client
+        run: npm run build
+
+      - name: Build the installer
+        run: npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          # No code-signing certificate. Without this electron-builder tries to
+          # discover one and fails the build rather than skipping signing.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v6
+        with:
+          name: open-historia-beta-${{ matrix.os }}
+          # Only the finished installers; release/ also holds the unpacked app tree.
+          path: |
+            release/*.exe
+            release/*-mac-*.zip
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
