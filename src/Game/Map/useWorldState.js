@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
+import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -60,6 +61,61 @@ const areEqualStructured = (a, b) => {
   return Object.is(a, b);
 };
 
+// The renderer keys colours, surfaces and labels by owner token. A save from
+// before owner folding, or one written by a build without it, can hold a
+// polity's regions under both its token ("Russia") and its display name
+// ("Russian Federation"); gameState.normalizeWorldState folds those on read,
+// but the map store reads the raw world, so the map painted and labelled two
+// polities. Fold the same way here. The objects are rebuilt only when a token
+// actually changes, so the store's reference comparisons stay meaningful.
+export const foldOwnerTokens = (state) => {
+  const overrides = state?.regionOwnershipOverrides;
+  const claimants = state?.regionClaimants;
+  const polityOverrides = state?.polityOverrides;
+  if (!polityOverrides || typeof polityOverrides !== "object") {
+    return { overrides: overrides ?? EMPTY_OBJECT, claimants: claimants ?? EMPTY_OBJECT };
+  }
+  const aliasMap = buildOwnerAliasMap(polityOverrides);
+  if (!aliasMap.size) {
+    return { overrides: overrides ?? EMPTY_OBJECT, claimants: claimants ?? EMPTY_OBJECT };
+  }
+  const resolve = createOwnerResolver(aliasMap);
+
+  let foldedOverrides = overrides ?? EMPTY_OBJECT;
+  if (overrides && typeof overrides === "object") {
+    let changed = false;
+    const next = {};
+    for (const [regionId, owner] of Object.entries(overrides)) {
+      const folded = resolve(owner) || owner;
+      if (folded !== owner) changed = true;
+      next[regionId] = folded;
+    }
+    if (changed) foldedOverrides = next;
+  }
+
+  let foldedClaimants = claimants ?? EMPTY_OBJECT;
+  if (claimants && typeof claimants === "object") {
+    let changed = false;
+    const next = {};
+    for (const [regionId, names] of Object.entries(claimants)) {
+      if (!Array.isArray(names)) {
+        next[regionId] = names;
+        continue;
+      }
+      const folded = names.map((name) => resolve(name) || name);
+      if (folded.some((name, index) => name !== names[index])) {
+        changed = true;
+        next[regionId] = folded;
+      } else {
+        next[regionId] = names;
+      }
+    }
+    if (changed) foldedClaimants = next;
+  }
+
+  return { overrides: foldedOverrides, claimants: foldedClaimants };
+};
+
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
@@ -71,8 +127,10 @@ const deriveMapState = (state) => ({
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
-  regionOwnershipOverrides: state?.regionOwnershipOverrides ?? EMPTY_OBJECT,
-  regionClaimants: state?.regionClaimants ?? EMPTY_OBJECT,
+  ...(() => {
+    const folded = foldOwnerTokens(state);
+    return { regionOwnershipOverrides: folded.overrides, regionClaimants: folded.claimants };
+  })(),
   polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
