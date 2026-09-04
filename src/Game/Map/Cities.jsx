@@ -7,18 +7,21 @@ import {
     ensurePmtilesProtocol,
     readJson,
 } from "../../runtime/assets.js";
-import { useWorldCities } from "./useWorldState.js";
+import { useWorldState } from "./useWorldState.js";
+import {
+    EMPTY_CITY_FEATURE_COLLECTION,
+    customCityFeatureCount,
+    normalizeCustomCityFeatureCollection,
+} from "../../runtime/cityFeatures.js";
 
 ensurePmtilesProtocol();
-
-const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
 const populationFilter = (pop) => [
     "any",
     ["==", ["get", "capital"], "primary"],
     [
         ">",
-        pop,
+        ["get", "population"],
         [
             "step", ["zoom"],
             2500000,
@@ -36,45 +39,54 @@ const populationFilter = (pop) => [
 // prominence tier instead: 4 = capital, 3 = major city, 2 = city, 1 = town.
 const customTierFilter = [
     "any",
-    [">=", ["get", "tier"], 3],
-    ["all", [">=", ["get", "tier"], 2], [">=", ["zoom"], 4.3]],
-    [">=", ["zoom"], 5.8],
+    ["==", ["get", "_ohCapital"], true],
+    [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 3],
+    ["all",
+        [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 2],
+        [">=", ["zoom"], 4.0],
+    ],
+    [">=", ["zoom"], 5.4],
 ];
 
-const customSortKey = (pop) => ["-", ["+", ["*", ["get", "tier"], 1000000000], pop]];
+const customSortKey = (pop) => [
+    "-",
+    ["+",
+        ["*", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 1000000000],
+        ["*", ["case", ["==", ["get", "_ohCapital"], true], 1, 0], 5000000000],
+        ["coalesce", pop, 0],
+    ],
+];
 
 // Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
 // AI renames (world.cityRenames) are applied as a client-side match override so a
 // renamed city shows its new name without touching the tiles.
-// Population overrides (world.cityPopulations) work the same way as renames: the
-// tiles are immutable, so a changed population is substituted client-side by the
-// city's original name. Unlike a label this feeds FILTERS and SIZES as well, so
-// every place the layers read population has to go through it — otherwise a city
-// that grew past a threshold resizes but never appears, or appears at its old size.
 const cityPopulationExpr = (populations) => {
+    const baseName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
     const pairs = Object.entries(populations || {});
     if (!pairs.length) return ["get", "population"];
-    const expr = ["match", ["downcase", ["get", "city"]]];
-    for (const [name, value] of pairs) expr.push(name, value);
+    const expr = ["match", baseName];
+    for (const [name, value] of pairs) expr.push(String(name).toLowerCase(), value);
     expr.push(["get", "population"]);
     return expr;
 };
 
 const cityLabelExpr = (renames) => {
+    const baseLabel = ["coalesce", ["get", "city"], ["get", "name"], ""];
     const pairs = Object.entries(renames || {});
-    if (!pairs.length) return ["get", "city"];
-    const expr = ["match", ["downcase", ["get", "city"]]];
+    if (!pairs.length) return baseLabel;
+    const expr = ["match", ["downcase", baseLabel]];
     for (const [from, to] of pairs) expr.push(from, to);
-    expr.push(["get", "city"]);
+    expr.push(baseLabel);
     return expr;
 };
 
-const StockCities = ({ label, pop }) => (
+const StockCities = ({ label, pop, vNext }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
     id="cities-shapes"
     type="symbol"
     source-layer="cities"
+    beforeId={vNext ? "country-curved-labels" : undefined}
     minzoom={3.4}
     filter={populationFilter(pop)}
     layout={{
@@ -82,7 +94,7 @@ const StockCities = ({ label, pop }) => (
         "text-allow-overlap": true,
         "text-field": [
             "case",
-            ["==", ["get", "capital"], "primary"], "★",
+            ["==", ["get", "_ohCapital"], true], "★",
             [">=", pop, 2500000], "◆",
             "■",
         ],
@@ -92,24 +104,25 @@ const StockCities = ({ label, pop }) => (
             3, [
                 "*",
                 [
-                    "interpolate", ["linear"], pop,
-                    100000, 6,
-                    1000000, 10,
+                    "interpolate", ["linear"], ["get", "population"],
+                    100000, 5.5,
+                    1000000, 8,
                 ],
                 [
                     "case",
-                    ["==", ["get", "capital"], "primary"], 2.5,
-                    [">=", pop, 2500000], 2,
+                    ["==", ["get", "capital"], "primary"], 1.7,
+                    [">=", pop, 2500000], 1.35,
                     1,
                 ],
             ],
-            10, 22,
+            10, 14,
         ],
     }}
     paint={{
-        "text-color": "rgba(0,0,0,0)",
-        "text-halo-color": "#ffffff",
-        "text-halo-width": 0.5,
+        "text-color": "rgba(247,246,240,0.96)",
+        "text-halo-color": "rgba(8,12,18,0.9)",
+        "text-halo-width": 1.1,
+        "text-halo-blur": 0.3,
     }}
     />
 
@@ -117,25 +130,29 @@ const StockCities = ({ label, pop }) => (
     id="cities-labels"
     type="symbol"
     source-layer="cities"
-    minzoom={3.4}
+    beforeId={vNext ? "country-curved-labels" : undefined}
+    minzoom={vNext ? 4.2 : 3.4}
     filter={populationFilter(pop)}
     layout={{
         "symbol-sort-key": ["-", pop],
         "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-        "text-padding": 5,
-        "text-radial-offset": 0.7,
+        "text-padding": 3,
+        "text-radial-offset": 0.82,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, 8,
-            10, 10,
+            3, 8.5,
+            10, 11.2,
         ],
         "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-letter-spacing": 0.015,
+        "text-optional": true,
     }}
     paint={{
-        "text-color": "#ffffff",
-        "text-halo-color": "#333333",
-        "text-halo-width": 2,
+        "text-color": "rgba(247,246,240,0.96)",
+        "text-halo-color": "rgba(8,12,18,0.88)",
+        "text-halo-width": 1.15,
+        "text-halo-blur": 0.45,
     }}
     />
     </Source>
@@ -143,12 +160,13 @@ const StockCities = ({ label, pop }) => (
 
 // Same visual language as the stock layers (★/◆/■ markers, haloed labels), but
 // fed from the scenario's cities.geojson and gated by the authored tier.
-const CustomCities = ({ data, label, pop }) => (
+const CustomCities = ({ data, label, pop, vNext }) => (
     <Source id="cities-source" type="geojson" data={data}>
     <Layer
     id="cities-shapes"
     type="symbol"
-    minzoom={3.4}
+    beforeId={vNext ? "country-curved-labels" : undefined}
+    minzoom={vNext ? 2.65 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey(pop),
@@ -156,88 +174,137 @@ const CustomCities = ({ data, label, pop }) => (
         "text-field": [
             "case",
             ["==", ["get", "capital"], "primary"], "★",
-            [">=", ["get", "tier"], 3], "◆",
+            [">=", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 3], "◆",
             "■",
         ],
         "text-padding": 0,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, ["match", ["get", "tier"], 4, 15, 3, 12, 2, 8, 6],
-            10, 22,
+            3, [
+                "case",
+                ["==", ["get", "_ohCapital"], true], 13.5,
+                ["match", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 4, 12.5, 3, 10.3, 2, 8.2, 6.0],
+            ],
+            10, 14.5,
         ],
     }}
     paint={{
-        "text-color": "rgba(0,0,0,0)",
-        "text-halo-color": "#ffffff",
-        "text-halo-width": 0.5,
+        "text-color": "rgba(250,249,244,0.99)",
+        "text-halo-color": "rgba(7,10,14,0.94)",
+        "text-halo-width": 1.3,
+        "text-halo-blur": 0.25,
     }}
     />
 
     <Layer
     id="cities-labels"
     type="symbol"
-    minzoom={3.4}
+    beforeId={vNext ? "country-curved-labels" : undefined}
+    minzoom={vNext ? 3.0 : 3.1}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey(pop),
         "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-        "text-padding": 5,
-        "text-radial-offset": 0.7,
+        "text-padding": 3,
+        "text-radial-offset": 0.82,
         "text-size": [
             "interpolate", ["linear"], ["zoom"],
-            3, ["match", ["get", "tier"], 4, 9.5, 3, 9, 8],
-            10, 10,
+            3, [
+                "case",
+                ["==", ["get", "_ohCapital"], true], 11.4,
+                ["match", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 4, 10.8, 3, 10.0, 9.0],
+            ],
+            10, 11.8,
         ],
         "text-variable-anchor": ["top", "bottom", "left", "right"],
+        "text-letter-spacing": 0.015,
+        "text-optional": true,
     }}
     paint={{
-        "text-color": "#ffffff",
-        "text-halo-color": "#333333",
-        "text-halo-width": 2,
+        "text-color": "rgba(250,249,244,0.99)",
+        "text-halo-color": "rgba(7,10,14,0.94)",
+        "text-halo-width": 1.3,
+        "text-halo-blur": 0.32,
     }}
     />
     </Source>
 );
 
-const Cities = () => {
+const Cities = ({ vNext = false }) => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
     // so the map doesn't fire its own independent 5s poll.
-    const { customCities: customFlag, cityRenames, cityPopulations } = useWorldCities();
+    const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
     const [customData, setCustomData] = useState(null);
+    const [customLoadFailed, setCustomLoadFailed] = useState(false);
+    const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
     const pop = React.useMemo(() => cityPopulationExpr(cityPopulations), [cityPopulations]);
 
-    // The city set itself is static per scenario — fetched once when the flag (or
-    // the runtime token behind the URL) changes.
+    // Cheats 2.0 can authoritatively edit the scenario city asset while the game is
+    // already open. Listen for that narrow editor signal rather than polling a ~MB
+    // GeoJSON document or forcing a page reload. Normal scenario switches still use
+    // the runtime token / customCities dependencies below.
+    useEffect(() => {
+        const refresh = () => setCityEditorEpoch((value) => value + 1);
+        window.addEventListener("oh:cities-updated", refresh);
+        return () => window.removeEventListener("oh:cities-updated", refresh);
+    }, []);
+
+    // The city set itself is static per scenario except for explicit editor writes.
+    // Those writes bump cityEditorEpoch so the map refetches the canonical asset.
     useEffect(() => {
         let cancelled = false;
         if (!customFlag) {
             setCustomData(null);
+            setCustomLoadFailed(false);
             return undefined;
         }
-        readJson(citiesGeojsonUrl, { defaultValue: EMPTY_FEATURE_COLLECTION, force: true })
+
+        setCustomData(null);
+        setCustomLoadFailed(false);
+        readJson(citiesGeojsonUrl, { defaultValue: EMPTY_CITY_FEATURE_COLLECTION, force: true })
             .then((data) => {
                 if (cancelled) return;
-                setCustomData(data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION);
+                const normalized = normalizeCustomCityFeatureCollection(data);
+                const count = customCityFeatureCount(normalized);
+                setCustomData(normalized);
+                setCustomLoadFailed(count === 0);
+
+                if (import.meta.env?.DEV) {
+                    console.info(`[cities] custom city asset loaded: ${count} point features`);
+                }
+                if (count === 0) {
+                    console.warn(
+                        "[cities] world.customCities=true but cities.geojson is empty/missing; " +
+                        "using stock cities as a temporary fallback.",
+                    );
+                }
             })
-            .catch(() => {
-                if (!cancelled) setCustomData(EMPTY_FEATURE_COLLECTION);
+            .catch((error) => {
+                if (cancelled) return;
+                console.warn("[cities] failed to load scenario cities.geojson; using stock fallback.", error);
+                setCustomData(EMPTY_CITY_FEATURE_COLLECTION);
+                setCustomLoadFailed(true);
             });
+
         return () => {
             cancelled = true;
         };
-    }, [customFlag, citiesGeojsonUrl]);
+    }, [customFlag, citiesGeojsonUrl, cityEditorEpoch]);
 
-    // Custom-city scenarios never show the modern database (anachronistic); while
-    // the custom set is still loading, show nothing rather than flash modern names.
+    // Never turn the whole planet cityless because a custom city asset is absent.
     if (customFlag) {
-        if (!customData || !customData.features.length) return null;
-        return <CustomCities data={customData} label={label} pop={pop} />;
+        if (customData === null) return null;
+        if (!customLoadFailed && customCityFeatureCount(customData) > 0) {
+            return <CustomCities data={customData} label={label} pop={pop} vNext={vNext} />;
+        }
+        return <StockCities label={label} pop={pop} vNext={vNext} />;
     }
-    return <StockCities label={label} pop={pop} />;
+
+    return <StockCities label={label} pop={pop} vNext={vNext} />;
 };
 
 export default Cities;

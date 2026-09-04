@@ -1,23 +1,18 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Map from "react-map-gl/maplibre";
-import Nations from "./Nations";
 import { useCustomBackground } from "./useCustomBackground.js";
-import GlobeEffects from "./GlobeEffects.jsx";
-import Cities from "./Cities";
-import Units from "./Units";
-import MarkersLayer from "./MarkersLayer.jsx";
-import RegionPopup from "../Selection/Regions";
-import CountryInfoPanel from "../Selection/CountryPanel.jsx";
-import UnitPopup from "../Selection/Units";
-import FeaturePopup from "../Selection/Features.jsx";
+import MapScene from "./MapScene.jsx";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
 import {
   DEFAULT_BASEMAP_ID,
-  TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
   basemapProtocolTemplate,
+  buildBasemapRenderKey,
   ensureBasemapProtocol,
-  esriTileTemplate,
+  isBuiltinBasemapId,
+  resolveBasemapId,
 } from "../../runtime/assets.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -29,12 +24,187 @@ ensureBasemapProtocol();
 // the satellite imagery and the paler cartographic styles.
 const SATELLITE_PAINT = {
   "raster-resampling": "linear",
-  "raster-saturation": -0.15,
-  "raster-contrast": 0.08,
-  "raster-brightness-min": 0.02,
-  "raster-brightness-max": 0.78,
+  "raster-fade-duration": 0,
+  // Keep the basemap as subdued geographic context. Political colour, borders,
+  // cities and labels should read first at normal strategy-map zooms.
+  "raster-saturation": -0.08,
+  "raster-contrast": 0.02,
+  "raster-brightness-min": 0.04,
+  "raster-brightness-max": 0.72,
 };
 
+const ATLAS_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  // Preserve the ocean/terrain material in Map vNext. Political colour is now
+  // translucent and relief is re-lit above it, so crushing this raster into the
+  // old near-black range only makes the world look dead.
+  "raster-saturation": 0.08,
+  "raster-contrast": 0.20,
+  "raster-brightness-min": 0.05,
+  "raster-brightness-max": 0.98,
+};
+
+// The low-zoom Pax-style foundation is a dedicated global topography +
+// bathymetry raster from NOAA/NCEI (ETOPO1). It is label-free, so it cannot
+// fight the map's live polity typography. A dark grade keeps it contextual
+// while preserving substantially more seabed/relief structure than the old
+// nearly-black far-zoom atlas.
+const PAX_WORLD_RELIEF_TILES =
+  "https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/" +
+  "ETOPO1_Global_Relief_Model_Color_Shaded_Relief/MapServer/tile/{z}/{y}/{x}";
+
+const PAX_WORLD_RELIEF_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.26,
+  "raster-contrast": 0.36,
+  "raster-brightness-min": 0.015,
+  "raster-brightness-max": 0.68,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 1,
+    3.0, 1,
+    // R5.4.1: keep the fixed z3 relief only where it is genuinely sharp.
+    // Fade it BEFORE overzoom pixels become visible; detailed World Terrain
+    // Base takes over through the same regional band.
+    3.50, 0.78,
+    4.00, 0.42,
+    4.45, 0.16,
+    4.85, 0,
+  ],
+};
+
+// World Terrain Base takes over as the player approaches regional/local zoom.
+// Crossfading instead of hard-switching avoids the visible material flash that
+// the old basemap handoff produced.
+const PAX_TERRAIN_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  // R21: World Terrain Base is substantially greyer than the global ETOPO
+  // material. Preserve its fine regional detail, but stop it bleaching the
+  // physical map as it takes over.
+  "raster-saturation": 0.18,
+  "raster-contrast": 0.38,
+  "raster-brightness-min": 0.025,
+  "raster-brightness-max": 0.92,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0,
+    2.75, 0.04,
+    3.20, 0.18,
+    3.65, 0.52,
+    4.10, 0.78,
+    4.60, 0.90,
+    7.0, 0.92,
+    12, 0.92,
+  ],
+};
+// R15: genuinely dark physical variants.
+// R12 added the ids to the basemap registry, but R14 was based on the R11
+// World.jsx and accidentally dropped their special rendering path. As a result,
+// selecting a "Dark" option fell through to the normal bright atlas grade.
+const PAX_WORLD_RELIEF_OCEAN_DARK_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  // The source has a strong cyan/green cast. Rotate it toward blue while
+  // retaining more chroma than R16 so the regional handoff keeps the ocean
+  // physically alive instead of collapsing toward grey.
+  "raster-hue-rotate": 34,
+  "raster-saturation": -0.34,
+  "raster-contrast": 0.64,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.30,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0.86,
+    3.0, 0.86,
+    3.50, 0.68,
+    4.00, 0.36,
+    4.45, 0.14,
+    4.85, 0,
+  ],
+};
+
+const PAX_TERRAIN_OCEAN_DARK_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-hue-rotate": 34,
+  // R21: the close ESRI source was being desaturated twice: once by its own
+  // muted material and again by this grade. Restore colour while keeping the
+  // deep-night Ocean Dark character.
+  "raster-saturation": 0.06,
+  "raster-contrast": 0.62,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.39,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0,
+    2.75, 0.03,
+    3.20, 0.14,
+    3.65, 0.38,
+    4.10, 0.58,
+    4.60, 0.67,
+    7.0, 0.68,
+    12, 0.68,
+  ],
+};
+
+const PAX_WORLD_RELIEF_ATLAS_DARK_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.82,
+  "raster-contrast": 0.68,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.22,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0.82,
+    3.0, 0.82,
+    3.50, 0.62,
+    4.00, 0.30,
+    4.45, 0.10,
+    4.85, 0,
+  ],
+};
+
+const PAX_TERRAIN_ATLAS_DARK_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.80,
+  "raster-contrast": 0.70,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.27,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0,
+    2.75, 0.04,
+    3.20, 0.16,
+    3.65, 0.42,
+    4.10, 0.60,
+    4.60, 0.66,
+    12, 0.66,
+  ],
+};
+
+const getPaxReliefPaints = (basemapId) => {
+  if (basemapId === "ocean-dark") {
+    return {
+      world: PAX_WORLD_RELIEF_OCEAN_DARK_PAINT,
+      terrain: PAX_TERRAIN_OCEAN_DARK_PAINT,
+    };
+  }
+  if (basemapId === "atlas-relief-dark") {
+    return {
+      world: PAX_WORLD_RELIEF_ATLAS_DARK_PAINT,
+      terrain: PAX_TERRAIN_ATLAS_DARK_PAINT,
+    };
+  }
+  return {
+    world: PAX_WORLD_RELIEF_PAINT,
+    terrain: PAX_TERRAIN_PAINT,
+  };
+};
 // Full-map image corners (TL, TR, BR, BL). The flat mercator map only reaches
 // ±85.0511° (the projection limit), but the globe shows all the way to the poles
 // — so on the globe the image stretches nearly to ±90° to cover the pole caps.
@@ -54,7 +224,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext = false, scenarioDefaultPaxRelief = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -103,36 +273,81 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       sky: { "atmosphere-blend": 0 },
     };
   }
-  const style = {
+  const usePaxRelief = vNext && (
+    basemapId === "atlas-relief"
+    || basemapId === "atlas-relief-dark"
+    || basemapId === "ocean"
+    || basemapId === "ocean-dark"
+    // Fault Lines historically authored "dark-gray" as its scenario default.
+    // Preserve the new physical/Pax presentation ONLY for that authored default;
+    // an explicit player choice of Dark Gray Canvas must remain the real ESRI
+    // Dark Gray basemap instead of being silently hijacked into terrain relief.
+    || (scenarioDefaultPaxRelief && basemapId === "dark-gray")
+  );
+  const paxReliefPaints = getPaxReliefPaints(basemapId);
+  const basemapPaint = vNext
+    ? usePaxRelief ? paxReliefPaints.terrain : ATLAS_PAINT
+    : SATELLITE_PAINT;
+  // World_Ocean_Base bakes political names into the raster, while plain shaded
+  // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
+  // World Terrain Base is the useful middle ground: label-free shaded land relief
+  // + bathymetry + coastal water context. Keep the authored preset id outside the
+  // renderer so saves/settings do not need a migration.
+  const renderedBasemapId = usePaxRelief ? "terrain" : basemapId;
+  const darkPhysicalVariant = basemapId === "ocean-dark" || basemapId === "atlas-relief-dark";
+  const physicalBackground = darkPhysicalVariant
+    ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
+    : "#0b1017";
+
+  return {
   version: 8,
   sources: {
-    "satellite-lowres": {
-      type: "raster",
-      // Levels 0-2 always have real data — no placeholder handling needed.
-      tiles: [esriTileTemplate(basemapId)],
-      tileSize: 256,
-      maxzoom: 2,
-    },
+    ...(usePaxRelief ? {
+      "pax-world-relief": {
+        type: "raster",
+        tiles: [PAX_WORLD_RELIEF_TILES],
+        tileSize: 256,
+        // R5.4: fixed-resolution relief material. Load ETOPO only through z3;
+        // MapLibre overzooms those already-loaded tiles at higher camera zooms.
+        // This keeps the global physical/bathymetry texture but prevents the
+        // relief source from climbing a new z4/z5/z6 tile pyramid while the
+        // player is actively navigating.
+        maxzoom: 3,
+        attribution: "Relief: NOAA/NCEI ETOPO1",
+      },
+    } : {}),
     satellite: {
       type: "raster",
-      tiles: [basemapProtocolTemplate(basemapId)],
+      tiles: [basemapProtocolTemplate(renderedBasemapId)],
       tileSize: 256,
-      maxzoom: basemapMaxZoom(basemapId),
+      maxzoom: basemapMaxZoom(renderedBasemapId),
     },
   },
   layers: [
     {
-      id: "satellite-lowres-layer",
-      type: "raster",
-      source: "satellite-lowres",
-      paint: SATELLITE_PAINT,
+      id: "strategy-map-base",
+      type: "background",
+      paint: { "background-color": physicalBackground },
     },
     {
       id: "satellite-layer",
       type: "raster",
       source: "satellite",
-      paint: SATELLITE_PAINT,
+      paint: basemapPaint,
     },
+    // R22: keep the detailed ESRI terrain as the regional foundation, then
+    // glaze the fading ETOPO colour/bathymetry material above it. Previously
+    // ETOPO sat underneath an almost-opaque terrain layer, so only a few percent
+    // of its colour survived at the Europe/Poland zoom band.
+    ...(usePaxRelief ? [{
+      id: "pax-world-relief-layer",
+      type: "raster",
+      source: "pax-world-relief",
+      paint: paxReliefPaints.world,
+    }] : []),
+    // Do not paint the DEM as a second hillshade pass here. The old DEM overlay
+    // produced a rectangular veil at whole-world zoom. Terrain Base supplies the
+    // always-on 2D relief/bathymetry; the DEM remains available for optional 3D.
   ],
   // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
   // surface light instead. Transparent space lets the stars and sun show.
@@ -140,35 +355,40 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     "atmosphere-blend": 0,
   },
   };
-
-  // Only include DEM source and hillshade layer if terrain is enabled
-  if (terrainEnabled) {
-    style.sources["terrain-source"] = {
-      type: "raster-dem",
-      tiles: [TERRAIN_TILE_TEMPLATE],
-      encoding: "terrarium",
-      maxzoom: 5,
-      tileSize: 256,
-    };
-
-    style.layers.push({
-      id: "hills",
-      type: "hillshade",
-      source: "terrain-source",
-      paint: {
-        "hillshade-exaggeration": 0.1,
-        "hillshade-shadow-color": "#000",
-      },
-    });
-  }
-
-  return style;
 };
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const loadTimerRef = useRef(null);
+  const mapMountedAtRef = useRef(0);
+  // Taken in an effect rather than during render: a clock read in render is
+  // impure, and this value is only ever compared against later clock reads
+  // from the map's own event handlers.
+  useEffect(() => {
+    if (!mapMountedAtRef.current) {
+      mapMountedAtRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
+    }
+  }, []);
+  const sourceReadyRef = useRef(new globalThis.Map());
+  const dragPerfRef = useRef({
+    active: false,
+    startedAt: 0,
+    lastFrameAt: 0,
+    frameDeltas: [],
+    raf: 0,
+    sourceEvents: 0,
+    sourceLoads: 0,
+    sourceLoaded: 0,
+    dataEvents: 0,
+    styleEvents: 0,
+    styleLoadingEvents: 0,
+    webglLosses: 0,
+    renders: 0,
+    idles: 0,
+    zoomStarts: 0,
+    zoomEnds: 0,
+  });
   const viewStateRef = useRef({
     longitude: 0,
     latitude: 0,
@@ -182,57 +402,342 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
+  const mapVNextEnabled = !useMapSetting(MAP_SETTING_KEYS.disableMapVNext);
+  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
+  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
+  // Runtime choices are player-local and reversible. Empty means the authored
+  // scenario background/basemap remains authoritative.
+  const useScenarioBackground = !validBasemapOverride;
+  const effectiveCustomBg = useScenarioBackground ? customBg : null;
+  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
+  const effectiveBasemap = resolveBasemapId({
+    overrideId: validBasemapOverride,
+    scenarioId: worldBasemap,
+    fallbackId: DEFAULT_BASEMAP_ID,
+  });
+  // The authored Fault Lines default currently resolves to dark-gray, but the
+  // player must still be able to explicitly choose the actual Dark Gray Canvas.
+  // Keep provenance separate from the resolved id so those two states can render
+  // differently without rewriting save/scenario data.
+  const scenarioDefaultPaxRelief = Boolean(
+    useScenarioBackground
+    && worldBasemap === "dark-gray"
+    && effectiveBasemap === "dark-gray"
+  );
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
-  const styleUsesGlobeCoords = customBg?.kind === "image" && isGlobe;
+  const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
-    () => buildWorldStyle(worldBasemap || DEFAULT_BASEMAP_ID, customBg, bgDeclared, styleUsesGlobeCoords, terrainEnabled),
-                             [customBg, bgDeclared, styleUsesGlobeCoords, worldBasemap, terrainEnabled],
+    () => buildWorldStyle(
+      effectiveBasemap,
+      effectiveCustomBg,
+      effectiveBgDeclared,
+      styleUsesGlobeCoords,
+      mapVNextEnabled,
+      scenarioDefaultPaxRelief,
+    ),
+    [
+      effectiveBasemap,
+      effectiveBgDeclared,
+      effectiveCustomBg,
+      mapVNextEnabled,
+      scenarioDefaultPaxRelief,
+      styleUsesGlobeCoords,
+    ],
   );
-  const terrain = useMemo(
-    () =>
-      terrainEnabled && !customBg && !bgDeclared
-        ? {
-            source: "terrain-source",
-            exaggeration: 15,
-          }
-        : null,
-    [terrainEnabled, customBg, bgDeclared],
-  );
-  // Render at reduced pixel density when zoomed far out: the whole-world view
-  // draws every region, border and label at once, and full native resolution
-  // there spends frames on detail nobody can see at that scale. Hysteresis
-  // (re-sharpen at 5, soften below 4.5) prevents flapping at the boundary.
-  const pixelRatioModeRef = useRef(null);
-  const applyDynamicPixelRatio = useCallback((zoom) => {
-    const map = mapRef?.current?.getMap?.();
-    if (!map || typeof map.setPixelRatio !== "function") return;
-    const mode = zoom <= 4.5 ? "low" : zoom >= 5 ? "native" : pixelRatioModeRef.current;
-    if (!mode || mode === pixelRatioModeRef.current) return;
-    pixelRatioModeRef.current = mode;
-    const native = window.devicePixelRatio || 1;
-    map.setPixelRatio(mode === "low" ? Math.min(native, 1) * 0.75 : native);
+  const mapInstanceKey = buildBasemapRenderKey({
+    projection,
+    // Scenario-default dark-gray and explicitly selected Dark Gray Canvas have
+    // the same resolved id but intentionally different styles. Include that
+    // provenance in the render key so MapLibre fully rebuilds when switching.
+    basemapId: scenarioDefaultPaxRelief
+      ? `${effectiveBasemap}:scenario-pax`
+      : effectiveBasemap,
+    backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+  });
+  // R5.0: the gameplay camera is hard-locked to pitch 0 (dragRotate/touchPitch/
+  // pitchWithRotate are all disabled). Building raster-dem terrain meshes in that
+  // mode adds tile/mesh/GPU work without changing the visible physical relief,
+  // which comes from the ESRI/NOAA raster basemap underneath political colour.
+  // Keep the user setting intact for a future pitched/3D camera, but do not bind
+  // a terrain mesh while the current renderer is strictly 2D.
+  const terrain = null;
+  void terrainEnabled;
+  // R5.1: use one renderer density for the entire session.
+  // R5.0 switched between 1x and native DPR around z4.5/z5.0.
+  // MapLibre setPixelRatio() rebuilds its render targets, producing a
+  // catastrophic hitch exactly when the player zooms through that boundary.
+  // The low-zoom live test showed the 1x framebuffer performs well, so keep it
+  // fixed instead of reallocating the renderer during navigation.
+  const fixedPixelRatioAppliedRef = useRef(false);
+  const applyFixedPixelRatio = useCallback(() => {
+    if (fixedPixelRatioAppliedRef.current) return;
+    const mapInstance = mapRef?.current?.getMap?.();
+    if (!mapInstance || typeof mapInstance.setPixelRatio !== "function") return;
+    fixedPixelRatioAppliedRef.current = true;
+    mapInstance.setPixelRatio(1);
   }, [mapRef]);
 
+  const emitMapMotion = useCallback((active) => {
+    if (typeof window === "undefined") return;
+    const moving = Boolean(active);
+    window.__OH_MAP_MOVING__ = moving;
+    window.dispatchEvent(new CustomEvent("oh:map-motion", {
+      detail: { active: moving },
+    }));
+  }, []);
+  const handleMoveStart = useCallback(() => {
+    emitMapMotion(true);
+    const perf = dragPerfRef.current;
+    if (perf.raf) cancelAnimationFrame(perf.raf);
+    perf.active = true;
+    perf.startedAt = performance.now();
+    perf.lastFrameAt = perf.startedAt;
+    perf.frameDeltas = [];
+    perf.sourceEvents = 0;
+    perf.sourceLoads = 0;
+    perf.sourceLoaded = 0;
+    perf.dataEvents = 0;
+    perf.styleEvents = 0;
+    perf.styleLoadingEvents = 0;
+    perf.webglLosses = 0;
+    perf.renders = 0;
+    perf.idles = 0;
+    perf.zoomStarts = 0;
+    perf.zoomEnds = 0;
+    recordMapTrace("camera:move-start", {
+      zoom: mapRef?.current?.getMap?.()?.getZoom?.() ?? viewStateRef.current?.zoom ?? 0,
+    });
+    const sample = (now) => {
+      if (!perf.active) return;
+      const delta = now - perf.lastFrameAt;
+      perf.lastFrameAt = now;
+      if (delta > 0 && perf.frameDeltas.length < 1200) perf.frameDeltas.push(delta);
+      if (delta >= 100) {
+        recordMapFreeze({
+          deltaMs: delta,
+          map: mapRef?.current?.getMap?.(),
+          counters: {
+            sourceEvents: perf.sourceEvents,
+            sourceLoads: perf.sourceLoads,
+            sourceLoaded: perf.sourceLoaded,
+            dataEvents: perf.dataEvents,
+            styleEvents: perf.styleEvents,
+            styleLoadingEvents: perf.styleLoadingEvents,
+            webglLosses: perf.webglLosses,
+            renders: perf.renders,
+            idles: perf.idles,
+            zoomStarts: perf.zoomStarts,
+            zoomEnds: perf.zoomEnds,
+          },
+        });
+      }
+      perf.raf = requestAnimationFrame(sample);
+    };
+    perf.raf = requestAnimationFrame(sample);
+  }, [emitMapMotion]);
   const handleMove = useCallback(({ viewState }) => {
-    // Pixel ratio is deliberately NOT touched here: setPixelRatio destroys and
-    // re-allocates the WebGL framebuffer mid-gesture, which hitched every zoom
-    // crossing 4.5/5.0. The new ratio applies once the camera settles (handleIdle).
     viewStateRef.current = viewState;
   }, []);
+  const handleMoveEnd = useCallback(() => {
+    emitMapMotion(false);
+    const perf = dragPerfRef.current;
+    if (!perf.active) return;
+    perf.active = false;
+    if (perf.raf) cancelAnimationFrame(perf.raf);
+    perf.raf = 0;
+    const endedAt = performance.now();
+    const deltas = perf.frameDeltas.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+    const percentile = (ratio) => {
+      if (!deltas.length) return 0;
+      return deltas[Math.min(deltas.length - 1, Math.floor((deltas.length - 1) * ratio))];
+    };
+    const durationMs = Math.max(0, endedAt - perf.startedAt);
+    const averageFrameMs = deltas.length
+      ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length
+      : 0;
+    const summary = {
+      version: "R5.3",
+      durationMs: Math.round(durationMs * 10) / 10,
+      sampledFrames: deltas.length,
+      averageFps: averageFrameMs > 0 ? Math.round((1000 / averageFrameMs) * 10) / 10 : 0,
+      p50FrameMs: Math.round(percentile(0.50) * 10) / 10,
+      p95FrameMs: Math.round(percentile(0.95) * 10) / 10,
+      p99FrameMs: Math.round(percentile(0.99) * 10) / 10,
+      maxFrameMs: Math.round((deltas[deltas.length - 1] || 0) * 10) / 10,
+      longFrames50ms: deltas.filter((value) => value >= 50).length,
+      longFrames100ms: deltas.filter((value) => value >= 100).length,
+      sourceReadyMs: Object.fromEntries(sourceReadyRef.current),
+      sourceWorker: globalThis.__OH_MAP_SOURCE_PERF__ ?? {},
+      sourceEventsDuringMove: perf.sourceEvents,
+      sourceLoadsDuringMove: perf.sourceLoads,
+      sourceLoadedDuringMove: perf.sourceLoaded,
+      dataEventsDuringMove: perf.dataEvents,
+      styleEventsDuringMove: perf.styleEvents,
+      styleLoadingEventsDuringMove: perf.styleLoadingEvents,
+      webglLossesDuringMove: perf.webglLosses,
+      rendersDuringMove: perf.renders,
+      idlesDuringMove: perf.idles,
+      zoomStartsDuringMove: perf.zoomStarts,
+      zoomEndsDuringMove: perf.zoomEnds,
+    };
+    globalThis.__OH_LAST_MAP_PERF__ = summary;
+    recordMapTrace("camera:move-end", {
+      durationMs: summary.durationMs,
+      averageFps: summary.averageFps,
+      maxFrameMs: summary.maxFrameMs,
+      sourceEvents: summary.sourceEventsDuringMove,
+      styleEvents: summary.styleEventsDuringMove,
+    });
+    console.info(
+      `[OH MAP PERF R5.3] ${summary.averageFps} fps avg; `
+      + `p95 ${summary.p95FrameMs}ms; max ${summary.maxFrameMs}ms; `
+      + `${summary.longFrames100ms} frame(s) >=100ms. Full object: window.__OH_LAST_MAP_PERF__`,
+    );
+  }, [emitMapMotion]);
+  const handleSourceData = useCallback((event) => {
+    const sourceId = String(event?.sourceId ?? event?.source?.id ?? "");
+    if (!sourceId) return;
+    recordMapTrace("map:sourcedata", {
+      sourceId,
+      sourceDataType: event?.sourceDataType ?? "",
+      loaded: event?.isSourceLoaded === true,
+    });
+    if (sourceReadyRef.current.has(sourceId) || event?.isSourceLoaded !== true) return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    sourceReadyRef.current.set(sourceId, Math.round((now - mapMountedAtRef.current) * 10) / 10);
+  }, []);
   const handleIdle = useCallback(() => {
-    // The soft ratio applies from the very first frame settled at world zoom —
-    // not only after the player first moves the camera.
-    applyDynamicPixelRatio(viewStateRef.current?.zoom ?? 0);
+    recordMapTrace("map:idle");
+    emitMapMotion(false);
+    applyFixedPixelRatio();
     if (hasReportedInitialIdleRef.current) return;
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
     setLoading(false);
-  }, [applyDynamicPixelRatio, onInitialIdle]);
+  }, [applyFixedPixelRatio, emitMapMotion, onInitialIdle]);
   const handleLoading = useCallback(() => {
+    recordMapTrace("map:loading");
     setLoading(true);
     clearTimeout(loadTimerRef.current);
     loadTimerRef.current = setTimeout(() => setLoading(false), 8000);
   }, []);
+
+  React.useEffect(() => () => {
+    emitMapMotion(false);
+    const perf = dragPerfRef.current;
+    perf.active = false;
+    if (perf.raf) cancelAnimationFrame(perf.raf);
+    perf.raf = 0;
+  }, [emitMapMotion]);
+
+  React.useEffect(() => {
+    fixedPixelRatioAppliedRef.current = false;
+    let disposed = false;
+    let frame = 0;
+    let canvas = null;
+    let mapInstance = null;
+
+    const attach = () => {
+      if (disposed) return;
+      mapInstance = mapRef?.current?.getMap?.() || null;
+      canvas = mapInstance?.getCanvas?.() || null;
+      if (!canvas || !mapInstance) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+
+      const perf = dragPerfRef.current;
+      const noteSource = (event) => {
+        if (perf.active) {
+          perf.sourceEvents += 1;
+          if (event?.sourceDataType === "content" || event?.sourceDataType === "metadata") {
+            perf.sourceLoads += 1;
+          }
+          if (event?.isSourceLoaded === true) perf.sourceLoaded += 1;
+        }
+        const sourceId = String(event?.sourceId ?? "");
+        if (sourceId) {
+          recordMapTrace("map:source-event", {
+            sourceId,
+            sourceDataType: event?.sourceDataType ?? "",
+            loaded: event?.isSourceLoaded === true,
+          });
+        }
+      };
+      const noteData = () => {
+        if (perf.active) perf.dataEvents += 1;
+      };
+      const noteStyle = () => {
+        if (perf.active) perf.styleEvents += 1;
+        recordMapTrace("map:styledata");
+      };
+      const noteStyleLoading = () => {
+        if (perf.active) perf.styleLoadingEvents += 1;
+        recordMapTrace("map:styledataloading");
+      };
+      const noteRender = () => {
+        if (perf.active) perf.renders += 1;
+      };
+      const noteIdle = () => {
+        if (perf.active) perf.idles += 1;
+        recordMapTrace("map:idle-event");
+      };
+      const noteZoomStart = () => {
+        if (perf.active) perf.zoomStarts += 1;
+        recordMapTrace("camera:zoom-start", { zoom: mapInstance.getZoom?.() ?? 0 });
+      };
+      const noteZoomEnd = () => {
+        if (perf.active) perf.zoomEnds += 1;
+        recordMapTrace("camera:zoom-end", { zoom: mapInstance.getZoom?.() ?? 0 });
+      };
+      const onLost = (event) => {
+        if (perf.active) perf.webglLosses += 1;
+        recordMapTrace("gpu:webgl-lost", { status: event?.statusMessage ?? "" });
+        console.warn(
+          `[OH PERF GPU] WebGL context lost${event?.statusMessage ? ` · ${event.statusMessage}` : ""}`,
+        );
+      };
+      const onRestored = () => {
+        recordMapTrace("gpu:webgl-restored");
+        console.warn("[OH PERF GPU] WebGL context restored");
+      };
+
+      canvas.addEventListener("webglcontextlost", onLost);
+      canvas.addEventListener("webglcontextrestored", onRestored);
+      mapInstance.on?.("sourcedata", noteSource);
+      mapInstance.on?.("data", noteData);
+      mapInstance.on?.("styledata", noteStyle);
+      mapInstance.on?.("styledataloading", noteStyleLoading);
+      mapInstance.on?.("render", noteRender);
+      mapInstance.on?.("idle", noteIdle);
+      mapInstance.on?.("zoomstart", noteZoomStart);
+      mapInstance.on?.("zoomend", noteZoomEnd);
+
+      recordMapTrace("map:instrumentation-attached");
+
+      canvas.__ohPerfGpuCleanup = () => {
+        canvas.removeEventListener("webglcontextlost", onLost);
+        canvas.removeEventListener("webglcontextrestored", onRestored);
+        mapInstance?.off?.("sourcedata", noteSource);
+        mapInstance?.off?.("data", noteData);
+        mapInstance?.off?.("styledata", noteStyle);
+        mapInstance?.off?.("styledataloading", noteStyleLoading);
+        mapInstance?.off?.("render", noteRender);
+        mapInstance?.off?.("idle", noteIdle);
+        mapInstance?.off?.("zoomstart", noteZoomStart);
+        mapInstance?.off?.("zoomend", noteZoomEnd);
+      };
+    };
+
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      canvas?.__ohPerfGpuCleanup?.();
+      if (canvas) delete canvas.__ohPerfGpuCleanup;
+    };
+  }, [mapRef, projection]);
+
 
   return (
     // Stars and the single projected sun sit behind the transparent MapLibre
@@ -242,7 +747,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       style={{
         height: "100vh",
         width: "100vw",
-        backgroundColor: "#000",
+        backgroundColor: isGlobe ? "#000" : "#0b1017",
         position: "relative",
         overflow: "hidden",
       }}
@@ -275,12 +780,12 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
             opacity: 0,
             background: "radial-gradient(circle, #fff 0 7%, #fff6cf 8% 12%, rgba(255,219,142,0.8) 15%, rgba(255,185,93,0.26) 31%, rgba(255,154,65,0.07) 52%, transparent 72%)",
             filter: "drop-shadow(0 0 12px rgba(255,218,145,0.75))",
-            willChange: "transform, opacity",
+            willChange: "transform, opacity, filter",
           }}
         />
       )}
       <Map
-        key={projection}
+        key={mapInstanceKey}
         ref={mapRef}
         initialViewState={viewStateRef.current}
         minZoom={2.25}
@@ -298,7 +803,10 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         dragPan
         fadeDuration={0}
         collectResourceTiming={false}
-        crossSourceCollisions={false}
+        // R5.0 keeps the original cross-source collision policy for visual fidelity.
+        // The performance win comes from collapsing the country-label layer fanout,
+        // not from allowing city/country labels to overlap while the camera moves.
+        crossSourceCollisions={true}
         renderWorldCopies
         // Cap MapLibre's per-source out-of-view tile-retention cache. Left unset it
         // sizes dynamically to ~(ceil(w/tileSize)+1)*(ceil(h/tileSize)+1)*5 tiles PER
@@ -308,24 +816,22 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         // case ~3x while barely trimming 1080p, and is a no-op on phone-sized viewports
         // (dynamic size there is well under 256). In-view tiles live in a separate
         // structure and are never evicted by this, so it never re-fetches what's on
-        // screen. Orthogonal to applyDynamicPixelRatio (which bounds framebuffer pixels).
+        // screen. Orthogonal to the fixed R5.1 framebuffer density.
         maxTileCacheSize={256}
         projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}
         onIdle={handleIdle}
         onLoading={handleLoading}
+        onMoveStart={handleMoveStart}
         onMove={handleMove}
+        onMoveEnd={handleMoveEnd}
+        onSourceData={handleSourceData}
       >
-        <Nations isGlobe={isGlobe} />
-        <Cities />
-        <MarkersLayer />
-        <Units />
-        <GlobeEffects active={isGlobe} />
-        <RegionPopup />
-        <CountryInfoPanel />
-        <UnitPopup />
-        <FeaturePopup />
+        <MapScene
+          isGlobe={isGlobe}
+          vNext={mapVNextEnabled}
+        />
       </Map>
       {isGlobe && (
         <canvas

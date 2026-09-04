@@ -1169,6 +1169,7 @@ const SettingsMenu = ({
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+        disableMapVNext: getMapSetting(MAP_SETTING_KEYS.disableMapVNext),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Not getMapSetting: this one ships ON, and an absent key must read as
@@ -1254,6 +1255,14 @@ const SettingsMenu = ({
         enabled={mapSettings.hideCountryLabels}
         onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)}
         />
+        <Toggle
+        label="Use the previous map renderer"
+        enabled={mapSettings.disableMapVNext}
+        onToggle={() => updateMapSetting("disableMapVNext", MAP_SETTING_KEYS.disableMapVNext, !mapSettings.disableMapVNext)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        Off (default): polities are drawn as one dissolved surface each, with stitched borders, one label per polity and relief-shaded terrain. On: the source-by-source renderer this replaced, kept as a fallback while the new one settles. Takes effect immediately.
+        </div>
         <Toggle
         label="Reduce motion"
         enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
