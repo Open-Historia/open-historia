@@ -52,7 +52,7 @@ PROVIDER TRANSPORT FIELD SHAPES
 The six *Json fields are STRINGS whose contents must be valid JSON arrays. Keep JSON keys exactly as shown. Omit optional object fields when irrelevant, but never invent new keys.
 
 eventsJson element:
-{"date":"YYYY-MM-DD","title":"","description":"","importance":"minor|major","kind":"world|player|diplomacy|military","notable":false,"playerRelated":false,"warId":"","combatants":[],"impacts":{"regionTransfers":[],"regionControlOps":[],"regionClaims":[],"polityChanges":[],"unitOps":[],"markerOps":[],"createdChats":[],"projectOps":[]}}
+{"date":"YYYY-MM-DD","title":"","description":"","importance":"minor|major","kind":"world|player|diplomacy|military","tags":["Military|Diplomacy|Economy|Politics|Culture|Disaster"],"notable":false,"playerRelated":false,"warId":"","combatants":[],"impacts":{"regionTransfers":[],"regionControlOps":[],"regionClaims":[],"polityChanges":[],"unitOps":[],"markerOps":[],"createdChats":[],"projectOps":[]}}
 - regionTransfers: {"regionId":"","regionName":"","fromCode":"","toCode":"","note":"","wholeCountry":false}
 - regionClaims: {"regionId":"","regionName":"","claimantCode":"","drop":false,"note":""}
 - regionControlOps: contest {"op":"contest","regionId":"","fromCode":"","actorCode":"","note":""}; control {"op":"control","regionId":"","fromCode":"","toCode":"","note":"","wholeCountry":false}; clear {"op":"clear_contest","regionId":"","fromCode":"","claimantCode":"","clearAll":false,"note":""}
