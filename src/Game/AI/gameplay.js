@@ -36,6 +36,7 @@ import {
   segmentEventRange,
 } from "./jumpSegments.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
+import { buildJumpProjectsDirective } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { decodeGameMasterTransportPayload, getGameplayTool, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -1559,6 +1560,17 @@ The board above carries a \"Needs a decision this jump\" list. It is worked out 
 - It reached or missed a checkpoint: op milestone.
 - It is over: op complete, cancel or fail, with a note.
 A project marked HIGH PRIORITY must not sit on that list two jumps running - the player has said it matters, so it either moves or it stalls for a stated reason. A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
+  }
+  // The jump's own view of the board — read-only. projectOps left the jump's
+  // OUTPUT contract on purpose (generateProjectOps keeps the board, from the
+  // events), but an effort the model cannot see is one it invents: an order to
+  // "move forward with Project Westbird" narrated a missile test for what the
+  // board describes as an agent-recruitment drive, and the board pass then,
+  // rightly, refused to advance recruitment on a missile test. The summary is
+  // already built for every jump (a live context key); it was just never read.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const projectsDirective = buildJumpProjectsDirective(variables.projectsSummary);
+    if (projectsDirective) systemPrompt = `${systemPrompt}\n\n${projectsDirective}`;
   }
   // The between-rounds pulse may now move the world's forces a little, so it needs
   // the same discipline the jump gets — injected here so it reaches existing games
