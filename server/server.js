@@ -778,7 +778,9 @@ const HUB_DOWNLOAD_HOSTS = new Set([
   "raw.githubusercontent.com",
   "objects.githubusercontent.com",
   "user-images.githubusercontent.com",
+  "private-user-images.githubusercontent.com",
   "user-attachments.githubusercontent.com",
+  "github-production-user-asset-6210df.s3.amazonaws.com",
 ]);
 const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
 

@@ -3,23 +3,32 @@
  * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
  */
 
-// Inline city editor, anchored where the map was clicked. Opens when the city
-// tool places a new city (name pre-selected — just type) or when an existing
-// city is clicked with the tool. Size is a preset that fills the population, and
-// population drives both the prominence tier and when the city appears on the
-// exported game map — so a city that is not one of the three presets can be given
-// its real figure instead of being rounded to the nearest one.
+// Inline city editor, anchored where the map was clicked. City size, population,
+// and capital status are deliberately separate pieces of state:
+//   tier 1 = Town, tier 2 = City, tier 3 = Major City
+// Population remains an independently editable demographic value, while capital
+// is an independent tag. Legacy features without tier derive a display tier from
+// population until the user explicitly chooses a size.
 
 import { useEffect, useRef } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 
 const SIZES = [
-  { value: "town", label: "Town", population: 20000 },
-  { value: "city", label: "City", population: 250000 },
-  { value: "major", label: "Major city", population: 1500000 },
+  { tier: 1, label: "Town" },
+  { tier: 2, label: "City" },
+  { tier: 3, label: "Major city" },
 ];
 
-const sizeOf = (population = 0) => (population >= 1000000 ? "major" : population >= 100000 ? "city" : "town");
+const tierFromPopulation = (population = 0) => {
+  const pop = Number(population || 0);
+  return pop >= 1000000 ? 3 : pop >= 100000 ? 2 : 1;
+};
+
+const cityTier = (feature) => {
+  const authored = Number(feature?.tier);
+  if (Number.isFinite(authored) && authored >= 1 && authored <= 3) return Math.round(authored);
+  return tierFromPopulation(feature?.population);
+};
 
 const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
   const nameRef = useRef(null);
@@ -42,9 +51,11 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
   if (!feature) return null;
   const tags = feature.tags || [];
   const isCapital = tags.includes("capital");
+  const tier = cityTier(feature);
+  const populationValue = feature.population == null ? "" : feature.population;
 
-  const left = Math.max(8, Math.min(x - 20, (window.innerWidth || 1200) - 268));
-  const top = Math.max(8, Math.min(y + 14, (window.innerHeight || 800) - 190));
+  const left = Math.max(8, Math.min(x - 20, (window.innerWidth || 1200) - 288));
+  const top = Math.max(8, Math.min(y + 14, (window.innerHeight || 800) - 250));
 
   return (
     <div
@@ -54,7 +65,7 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
         left,
         top,
         zIndex: 45,
-        width: 250,
+        width: 270,
         padding: 10,
         display: "flex",
         flexDirection: "column",
@@ -69,33 +80,17 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
         placeholder="City name"
         style={{ ...inputStyle, padding: "6px 8px", fontSize: 13, fontWeight: 600 }}
       />
+
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <input
-          type="number"
-          min="0"
-          step="1000"
-          value={Number.isFinite(Number(feature.population)) ? Number(feature.population) : 0}
-          onChange={(e) => {
-            const next = Number(e.target.value);
-            // 0 is meaningful (an abandoned or ruined settlement); only a
-            // non-number or a negative one is ignored.
-            if (Number.isFinite(next) && next >= 0) onChange({ population: Math.round(next) });
-          }}
-          title="Population"
-          aria-label="Population"
-          style={{ ...inputStyle, padding: "5px 6px", flex: 1, minWidth: 0 }}
-        />
         <select
-          value={sizeOf(feature.population)}
-          onChange={(e) => {
-            const size = SIZES.find((s) => s.value === e.target.value);
-            if (size) onChange({ population: size.population });
-          }}
+          value={String(tier)}
+          onChange={(e) => onChange({ tier: Number(e.target.value) })}
           style={{ ...inputStyle, padding: "5px 6px", flex: 1 }}
+          aria-label="City size"
         >
-          {SIZES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
+          {SIZES.map((size) => (
+            <option key={size.tier} value={String(size.tier)}>
+              {size.label}
             </option>
           ))}
         </select>
@@ -112,6 +107,27 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
           ★ Capital
         </label>
       </div>
+
+      <label style={{ display: "grid", gap: 4, color: "rgba(255,255,255,0.7)" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700 }}>Population</span>
+        <input
+          type="number"
+          min="0"
+          step="1000"
+          value={populationValue}
+          onChange={(e) => {
+            const raw = e.target.value;
+            onChange({ population: raw === "" ? null : Math.max(0, Math.round(Number(raw) || 0)) });
+          }}
+          onBlur={() => {
+            if (feature.population == null || feature.population === "") onChange({ population: 0 });
+          }}
+          placeholder="0"
+          style={{ ...inputStyle, padding: "5px 7px" }}
+          aria-label="City population"
+        />
+      </label>
+
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <button onClick={onDelete} style={{ ...pillButton(false), color: "#f87171" }}>
           Delete

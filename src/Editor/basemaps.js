@@ -5,6 +5,25 @@
 // side effects) into the lazily-loaded editor bundle. Ocean is first = default.
 export const EDITOR_BASEMAPS = [
   { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  {
+    id: "ocean-dark",
+    label: "Ocean - Dark",
+    service: "Ocean/World_Ocean_Base",
+    maxZoom: 13,
+    editorOpacity: 0.46,
+    editorBackground: "#030a14",
+    previewFilter: "brightness(0.38) saturate(0.82) contrast(1.24)",
+  },
+  { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  {
+    id: "atlas-relief-dark",
+    label: "Atlas Relief - Dark",
+    service: "Ocean/World_Ocean_Base",
+    maxZoom: 13,
+    editorOpacity: 0.38,
+    editorBackground: "#050609",
+    previewFilter: "brightness(0.31) saturate(0.42) contrast(1.30)",
+  },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },

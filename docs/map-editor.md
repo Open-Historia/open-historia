@@ -391,7 +391,7 @@ Save robustness:
 
 ---
 
-## 19. How edits reach the game — Apply & Play (`libraryBar.jsx` `applyMapToScenario`)
+## 19. How edits reach the game — Save / Save & Exit / Apply & Play (`libraryBar.jsx` `applyMapToScenario`)
 
 In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`) then uploads each seed piece as a scenario asset:
 
@@ -441,3 +441,21 @@ The editor was split into a standalone repo (`Open-Historia/open-historia-map-ed
 - Region geometry is verified in-app; a headless WebGL context can't pixel-check the game map.
 
 Related: [World state](world-state.md) (`world.json` fields the seed writes — `regionOwnershipOverrides`, `polityOverrides`, `customRegions`, `countryTags`).
+
+## 24. Scenario Workshop: polities, topology, province import
+
+Ported from kernely's Continuum branch. The editor's document gained an explicit **polity registry** (`doc.polities`, keyed by the STABLE polity identity; `name` is presentation) and three panels reached from the bottom bar.
+
+| Panel / tool | File | What it does |
+|---|---|---|
+| **Polities** (`Polities: N` chip) | `PolitiesPanel.jsx` | Create, rename (display name only — the key, and every region, flag, tag and colour keyed by it, stay put), recolour, tag, flag and remove polities; landless polities survive because they no longer need a region to exist. "Fill standard flags" copies the built-in flag for recognised stock polities. Bulk import a roster (`importPolityRoster`: key/name/aliases/color/flag/tags/status/note/mapRefs rows). "Paint" hands the polity to the paint tool. |
+| **Topology** chip | `TopologyPanel.jsx` + `geometry.js` (`planarGeometryArea`, `intersectionGeom`, `unionAllGeoms`, `enclosedGapGeoms`, `overlapGeoms`) | Finds slivers, overlaps and enclosed gaps between regions and repairs them; the map highlights diagnostics (`topologyDiagnosticStyle`). |
+| **Import Map** chip | `ProvinceImportPanel.jsx` + `provinceRasterWorker.js` | Turns a colour-coded province raster (a HOI4-style `provinces.bmp`, any PNG) into regions in a worker, entirely in the browser; optional definition CSV / GeoJSON metadata assign polities, names and city markers (`importCityMarkers`); a GeoJSON backup of the current regions and cities is downloaded first. Colours are never assigned by feature order — ambiguous sources are refused. |
+| **Paint** tool | `OlMap.jsx`, `MapEditor.jsx` | Paints a stable polity key by click or drag (one stroke = one undo), with a "paint over" filter (any region / unowned only / only regions of one polity); the picker lists registry polities by display name. |
+| **Edit vertices** / **Shared border precision** | `OlMap.jsx` (`weldPointIntoFeature`, `sharedBorderPoint`, `removeSharedVertexNear`) | Vertex editing with snapping and undo; with exactly two neighbouring regions selected, a dragged border vertex or edge is welded into BOTH regions. |
+| **Selection inspector** | `SelectionInspector.jsx` | The owner field is a registry pick-list rather than free text, so a typo can no longer mint a one-province country. |
+| **Basemaps** | `basemaps.js`, `BasemapPicker.jsx`, `OlMap.jsx` | Two dark physical presets (`ocean-dark`, `atlas-relief-dark`) with graded preview cards and a dark editor presentation (`editorOpacity`, `editorBackground`). |
+
+**Saving.** The Workshop has three actions: **Save** (write the map into the scenario and keep editing), **Save & Exit**, and **Apply & Play** (the old flow: save, then create and activate a fresh game). `libraryBar.jsx` `applyMapToScenario(scenario, seed, { play })` replaces the scenario's `polityOverrides` with the Workshop's registry (it hydrated the full registry, landless polities included, so merging would resurrect deleted entries), writes `ownerSchema`, and refreshes the drawer's cached scenario details from the save's response so a later ordinary scenario save cannot write a stale basemap back. A "Scenario unsaved" chip shows while the document has autosaved edits not yet written into the scenario, and closing asks first.
+
+**Export.** `buildGameSeed` emits one `polityOverrides` record per registry entry and per owner (code = stable key, display name, cumulative aliases, colour, status, `verbatim` for a code-shaped key) plus `ownerSchema`, and cities export their authored `tier` (1 town, 2 city, 3 major) with `capital` as an independent flag (`CityPopup.jsx`).
