@@ -113,6 +113,34 @@ const regionTransferSchema = {
   additionalProperties: false,
 };
 
+const regionClaimSchema = {
+  type: "object",
+  description:
+    "One polity asserting a claim over a region it does not hold and has not been "
+    + "given. The region renders as DISPUTED on the map - striped in every "
+    + "claimant's colour - without its ownership changing, and stays that way until "
+    + "the claim is settled by a regionTransfers entry (someone won or conceded it) "
+    + "or dropped.",
+  properties: {
+    regionId: textSchema(
+      "Exact map region identifier when known; otherwise the region's plain name "
+      + "(the engine resolves names to ids).",
+    ),
+    regionName: textSchema("Human-readable region name, when known."),
+    claimantCode: textSchema("Claiming polity's FULL country name (\"Spain\"), never a country code."),
+    drop: {
+      type: "boolean",
+      description:
+        "True to WITHDRAW this polity's claim - it was renounced, traded away, or "
+        + "the claimant was defeated and has given it up. Clears their stripe. Leave "
+        + "unset to assert a claim.",
+    },
+    note: textSchema("Brief reason for the claim or its withdrawal."),
+  },
+  required: ["regionId", "claimantCode"],
+  additionalProperties: false,
+};
+
 // AI-authored updates to a country's PERSISTENT stat sheet (world.countryStats[code]).
 // Only fields that CHANGED this period are sent; everything else persists. Absolute
 // values, not deltas. Kept self-contained (no percentageSchema dep, which is defined
@@ -438,6 +466,16 @@ const impactsSchema = {
         + "base, bunker, missile silo, embassy, port - so the map shows it, and "
         + "whenever a city's POPULATION changes.",
       items: markerOpSchema,
+    },
+    regionClaims: {
+      type: "array",
+      description:
+        "Territory CLAIMED but not held. Use whenever a polity asserts a right to "
+        + "land it does not control and has not been given it - an irredentist "
+        + "declaration, a proclaimed union, a contested border, a government-in-"
+        + "exile's title. Marks the region disputed on the map WITHOUT moving the "
+        + "border; use regionTransfers for land that actually changed hands.",
+      items: regionClaimSchema,
     },
   },
   additionalProperties: false,

@@ -135,6 +135,7 @@ Every event may carry an `impacts` object (`normalizeEventImpacts`, `src/runtime
 | Impact array | Element normalizer | Applied by | Effect on `world.json` |
 |---|---|---|---|
 | `regionTransfers` | `normalizeRegionTransfer` (`:420`) → `{regionId,toCode,fromCode,regionName,note}` | inline loop (`:1048`) | `regionOwnershipOverrides[regionId] = toCode`. |
+| `regionClaims` | `normalizeRegionClaim` → `{regionId,claimantCode,drop,note,regionName}` | `applyPolityAndTerritoryImpacts` | Appends to / removes from `regionClaimants[regionId]` (de-duplicated case-insensitively; the key is deleted at zero). Applied **before** `regionTransfers`, so a region claimed and handed over in the same jump ends settled rather than striped. Plain region names are resolved to ids beside the transfers (`resolveRegionTransfers`); a claim that matches nothing is dropped, never failed. |
 | `polityChanges` | `normalizePolityChange` (`:442`) → `{code,name,color,aliases[],note,reputation,tags}` | inline loop (`:1052`) | Upserts `polityOverrides[code]`; also writes `colors[code]` (§7), `internationalReputation[code]`, `countryTags[code]`. |
 | `unitOps` | `normalizeUnitOp` (`:592`) → `spawn\|move\|strength\|remove` | `applyUnitOps` (`:638`) | Rewrites `world.units`. |
 | `markerOps` | `normalizeMarkerOp` (`:549`) → `build\|remove` | `applyMarkerOps` (`:575`) | Rewrites `world.markers`. |
