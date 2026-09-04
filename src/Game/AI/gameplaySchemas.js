@@ -1250,9 +1250,17 @@ const percentageSchema = (description) => ({
   maximum: 100,
 });
 
-export const COUNTRY_STAT_SHEET_SCHEMA = {
+const statNumberSchema = (description, { minimum, maximum } = {}) => ({
+  type: "number",
+  description,
+  ...(Number.isFinite(minimum) ? { minimum } : {}),
+  ...(Number.isFinite(maximum) ? { maximum } : {}),
+});
+
+export const COUNTRY_STAT_GENERATION_SCHEMA = {
   type: "object",
-  description: "A complete national statistics sheet for the selected polity.",
+  description:
+    "Compact generation transport for a persistent national statistics sheet. Native code expands a bounded regional macro estimate into the exact live-map territorial ledger and deterministically derives population/GDP aggregates before canonical validation.",
   properties: {
     capital: nonEmptyTextSchema("Capital or primary seat of government."),
     continent: nonEmptyTextSchema("Continent or broad geographic region."),
@@ -1272,19 +1280,114 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
       additionalProperties: false,
     },
+    populationCalibration: {
+      type: "object",
+      description:
+        "Scenario-causality provenance for a native regional bootstrap/reconstruction. Return this ONLY when the live Stats prompt says CAUSAL CALIBRATION REQUIRED. It identifies the history authority frontier but does not impose a whole-polity numeric target.",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["historical_start", "counterfactual_start", "campaign_reconstruction"],
+          description:
+            "historical_start only when scenario history is still materially shared through the start date; counterfactual_start when pre-start canon diverged; campaign_reconstruction for a later hard audit reconstructed from campaign canon.",
+        },
+        historyAuthorityCutoff: nonEmptyTextSchema(
+          "Latest date/era through which real-world history is still causally shared enough to use as demographic evidence. After this frontier, scenario/campaign canon wins.",
+        ),
+        basis: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description:
+            "One concise evidence summary for the regional calibration: identify the shared historical/regional baseline and relevant post-cutoff scenario canon. Do not provide hidden reasoning; state only the usable basis.",
+        },
+      },
+      required: ["mode", "historyAuthorityCutoff", "basis"],
+      additionalProperties: false,
+    },
+    economicCalibration: {
+      type: "object",
+      description:
+        "Audit provenance for a fresh/hard-audit NOMINAL economic baseline. Return this ONLY when the live Stats prompt says ECONOMIC CALIBRATION REQUIRED. This explicitly forbids PPP/international-dollar substitution in the canonical GDP ledger.",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["historical_start", "counterfactual_start", "campaign_reconstruction"],
+          description:
+            "Use the same scenario-causality mode as the population baseline when both are present.",
+        },
+        historyAuthorityCutoff: nonEmptyTextSchema(
+          "Latest date/era through which real-world economic history is causally shared enough to anchor nominal output. Later real-world outcomes are forbidden after divergence.",
+        ),
+        basis: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description:
+            "Concise audit basis naming the nominal GDP/GDP-per-capita scale and scenario evidence used. Do not provide hidden reasoning.",
+        },
+        anchorYear: {
+          type: "integer",
+          minimum: 1,
+          maximum: 9999,
+          description: "Year of the contemporaneous nominal GDP anchor; it must not lie beyond the shared-history frontier.",
+        },
+        anchorCurrency: {
+          type: "string",
+          enum: ["USD", "EUR"],
+          description:
+            "Currency unit of the contemporaneous nominal anchor. Use current USD or current EUR only; do not use PPP/international dollars or local-currency amounts here.",
+        },
+        nominalGdpBillions: statNumberSchema(
+          "Whole-polity NOMINAL GDP at anchorYear in billions of anchorCurrency, for the same territorial scope as nominalGdpPerCapita. Never use PPP GDP.",
+          { minimum: 0.000001 },
+        ),
+        nominalGdpPerCapita: statNumberSchema(
+          "Contemporaneous NOMINAL GDP per capita at anchorYear in anchorCurrency. Never use PPP/international-dollar GDP per capita.",
+          { minimum: 1 },
+        ),
+        rebasedGdpPerCapita2026Eur: statNumberSchema(
+          "The same nominal GDP-per-capita anchor expressed in constant 2026 EUR using monetary inflation/FX rebasing only. This is NOT PPP, purchasing power, or a productivity/living-standard adjustment.",
+          { minimum: 1 },
+        ),
+        divergenceEventIds: {
+          type: "array",
+          maxItems: 12,
+          description:
+            "Canonical IDs from the bounded fresh economic evidence that causally justify a large current departure from the rebased nominal anchor. Empty when no supplied event supports such a departure.",
+          items: nonEmptyTextSchema("Canonical economic event id supplied by the live Stats prompt."),
+        },
+      },
+      required: [
+        "mode",
+        "historyAuthorityCutoff",
+        "basis",
+        "anchorYear",
+        "anchorCurrency",
+        "nominalGdpBillions",
+        "nominalGdpPerCapita",
+        "rebasedGdpPerCapita2026Eur",
+        "divergenceEventIds",
+      ],
+      additionalProperties: false,
+    },
+    territorialMacroComponentsText: {
+      type: "string",
+      minLength: 1,
+      description:
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. Compatibility fallback without a native macro plan may use group~geography~population~gdpPerCapita. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
+    },
     economy: {
       type: "object",
       properties: {
-        gdp: nonEmptyTextSchema("Era-appropriate gross domestic product estimate."),
-        gdpGrowth: nonEmptyTextSchema("Annual GDP growth estimate."),
-        gdpPerCapita: nonEmptyTextSchema("Era-appropriate GDP per capita estimate."),
-        currency: nonEmptyTextSchema("Currency or dominant medium of exchange."),
-        inflation: nonEmptyTextSchema("Inflation estimate."),
-        unemployment: nonEmptyTextSchema("Unemployment estimate."),
-        publicDebt: nonEmptyTextSchema("Public debt estimate."),
-        budgetBalance: nonEmptyTextSchema("Budget surplus or deficit estimate."),
+        gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
+        currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
+        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
+        publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
+        budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
       },
-      required: ["gdp", "gdpGrowth", "gdpPerCapita", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
+      required: ["gdpGrowth", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
       additionalProperties: false,
     },
     gdpBreakdown: {
@@ -1298,7 +1401,142 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["capital", "continent", "government", "leader", "stability", "indices", "economy", "gdpBreakdown"],
+  required: [
+    "capital",
+    "continent",
+    "government",
+    "leader",
+    "stability",
+    "indices",
+    "territorialMacroComponentsText",
+    "economy",
+    "gdpBreakdown",
+  ],
+  additionalProperties: false,
+};
+
+export const COUNTRY_STAT_SHEET_SCHEMA = {
+  type: "object",
+  description:
+    "A complete persistent national statistics sheet. Territorial components are the arithmetic authority for population and GDP; derived aggregate fields may be omitted because native JavaScript recomputes them before validation/persistence.",
+  properties: {
+    statsSchemaVersion: {
+      type: "integer",
+      minimum: 1,
+      description: "Native country-stat schema version. Current version is 1; the runtime fills this when omitted.",
+    },
+    continuity: {
+      type: "object",
+      description: "Native-only continuity/accounting metadata. The country-stat generation tool does not author this; runtime may attach it after validation.",
+      properties: {
+        assessedDate: nonEmptyTextSchema("Simulation date of the last full country-stat reassessment."),
+        assessedRound: { type: "integer", minimum: 0 },
+        stateFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed simulation/economic state."),
+        territorialFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed legal territorial basis."),
+        populationCalibrationVersion: {
+          type: "integer",
+          minimum: 1,
+          description: "Native population-calibration generation version. Presence means the component ledger has passed the bounded regional causal-calibration path.",
+        },
+        accountedEventIds: {
+          type: "array",
+          maxItems: 64,
+          items: nonEmptyTextSchema("Canonical economic event id already incorporated into this stat baseline."),
+        },
+      },
+      additionalProperties: false,
+    },
+    capital: nonEmptyTextSchema("Capital or primary seat of government."),
+    continent: nonEmptyTextSchema("Continent or broad geographic region."),
+    government: nonEmptyTextSchema("Government system and ideology."),
+    leader: nonEmptyTextSchema("Head of state or government."),
+    stability: percentageSchema("National stability from 0 to 100."),
+    indices: {
+      type: "object",
+      properties: {
+        sovereignty: percentageSchema("Practical political sovereignty."),
+        foodAutonomy: percentageSchema("Domestic food autonomy."),
+        energyAutonomy: percentageSchema("Domestic energy autonomy."),
+        economicIndependence: percentageSchema("Economic independence."),
+        internalSecurity: percentageSchema("Internal security."),
+        internationalReputation: percentageSchema("International reputation / standing (0-100)."),
+      },
+      required: ["sovereignty", "foodAutonomy", "energyAutonomy", "economicIndependence", "internalSecurity", "internationalReputation"],
+      additionalProperties: false,
+    },
+    population: {
+      type: "object",
+      description: "Derived population aggregates. The runtime recomputes these from territorialComponents.",
+      properties: {
+        total: { type: "integer", minimum: 0 },
+        coreIntegrated: { type: "integer", minimum: 0 },
+        otherTerritories: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    territorialComponents: {
+      type: "array",
+      minItems: 1,
+      description:
+        "One demographic/economic component for every authoritative territorial geography in the live-map basis. There is deliberately no fixed component cap: map granularity must never delete population/GDP. Generation expands bounded regional macro estimates into this exact canonical ledger natively; the model does not author these rows one-by-one.",
+      items: {
+        type: "object",
+        properties: {
+          geography: nonEmptyTextSchema("Human-readable controlled/legal geography matching the supplied territorial basis."),
+          group: {
+            type: "string",
+            enum: ["core", "integrated", "overseas/dependent"],
+            description: "Economic aggregation/display group only; not a sovereignty or constitutional judgment.",
+          },
+          population: { type: "integer", minimum: 0, description: "Current inhabitants in THIS geography only." },
+          gdpPerCapita: statNumberSchema(
+            "THIS component's NOMINAL GDP per capita expressed in constant 2026-EUR accounting terms. This is not PPP/international-dollar purchasing power and does not import 2026 technology/productivity.",
+            { minimum: 1 },
+          ),
+        },
+        required: ["geography", "group", "population", "gdpPerCapita"],
+        additionalProperties: false,
+      },
+    },
+    economy: {
+      type: "object",
+      properties: {
+        gdp: statNumberSchema("Derived whole-polity NOMINAL GDP in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
+        gdpPerCapita: statNumberSchema("Derived whole-polity NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
+        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
+        publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
+        budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
+      },
+      required: ["gdpGrowth", "currency", "inflation", "unemployment", "publicDebt", "budgetBalance"],
+      additionalProperties: false,
+    },
+    gdpBreakdown: {
+      type: "object",
+      properties: {
+        agriculture: percentageSchema("Agriculture share of GDP."),
+        industry: percentageSchema("Industry share of GDP."),
+        services: percentageSchema("Services share of GDP."),
+      },
+      required: ["agriculture", "industry", "services"],
+      additionalProperties: false,
+    },
+  },
+  required: [
+    "capital",
+    "continent",
+    "government",
+    "leader",
+    "stability",
+    "indices",
+    "territorialComponents",
+    "economy",
+    "gdpBreakdown",
+  ],
   additionalProperties: false,
 };
 
@@ -1431,8 +1669,8 @@ export const GAME_MASTER_TOOL = makeTool(
 
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
-  "Submit the complete validated national statistics sheet.",
-  COUNTRY_STAT_SHEET_SCHEMA,
+  "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
+  COUNTRY_STAT_GENERATION_SCHEMA,
 );
 
 export const IDLE_DIPLOMACY_TOOL = makeTool(
@@ -1683,6 +1921,14 @@ export const validateGameplayPayload = (taskKey, value) => {
     const breakdown = value.gdpBreakdown;
     if (breakdown.agriculture + breakdown.industry + breakdown.services !== 100) {
       return { valid: false, error: "$.gdpBreakdown percentages must sum to 100." };
+    }
+    const names = new Set();
+    for (let index = 0; index < value.territorialComponents.length; index += 1) {
+      const key = value.territorialComponents[index].geography.trim().toLowerCase();
+      if (names.has(key)) {
+        return { valid: false, error: `$.territorialComponents[${index}].geography duplicates another component.` };
+      }
+      names.add(key);
     }
   }
 
