@@ -962,6 +962,11 @@ export const JUMP_FORWARD_SCHEMA = {
     // travel as compact text lines rather than nested objects: a large nested
     // schema is exactly what Gemini function calling and strict tool modes
     // choke on, and the line formats are taught in the live prompt.
+    storylineUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated storyline records. Empty string when none. Persist unresolved multi-turn crises/processes here instead of letting a major crisis disappear after one event. Record format is documented in the live prompt.",
+    },
     warUpdates: {
       type: "string",
       description:
@@ -991,6 +996,61 @@ export const JUMP_FORWARD_SCHEMA = {
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// Persistent storylines (nativeWorldDirector.js). On a jump they travel as
+// compact text lines like the other ledgers; this object form is the
+// worldMotionRepair tool's answer for exactly one existing storyline.
+const storylineUpdateSchema = {
+  type: "object",
+  description:
+    "One semantic persistent-storyline update. Do not provide event indexes/ids; native Javascript binds causal events.",
+  properties: {
+    id: nonEmptyTextSchema("Stable storyline id. Reuse an existing id when advancing an existing process."),
+    status: {
+      type: "string",
+      enum: ["active", "dormant", "resolved"],
+      description: "Current process status.",
+    },
+    pressure: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Current structural pressure, 0-100.",
+    },
+    momentum: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Current tendency to keep developing without a new external shove, 0-100.",
+    },
+    startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
+    kind: nonEmptyTextSchema("Short process category such as war, crisis, revolution, diplomacy, politics, or economy."),
+    title: nonEmptyTextSchema("Concise persistent process title."),
+    participants: {
+      type: "array",
+      maxItems: 12,
+      description: "Canonical polity participants involved in this persistent process. This list is cumulative on update: include newly involved actors; omission does not remove existing participants. Use exact current polity names.",
+      items: nonEmptyTextSchema("One current canonical polity."),
+    },
+    state: nonEmptyTextSchema("Semantic state through the current stop date: what is true now and why the process remains active/dormant/resolved."),
+  },
+  required: ["id", "status", "pressure", "momentum", "kind", "title", "participants", "state"],
+  additionalProperties: false,
+};
+
+export const WORLD_MOTION_REPAIR_SCHEMA = {
+  type: "object",
+  description:
+    "One narrow semantic repair for exactly one already-existing persistent storyline. "
+    + "No events, wars, relations, agreements, territory, units, chats, catalysts, or other world changes are allowed.",
+  properties: {
+    stopDate: nonEmptyTextSchema("Exact simulation stop date in YYYY-MM-DD form."),
+    storyline: storylineUpdateSchema,
+    summary: textSchema("Optional concise note explaining the repaired semantic movement."),
+  },
+  required: ["stopDate", "storyline", "summary"],
+  additionalProperties: false,
+};
 
 // Backstory events deliberately have NO impacts field: the scenario's world
 // state already reflects everything that happened before round one, so a
@@ -1026,13 +1086,13 @@ const canonicalUpdateSchema = {
     kind: {
       type: "string",
       description:
-        "Semantic kind code. Use relation; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start.",
+        "Semantic kind code. Use relation; storyline:active; storyline:dormant; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start.",
     },
-    id: { type: "string", description: "Stable war/agreement id, or empty for a relation." },
+    id: { type: "string", description: "Stable storyline/war/agreement id, or empty for a relation." },
     polities: {
       type: "array",
       description:
-        "Primary polities. Relation: exactly [A,B]. War: actors / side A. Agreement: parties.",
+        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors / side A. Agreement: parties.",
       items: { type: "string" },
     },
     opponents: {
@@ -1044,17 +1104,29 @@ const canonicalUpdateSchema = {
       type: "integer",
       description: "Relation absolute score -100..100; 0 for non-relation items. The engine clamps it and derives the status.",
     },
+    pressure: {
+      type: "integer",
+      description: "Storyline pressure 0-100 (unresolved stakes); 0 for other kinds.",
+    },
+    momentum: {
+      type: "integer",
+      description: "Storyline momentum 0-100 (current rate of change); 0 for other kinds.",
+    },
+    date: {
+      type: "string",
+      description: "Storyline start date YYYY-MM-DD when known; empty for other kinds.",
+    },
     category: {
       type: "string",
-      description: "Agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other); otherwise empty.",
+      description: "Storyline process kind (war, crisis, revolution, diplomacy, politics, economy) or agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other); otherwise empty.",
     },
     title: {
       type: "string",
-      description: "Agreement title when relevant; otherwise empty.",
+      description: "Agreement or storyline title when relevant; otherwise empty.",
     },
     detail: {
       type: "string",
-      description: "Relation summary, war note, or agreement terms.",
+      description: "Relation summary, war note, agreement terms, or storyline state (what is true now and why the process is unresolved).",
     },
   },
   required: [
@@ -1063,6 +1135,9 @@ const canonicalUpdateSchema = {
     "polities",
     "opponents",
     "score",
+    "pressure",
+    "momentum",
+    "date",
     "category",
     "title",
     "detail",
@@ -1217,6 +1292,25 @@ const gmEventIndexesSchema = {
   description: "0-based indexes into this GM transaction's events array.",
   maxItems: 8,
   items: { type: "integer", minimum: 0 },
+};
+
+const gmStorylineUpdateSchema = {
+  type: "object",
+  description: "One authoritative persistent world.storylines semantic update.",
+  properties: {
+    id: nonEmptyTextSchema("Stable storyline id. Reuse the existing id when advancing an existing process."),
+    status: { type: "string", enum: ["active", "dormant", "resolved"] },
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
+    kind: nonEmptyTextSchema("Short process category such as crisis, politics, economy, war, revolution, or diplomacy."),
+    title: nonEmptyTextSchema("Concise persistent process title."),
+    participants: stringArraySchema("Canonical polity participants. Cumulative on update: include new actors; omitted prior actors remain. Full polity names only."),
+    eventIndexes: gmEventIndexesSchema,
+    state: nonEmptyTextSchema("What is true now and why the process remains active/dormant/resolved through the current game date."),
+  },
+  required: ["id", "status", "pressure", "momentum", "kind", "title", "participants", "eventIndexes", "state"],
+  additionalProperties: false,
 };
 
 const gmWarUpdateSchema = {
@@ -1393,6 +1487,12 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 12,
       items: gmCountryStatPatchSchema,
     },
+    storylineUpdates: {
+      type: "array",
+      description: "Persistent unresolved world-process updates using the canonical world.storylines owner.",
+      maxItems: 16,
+      items: gmStorylineUpdateSchema,
+    },
     warUpdates: {
       type: "array",
       description: "Structured canonical belligerency changes. Never encode these as strings.",
@@ -1423,6 +1523,7 @@ export const GAME_MASTER_SCHEMA = {
     "summary",
     "events",
     "countryStatPatches",
+    "storylineUpdates",
     "warUpdates",
     "relationUpdates",
     "agreementUpdates",
@@ -1448,6 +1549,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
+    storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
@@ -1458,6 +1560,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "summary",
     "eventsJson",
     "countryStatPatchesJson",
+    "storylineUpdatesJson",
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
@@ -1469,6 +1572,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
 const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["eventsJson", "events"],
   ["countryStatPatchesJson", "countryStatPatches"],
+  ["storylineUpdatesJson", "storylineUpdates"],
   ["warUpdatesJson", "warUpdates"],
   ["relationUpdatesJson", "relationUpdates"],
   ["agreementUpdatesJson", "agreementUpdates"],
@@ -2152,6 +2256,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   gameMaster: GAME_MASTER_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
+  worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -2238,6 +2343,12 @@ export const UNIT_DIRECTOR_TOOL = makeTool(
   UNIT_DIRECTOR_SCHEMA,
 );
 
+export const WORLD_MOTION_REPAIR_TOOL = makeTool(
+  "submit_world_motion_repair",
+  "Submit exactly one semantic update for one existing persistent storyline. This tool cannot create events or mutate any other canonical ledger.",
+  WORLD_MOTION_REPAIR_SCHEMA,
+);
+
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
   "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
@@ -2278,6 +2389,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   gameMaster: GAME_MASTER_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
+  worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,

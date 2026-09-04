@@ -57,9 +57,9 @@ test("a broken transport field is reported rather than silently dropped", () => 
 test("the provider sees a shallow contract while the decoded transaction is validated in full", () => {
   assert.deepEqual(Object.keys(GAME_MASTER_TRANSPORT_SCHEMA.properties).sort(), [
     "agreementUpdatesJson", "countryStatPatchesJson", "diplomaticOutreachJson", "eventsJson",
-    "mode", "relationUpdatesJson", "summary", "warUpdatesJson",
+    "mode", "relationUpdatesJson", "storylineUpdatesJson", "summary", "warUpdatesJson",
   ]);
-  assert.equal("storylineUpdates" in GAME_MASTER_SCHEMA.properties, false);
+  assert.equal("storylineUpdates" in GAME_MASTER_SCHEMA.properties, true);
 
   const minimal = decodeGameMasterTransportPayload(transport()).payload;
   assert.equal(validateGameplayPayload("gameMaster", minimal).valid, true);
