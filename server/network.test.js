@@ -193,13 +193,14 @@ describe("LAN sharing", () => {
       t.skip("no non-loopback address on this host");
       return;
     }
-    // Windows lets a wildcard bind succeed beside a listener on a specific
-    // interface (measured: a squatter on <lan>:port, with or without
-    // exclusive, does not stop 0.0.0.0:port), so the rebind this case wants
-    // to fail cannot be made to fail here. The rollback path is exercised on
-    // Linux and macOS.
-    if (process.platform === "win32") {
-      t.skip("a specific-interface listener does not block 0.0.0.0 on Windows");
+    // Windows and macOS both let a wildcard bind succeed beside a listener on a
+    // specific interface (measured: a squatter on <lan>:port, with or without
+    // exclusive, does not stop 0.0.0.0:port; on the BSD sockets macOS inherits,
+    // SO_REUSEADDR — which Node sets on a listener — permits the overlap that
+    // Linux refuses). The rebind this case needs to fail therefore cannot be
+    // made to fail on either, so the rollback path is exercised on Linux.
+    if (process.platform === "win32" || process.platform === "darwin") {
+      t.skip(`a specific-interface listener does not block 0.0.0.0 on ${process.platform}`);
       return;
     }
 
