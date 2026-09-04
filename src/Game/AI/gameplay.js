@@ -3,6 +3,7 @@ import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
+import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -1189,6 +1190,115 @@ So use the wider picture to choose the sender and the moment — never to give t
     if (eventReaction) {
       systemPrompt = `${systemPrompt}\n\n[Event-triggered reaction — one-shot]\nA human administrator explicitly allowed NPCs to react to the canonical event below. Evaluate THIS event in the current diplomatic world. Silence remains valid and must be chosen when nobody would plausibly contact the player. But do not confuse "minor" with "unworthy of human contact": a friendly ally may simply congratulate the player, express sympathy, show interest, or make a brief good-natured remark even when no treaty, warning, or mechanical consequence is needed. Keep any opener natural and proportionate. Return at most one initiating chat for this one-shot evaluation, and no unit movement.\n\n${eventReaction}`;
     }
+  }
+
+  // The curator's calibration travels with the call so frozen prompt packs get it.
+  if (taskKey === "timelineCurator") {
+    systemPrompt = `${systemPrompt}
+
+  [Strict Curator Calibration]
+
+  Be conservative about DELETING history, but do NOT be conservative about CLASSIFYING low-value material accurately. JavaScript applies independent safety gates after your judgment.
+
+  RECURRENCE:
+  Set recurrenceMatters=true ONLY when repetition itself creates meaningful historical pressure or consequence.
+
+  Examples that normally justify recurrenceMatters=true:
+  - renewed clashes or combat
+  - casualties
+  - strikes, protests, riots or unrest
+  - arrests or repression
+  - sanctions, embargoes or blockades
+  - shortages or economic disruption
+  - mutiny, sabotage, breakdown, failure or withdrawal
+  - repeated incidents whose accumulation materially changes the situation
+
+  Routine continuation does NOT make recurrence meaningful.
+
+  Normally set recurrenceMatters=false for repeated:
+  - meetings or conferences
+  - negotiations without a new settlement
+  - planning cycles
+  - operational timetables
+  - mobilization schedules
+  - technical protocols
+  - reviews or inspections
+  - budget negotiations
+  - funding tranches
+  - administrative implementation
+  - reports, studies or committees
+  - ordinary military preparations without a new operational consequence
+
+  Do not use recurrenceMatters merely as a reason to protect an otherwise incremental event.
+
+  WORTHWHILE:
+  substantive=true does NOT imply worthwhile=true.
+
+  Set worthwhile=false when an event establishes a real but minor fact that does not deserve its own permanent timeline entry because an already-established storyline merely advanced another routine step.
+
+  Examples:
+  - another timetable in an already established military plan
+  - another implementation protocol after the policy already exists
+  - another round of budget bargaining with no decisive legislative outcome
+  - another committee, review, inspection or consultation
+  - another technical refinement to an already functioning program
+
+  QUALITATIVE ADVANCE:
+  A new detail is not automatically a materially new dimension.
+
+  Things such as another timetable, quota, funding allocation, review result, logistics arrangement, protocol refinement, procedural step, or administrative package normally remain incrementalProcess=true and qualitativeAdvance=false unless they cross a real threshold.
+
+  PROCESS FILLER:
+  If processFramePresent=true and there is no completed observable result directly quotable from the candidate, set:
+  - observableOutcomeEvidence=""
+  - pureProcessFiller=true
+
+  Do not rescue a process-only event merely because the meeting concerns an important subject.
+
+  SATURATED STORYLINES:
+  When a storyline already has several recent canonical entries, judge whether the candidate actually changes the situation rather than rewarding it for being specific.
+
+  A small new detail inside an already-established process may still have:
+  - substantive=true
+  - materiallyNewDimensions containing a minor detail
+
+  while correctly having:
+  - worthwhile=false
+  - qualitativeAdvance=false
+  - incrementalProcess=true
+
+  STORYLINE STAGE REGRESSION:
+  A candidate is not a qualitative advance merely because it gives a fresh date or a more detailed description to a diplomatic, political, military, or administrative state that earlier canonical events already resolved.
+
+  Read the supplied prior history chronologically.
+
+  If prior canonical history shows a storyline progressing through stages such as:
+  proposal → response → negotiation → decision → implementation
+
+  then a later candidate must not treat an earlier stage as newly occurring again unless the candidate explicitly establishes a new trigger, reopening, reversal, or materially changed position.
+
+  Examples:
+
+  If a government already formally rejected a proposal, a later event saying that government rejects the same proposal again is normally REDUNDANT unless something reopened the question.
+
+  If negotiations already opened and later adjourned, a candidate describing the counterpart's initial response to the original proposal is normally a regression to an already-resolved stage.
+
+  If an alliance already finalized mobilization protocols, another event merely finalizing substantially the same protocols or schedules is normally incremental or redundant.
+
+  Judge the candidate against the LATEST established state of that storyline, not merely against whether its wording differs from one prior event.
+
+  A repeated important fact is still repeated. Importance does not make an already-established state new.
+
+  CONFIDENCE:
+  Confidence measures confidence in your CLASSIFICATION, not confidence that the event happened. Do not artificially reduce confidence merely because an event is plausible or historically realistic.
+
+  Default verdict remains KEEP when uncertain.
+
+  [MULTI-PASS CAUSAL CHAIN]
+  Candidates may have been generated in successive hidden world windows inside one user jump. If a later candidate materially depends on an earlier candidate in the SAME supplied batch/storyline, do not drop the earlier event merely as incremental/redundant when doing so would make the later development causally unintelligible. This does not protect filler; it protects real prerequisite milestones.
+
+  [CANONICAL WAR-STATE PREREQUISITES]
+  An event that starts/joins/resumes a canonical war may be the mechanical prerequisite for later same-batch combat carrying the same warId. Do not drop that transition as redundant when doing so would orphan later battles/offensives from their legal belligerency state. Peace/ceasefire/end transitions are likewise substantive because they change what later combat is allowed to occur.`;
   }
 
   // The unit director's runtime rules travel with the call so a campaign's
@@ -3106,6 +3216,27 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
 // retried. Callers that own the board through their own impacts
 // (applyGameMasterCommand) or have no board story (advanceActiveCatalyst)
 // simply omit it and are unchanged.
+// Ledger records reference the events that caused them by id. When a
+// post-processor drops an event, every record bound only to it is dropped too;
+// a record bound to no event at all (a baseline row) stays.
+const filterBoundLedgerUpdatesToKeptEvents = (updates, allEvents, keptEvents) => {
+  const allIds = normalizeArray(allEvents)
+    .map((event) => normalizeString(event?.id))
+    .filter(Boolean);
+  const keptIds = new Set(
+    normalizeArray(keptEvents)
+      .map((event) => normalizeString(event?.id))
+      .filter(Boolean),
+  );
+
+  return normalizeArray(updates).filter((update) => {
+    const serialized = JSON.stringify(update ?? {});
+    const referenced = allIds.filter((id) => serialized.includes(id));
+    if (!referenced.length) return true;
+    return referenced.some((id) => keptIds.has(id));
+  });
+};
+
 const applySimulationResult = async ({
   baseActions,
   baseChats,
@@ -3128,19 +3259,74 @@ const applySimulationResult = async ({
   // impacts, or land in this turn's record (also see the [New Developments Only]
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
+  const dedupedEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
+
+  // The curator decides whether an event exists BEFORE impacts, chats, history
+  // and persistence see it: the model judges each candidate against recent
+  // canon, and deterministic gates (hard mechanical consequences, retrieved
+  // prior matches, saturation) decide what those judgments may remove. The
+  // default is KEEP, and any failure of the analysis keeps everything.
+  const curatedEvents = await curateGeneratedEvents({
+    events: dedupedEvents,
+    priorEvents,
+    game: baseGame,
+    world: baseWorld,
+    actions: baseActions,
+    mode: result.mode,
+    analyzeBatch: ({ candidates, priorHistory }) =>
+      runJsonTask("timelineCurator", {
+        fallback: () => ({
+          judgments: candidates.map((event, index) => ({
+            index,
+            verdict: "KEEP",
+            confidence: 0,
+            materialStateChange: "Semantic curator unavailable; event preserved by fail-open fallback.",
+            matchedPriorIndexes: [],
+            materiallyNewDimensions: ["unknown"],
+            recurrenceMatters: false,
+            newTriggerAfterPriorPosture: "none",
+            worthwhile: true,
+            substantive: true,
+            personalityTexture: false,
+            storyline: normalizeString(event?.title) || `event-${index}`,
+            qualitativeAdvance: true,
+            incrementalProcess: false,
+            processFramePresent: false,
+            observableOutcomeEvidence: "",
+            pureProcessFiller: false,
+            reason: "Curator AI failed; fail-open KEEP.",
+          })),
+          recentHistoryMechanical: false,
+          storylineSaturation: [],
+          underrepresentedDomains: [],
+        }),
+        signal: projects?.signal,
+        userMessage:
+          "Analyze every supplied native timeline candidate with the required curator tool. Return exactly one judgment for every candidate index.",
+        variables: {
+          curatorPriorHistory: JSON.stringify(priorHistory, null, 2),
+          curatorCandidates: JSON.stringify(candidates, null, 2),
+        },
+      }),
+  });
+  // A ledger record bound to an event the curator removed goes with it.
+  const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(result.warUpdates, dedupedEvents, curatedEvents);
+  const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
+  const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
+
   // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
   // across the whole save, so a ledger or history reference is never ambiguous.
   // Existing history is never renamed. The ledger records were bound to the
   // segments' temporary ids; they follow the rename here.
   const canonicalEventIdentity = allocateCanonicalTurnEventIds({
     existingEvents: priorEvents,
-    newEvents: dedupeGeneratedEvents(priorEvents, generatedEvents),
+    newEvents: curatedEvents,
     round: (baseGame.round || 1) + 1,
   });
   const freshEvents = canonicalEventIdentity.events;
-  const warUpdates = remapLedgerEventIds(normalizeArray(result.warUpdates), canonicalEventIdentity.idMap);
-  const relationUpdates = remapLedgerEventIds(normalizeArray(result.relationUpdates), canonicalEventIdentity.idMap);
-  const agreementUpdates = remapLedgerEventIds(normalizeArray(result.agreementUpdates), canonicalEventIdentity.idMap);
+  const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
+  const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
+  const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,

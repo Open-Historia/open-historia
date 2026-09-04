@@ -243,6 +243,7 @@ Anthropic's `cache_read_input_tokens` and `cache_creation_input_tokens` are adde
 | `catalystSummary` | `submit_catalyst_summary` | (within catalyst resolution) | Final event from a resolved catalyst. |
 | `gameMaster` | `submit_game_master` | `applyGameMasterCommand` | GM console: apply free‑text world/map edits. |
 | `countryStatSheet` | `submit_country_stat_sheet` | `generateCountryStatSheet` / `generateCountryStats` | National statistics sheet. |
+| `timelineCurator` | `submit_timeline_curator` | `curateGeneratedEvents` (`nativeTimelineCurator.js`, from `applySimulationResult`) | Judges each fresh event against recent canon before it persists; deterministic gates (hard impacts, retrieved prior matches, saturation) decide what may be dropped, default KEEP. |
 | `unitDirector` | `submit_unit_director` | `directGeneratedUnitOps` (`nativeUnitDirector.js`, from `finishTimelineJump`) | Keeps existing NPC formations coherent with the turn's military events: proposes spawn/move/strength/remove ops that native rules sanitize before they ride the normal unitOps path. |
 | `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` | Optional unprompted diplomatic note. |
 | `pregameHistory` | `submit_pregame_history` | `maybeGeneratePregameHistory` | Backstory events before the start date. |

@@ -291,6 +291,11 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Tool/schema:** `submit_country_stat_sheet` / `COUNTRY_STAT_SHEET_SCHEMA` (`569`): `capital, continent, government, leader, stability(0–100), indices{sovereignty,foodAutonomy,energyAutonomy,economicIndependence,internalSecurity,internationalReputation}, economy{gdp,gdpGrowth,gdpPerCapita,currency,inflation,unemployment,publicDebt,budgetBalance}, gdpBreakdown{agriculture,industry,services}`.
 - **Validation:** all strings non-blank; all indices 0–100 integers; `agriculture+industry+services === 100` (`gameplaySchemas.js:940`). No fallback.
 
+### 7.12a `timelineCurator` — the native timeline curator
+
+- **Prompt:** `tasks.timelineCurator` (uses `${curatorPriorHistory}` and `${curatorCandidates}`, passed directly) plus the `[Strict Curator Calibration]` directive appended at call time. **Entry:** `curateGeneratedEvents` in `src/Game/AI/nativeTimelineCurator.js`, called from `applySimulationResult` after the content de-dup and before canonical ids, impacts and persistence.
+- **Purpose:** the model classifies every fresh candidate (KEEP / REDUNDANT / UNSUPPORTED_REVERSAL with confidence, matched prior indexes, storyline, worthwhile/substantive/process flags). Native gates decide what may be removed: an event with hard consequences (territory, claims, units, features, chats, a polity rename or recolor, a war-ledger binding) is always kept; an exact same-date restatement of a prior event is always dropped; a REDUNDANT verdict removes an event only with high confidence, a retrieved prior match that is genuinely similar, no new dimension and no recurrence value; saturation and process-filler gates catch routine churn in a busy storyline. Ledger records bound only to a dropped event are dropped with it. Any failure of the analysis keeps everything.
+
 ### 7.12b `unitDirector` — the native unit director
 
 - **Prompt:** `tasks.unitDirector` (uses `${unitDirectorGameDate}`, `${unitDirectorRound}`, `${unitDirectorUnits}`, `${unitDirectorCandidates}`, all passed directly by the caller) plus the `[Native Unit Director — runtime rules]` directive appended at call time. **Entry:** `directGeneratedUnitOps` in `src/Game/AI/nativeUnitDirector.js`, called from `finishTimelineJump` after the segments are merged.
