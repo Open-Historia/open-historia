@@ -8,6 +8,8 @@ import {
     saveRecentModel,
     setProviderField,
 } from "./providerConfig.js";
+import { splitSystemPromptForCache } from "./promptLayout.js";
+import { attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -683,6 +685,7 @@ async function callGemini(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
     taskKey,
     tool,
@@ -700,6 +703,7 @@ async function callGemini(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
 
@@ -1277,6 +1281,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         signal: opts.signal,
         taskKey: opts.taskKey,
     });
+    opts.onModel?.(model);
 
     return callOpenAIStyleChatCompletions({
         endpoint: OPENAI_API_ENDPOINT,
@@ -1314,6 +1319,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         signal: opts.signal,
         taskKey: opts.taskKey,
     });
+    opts.onModel?.(model);
 
     return callOpenAIStyleChatCompletions({
         endpoint,
@@ -1340,6 +1346,22 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
 const ANTHROPIC_MAX_OUTPUT = 64000;
 const anthropicModelMax = new Map(); // model -> learned output ceiling
 
+// Prompt-cache boundary (promptLayout.js): the system prompt goes out as two
+// content blocks — the game-lifetime prefix pinned with an ephemeral
+// cache_control breakpoint, and the per-turn tail uncached. Within an
+// auto-jump chain or a retry the prefix is byte-identical, so every
+// consecutive call reads it from the cache at a fraction of the input price.
+// One breakpoint is enough (the API allows four); a prompt with no usable
+// boundary goes out as the plain string it always was.
+function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd) {
+    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
+    if (!split) return systemPrompt;
+    return [
+        { type: "text", text: split.prefix, cache_control: { type: "ephemeral" } },
+        { type: "text", text: split.tail },
+    ];
+}
+
 async function callAnthropic(systemPrompt, history, {
     deadline,
     maxTokens,
@@ -1348,7 +1370,9 @@ async function callAnthropic(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
+    staticPrefixEnd,
     taskKey,
     tool,
 } = {}) {
@@ -1369,6 +1393,7 @@ async function callAnthropic(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     const headers = {
         "Content-Type": "application/json",
@@ -1403,7 +1428,7 @@ async function callAnthropic(systemPrompt, history, {
         const streamThisRequest = !streamingDisabled;
         const body = {
             model,
-            system: systemPrompt,
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
@@ -1538,7 +1563,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onUsage,
     retries = 3,
     retryDelay = 15000,
+    onModel,
     signal,
+    staticPrefixEnd,
     taskKey,
     tool,
 } = {}) {
@@ -1560,6 +1587,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         signal,
         taskKey,
     });
+    onModel?.(model);
 
     // Self-hosted proxy: tried directly first, falling back to the local relay
     // if it refuses the browser call (providerFetch). The browser-access opt-in
@@ -1620,7 +1648,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         const streamThisRequest = !streamingDisabled;
         const body = {
             model,
-            system: requestSystemPrompt,
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
@@ -1812,7 +1840,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // line up with the message entries their callers write. It is stripped here
     // alongside languageMode because it is ours: no provider function should
     // ever see it, and callGemini would silently drop it anyway.
-    const { languageMode = "ui", logLabel = "", ...providerOpts } = opts;
+    // `__debug` (task, attempt, simulated days) and `__debugSink` (where the
+    // task runner wants the record back, to attach the validation outcome)
+    // are ours too, and stripped for the same reason.
+    const { languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, ...providerOpts } = opts;
     const directive = languageMode === "none" ? ""
         : languageMode === "chat" ? chatLanguageDirective()
         : languageDirective();
@@ -1823,6 +1854,22 @@ export async function callAI(systemPrompt, history, opts = {}) {
     const provider = getStoredProvider();
     const label = logLabel || "AI call";
     const startedAt = Date.now();
+    // Telemetry (Settings → AI debug console): one record per call — prompt,
+    // answer, model, usage, latency — in memory and, while recording is on, in
+    // IndexedDB. A task-runner call is judged by its validator afterwards, so
+    // it stays "pending" until that outcome lands through the sink.
+    const record = isTelemetryEnabled()
+        ? startAiRecord({
+            ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
+            taskKey: debugMeta?.taskKey ?? providerOpts.taskKey ?? (logLabel || "direct"),
+            provider,
+            systemPrompt,
+            userMessage: Array.isArray(history) ? history.at(-1)?.parts?.[0]?.text ?? "" : "",
+            staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
+            awaitingOutcome: Boolean(debugSink),
+        })
+        : null;
+    if (debugSink && typeof debugSink === "object") debugSink.record = record;
     logDebugEvent("ai-call", `${label}: request to ${provider}.`, {
         ...conversationShape(systemPrompt, history),
         streaming: Boolean(providerOpts.onChunk),
@@ -1849,6 +1896,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...providerOpts,
             onActivity: timer.note,
             onUsage: (data) => { usage = normalizeUsage(data) ?? usage; },
+            // The model the provider actually resolved (overrides, discovery).
+            onModel: (model) => { if (record) record.model = String(model ?? ""); },
         });
         logDebugEvent("ai-call", `${label}: ${provider} answered in ${elapsedSeconds(startedAt)}.`, {
             replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
@@ -1858,6 +1907,13 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
             ...(usage ?? {}),
         }, { verbose: true });
+        attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
+        finishAiRecord(record, {
+            ok: true,
+            rawResponse: typeof result === "string"
+                ? result
+                : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : ""),
+        });
         return result;
     } catch (error) {
         // NOT verbose-only. A call that failed is the thing a bug report is most
@@ -1871,6 +1927,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
             `${label}: ${provider} ${cancelled ? "call cancelled" : "call FAILED"} after ${elapsedSeconds(startedAt)}.`,
             error,
             { verbose: cancelled });
+        attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
+        finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
         throw error;
     }
 }
@@ -2441,5 +2499,157 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
     } catch (err) {
         logDebugEvent("diplomacy", `${speakingAs} failed to answer the advisor-drafted message after ${elapsedSeconds(startedAt)}.`, err);
         throw err;
+    }
+}
+
+// --- Batch API (ported from the abdulrahman-2005 fork) -----------------------
+// A task the player is not waiting on can ride a provider's asynchronous batch
+// endpoint at about half the price. Capability is a per-provider fact, never a
+// requirement: only the native Anthropic Messages API exposes a browser-callable
+// batch endpoint (a JSON request, no file upload), so everything else — the
+// OpenAI-style APIs (Files API), Gemini (File API), local and self-hosted
+// gateways — takes the normal synchronous call. A submission that fails for any
+// reason also falls back; batching must never break a task. Opt-in from
+// Settings → Batch background AI tasks; gameplay.js checks that switch.
+export const providerSupportsBatch = (provider = getStoredProvider()) => provider === "anthropic";
+
+const anthropicBatchHeaders = (apiKey) => ({
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+});
+
+// The provider's batch id is what retrieval polls; the custom id names our
+// request inside it. In memory, like the registry in gameplay.js.
+const pendingBatchIds = new Map(); // customId -> provider batch id
+
+// Resolves to { customId } when the batch was accepted, null when batching is
+// unavailable or the submission was refused — the caller then runs the task
+// synchronously.
+export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool }) {
+    if (!providerSupportsBatch()) return null;
+    const settings = getProviderSettings("anthropic");
+    const apiKey = settings.apiKey.trim();
+    if (!apiKey) return null;
+
+    let model;
+    try {
+        model = await resolveModel("anthropic", {
+            fallbackModel: ANTHROPIC_DEFAULT_MODEL,
+            providerLabel: "Anthropic",
+            taskKey,
+        });
+    } catch {
+        return null;
+    }
+
+    // The synchronous tool call's parameters minus the interactive knobs
+    // (streaming, thinking, the learned-ceiling retry) that need a round trip.
+    const params = {
+        model,
+        max_tokens: Math.max(anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT, 1024),
+        messages: toAnthropicMessages(history),
+        system: systemPrompt,
+        ...(tool ? {
+            tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
+            tool_choice: { type: "tool", name: tool.name },
+        } : {}),
+    };
+
+    const record = isTelemetryEnabled()
+        ? startAiRecord({
+            taskKey,
+            provider: "anthropic",
+            model,
+            systemPrompt,
+            userMessage: history?.[0]?.parts?.[0]?.text ?? "",
+            awaitingOutcome: true,
+            batch: true,
+        })
+        : null;
+
+    try {
+        const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages/batches`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...anthropicBatchHeaders(apiKey) },
+            body: JSON.stringify({ requests: [{ custom_id: customId, params }] }),
+        });
+        if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            logDebugEvent("ai-call", `Batch submission for "${taskKey}" refused (${response.status}): ${extractErrorMessage(payload, "unknown error")}`);
+            finishAiRecord(record, { ok: false, error: `batch submission refused (${response.status})` });
+            return null;
+        }
+        const batch = await response.json();
+        const batchId = String(batch?.id ?? "").trim();
+        if (!batchId) return null;
+        pendingBatchIds.set(customId, batchId);
+        logDebugEvent("ai-call", `Batch submission for "${taskKey}" accepted as ${batchId}.`);
+        return { customId, batchId, record };
+    } catch (error) {
+        logDebugEvent("ai-call", `Batch submission for "${taskKey}" failed: ${error?.message || error}`);
+        finishAiRecord(record, { ok: false, error: String(error?.message || error) });
+        return null;
+    }
+}
+
+// One batch request's outcome: { status: "pending" | "done" | "failed",
+// payload, rawText, usage }. payload is the tool input (or null when the model
+// answered in text — the caller parses rawText); validation and application
+// stay with the caller.
+export async function retrieveAIBatch(customId) {
+    const batchId = pendingBatchIds.get(customId);
+    const settings = getProviderSettings("anthropic");
+    const apiKey = settings.apiKey.trim();
+    if (!batchId || !apiKey) return { status: "failed", payload: null, rawText: "" };
+    const headers = anthropicBatchHeaders(apiKey);
+
+    let batch;
+    try {
+        const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages/batches/${encodeURIComponent(batchId)}`, { headers });
+        if (response.status === 404) {
+            pendingBatchIds.delete(customId);
+            return { status: "failed", payload: null, rawText: "" };
+        }
+        if (!response.ok) {
+            if (response.status === 429 || response.status >= 500) return { status: "pending", payload: null, rawText: "" };
+            pendingBatchIds.delete(customId);
+            return { status: "failed", payload: null, rawText: "" };
+        }
+        batch = await response.json();
+    } catch {
+        return { status: "pending", payload: null, rawText: "" }; // network hiccup: next poll
+    }
+
+    if (batch?.processing_status !== "ended") return { status: "pending", payload: null, rawText: "" };
+    pendingBatchIds.delete(customId);
+
+    try {
+        const resultsResponse = await fetch(batch.results_url, { headers });
+        if (!resultsResponse.ok) return { status: "failed", payload: null, rawText: "" };
+        const jsonl = await resultsResponse.text();
+        for (const line of jsonl.split("\n")) {
+            if (!line.trim()) continue;
+            let row;
+            try { row = JSON.parse(line); } catch { continue; }
+            if (row?.custom_id !== customId) continue;
+            const result = row?.result;
+            if (result?.type !== "succeeded") {
+                logDebugEvent("ai-call", `Batch request ${customId} ended with "${result?.type ?? "unknown"}".`);
+                return { status: "failed", payload: null, rawText: "", usage: normalizeUsage(result?.message) };
+            }
+            const toolUse = (result?.message?.content ?? []).find((block) => block?.type === "tool_use");
+            const rawText = extractAnthropicText(result?.message);
+            return {
+                status: "done",
+                payload: toolUse?.input && typeof toolUse.input === "object" ? toolUse.input : null,
+                rawText,
+                usage: normalizeUsage(result?.message),
+            };
+        }
+        return { status: "failed", payload: null, rawText: "" };
+    } catch (error) {
+        logDebugEvent("ai-call", `Batch results for ${customId} could not be read: ${error?.message || error}`);
+        return { status: "failed", payload: null, rawText: "" };
     }
 }

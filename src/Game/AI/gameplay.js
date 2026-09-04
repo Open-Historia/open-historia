@@ -1,5 +1,5 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
+import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
@@ -58,9 +58,10 @@ import {
   buildPromptContext,
   formatDateReadable,
   getUnconsolidatedEvents,
-  renderTemplate,
   resolveHelperValues,
 } from "./promptContext.js";
+import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
+import { attachAttemptOutcome, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
   loadCountryNames,
@@ -1337,12 +1338,29 @@ const difficultyScopeForTask = (taskKey) => {
   return "simulation";
 };
 
+// Telemetry: how much in-game time this task's prompt covers, from the round
+// dates the template variables carry. Null for tasks without a window.
+const computeSimulatedDays = (variables) => {
+  const origin = Date.parse(String(variables?.date ?? ""));
+  const target = Date.parse(String(variables?.targetDate ?? ""));
+  if (!Number.isFinite(origin) || !Number.isFinite(target)) return null;
+  return Math.max(0, Math.round((target - origin) / 86400000));
+};
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
   userMessage,
   validatePayload,
   variables,
+  // Batch routing (ported from the abdulrahman-2005 fork): sync:false marks a
+  // task nobody is waiting on. When the player opted in (Settings → Batch
+  // background AI tasks) and the provider has a batch endpoint, the task is
+  // submitted there and onBatchResult(payload, source) fires from the poller
+  // when the validated answer lands — or with the fallback's answer when it
+  // fails. Everything else takes the normal synchronous path, unchanged.
+  sync = true,
+  onBatchResult,
 }) => {
   const prompts = await loadPromptCatalog();
   // The GM operational contract is native behaviour: a campaign's frozen
@@ -1355,10 +1373,18 @@ const runJsonTask = async (taskKey, {
     variables,
   });
   const helperValues = resolveHelperValues(prompts.helpers, variables, { includeKeys: liveDemand.helperKeys });
-  let systemPrompt = renderTemplate(promptTemplate, {
+  // Two-pass layout (promptLayout.js): the game-lifetime constants come out
+  // first, so the prompt opens with a prefix that is byte-identical from one
+  // call to the next within a campaign — the part a provider's prompt cache
+  // can discount. Kept as text rather than an offset because the directives
+  // and the de-duplication below rewrite the prompt; the offset is recomputed
+  // when the call goes out.
+  const rendered = renderTemplateCached(promptTemplate, {
     ...variables,
     ...helperValues,
   });
+  let systemPrompt = rendered.text;
+  const staticPromptPrefix = rendered.text.slice(0, rendered.staticPrefixEnd);
 
   // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
   try {
@@ -1832,6 +1858,28 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     "(The pre-round-one briefing is reproduced in full earlier in this prompt.)",
   );
 
+  // Batch routing (see the parameter): a deferred task leaves here with no
+  // answer and no attempt loop; its result arrives through pollPendingBatches.
+  if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
+    const batchTool = getGameplayTool(taskKey);
+    if (batchTool && providerSupportsBatch()) {
+      const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
+      const submitted = await submitAIBatch({
+        customId,
+        history: [{ role: "user", parts: [{ text: userMessage }] }],
+        systemPrompt,
+        taskKey,
+        tool: batchTool,
+      });
+      if (submitted) {
+        registerPendingBatch({ customId, fallback, onBatchResult, record: submitted.record ?? null, taskKey, validatePayload });
+        return { deferred: true, generation: { source: "batch", fallbackReason: "", deferred: true }, payload: null };
+      }
+      // Submission refused (no key, provider hiccup): the synchronous path
+      // below — batching is an optimization, never a dependency.
+    }
+  }
+
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
@@ -1920,6 +1968,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         // answerable from the log rather than by re-deriving it.
         systemPrompt,
       });
+      // Telemetry: the record for THIS attempt comes back through the sink, so
+      // the validation outcome below lands on the call that produced it.
+      const attemptSink = {};
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
@@ -1939,6 +1990,13 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         logLabel: `task "${taskKey}"`,
         // Which model answers is the task's business (Settings → Per-task models).
         taskKey,
+        // Where the cacheable prefix of the system prompt ends — null once the
+        // prompt was rewritten past it. Anthropic pins it with an explicit
+        // cache_control block; OpenAI and Gemini cache identical prefixes on
+        // their own, so the layout alone helps them.
+        staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
+        __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
+        __debugSink: attemptSink,
       });
       // This attempt is answered: stop counting silence against it. Validation,
       // salvage and the retry's own prompt evaluation all happen with nothing on
@@ -2135,6 +2193,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       }
 
       if (validation.valid) {
+        attachAttemptOutcome(attemptSink.record, { ok: true, parsedSummary: normalizeParsedSummary(taskKey, parsed) });
         logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
         // The payload that was ACCEPTED, not only the ones that were rejected.
         // A turn that validates cleanly and still produces the wrong world — a
@@ -2150,6 +2209,11 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       // Every rejection, including the one attempt 2 goes on to fix. A turn that
       // came out right on the retry still tells you which rule the model keeps
       // breaking, and that is invisible in a log that only records failures.
+      attachAttemptOutcome(attemptSink.record, {
+        ok: false,
+        validationError: validation.error,
+        parsedSummary: normalizeParsedSummary(taskKey, parsed),
+      });
       logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} REJECTED: ${validation.error}`, {
         clearedSchema: schemaValid,
         rawResponse: rawText,
@@ -2397,7 +2461,7 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult } = {}) => {
   const variables = await buildTemplateVariables(bundle, {
     // Resolved orders are consolidated alongside the events they caused. Capping
     // the history that gets SENT each turn is not enough on its own: drop the old
@@ -2412,7 +2476,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
   });
-  const { generation, payload } = await runJsonTask("eventConsolidator", {
+  const { generation, payload, deferred } = await runJsonTask("eventConsolidator", {
     fallback: () => ({
       summary: [
         events.map((event) => `${event.date || "undated"} ${event.title}: ${event.description}`).join("; "),
@@ -2422,7 +2486,12 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
     }),
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     variables,
+    // Off the critical path when the caller supplies an applier: the summary
+    // may land later through the batch poller.
+    sync: typeof onBatchResult !== "function",
+    onBatchResult,
   });
+  if (deferred) return { deferred: true, generation, summary: "" };
   return { generation, summary: normalizeString(payload?.summary) };
 };
 
@@ -2450,29 +2519,58 @@ const compactHistoryIfNeeded = async (bundle) => {
     .filter((action) => action.status !== "planned" && action.id && !priorActionIds.has(action.id))
     .slice(0, CONSOLIDATION_BATCH_SIZE);
 
+  const throughEvent = eventsToConsolidate.at(-1);
+  // One shape for both writers — the synchronous return below and the
+  // deferred applier — so a batch-consolidated entry reads exactly like a
+  // live one.
+  const entryFor = (summary, source, priorHistory) => ({
+    actionIds: actionsToConsolidate.map((action) => action.id),
+    chatIds: closedChats.map((chat) => chat.id),
+    createdAt: new Date().toISOString(),
+    source,
+    summary,
+    throughDate: throughEvent?.date || bundle.game.gameDate,
+    throughEventId: throughEvent?.id || priorHistory.at(-1)?.throughEventId || "",
+    throughRound: bundle.game.round,
+  });
   const { generation, summary } = await consolidateHistoryBatch(
     bundle,
     eventsToConsolidate,
     closedChats,
     actionsToConsolidate,
+    {
+      // Batch routing (Settings → Batch background AI tasks): the summary lands
+      // later through the poller and is written here out of band, while the
+      // jump that asked for it carries on with the events unconsolidated.
+      onBatchResult: async (resultPayload, source) => {
+        if (isSimulationBusy()) return false;
+        const summaryText = normalizeString(resultPayload?.summary);
+        if (!summaryText) return true;
+        const current = await readGameStateBundle({ force: true });
+        const currentWorld = normalizeWorldState(current.world);
+        // Superseded when a synchronous consolidation covered these events
+        // in the meantime: two summaries of the same weeks would double the
+        // campaign's memory of them.
+        const stillOpen = throughEvent
+          ? getUnconsolidatedEvents(current.events, currentWorld).some((event) => event.id === throughEvent.id)
+          : true;
+        if (!stillOpen) return true;
+        await writeWorldState(normalizeWorldState({
+          ...currentWorld,
+          consolidatedHistory: [...currentWorld.consolidatedHistory, entryFor(summaryText, source, currentWorld.consolidatedHistory)],
+        }));
+        logDebugEvent("ai", `Deferred consolidation applied (${source}): ${eventsToConsolidate.length} events, ${closedChats.length} chats.`);
+        return true;
+      },
+    },
   );
   if (!summary) return world;
-  const throughEvent = eventsToConsolidate.at(-1);
 
   return normalizeWorldState({
     ...world,
     consolidatedHistory: [
       ...world.consolidatedHistory,
-      {
-        actionIds: actionsToConsolidate.map((action) => action.id),
-        chatIds: closedChats.map((chat) => chat.id),
-        createdAt: new Date().toISOString(),
-        source: generation.source,
-        summary,
-        throughDate: throughEvent?.date || bundle.game.gameDate,
-        throughEventId: throughEvent?.id || world.consolidatedHistory.at(-1)?.throughEventId || "",
-        throughRound: bundle.game.round,
-      },
+      entryFor(summary, generation.source, world.consolidatedHistory),
     ],
   });
 };
@@ -2571,6 +2669,76 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
 export const isSimulationBusy = () => activeSimulations > 0
   || pendingProjectsJump !== null
   || pendingJumpSegment !== null;
+
+// --- Batch dispatch (ported from the abdulrahman-2005 fork) -------------------
+// Tasks submitted with sync:false register here; a lazy poller asks the
+// provider's batch endpoint and applies validated results out of band, never
+// while a simulation is running. The registry is in memory on purpose: a page
+// reload orphans an in-flight batch, which for the event consolidator only
+// means those events stay unconsolidated and ride along with the next
+// consolidation — nothing is lost, and there is no stale handle to migrate.
+const batchBackgroundTasksEnabled = () => getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks);
+const BATCH_POLL_INTERVAL_MS = 60000;
+const pendingBatches = new Map(); // customId -> { taskKey, fallback, validatePayload, onBatchResult }
+let batchPollerTimer = null;
+
+const registerPendingBatch = (entry) => {
+  pendingBatches.set(entry.customId, entry);
+  logDebugEvent("ai", `Task "${entry.taskKey}" submitted as batch ${entry.customId} (${pendingBatches.size} in flight).`);
+  if (!batchPollerTimer && typeof window !== "undefined") {
+    batchPollerTimer = window.setInterval(() => { pollPendingBatches(); }, BATCH_POLL_INTERVAL_MS);
+  }
+};
+
+export const pendingBatchCount = () => pendingBatches.size;
+
+export const pollPendingBatches = async () => {
+  if (pendingBatches.size === 0 || isSimulationBusy()) return;
+  for (const [customId, entry] of [...pendingBatches]) {
+    const outcome = await retrieveAIBatch(customId);
+    if (outcome.status === "pending") continue;
+    pendingBatches.delete(customId);
+    try {
+      let result = null;
+      if (entry.record && outcome.usage) entry.record.usage = outcome.usage;
+      if (outcome.status === "done") {
+        const candidate = outcome.payload ?? (outcome.rawText ? extractJsonPayload(outcome.rawText) : null);
+        let validation = candidate
+          ? validateGameplayPayload(entry.taskKey, candidate)
+          : { valid: false, error: "The batch answer carried no parseable JSON or tool input." };
+        if (validation.valid && typeof entry.validatePayload === "function") {
+          // No interactive retry stands behind a batch job: the final-attempt
+          // (salvage) treatment, as the synchronous path gives attempt 2.
+          const taskError = normalizeString(await entry.validatePayload(candidate, { attempt: 1, finalAttempt: true }));
+          if (taskError) validation = { valid: false, error: taskError };
+        }
+        if (validation.valid) {
+          result = { value: candidate, source: "batch" };
+          attachAttemptOutcome(entry.record, { ok: true, parsedSummary: normalizeParsedSummary(entry.taskKey, candidate) });
+          finishAiRecord(entry.record, { ok: true, rawResponse: outcome.rawText ?? "" });
+        } else {
+          attachAttemptOutcome(entry.record, { ok: false, validationError: validation.error });
+          finishAiRecord(entry.record, { ok: false, error: "The batch answer failed validation.", rawResponse: outcome.rawText ?? "" });
+          logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") failed validation: ${validation.error} Applying the deterministic fallback.`);
+        }
+      } else {
+        finishAiRecord(entry.record, { ok: false, error: "The batch request did not succeed." });
+        logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") did not succeed. Applying the deterministic fallback.`);
+      }
+      if (!result) {
+        const fallbackPayload = typeof entry.fallback === "function" ? await entry.fallback() : null;
+        result = fallbackPayload ? { value: fallbackPayload, source: "fallback" } : null;
+      }
+      if (!result) continue;
+      const applied = await entry.onBatchResult(result.value, result.source);
+      // The applier declined (a simulation started meanwhile): keep the entry
+      // and try again on the next poll.
+      if (applied === false) pendingBatches.set(customId, entry);
+    } catch (error) {
+      logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") could not be applied: ${normalizeString(error?.message || error)}`);
+    }
+  }
+};
 
 export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
 
