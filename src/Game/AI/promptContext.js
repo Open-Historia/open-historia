@@ -118,9 +118,77 @@ export const getUnconsolidatedEvents = (events, world) => {
   return boundaryIndex >= 0 ? normalizedEvents.slice(boundaryIndex + 1) : normalizedEvents;
 };
 
+// --- Context ranking (ported from the abdulrahman-2005 fork) ------------------
+// The recent-events window used to be a flat recency cut (slice(-limit)): a
+// major war turning point aged out of the prompt in favour of yesterday's
+// parade. Ranking keeps the SAME budget but re-weights which entries fill it —
+// recency (a soft decay over about six months), importance (a major event
+// carries 2.5x the weight of a minor one) and relevance (events moving
+// territory for the polities currently on the map). The selection is re-sorted
+// chronologically, so the text downstream reads exactly as before; only WHICH
+// events made it changed.
+const normalizeLower = (value) => String(value ?? "").trim().toLowerCase();
+
+const buildLedgerActorSet = (world) => {
+  const actors = new Set();
+  if (!world) return actors;
+  const normalized = normalizeWorldState(world);
+  for (const unit of normalizeArray(normalized.units)) {
+    const owner = toCountryName(normalizeString(unit?.ownerCode));
+    if (owner) actors.add(owner.toLowerCase());
+  }
+  for (const owner of Object.values(normalized.regionOwnershipOverrides ?? {})) {
+    const name = toCountryName(normalizeString(owner));
+    if (name) actors.add(name.toLowerCase());
+  }
+  for (const [code, entry] of Object.entries(normalized.polityOverrides ?? {})) {
+    for (const candidate of [code, entry?.name]) {
+      const name = toCountryName(normalizeString(candidate));
+      if (name) actors.add(name.toLowerCase());
+    }
+  }
+  return actors;
+};
+
+const daysBetweenIso = (from, to) => {
+  const start = dayjs(from);
+  const end = dayjs(to);
+  return start.isValid() && end.isValid() ? end.diff(start, "day") : 0;
+};
+
+const rankEvent = (event, { ledgerActors, currentDate }) => {
+  const date = normalizeString(event?.date);
+  const recencyDays = currentDate && date ? Math.max(0, daysBetweenIso(date, currentDate)) : 0;
+  const recencyScore = 1 / (1 + recencyDays / 180);
+  const importanceScore = normalizeLower(event?.importance) === "major" ? 1 : 0.4;
+  const involved = normalizeArray(event?.impacts?.regionTransfers)
+    .flatMap((transfer) => [transfer?.fromCode, transfer?.toCode])
+    .map((code) => toCountryName(normalizeString(code)))
+    .filter(Boolean);
+  const relevance = involved.length === 0 || involved.some((name) => ledgerActors.has(normalizeLower(name))) ? 1 : 0.5;
+  return recencyScore * importanceScore * relevance;
+};
+
+// The events that fill a window of `limit`, in their original (chronological)
+// order. Everything fits when the list is within the limit, so a consolidation
+// pass that asks for every event is untouched.
+export const selectRankedEvents = (events, { limit, world = null, currentDate = "" } = {}) => {
+  if (!(limit > 0) || events.length <= limit) return events;
+  const ledgerActors = buildLedgerActorSet(world);
+  return events
+    .map((entry, index) => ({ entry, index, score: rankEvent(entry, { ledgerActors, currentDate }) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)
+    .slice(0, limit)
+    .sort((a, b) => a.index - b.index)
+    .map((ranked) => ranked.entry);
+};
+
 export const buildEventHistoryText = (
   events,
   {
+    // The game date, for the recency weighting; blank ranks by importance and
+    // relevance alone.
+    currentDate = "",
     limit = 10,
     maxChars = 0,
     world = null,
@@ -131,8 +199,7 @@ export const buildEventHistoryText = (
     return "No unconsolidated events have been recorded yet.";
   }
 
-  const rendered = normalizedEvents
-    .slice(-limit)
+  const rendered = selectRankedEvents(normalizedEvents, { limit, world, currentDate })
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
       const description = normalizeString(event.description);
@@ -325,6 +392,7 @@ export const buildCampaignHistoryText = (
   {
     consolidatedMaxChars = 0,
     consolidatedSelection = "tail",
+    currentDate = "",
     eventMaxChars = 0,
     limit = 24,
   } = {},
@@ -336,7 +404,7 @@ export const buildCampaignHistoryText = (
   }),
   "",
   "RECENT EVENTS:",
-  buildEventHistoryText(events, { limit, maxChars: eventMaxChars, world }),
+  buildEventHistoryText(events, { currentDate, limit, maxChars: eventMaxChars, world }),
 ].join("\n");
 
 
@@ -1506,7 +1574,7 @@ export const buildPromptContext = async (bundle, {
   }
 
   if (wants("recentEvents")) {
-    result.recentEvents = buildEventHistoryText(bundle.events, {
+    result.recentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
       limit: eventLimit,
       maxChars: eventHistoryMaxChars,
       world: bundle.world,
@@ -1573,7 +1641,7 @@ export const buildPromptContext = async (bundle, {
     put("historicalAttentionStatus", historicalAttentionStatus);
 
     if (wants("recentEventsLong")) {
-      const campaignRecentEvents = buildEventHistoryText(bundle.events, {
+      const campaignRecentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
         limit: longEventLimit,
         maxChars: longEventHistoryMaxChars,
         world: bundle.world,
@@ -1672,7 +1740,7 @@ export const buildPromptContext = async (bundle, {
 
   if (wants("eventsToConsolidate")) {
     result.eventsToConsolidate =
-      eventsToConsolidate || buildEventHistoryText(bundle.events, { limit: 12 });
+      eventsToConsolidate || buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate, limit: 12 });
   }
 
   if (wants("advisorMessages")) {

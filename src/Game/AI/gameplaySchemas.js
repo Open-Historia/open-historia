@@ -1,3 +1,4 @@
+import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -928,6 +929,14 @@ const jumpImpactsSchema = {
   ),
 };
 
+// Category tags (runtime/eventTags.js): the timeline's filter chips.
+const eventTagsSchema = {
+  type: "array",
+  description: "Categorization tags for the timeline's filter chips: Military, Diplomacy, Economy, Politics, Culture or Disaster (up to three).",
+  items: { type: "string", enum: [...EVENT_TAG_ENUM] },
+  maxItems: MAX_EVENT_TAGS,
+};
+
 const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
@@ -938,6 +947,7 @@ const eventSchema = {
     description: textSchema("Specific narrative description and consequences."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
+    tags: eventTagsSchema,
     notable: {
       type: "boolean",
       description: "Whether this event is important enough to stop an automatic jump.",
@@ -1240,6 +1250,7 @@ const pregameEventSchema = {
     description: textSchema("Specific narrative description and its consequences."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
+    tags: eventTagsSchema,
     warId: textSchema(
       "Canonical war id when this pre-game event is the one that started, joined, paused or ended a war listed in canonicalUpdates. Blank otherwise.",
     ),

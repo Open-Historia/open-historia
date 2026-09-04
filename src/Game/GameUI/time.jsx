@@ -15,6 +15,7 @@ import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStr
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
+import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -550,7 +551,8 @@ const ghostButtonStyle = {
 };
 
 const EventCard = ({ event, footer = null, lookups }) => {
-    const tags = collectEventTags(event, lookups);
+    // The model's category tags first, then the participants the card derives.
+    const tags = [...(Array.isArray(event.tags) ? event.tags : []), ...collectEventTags(event, lookups)];
     const mapChangeCount = getEventMapChangeCount(event);
 
     return (
@@ -1268,10 +1270,29 @@ const TimelineHistoryPanel = ({
     visibleEventCount,
     warning,
 }) => {
-    const totalEvents = record?.events?.length || 0;
+    // Category filter chips (ported from the abdulrahman-2005 fork): only the
+    // categories present on this turn's events appear; null = no filter. Older
+    // events without tags are always shown. The choice is keyed by the record,
+    // so a new turn starts unfiltered without an effect to reset it.
+    const [categoryChoice, setCategoryChoice] = useState({ recordId: null, tag: null });
+    const categoryFilter = record && categoryChoice.recordId === record.id ? categoryChoice.tag : null;
+    const categoryChips = useMemo(() => {
+        const present = new Set();
+        for (const event of record?.events ?? []) {
+            for (const tag of Array.isArray(event?.tags) ? event.tags : []) present.add(tag);
+        }
+        return EVENT_TAG_ENUM.filter((tag) => present.has(tag));
+    }, [record?.events]);
+    const filteredEvents = useMemo(() => {
+        const events = record?.events ?? [];
+        return categoryFilter
+            ? events.filter((event) => Array.isArray(event?.tags) && event.tags.includes(categoryFilter))
+            : events;
+    }, [record?.events, categoryFilter]);
+    const totalEvents = filteredEvents.length;
     const visibleEvents =
     totalEvents > 0
-    ? record.events.slice(0, Math.min(visibleEventCount, totalEvents))
+    ? filteredEvents.slice(0, Math.min(visibleEventCount, totalEvents))
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
     const lastVisibleEventRef = React.useRef(null);
@@ -1397,6 +1418,32 @@ const TimelineHistoryPanel = ({
             <EmptyPanelState text="No world events were recorded for this time skip." />
         ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            {categoryChips.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                {categoryChips.map((tag) => {
+                    const active = categoryFilter === tag;
+                    return (
+                        <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setCategoryChoice({ recordId: record.id, tag: active ? null : tag })}
+                        style={{
+                            padding: "0.2rem 0.6rem",
+                            borderRadius: "999px",
+                            border: active ? "1px solid rgba(96,165,250,0.8)" : "1px solid rgba(255,255,255,0.16)",
+                            background: active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.06)",
+                            color: "white",
+                            fontSize: "0.68rem",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                        }}
+                        >
+                        {tag}
+                        </button>
+                    );
+                })}
+                </div>
+            )}
             {visibleEvents.map((event, index) => {
                 const isLastVisible = index === visibleEvents.length - 1;
 

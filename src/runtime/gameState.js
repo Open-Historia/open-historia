@@ -5,6 +5,7 @@ import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
+import { normalizeEventTags } from "./eventTags.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
@@ -2756,6 +2757,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
       impacts: normalizeEventImpacts(null),
       importance: "minor",
       kind: "world",
+      tags: [],
       notable: false,
       playerRelated: false,
       storylineIds: [],
@@ -2786,6 +2788,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
     impacts: normalizeEventImpacts(entry.impacts),
     importance: normalizeOptionalString(entry.importance) || "minor",
     kind: normalizeOptionalString(entry.kind) || "world",
+    // Category tags for the timeline's filter chips (runtime/eventTags.js).
+    tags: normalizeEventTags(entry.tags),
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
     // Persistent storylines this event advances (AI/nativeWorldDirector.js).
