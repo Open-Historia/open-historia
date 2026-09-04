@@ -9,12 +9,13 @@ const surface = (owner, gadm0 = []) => ({
   geometry: { type: "MultiPolygon", coordinates: [] },
 });
 
-test("Map vNext uses the geographic label for one uncontested regime", () => {
+test("Map vNext labels a polity with the name the scenario gave it, never a stock short form", () => {
   const labels = resolveContextualPolityLabels(
-    { features: [surface("Latvian lineage", ["LVA"])] },
+    { features: [surface("Latvian lineage", ["LVA"]), surface("Russian Federation", ["RUS"])] },
     { "Latvian lineage": { name: "Republic of Latvia" } },
   );
-  assert.equal(labels.get("Latvian lineage"), "Latvia");
+  assert.equal(labels.get("Latvian lineage"), "Republic of Latvia");
+  assert.equal(labels.get("Russian Federation"), "Russian Federation");
 });
 
 test("Map vNext distinguishes rival regimes sharing one homeland", () => {

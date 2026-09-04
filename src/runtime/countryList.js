@@ -80,6 +80,78 @@ export const mergeCountryOverrides = (countries, polityOverrides) => {
     .sort((left, right) => left.name.localeCompare(right.name));
 };
 
+// Merges the stock country list (read from the tiles: { code: "RUS", name:
+// "Russia" }) with the campaign's declared polities so a picker lists each
+// polity ONCE, under the name the scenario gave it.
+//
+// The Fault Lines map names its Russia "Russian Federation". The tiles say
+// "Russia". Both resolve to the stock code RUS, but the lineage resolver keeps
+// them apart on purpose (a stock name is a stock base, a declared name is a
+// declared identity), so the chat and spy pickers listed both - and choosing
+// "Russia" opened a thread with a country the world does not contain. A stock
+// entry therefore folds onto the declared polity that owns its stock code, and
+// only when exactly one declared polity does: two regimes claiming one homeland
+// stay distinct, and a declared name that resolves to no stock country is
+// simply added beside the stock list.
+//
+// `resolvers` are the identity functions (kept as parameters so this stays a
+// pure module the tests can drive without the identity tables).
+export const mergeStockAndDeclaredPolities = (
+  countries,
+  world,
+  { resolvePolityIdentity, resolveStockCountryCode } = {},
+) => {
+  const overrides = world?.polityOverrides && typeof world.polityOverrides === "object"
+    ? world.polityOverrides
+    : {};
+
+  // Stock code -> the ONE declared polity carrying it (null when contested).
+  const declaredByStockCode = new Map();
+  for (const [stableKey, polity] of Object.entries(overrides)) {
+    if (!clean(stableKey)) continue;
+    const code = (typeof resolveStockCountryCode === "function"
+      ? resolveStockCountryCode(stableKey) || resolveStockCountryCode(polity?.name) || resolveStockCountryCode(polity?.code)
+      : clean(polity?.code)) || "";
+    if (!code) continue;
+    declaredByStockCode.set(code, declaredByStockCode.has(code) ? null : stableKey);
+  }
+
+  const merged = new Map();
+  for (const entry of Array.isArray(countries) ? countries : []) {
+    if (!entry) continue;
+    const token = entry.name || entry.code;
+    const declared = entry.code ? declaredByStockCode.get(entry.code) : null;
+    const resolved = declared
+      ? declared
+      : typeof resolvePolityIdentity === "function"
+        ? resolvePolityIdentity(token, world, {
+          allowUnknown: false,
+          requireActive: false,
+          allowCoreMatch: true,
+          allowStockBase: true,
+        })?.resolved
+        : "";
+    // Ambiguous identities deliberately remain distinct. Never collapse a
+    // civil-war/rival-regime situation merely because names look related.
+    const key = resolved ? `lineage:${resolved}` : `stock:${entry.code || entry.name}`;
+    merged.set(key, { code: clean(entry.code), name: clean(entry.name) });
+  }
+
+  // polityOverride keys are the stable campaign lineage identities. If a stock
+  // entry already represents that lineage, preserve its code for flags/map UI
+  // while taking the CURRENT runtime display name.
+  for (const [stableKey, polity] of Object.entries(overrides)) {
+    if (!clean(stableKey)) continue;
+    const key = `lineage:${stableKey}`;
+    const existing = merged.get(key);
+    const name = clean(polity?.name) || clean(existing?.name) || clean(polity?.code) || clean(stableKey);
+    if (!name) continue;
+    merged.set(key, { code: clean(existing?.code) || clean(polity?.code) || clean(stableKey), name });
+  }
+
+  return dedupeByName([...merged.values()]).sort((left, right) => left.name.localeCompare(right.name));
+};
+
 // Belt and braces for any list handed to a picker, whatever its source.
 export const dedupeByName = (countries) => {
   const seen = new Set();

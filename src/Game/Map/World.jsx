@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
 import MapScene from "./MapScene.jsx";
-import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
+
 import { recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
 import {
   DEFAULT_BASEMAP_ID,
@@ -11,7 +11,6 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   ensureBasemapProtocol,
-  isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
 
@@ -224,7 +223,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext = false, scenarioDefaultPaxRelief = false) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -273,26 +272,25 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext
       sky: { "atmosphere-blend": 0 },
     };
   }
+  // The scenario's basemap is the basemap, at every zoom. Only the two "Atlas
+  // Relief" presets are a composed look of their own (ETOPO global relief fading
+  // into World Terrain Base); every other id renders the ESRI service it names.
+  // The renderer used to swap Ocean and a scenario-default Dark Gray for that
+  // relief composition too, so a map authored on Ocean or Dark Gray opened on a
+  // satellite-looking globe and only showed its real basemap once the relief
+  // had faded out around z5.
   const usePaxRelief = vNext && (
     basemapId === "atlas-relief"
     || basemapId === "atlas-relief-dark"
-    || basemapId === "ocean"
-    || basemapId === "ocean-dark"
-    // Fault Lines historically authored "dark-gray" as its scenario default.
-    // Preserve the new physical/Pax presentation ONLY for that authored default;
-    // an explicit player choice of Dark Gray Canvas must remain the real ESRI
-    // Dark Gray basemap instead of being silently hijacked into terrain relief.
-    || (scenarioDefaultPaxRelief && basemapId === "dark-gray")
   );
   const paxReliefPaints = getPaxReliefPaints(basemapId);
   const basemapPaint = vNext
-    ? usePaxRelief ? paxReliefPaints.terrain : ATLAS_PAINT
+    ? usePaxRelief ? paxReliefPaints.terrain : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT
     : SATELLITE_PAINT;
   // World_Ocean_Base bakes political names into the raster, while plain shaded
   // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
-  // World Terrain Base is the useful middle ground: label-free shaded land relief
-  // + bathymetry + coastal water context. Keep the authored preset id outside the
-  // renderer so saves/settings do not need a migration.
+  // World Terrain Base is the useful middle ground for the relief presets:
+  // label-free shaded land relief + bathymetry + coastal water context.
   const renderedBasemapId = usePaxRelief ? "terrain" : basemapId;
   const darkPhysicalVariant = basemapId === "ocean-dark" || basemapId === "atlas-relief-dark";
   const physicalBackground = darkPhysicalVariant
@@ -402,28 +400,19 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
-  const mapVNextEnabled = !useMapSetting(MAP_SETTING_KEYS.disableMapVNext);
-  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
-  // Runtime choices are player-local and reversible. Empty means the authored
-  // scenario background/basemap remains authoritative.
-  const useScenarioBackground = !validBasemapOverride;
-  const effectiveCustomBg = useScenarioBackground ? customBg : null;
-  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
+  // Map vNext is the renderer. The previous source-by-source renderer stayed
+  // reachable behind a setting while vNext was built; it is not a fallback now.
+  const mapVNextEnabled = true;
+  // The scenario author's background and basemap are authoritative. There is no
+  // in-game basemap picker, so a basemap id left in this browser's localStorage
+  // by an older build must not silently replace every scenario's choice.
+  const effectiveCustomBg = customBg;
+  const effectiveBgDeclared = bgDeclared;
   const effectiveBasemap = resolveBasemapId({
-    overrideId: validBasemapOverride,
+    overrideId: "",
     scenarioId: worldBasemap,
     fallbackId: DEFAULT_BASEMAP_ID,
   });
-  // The authored Fault Lines default currently resolves to dark-gray, but the
-  // player must still be able to explicitly choose the actual Dark Gray Canvas.
-  // Keep provenance separate from the resolved id so those two states can render
-  // differently without rewriting save/scenario data.
-  const scenarioDefaultPaxRelief = Boolean(
-    useScenarioBackground
-    && worldBasemap === "dark-gray"
-    && effectiveBasemap === "dark-gray"
-  );
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
   const worldStyle = useMemo(
@@ -433,25 +422,18 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveBgDeclared,
       styleUsesGlobeCoords,
       mapVNextEnabled,
-      scenarioDefaultPaxRelief,
     ),
     [
       effectiveBasemap,
       effectiveBgDeclared,
       effectiveCustomBg,
       mapVNextEnabled,
-      scenarioDefaultPaxRelief,
       styleUsesGlobeCoords,
     ],
   );
   const mapInstanceKey = buildBasemapRenderKey({
     projection,
-    // Scenario-default dark-gray and explicitly selected Dark Gray Canvas have
-    // the same resolved id but intentionally different styles. Include that
-    // provenance in the render key so MapLibre fully rebuilds when switching.
-    basemapId: scenarioDefaultPaxRelief
-      ? `${effectiveBasemap}:scenario-pax`
-      : effectiveBasemap,
+    basemapId: effectiveBasemap,
     backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
   });
   // R5.0: the gameplay camera is hard-locked to pitch 0 (dragRotate/touchPitch/
