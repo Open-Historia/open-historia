@@ -1,9 +1,11 @@
 /*! Open Historia — portions (server relay for OpenAI-style APIs + reasoning toggle) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import {
+    getModelForTask,
     getProviderSettings,
     getReasoningEnabled,
     getStoredProvider,
     providerSupportsModelDiscovery,
+    saveRecentModel,
     setProviderField,
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -618,9 +620,17 @@ function toAnthropicMessages(history) {
     }));
 }
 
-async function resolveModel(provider, { endpoint = "", headers = {}, fallbackModel = "", providerLabel, signal } = {}) {
-    const settings = getProviderSettings(provider);
-    const configuredModel = settings.model.trim();
+// The model one call runs with: the task's own override when the player set one
+// in Settings → Per-task models, else the provider default (typed, or discovered
+// below). Recorded afterwards so the model fields can suggest what was used.
+async function resolveModel(provider, options = {}) {
+    const model = await resolveConfiguredModel(provider, options);
+    saveRecentModel(provider, model);
+    return model;
+}
+
+async function resolveConfiguredModel(provider, { endpoint = "", headers = {}, fallbackModel = "", providerLabel, signal, taskKey } = {}) {
+    const configuredModel = getModelForTask(provider, taskKey).trim();
 
     if (configuredModel) {
         return provider === "gemini" ? normalizeGeminiModel(configuredModel) : configuredModel;
@@ -674,6 +684,7 @@ async function callGemini(systemPrompt, history, {
     retries = 3,
     retryDelay = 15000,
     signal,
+    taskKey,
     tool,
 } = {}) {
     const settings = getProviderSettings("gemini");
@@ -687,6 +698,7 @@ async function callGemini(systemPrompt, history, {
         fallbackModel: GEMINI_DEFAULT_MODEL,
         providerLabel: "Gemini",
         signal,
+        taskKey,
     });
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
@@ -1263,6 +1275,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         headers,
         providerLabel: "OpenAI",
         signal: opts.signal,
+        taskKey: opts.taskKey,
     });
 
     return callOpenAIStyleChatCompletions({
@@ -1299,6 +1312,7 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
         headers,
         providerLabel: "OpenAI Compatible",
         signal: opts.signal,
+        taskKey: opts.taskKey,
     });
 
     return callOpenAIStyleChatCompletions({
@@ -1335,6 +1349,7 @@ async function callAnthropic(systemPrompt, history, {
     retries = 3,
     retryDelay = 15000,
     signal,
+    taskKey,
     tool,
 } = {}) {
     let retriedAfterOverload = false;
@@ -1352,6 +1367,7 @@ async function callAnthropic(systemPrompt, history, {
         fallbackModel: ANTHROPIC_DEFAULT_MODEL,
         providerLabel: "Anthropic",
         signal,
+        taskKey,
     });
 
     const headers = {
@@ -1523,6 +1539,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     retries = 3,
     retryDelay = 15000,
     signal,
+    taskKey,
     tool,
 } = {}) {
     let retriedAfterOverload = false;
@@ -1541,6 +1558,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         fallbackModel: ANTHROPIC_DEFAULT_MODEL,
         providerLabel: "Anthropic Compatible",
         signal,
+        taskKey,
     });
 
     // Self-hosted proxy: tried directly first, falling back to the local relay
@@ -2236,7 +2254,7 @@ export async function sendMessage(userMessage, opts) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor" });
+        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor" });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
@@ -2345,7 +2363,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         conversationShape(freshPrompt, historyWithInstruction), { verbose: true });
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}` });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy" });
         const { reply, reaction, memorySummary: generatedMemorySummary } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
@@ -2412,7 +2430,7 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
         playerMessage, { verbose: true });
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}` });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}`, taskKey: "diplomacy" });
         const parsed = parseDiplomaticEnvelope(raw);
         if (!parsed.memorySummary && priorMemory?.summary) parsed.memorySummary = priorMemory.summary;
         logDebugEvent("diplomacy",

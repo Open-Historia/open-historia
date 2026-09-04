@@ -1,12 +1,20 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import {
+    AI_TASK_ROUTING,
     DEFAULT_PROVIDER,
     PROVIDER_OPTIONS,
+    deletePreset,
+    getProviderField,
     getProviderMeta,
     getReasoningEnabled,
+    getRecentModels,
+    getSavedPresets,
     providerSupportsModelDiscovery,
+    savePreset,
+    setProviderField,
     setReasoningEnabled,
+    updatePreset,
 } from "../AI/providerConfig.js";
 import {
     STRUCTURED_MODES,
@@ -94,6 +102,34 @@ const helperStyle = {
 
 const fieldGroupStyle = {
     marginBottom: "0.85rem",
+};
+
+const smallButtonStyle = {
+    padding: "0.4rem 0.7rem",
+    borderRadius: "8px",
+    border: "1px solid rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    color: "white",
+    fontSize: "0.78rem",
+    cursor: "pointer",
+};
+
+const primaryButtonStyle = {
+    ...smallButtonStyle,
+    backgroundColor: "rgba(59,130,246,0.35)",
+    borderColor: "rgba(59,130,246,0.6)",
+};
+
+const profileCardStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.5rem",
+    padding: "0.55rem 0.7rem",
+    borderRadius: "8px",
+    border: "1px solid rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(0,0,0,0.18)",
+    marginBottom: "0.45rem",
 };
 
 function providerMatchesQuery(option, query) {
@@ -439,43 +475,270 @@ const SettingsInput = ({
     type = "text",
     helperText,
     multiline = false,
-}) => (
-    <div style={fieldGroupStyle}>
-    <label style={labelStyle}>
-    {label}
-    </label>
-    {multiline ? (
-        <textarea
-        rows={4}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        autoComplete="off"
-        spellCheck={false}
-        style={{ ...inputStyle, fontFamily: "monospace", resize: "vertical" }}
-        />
-    ) : (
-        <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        autoComplete="off"
-        spellCheck={false}
-        style={inputStyle}
-        />
-    )}
-    {helperText && (
-        <div style={helperStyle}>
-        {helperText}
+    // Optional datalist entries (the provider's recent models): a hint, never a
+    // constraint — the field still accepts anything typed.
+    suggestions = null,
+}) => {
+    const listId = useId();
+    const list = Array.isArray(suggestions) && suggestions.length ? suggestions : null;
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>
+        {label}
+        </label>
+        {multiline ? (
+            <textarea
+            rows={4}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+            autoComplete="off"
+            spellCheck={false}
+            style={{ ...inputStyle, fontFamily: "monospace", resize: "vertical" }}
+            />
+        ) : (
+            <input
+            type={type}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+            autoComplete="off"
+            spellCheck={false}
+            list={list ? listId : undefined}
+            style={inputStyle}
+            />
+        )}
+        {list && (
+            <datalist id={listId}>
+            {list.map((entry) => <option key={entry} value={entry} />)}
+            </datalist>
+        )}
+        {helperText && (
+            <div style={helperStyle}>
+            {helperText}
+            </div>
+        )}
         </div>
-    )}
-    </div>
-);
+    );
+};
+
+// Configuration profiles (ported from the abdulrahman-2005 fork): saved
+// endpoint/key/model/parameter bundles for the two "compatible" providers, so
+// switching between a local server and a hosted gateway is one click.
+const PROFILE_FORM_PREFIX = {
+    "openai-compatible": "openaiCompatible",
+    "anthropic-compatible": "anthropicCompatible",
+};
+
+const EMPTY_PROFILE_FORM = { name: "", endpoint: "", apiKey: "", model: "", customParams: "" };
+
+const PresetManager = ({ provider, settings, onSettingChange }) => {
+    const prefix = PROFILE_FORM_PREFIX[provider];
+    const loadPresets = () => getSavedPresets().filter((preset) => preset.provider === provider);
+    // Keyed by provider where it is mounted, so a provider switch remounts it
+    // with fresh state instead of syncing in an effect.
+    const [presets, setPresets] = useState(loadPresets);
+    const [editingId, setEditingId] = useState(null);
+    const [form, setForm] = useState(EMPTY_PROFILE_FORM);
+
+    if (!prefix) return null;
+
+    const currentEndpoint = settings[`${prefix}Endpoint`] ?? "";
+    const currentModel = settings[`${prefix}Model`] ?? "";
+    const setField = (key) => (value) => setForm((current) => ({ ...current, [key]: value }));
+
+    const apply = (preset) => {
+        onSettingChange(`${prefix}Endpoint`, preset.settings?.endpoint ?? "");
+        // A profile saved without a key leaves the current key alone: the stock
+        // profiles have none, and wiping a pasted key on "Apply" is never wanted.
+        if (preset.settings?.apiKey) onSettingChange(`${prefix}ApiKey`, preset.settings.apiKey);
+        onSettingChange(`${prefix}Model`, preset.settings?.model ?? "");
+        onSettingChange(`${prefix}CustomParams`, preset.settings?.customParams ?? "");
+    };
+
+    const startCreate = () => {
+        // Prefilled from the fields above, so "save this setup" is one click.
+        setForm({
+            name: "",
+            endpoint: currentEndpoint,
+            apiKey: settings[`${prefix}ApiKey`] ?? "",
+            model: currentModel,
+            customParams: settings[`${prefix}CustomParams`] ?? "",
+        });
+        setEditingId("new");
+    };
+
+    const startEdit = (preset) => {
+        setForm({
+            name: preset.name ?? "",
+            endpoint: preset.settings?.endpoint ?? "",
+            apiKey: preset.settings?.apiKey ?? "",
+            model: preset.settings?.model ?? "",
+            customParams: preset.settings?.customParams ?? "",
+        });
+        setEditingId(preset.id);
+    };
+
+    const saveForm = () => {
+        const name = form.name.trim();
+        if (!name) return;
+        const values = { endpoint: form.endpoint, apiKey: form.apiKey, model: form.model, customParams: form.customParams };
+        if (editingId === "new") savePreset(provider, name, values);
+        else updatePreset(editingId, name, values);
+        setPresets(loadPresets());
+        setEditingId(null);
+    };
+
+    const remove = (preset) => {
+        if (!window.confirm(`Delete the "${preset.name}" profile?`)) return;
+        deletePreset(preset.id);
+        setPresets(loadPresets());
+    };
+
+    const box = {
+        marginBottom: "0.85rem",
+        padding: "0.7rem",
+        borderRadius: "8px",
+        border: "1px solid rgba(255,255,255,0.12)",
+        backgroundColor: "rgba(0,0,0,0.12)",
+    };
+
+    if (editingId) {
+        return (
+            <div style={box}>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.6rem" }}>
+            {editingId === "new" ? "New profile" : "Edit profile"}
+            </div>
+            <SettingsInput label="Profile name" value={form.name} onChange={setField("name")} placeholder="My local server" />
+            <SettingsInput label="API endpoint" value={form.endpoint} onChange={setField("endpoint")} placeholder="http://localhost:11434/v1" />
+            <SettingsInput
+            label="API key (optional)"
+            type="password"
+            value={form.apiKey}
+            onChange={setField("apiKey")}
+            placeholder="Leave empty to keep the current key when applied"
+            />
+            <SettingsInput label="Model" value={form.model} onChange={setField("model")} placeholder="Leave blank to auto-pick if supported" />
+            <SettingsInput
+            label="Custom parameters (JSON)"
+            multiline
+            value={form.customParams}
+            onChange={setField("customParams")}
+            placeholder='{"top_p": 0.9}'
+            />
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button type="button" onClick={saveForm} disabled={!form.name.trim()} style={{ ...primaryButtonStyle, opacity: form.name.trim() ? 1 : 0.5 }}>
+            Save profile
+            </button>
+            <button type="button" onClick={() => setEditingId(null)} style={smallButtonStyle}>
+            Cancel
+            </button>
+            </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={box}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <div style={{ fontSize: "0.8rem", fontWeight: 700 }}>Configuration profiles</div>
+        <button type="button" onClick={startCreate} style={primaryButtonStyle}>+ Save current</button>
+        </div>
+        {presets.length === 0 ? (
+            <div style={{ ...helperStyle, marginTop: 0 }}>No profiles yet. Save the current endpoint and model as one to switch back to it later.</div>
+        ) : presets.map((preset) => {
+            const active = (preset.settings?.endpoint ?? "") === currentEndpoint && (preset.settings?.model ?? "") === currentModel;
+            return (
+                <div key={preset.id} style={profileCardStyle}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {preset.name}
+                {active && (
+                    <span style={{ marginLeft: "0.4rem", fontSize: "0.68rem", fontWeight: 700, color: "rgba(147,197,253,0.95)" }}>ACTIVE</span>
+                )}
+                </div>
+                <div style={{ ...helperStyle, marginTop: "0.1rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {preset.settings?.endpoint || "Default endpoint"}
+                {preset.settings?.model ? ` · ${preset.settings.model}` : ""}
+                </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.3rem", flexShrink: 0 }}>
+                {!active && <button type="button" onClick={() => apply(preset)} style={primaryButtonStyle}>Apply</button>}
+                <button type="button" onClick={() => startEdit(preset)} style={smallButtonStyle}>Edit</button>
+                <button type="button" onClick={() => remove(preset)} style={smallButtonStyle} title="Delete profile">✕</button>
+                </div>
+                </div>
+            );
+        })}
+        <div style={{ ...helperStyle, marginTop: "0.2rem" }}>
+        Stored only in this browser. A profile saved without a key keeps whatever key is entered above when applied.
+        </div>
+        </div>
+    );
+};
+
+// Per-task model routing (ported from the abdulrahman-2005 fork). Collapsed by
+// default: blank fields inherit the provider default, so the single-model
+// experience is untouched until a player opts in. Hints are placeholders —
+// nothing is written until the player types.
+const TaskModelOverrides = ({ provider, suggestions }) => {
+    const [expanded, setExpanded] = useState(false);
+    // Keyed by provider at the mount site (see PresetManager).
+    const [overrides, setOverrides] = useState(() => Object.fromEntries(AI_TASK_ROUTING.map(({ key }) => [
+        key,
+        getProviderField(provider, `model_${key}`),
+    ])));
+
+    const update = (key, value) => {
+        setOverrides((current) => ({ ...current, [key]: value }));
+        setProviderField(provider, `model_${key}`, value);
+    };
+
+    const activeCount = Object.values(overrides).filter((value) => value && value.trim()).length;
+    const groups = [...new Set(AI_TASK_ROUTING.map((entry) => entry.group))];
+
+    return (
+        <div style={{ marginBottom: "0.85rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        style={{ ...smallButtonStyle, width: "100%", display: "flex", justifyContent: "space-between" }}
+        >
+        <span>Per-task models{activeCount ? ` (${activeCount} set)` : ""}</span>
+        <span>{expanded ? "Hide" : "Show"}</span>
+        </button>
+        {expanded && (
+            <div style={{ marginTop: "0.6rem" }}>
+            <div style={{ ...helperStyle, marginTop: 0, marginBottom: "0.7rem" }}>
+            Route individual AI tasks to a cheaper or a stronger model. Blank means the
+            default model above. Saved per provider, so switching providers switches the
+            whole set.
+            </div>
+            {groups.map((group) => (
+                <div key={group}>
+                <div style={{ fontSize: "0.76rem", fontWeight: 700, opacity: 0.8, margin: "0.5rem 0 0.4rem" }}>{group}</div>
+                {AI_TASK_ROUTING.filter((entry) => entry.group === group).map(({ key, label, hint }) => (
+                    <SettingsInput
+                    key={key}
+                    label={label}
+                    value={overrides[key] ?? ""}
+                    onChange={(value) => update(key, value)}
+                    placeholder={hint}
+                    suggestions={suggestions}
+                    />
+                ))}
+                </div>
+            ))}
+            </div>
+        )}
+        </div>
+    );
+};
 
 const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
     const meta = getProviderMeta(provider);
     const supportsModelDiscovery = providerSupportsModelDiscovery(provider);
+    const recentModels = getRecentModels(provider);
     // Global reasoning toggle — one switch, applied in every provider mode.
     const [reasoningOn, setReasoningOn] = useState(() => getReasoningEnabled());
     const toggleReasoning = () => {
@@ -501,6 +764,8 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
         {meta.description}
         </div>
 
+        <PresetManager key={provider} provider={provider} settings={settings} onSettingChange={onSettingChange} />
+
         {provider === "gemini" && (
             <>
             <SettingsInput
@@ -515,6 +780,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.geminiModel ?? ""}
             onChange={(value) => onSettingChange("geminiModel", value)}
+            suggestions={recentModels}
             placeholder="gemini-3.5-flash-lite"
             helperText="Leave blank to use the built-in Gemini default."
             />
@@ -543,6 +809,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.openaiModel ?? ""}
             onChange={(value) => onSettingChange("openaiModel", value)}
+            suggestions={recentModels}
             placeholder="gpt-..."
             helperText={
                 supportsModelDiscovery
@@ -579,6 +846,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.anthropicModel ?? ""}
             onChange={(value) => onSettingChange("anthropicModel", value)}
+            suggestions={recentModels}
             placeholder="claude-haiku-4-5"
             helperText="Claude model ids are manual here. Leave blank to use the built-in default."
             />
@@ -619,6 +887,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.openaiCompatibleModel ?? ""}
             onChange={(value) => onSettingChange("openaiCompatibleModel", value)}
+            suggestions={recentModels}
             placeholder="llama / qwen / gpt / mistral"
             helperText="Leave blank to auto-pick a model from /models."
             />
@@ -673,6 +942,7 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             label="Model"
             value={settings.anthropicCompatibleModel ?? ""}
             onChange={(value) => onSettingChange("anthropicCompatibleModel", value)}
+            suggestions={recentModels}
             placeholder="claude-haiku-4-5"
             helperText="The model id your proxy expects. Leave blank to use the built-in default."
             />
@@ -690,6 +960,8 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             />
             </>
         )}
+
+        <TaskModelOverrides key={provider} provider={provider} suggestions={recentModels} />
 
         <div style={{ marginTop: "0.5rem" }}>
         <Toggle

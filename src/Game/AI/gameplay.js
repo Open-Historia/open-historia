@@ -1887,6 +1887,8 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         // Names this call in the ai-call transport entries, so a task's own
         // entries and the request/response pair underneath them line up.
         logLabel: `task "${taskKey}"`,
+        // Which model answers is the task's business (Settings → Per-task models).
+        taskKey,
       });
       // This attempt is answered: stop counting silence against it. Validation,
       // salvage and the retry's own prompt evaluation all happen with nothing on
@@ -5445,6 +5447,7 @@ const runTargetedWorldMotionRepair = async ({
         deadline,
         reasoningEnabled: false,
         signal,
+        taskKey: "worldMotionRepair",
         tool: getGameplayTool("worldMotionRepair"),
       });
     } catch (error) {
@@ -5930,6 +5933,7 @@ const runWorldBreadthRepair = async ({
       ], {
         deadline,
         signal,
+        taskKey: "worldBreadthRepair",
         tool: getGameplayTool("jumpForward"),
       });
     } catch (error) {
@@ -7268,6 +7272,7 @@ You may omit a field when the existing value should remain exactly unchanged.`;
       {
         signal,
         reasoningEnabled: false,
+        taskKey: "countryStatSheet",
         ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration)
           ? { deadline: Date.now() + 90000 }
           : {}),
@@ -8079,7 +8084,7 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     `Respond in ${variables.language || "English"} as 4-6 short bullet points, each prefixed with "- ". No preamble, no closing remarks.`;
   const raw = await callAI(system, [
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
-  ]);
+  ], { taskKey: "countryStatSheet" });
   return String(raw || "").trim();
 };
 

@@ -134,8 +134,24 @@ function readStoredValue(setting) {
     return setting.defaultValue ?? "";
 }
 
+// A task-scoped model override lives under `model_<taskKey>`. Those fields are
+// synthesized here rather than listed per task in PROVIDER_SETTINGS, so
+// getProviderField/setProviderField work on them with no per-task schema and
+// the task list stays open-ended. Only providers with a base model setting
+// have anything for an override to inherit.
+const TASK_MODEL_FIELD = /^model_([A-Za-z][A-Za-z0-9_]*)$/;
+
 function getSettingConfig(provider, field) {
-    return PROVIDER_SETTINGS[normalizeProvider(provider)]?.[field] ?? null;
+    const normalized = normalizeProvider(provider);
+    const base = PROVIDER_SETTINGS[normalized];
+    if (!base) return null;
+    const direct = base[field];
+    if (direct) return direct;
+    const taskMatch = TASK_MODEL_FIELD.exec(String(field ?? ""));
+    if (taskMatch && base.model) {
+        return { storageKey: `${normalized}_model_${taskMatch[1]}`, defaultValue: "" };
+    }
+    return null;
 }
 
 export function normalizeProvider(provider) {
@@ -160,6 +176,48 @@ export function providerSupportsModelDiscovery(provider) {
 export function getProviderField(provider, field) {
     const setting = getSettingConfig(provider, field);
     return setting ? readStoredValue(setting) : "";
+}
+
+// Per-task model routing (ported from the abdulrahman-2005 fork). Every AI call
+// names its task (a prompt-pack task key, or "advisor"/"diplomacy" for the
+// chats); a task-scoped override wins, otherwise the provider's default model
+// applies, so a player who never opens the advanced section keeps the exact
+// single-model behaviour. Keys outside AI_TASK_ROUTING still resolve — they
+// just always fall back to the default.
+export const AI_TASK_ROUTING = [
+    { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
+    { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
+    { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
+    { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
+    { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
+    { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
+    { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
+    { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
+    { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
+    { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
+    { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
+    { key: "gameMaster", label: "Game Master", hint: "High-tier model (direct world edits)", group: "Player" },
+    { key: "actions", label: "Action suggestions", hint: "Small/mid-tier: short suggestions", group: "Player" },
+    { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
+    { key: "nextSpeaker", label: "Next speaker", hint: "Smallest model: single-field pick", group: "Player" },
+    { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
+    { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
+    { key: "catalystCreation", label: "Catalyst creation", hint: "Mid-tier model", group: "Player" },
+    { key: "catalystExecutor", label: "Catalyst execution", hint: "Mid-tier model", group: "Player" },
+    { key: "catalystSummary", label: "Catalyst summary", hint: "Small model", group: "Player" },
+    { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
+    { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
+    { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
+];
+
+export function getModelForTask(provider, taskKey) {
+    const normalized = normalizeProvider(provider);
+    const key = String(taskKey ?? "").trim();
+    if (key && /^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
+        const taskSpecific = getProviderField(normalized, `model_${key}`);
+        if (taskSpecific && taskSpecific.trim()) return taskSpecific.trim();
+    }
+    return getProviderField(normalized, "model");
 }
 
 export function setProviderField(provider, field, value) {
@@ -272,4 +330,140 @@ export function persistProviderSetting(stateKey, value) {
     const mapping = FORM_FIELD_MAP[stateKey];
     if (!mapping) return;
     setProviderField(mapping.provider, mapping.field, value);
+}
+
+// --- Configuration profiles (ported from the abdulrahman-2005 fork) ---
+//
+// A profile is an endpoint + key + model + custom-params bundle for the two
+// "compatible" providers, so a player who alternates between, say, a local
+// Ollama and OpenRouter switches with one click instead of retyping four
+// fields. Stored as one JSON array; the stock entries are written on first read
+// so they can be edited or deleted like any other.
+
+const PRESETS_STORAGE_KEY = "ai_provider_presets";
+
+const DEFAULT_PRESETS = [
+    {
+        id: "default_groq",
+        provider: "openai-compatible",
+        name: "Groq",
+        settings: { endpoint: "https://api.groq.com/openai/v1", apiKey: "", model: "llama-3.3-70b-versatile", customParams: "" },
+    },
+    {
+        id: "default_openrouter",
+        provider: "openai-compatible",
+        name: "OpenRouter",
+        settings: { endpoint: "https://openrouter.ai/api/v1", apiKey: "", model: "", customParams: "" },
+    },
+    {
+        id: "default_ollama",
+        provider: "openai-compatible",
+        name: "Local Ollama",
+        settings: { endpoint: "http://localhost:11434/v1", apiKey: "", model: "", customParams: "" },
+    },
+];
+
+function readStoredPresets() {
+    if (typeof localStorage === "undefined") return null;
+    try {
+        const stored = localStorage.getItem(PRESETS_STORAGE_KEY);
+        if (stored === null) return null;
+        const parsed = JSON.parse(stored);
+        return Array.isArray(parsed) ? parsed : null;
+    } catch (error) {
+        console.warn("Failed to load AI provider profiles", error);
+        return null;
+    }
+}
+
+function writeStoredPresets(presets) {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+}
+
+function normalizePresetSettings(settings) {
+    return {
+        endpoint: String(settings?.endpoint ?? ""),
+        apiKey: String(settings?.apiKey ?? ""),
+        model: String(settings?.model ?? ""),
+        customParams: String(settings?.customParams ?? ""),
+    };
+}
+
+export function getSavedPresets() {
+    const stored = readStoredPresets();
+    if (stored) return stored;
+    const seeded = DEFAULT_PRESETS.map((preset) => ({ ...preset, settings: { ...preset.settings } }));
+    writeStoredPresets(seeded);
+    return seeded;
+}
+
+export function savePreset(provider, name, settings) {
+    const presets = getSavedPresets();
+    const preset = {
+        id: `preset_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        provider: normalizeProvider(provider),
+        name: String(name ?? "").trim(),
+        settings: normalizePresetSettings(settings),
+    };
+    writeStoredPresets([...presets, preset]);
+    logDebugEvent("setting", `AI profile "${preset.name}" saved for ${preset.provider}.`);
+    return preset.id;
+}
+
+export function updatePreset(id, name, settings) {
+    const presets = getSavedPresets();
+    const index = presets.findIndex((preset) => preset.id === id);
+    if (index === -1) return false;
+    const next = { ...presets[index] };
+    if (name !== undefined && name !== null) next.name = String(name).trim();
+    if (settings) next.settings = normalizePresetSettings(settings);
+    presets[index] = next;
+    writeStoredPresets(presets);
+    return true;
+}
+
+export function deletePreset(id) {
+    const presets = getSavedPresets();
+    const remaining = presets.filter((preset) => preset.id !== id);
+    if (remaining.length === presets.length) return false;
+    writeStoredPresets(remaining);
+    return true;
+}
+
+// --- Recent models ---
+//
+// The last ten models each provider actually ran with, newest first, offered
+// as suggestions under the model fields. Recorded by resolveModel (main.jsx),
+// so discovered and task-routed models count too, not only typed ones.
+
+const RECENT_MODELS_LIMIT = 10;
+
+function recentModelsKey(provider) {
+    return `ai_recent_models_${normalizeProvider(provider)}`;
+}
+
+export function getRecentModels(provider) {
+    if (typeof localStorage === "undefined") return [];
+    try {
+        const stored = localStorage.getItem(recentModelsKey(provider));
+        const parsed = stored ? JSON.parse(stored) : [];
+        return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === "string" && entry) : [];
+    } catch {
+        return [];
+    }
+}
+
+export function saveRecentModel(provider, model) {
+    const name = String(model ?? "").trim();
+    if (!name || typeof localStorage === "undefined") return;
+    const current = getRecentModels(provider);
+    // The common case — the same model as last call — costs no write at all.
+    if (current[0] === name) return;
+    const next = [name, ...current.filter((entry) => entry !== name)].slice(0, RECENT_MODELS_LIMIT);
+    try {
+        localStorage.setItem(recentModelsKey(provider), JSON.stringify(next));
+    } catch {
+        // Storage full or unavailable: suggestions are a convenience, not state.
+    }
 }
