@@ -491,18 +491,19 @@ const ScenarioEditor = ({
     </div>
     {/* Country-label styling. The font renders from each player's LOCAL fonts
         (the map rasterizes glyphs client-side), so any installed family works —
-        the list only offers common ones. Empty font = the Impact default. */}
+        the list only offers common ones. Empty font = the Georgia default (the
+        map's serif stack in Nations.jsx). */}
     <div>
     <label style={fieldLabelStyle}>Country Label Font</label>
     <input
     list="oh-label-font-options"
-    placeholder="Impact (default)"
+    placeholder="Georgia (default)"
     style={inputStyle}
     value={formState.labelFont}
     onChange={(event) => onChange("labelFont", event.target.value)}
     />
     <datalist id="oh-label-font-options">
-    {["Impact", "Arial Black", "Arial", "Georgia", "Times New Roman", "Trebuchet MS", "Verdana", "Courier New", "Garamond", "Comic Sans MS"].map((font) => (
+    {["Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact", "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS"].map((font) => (
       <option key={font} value={font} />
     ))}
     </datalist>

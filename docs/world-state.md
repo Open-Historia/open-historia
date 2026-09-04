@@ -79,7 +79,7 @@ Events gained `warId` and `combatants[]` for the same rule. Polity names inside 
 
 ### 2c. Country-label styling (§ read by the map)
 
-Empty string = defaults (Impact, white letters, half-black outline). The font renders from the PLAYER's local fonts — MapLibre v5 rasterizes each glyph client-side using the stack as a CSS `font-family` (there is no glyphs endpoint). Set in scenario settings; surfaced to the map by `useWorldState`.
+Empty string = defaults (Georgia, white letters, half-black outline). The font renders from the PLAYER's local fonts — MapLibre v5 rasterizes each glyph client-side using the stack as a CSS `font-family` (there is no glyphs endpoint). Set in scenario settings; surfaced to the map by `useWorldState`.
 
 | Field | Type | Default | Notes (`gameState.js`) |
 |---|---|---|---|
