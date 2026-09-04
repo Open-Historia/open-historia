@@ -202,10 +202,24 @@ const onWorldUpdated = (event) => {
   if (!overrideState) publish();
 };
 
+// Another save became active (library.js). Everything held here belongs to the
+// previous save: drop it and bootstrap again from the new save's world.json,
+// which JSON_URLS.world already points at. The override is dropped too - a
+// reveal staged from the old save must not be painted over the new one.
+const onActiveGameChanged = () => {
+  sharedState = null;
+  overrideState = null;
+  publishedState = null;
+  bootstrapPromise = null;
+  recordMapTrace("world-store:game-switch", { subscribers: subscribers.size });
+  void bootstrap();
+};
+
 const installListeners = () => {
   if (listenersInstalled || typeof window === "undefined") return;
   listenersInstalled = true;
   window.addEventListener("oh:world-updated", onWorldUpdated);
+  window.addEventListener("oh:active-game-changed", onActiveGameChanged);
 };
 
 export function useWorldState() {
