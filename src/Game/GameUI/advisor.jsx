@@ -1,10 +1,16 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
+import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import StatsPane from "./stats.jsx";
 
 Chart.register(...registerables);
@@ -35,13 +41,463 @@ const ThinkingDots = () => {
     return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
 };
 
+// extractFencedJson now lives in advisorBlocks.js so it can be unit-tested (this
+// file cannot be — JSX, and it reaches maplibre-gl through assets.js).
+
+const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
+
 const parseMessage = (rawText) => {
-    const chartRegex = /```chart\s*([\s\S]*?)```/;
-    const match = rawText.match(chartRegex);
-    if (!match) return { text: rawText, chartConfig: null };
-    let chartConfig = null;
-    try { chartConfig = JSON.parse(match[1].trim()); } catch { chartConfig = null; }
-    return { text: rawText.replace(chartRegex, "").trim(), chartConfig };
+    const { rest: afterChart, json: chartConfig } = extractFencedJson(rawText, "chart");
+    const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
+    const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
+    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
+    const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
+    const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
+    // A deployment the advisor is recommending, ready to place with one click.
+    // Filtered hard: a button that places a unit somewhere unusable is worse
+    // than no button, so anything missing a real type or real coordinates goes.
+    const deployments = Array.isArray(deployRaw)
+        ? deployRaw.filter((entry) => entry
+            && UNIT_TYPES_ALLOWED.has(String(entry.type ?? "").toLowerCase())
+            && String(entry.name ?? "").trim()
+            && Number.isFinite(Number(entry.lng)) && Number.isFinite(Number(entry.lat))
+            && !(Number(entry.lng) === 0 && Number(entry.lat) === 0))
+        : null;
+    return {
+        text: rest.trim(),
+        chartConfig,
+        actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
+        messageDrafts,
+        deployments: deployments && deployments.length ? deployments : null,
+        projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
+        projectsTruncated,
+    };
+};
+
+// Applies the advisor's ```actions proposal to the real queue (readActionsState/
+// writeActionsState — the same storage the Actions panel reads and writes) and
+// reports what actually happened, so the confirmation card shows real outcomes
+// rather than just echoing the model's request back. Runs ONCE, right when a
+// reply arrives (see handleSend) — never at render time, since parseMessage
+// above runs on every re-render and must stay a pure read.
+const applyAdvisorActions = async (proposal) => {
+    if (!Array.isArray(proposal) || proposal.length === 0) return null;
+
+    const current = await readActionsState({ force: true });
+    let next = [...current];
+    const items = [];
+
+    for (const raw of proposal) {
+        if (!raw || typeof raw !== "object") continue;
+        const id = String(raw.id ?? "").trim();
+
+        if (raw.remove) {
+            if (!id) continue;
+            const before = next.length;
+            next = next.filter((action) => action.id !== id);
+            if (next.length < before) items.push({ change: "removed", title: raw.title || id });
+            continue;
+        }
+
+        const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
+        if (existingIndex !== -1) {
+            const existing = next[existingIndex];
+            const updated = {
+                ...existing,
+                ...(raw.title ? { title: String(raw.title) } : {}),
+                ...(raw.text ? { text: String(raw.text) } : {}),
+                ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
+            };
+            next[existingIndex] = updated;
+            items.push({ change: "updated", title: updated.title });
+            continue;
+        }
+
+        // No id, or an id that doesn't match anything current — either a genuinely
+        // new proposal, or the model referencing a stale/already-resolved id. Both
+        // land as a fresh queued action rather than being silently dropped.
+        const created = normalizeActionEntry({
+            title: raw.title,
+            text: raw.text,
+            kind: raw.kind === "chat" ? "chat" : "action",
+            source: "advisor",
+            status: "planned",
+        });
+        if (created) {
+            next.push(created);
+            items.push({ change: "added", title: created.title });
+        }
+    }
+
+    if (items.length === 0) return null;
+    await writeActionsState(next);
+    return items;
+};
+
+const CopyButton = ({ text, label = "Copy for a bug report", tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
+    const [state, setState] = useState("idle");
+    return (
+        <button
+        type="button"
+        onClick={async () => {
+            setState(await copyToClipboard(text) ? "copied" : "failed");
+            setTimeout(() => setState("idle"), 2000);
+        }}
+        style={{ background: "none", border: `1px solid ${tone}`, borderRadius: "6px", color, cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}
+        >
+        {state === "copied" ? "✓ Copied" : state === "failed" ? "Copy failed — select the text below" : label}
+        </button>
+    );
+};
+
+const RetryIcon = () => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+    </svg>
+);
+
+// The pasteable report.
+//
+// Contains no API key and no endpoint host. It DOES contain model output — the
+// tail of the reasoning and a few raw stream frames — because that is the part
+// that actually explains a failure, and it can quote the campaign. The UI says
+// so next to the button rather than letting someone paste it somewhere public
+// on the assumption that it is inert.
+const formatErrorReport = (message, diagnostics) => {
+    const lines = ["Open Historia — advisor error", "", `Message: ${message}`];
+    if (diagnostics && typeof diagnostics === "object") {
+        lines.push("");
+        for (const [key, value] of Object.entries(diagnostics)) {
+            if (value === "" || value === null || value === undefined) continue;
+            if (Array.isArray(value)) {
+                if (value.length === 0) continue;
+                lines.push(`${key}:`);
+                for (const entry of value) lines.push(`  ${String(entry)}`);
+                continue;
+            }
+            const text = String(value);
+            lines.push(text.includes("\n") ? `${key}:\n${text}` : `${key}: ${text}`);
+        }
+    }
+    return lines.join("\n");
+};
+
+// Shown under an advisor error. The message says what went wrong in plain
+// English; this is the part that says WHY, in enough detail to act on.
+//
+// The Retry button is offered on the NEWEST error only (see the caller). Most
+// advisor failures are the transport or an overloaded provider rather than
+// anything about the question, and the transport already waits and retries once
+// on its own before it gets here — so by this point the useful thing is a way to
+// ask again without retyping, not more advice.
+const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
+    const [open, setOpen] = useState(false);
+    const report = formatErrorReport(message, diagnostics);
+    const hasDetail = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
+
+    return (
+        <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+        {onRetry && (
+            <button type="button" onClick={onRetry} disabled={retrying}
+            style={{ alignItems: "center", background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "6px", color: "rgba(254,202,202,0.95)", cursor: retrying ? "default" : "pointer", display: "flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", opacity: retrying ? 0.6 : 1, padding: "0.2rem 0.55rem" }}>
+            <RetryIcon /> {retrying ? "Retrying…" : "Retry"}
+            </button>
+        )}
+        <CopyButton text={report} tone="rgba(239,68,68,0.45)" color="rgba(254,202,202,0.95)" />
+        {hasDetail && (
+            <button type="button" onClick={() => setOpen((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            {open ? "Hide details" : "Show details"}
+            </button>
+        )}
+        </div>
+        {open && (
+            <>
+            <p style={{ margin: "0.4rem 0 0", fontSize: "0.64rem", lineHeight: 1.4, color: "rgba(255,255,255,0.35)" }}>
+            No API key or endpoint is included. The model&apos;s own output is, so this may quote your campaign.
+            </p>
+            <pre data-no-translate style={{ margin: "0.35rem 0 0", padding: "0.5rem", background: "rgba(0,0,0,0.35)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", fontSize: "0.64rem", lineHeight: 1.45, maxHeight: "12rem", overflow: "auto", userSelect: "text", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {report}
+            </pre>
+            </>
+        )}
+        </div>
+    );
+};
+
+// Applies the advisor's ```projects proposal to the real board (world.projects,
+// the same field events write through impacts.projectOps) and reports what
+// actually happened, so the confirmation card shows real outcomes rather than
+// echoing the model's request back. Runs ONCE, right when a reply arrives (see
+// handleSend) — never at render time, since parseMessage runs on every re-render
+// and must stay a pure read.
+//
+// The read-modify-write spreads the WHOLE world back. A shallow patch here would
+// drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
+// — the same trap saveGame documents in libraryBar.jsx.
+// `round` matters as much as the date: applyProjectOps stamps it onto
+// updatedRound, which is the ONLY thing deriveProjectFlags uses to decide whether a
+// programme has gone quiet. Without it an advisor update kept whatever round the
+// last EVENT stamped, so asking the advisor to brief you on a project — it updates
+// the board, the receipt card says "1 updated" — left the card still wearing "No
+// recent progress". The event path has always passed it (gameplay.js); this one had
+// not.
+const applyAdvisorProjects = async (proposal, gameDate, round) => {
+    if (!Array.isArray(proposal) || proposal.length === 0) return null;
+
+    const world = await readWorldState({ force: true });
+    const before = new Map(world.projects.map((project) => [project.id, project]));
+
+    // applyProjectOpsToWorld normalizes defensively, so the raw parsed ops are
+    // fine here; it also drops anything aimed at a project that does not exist.
+    //
+    // Not bare applyProjectOps: a project the advisor COMPLETES may carry
+    // onComplete effects — a border it hands over, a polity it renames — and those
+    // have to land whoever completed it. This is the same door the event path uses,
+    // in the same order, so a completion from chat and a completion from a jump
+    // change the world identically.
+    const { deferredProjectIds, world: nextWorld } = applyProjectOpsToWorld({
+        date: String(gameDate || ""),
+        ops: proposal,
+        round: Number(round) || 0,
+        world,
+    });
+    const next = nextWorld.projects;
+
+    const items = [];
+    for (const project of next) {
+        const previous = before.get(project.id);
+        if (!previous) {
+            items.push({ change: "opened", title: project.name });
+        } else if (previous.updatedAt !== project.updatedAt) {
+            items.push({
+                change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
+                title: project.name,
+            });
+        }
+    }
+    for (const project of world.projects) {
+        if (!next.some((entry) => entry.id === project.id)) {
+            items.push({ change: "closed", title: project.name });
+        }
+    }
+    // A project whose completion would change the world is NOT closed from here —
+    // only an event may move a border or rename a polity. Say so on the card rather
+    // than silently doing nothing, or the advisor claims it finished something the
+    // board still shows as running and nobody can tell why.
+    for (const id of deferredProjectIds) {
+        const project = next.find((entry) => entry.id === id);
+        if (project) items.push({ change: "deferred", title: project.name });
+    }
+    if (items.length === 0) return null;
+    await writeWorldState(nextWorld);
+    return items;
+};
+
+// Inline confirmation for what the advisor just did to the projects board. Same
+// "advisor creates, I review" contract as the actions card below it: nothing the
+// advisor changes happens silently.
+const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
+    const counts = items.reduce((acc, item) => {
+        acc[item.change] = (acc[item.change] ?? 0) + 1;
+        return acc;
+    }, {});
+    const summary = ["opened", "updated", "completed", "closed", "deferred"]
+        .filter((change) => counts[change])
+        .map((change) => `${counts[change]} ${change}`)
+        .join(", ");
+    const verb = {
+        opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: ",
+        deferred: "Awaiting the simulation: ",
+    };
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(191,219,254,0.95)" }}>🎯 Projects {summary}</span>
+        {onOpenProjects && (
+            <button type="button" onClick={onOpenProjects} style={{ background: "none", border: "1px solid rgba(59,130,246,0.5)", borderRadius: "6px", color: "rgba(191,219,254,0.9)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Open Projects
+            </button>
+        )}
+        </div>
+        <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item, index) => (
+            <li key={index} data-no-translate style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
+            {verb[item.change] || "Changed: "}{item.title}
+            {item.change === "deferred" && (
+                <span style={{ color: "rgba(252,211,77,0.9)" }}> — this one changes the world, so the next time skip enacts it</span>
+            )}
+            </li>
+        ))}
+        </ul>
+        </div>
+    );
+};
+
+// The other half of the receipt: what to show when the advisor plainly tried to
+// change the board and the change did not land. Silence here is the worst
+// outcome — the player sees a wall of JSON in the chat, the board stays empty,
+// and nothing anywhere explains why. The overwhelmingly common cause is the
+// reply hitting its token cap partway through a long array.
+const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
+    const [showExcerpt, setShowExcerpt] = useState(false);
+    const message = kind === "truncated"
+        ? "That reply was cut off partway through, so only the entries that arrived complete were added. Ask for the rest to continue the board."
+        : kind === "truncated-empty"
+            ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
+            : kind === "partial"
+                ? "Most of that batch went on the board. A few entries were written in a way that could not be read and were skipped — ask for those again."
+                : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(253,230,138,0.95)" }}>⚠ Board not fully updated</div>
+        <p style={{ margin: "0.3rem 0 0", fontSize: "0.75rem", lineHeight: 1.5, color: "rgba(255,255,255,0.75)" }}>{message}</p>
+        {detail && (
+            <p data-no-translate style={{ margin: "0.3rem 0 0", fontSize: "0.68rem", lineHeight: 1.45, color: "rgba(255,255,255,0.4)" }}>
+            {detail}
+            </p>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
+        {onRetry && (
+            <button type="button" onClick={onRetry} style={{ background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Ask for the next batch
+            </button>
+        )}
+        {excerpt && (
+            <button type="button" onClick={() => setShowExcerpt((value) => !value)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            {showExcerpt ? "Hide" : "Show"} what broke
+            </button>
+        )}
+        {excerpt && (
+            <CopyButton
+            text={formatErrorReport("projects block could not be applied", { detail, excerpt })}
+            tone="rgba(245,158,11,0.5)"
+            color="rgba(253,230,138,0.95)"
+            />
+        )}
+        </div>
+        {excerpt && showExcerpt && (
+            <pre data-no-translate style={{ margin: "0.5rem 0 0", padding: "0.5rem", background: "rgba(0,0,0,0.35)", borderRadius: "6px", color: "rgba(255,255,255,0.6)", fontSize: "0.64rem", lineHeight: 1.45, maxHeight: "9rem", overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {excerpt}
+            </pre>
+        )}
+        </div>
+    );
+};
+
+// Inline confirmation for what the advisor just did to the Actions queue —
+// the "review" half of "advisor creates, I review": nothing here is silent.
+const AdvisorActionsCard = ({ items, onOpenActions }) => {
+    const counts = items.reduce((acc, item) => {
+        acc[item.change] = (acc[item.change] ?? 0) + 1;
+        return acc;
+    }, {});
+    const summary = ["added", "updated", "removed"]
+        .filter((change) => counts[change])
+        .map((change) => `${counts[change]} ${change}`)
+        .join(", ");
+
+    return (
+        <div style={{ marginTop: "0.75rem", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(216,196,255,0.95)" }}>📋 Actions {summary}</span>
+        {onOpenActions && (
+            <button type="button" onClick={onOpenActions} style={{ background: "none", border: "1px solid rgba(139,92,246,0.5)", borderRadius: "6px", color: "rgba(216,196,255,0.9)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            Open Actions
+            </button>
+        )}
+        </div>
+        <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item, index) => (
+            <li key={index} style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
+            {item.change === "removed" ? "Removed: " : item.change === "updated" ? "Updated: " : "Added: "}{item.title}
+            </li>
+        ))}
+        </ul>
+        </div>
+    );
+};
+
+// Puts the drafted letter in the recipient's diplomacy composer. It does NOT
+// send it, deliberately: the player reads it over in the chat window, edits it
+// if they want, and presses send there.
+//
+// It used to send — writing the letter AND generating the reply in one click,
+// which meant a long wait on a button that said "Sending…", and a message the
+// player never got to look at before it was in front of a foreign government.
+// The button is a hand-off now, so it returns immediately and there is nothing
+// to fail: at worst the chat opens with the text waiting in it.
+const AdvisorDraftSend = ({ draft, onDraft }) => {
+    const [handedOff, setHandedOff] = useState(false);
+    const resetTimer = useRef(null);
+
+    useEffect(() => () => clearTimeout(resetTimer.current), []);
+
+    const handleClick = () => {
+        onDraft();
+        setHandedOff(true);
+        // Back to the plain label after a moment — the draft can be handed over
+        // again (the player may have cleared the composer, or want it back).
+        clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(() => setHandedOff(false), 3000);
+    };
+
+    return (
+        <div>
+        <button type="button" onClick={handleClick} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: handedOff ? "rgba(52,211,153,0.12)" : "rgba(59,130,246,0.16)",
+            border: `1px solid ${handedOff ? "rgba(52,211,153,0.4)" : "rgba(59,130,246,0.45)"}`,
+            borderRadius: "8px",
+            color: handedOff ? "rgba(167,243,208,0.95)" : "rgba(191,219,254,0.95)",
+            cursor: "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+            textAlign: "left",
+        }}>
+        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.country}`}
+        </button>
+        </div>
+    );
+};
+
+// One recommended deployment, placed with a click. Deliberately routed through
+// the SAME deployUnit the Forces panel calls, so a unit the advisor places and
+// one the player places by hand are indistinguishable to the engine: both land
+// as a translucent pending unit with a queued order for the AI to adjudicate.
+const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
+    const [status, setStatus] = useState(placed ? "placed" : "idle");
+
+    useEffect(() => { if (placed) setStatus("placed"); }, [placed]);
+
+    const handleClick = async () => {
+        if (status !== "idle") return;
+        setStatus("placing");
+        const result = await onPlace();
+        setStatus(result?.ok ? "placed" : "idle");
+    };
+
+    const busy = status !== "idle";
+    return (
+        <button type="button" onClick={handleClick} disabled={busy} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(139,92,246,0.16)",
+            border: `1px solid ${status === "placed" ? "rgba(52,211,153,0.4)" : "rgba(139,92,246,0.45)"}`,
+            borderRadius: "8px",
+            color: status === "placed" ? "rgba(167,243,208,0.95)" : "rgba(216,196,255,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+        }}>
+        {status === "placed"
+            ? `✓ ${deployment.name} placed`
+            : status === "placing"
+                ? `Placing ${deployment.name}…`
+                : `📍 Place ${deployment.name} here`}
+        </button>
+    );
 };
 
 const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#a78bfa","#f87171","#38bdf8"];
@@ -184,11 +640,197 @@ const TabButton = ({ icon, label, active, onClick }) => (
     </button>
 );
 
-const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
+// An advisor reply's prose, with each drafted letter's Send button rendered
+// immediately under the letter it would send.
+//
+// The buttons used to be collected at the bottom of the message. In a reply that
+// drafts one letter and then goes on to say three other things — or drafts two —
+// that put "Send message to France" a long way from the France letter, and with
+// two of them side by side there was nothing on the button to say which quote it
+// belonged to. Here the pairing is positional and visible.
+//
+// A reply with no drafts renders as ONE markdown block, exactly as before: the
+// split is only worth its cost when there is something to interleave.
+const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
+    if (!drafts || drafts.length === 0) {
+        return <Markdown className="advisor-markdown">{text}</Markdown>;
+    }
+
+    const byQuote = new Map();
+    drafts.forEach((draft, draftIndex) => {
+        if (!Number.isInteger(draft.quoteIndex)) return;
+        byQuote.set(draft.quoteIndex, [...(byQuote.get(draft.quoteIndex) ?? []), { draft, draftIndex }]);
+    });
+
+    const placed = new Set();
+    const button = ({ draft, draftIndex }) => {
+        placed.add(draftIndex);
+        return (
+            <AdvisorDraftSend
+            key={`draft-${draftIndex}`}
+            draft={draft}
+            onDraft={() => onDraftMessage(draft)}
+            />
+        );
+    };
+
+    const segments = splitAtBlockquotes(text);
+    const rendered = segments.map((segment, index) => (
+        <React.Fragment key={index}>
+        <Markdown className="advisor-markdown">{segment.content}</Markdown>
+        {segment.type === "quote" && (byQuote.get(segment.quoteIndex) ?? []).map(button)}
+        </React.Fragment>
+    ));
+
+    // A draft whose quote is not in the rendered text — an older saved message
+    // carrying an explicit "text" field, or a reply whose blockquote was lost to
+    // a stripped fence. Never drop the button; fall back to the old position.
+    const orphans = drafts
+        .map((draft, draftIndex) => ({ draft, draftIndex }))
+        .filter(({ draftIndex }) => !placed.has(draftIndex));
+
+    // gap matches the 0.5rem a paragraph carries, so the interleaved blocks
+    // still read as one continuous reply.
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {rendered}
+        {orphans.map(button)}
+        </div>
+    );
+};
+
+// No closure over component state, so hoisted rather than redefined on every
+// AdvisorPanel render (and needed at module scope by the memoized row below).
+const formatAdvisorDate = (dateStr) => {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+};
+
+// One chat bubble, memoized. AdvisorPanel's `input` (the composer text) used to
+// live in the SAME component as the whole message history, so every keystroke
+// re-rendered every bubble in the conversation: re-running parseMessage's
+// regex/JSON.parse over each message's full text, re-parsing every markdown
+// body, and — the expensive part — handing AdvisorChart a BRAND NEW config
+// object each time (parseMessage's JSON.parse always returns a fresh
+// reference), which tore down and rebuilt every historical Chart.js chart on
+// every keystroke. None of that scales with the length of the conversation —
+// it's exactly why a long chat felt laggy while a short one didn't. Wrapped
+// here, a row only re-renders when ITS OWN message object actually changes (a
+// new message appended, or the streaming placeholder being replaced); memo's
+// default shallow prop comparison skips everything else, including every
+// keystroke in the composer below.
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
+    const { text, chartConfig, messageDrafts, deployments } = msg.role === "advisor"
+        ? parseMessage(msg.text)
+        : { text: msg.text, chartConfig: null, messageDrafts: null, deployments: null };
+    const asWritten = msg.role === "advisor" && chatDiffers;
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+        {msg.role !== "user" && (
+            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
+            {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
+            </span>
+        )}
+        {/* Player-typed text stays verbatim under UI translation. */}
+        <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
+            maxWidth: "90%", width: chartConfig ? "90%" : undefined,
+            padding: "0.6rem 0.85rem",
+            borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+            backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
+            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
+            border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
+            boxSizing: "border-box",
+        }}>
+        {msg.role === "user" ? text : (
+            <AdvisorReplyBody
+            text={text}
+            drafts={messageDrafts}
+            onDraftMessage={onDraftMessage}
+            />
+        )}
+        {chartConfig && <AdvisorChart config={chartConfig} />}
+        {msg.actionsSummary && <AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
+        {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
+        {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
+        {deployments && deployments.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {deployments.map((deployment, deployIndex) => (
+                <AdvisorDeployPlace
+                key={deployIndex}
+                deployment={deployment}
+                placed={!!msg.placedDeployments?.includes(deployIndex)}
+                onPlace={() => onPlaceDeployment(msgIndex, deployIndex, deployment)}
+                />
+            ))}
+            </div>
+        )}
+        </div>
+        {msg.time && msg.role !== "user" && (
+            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+            {formatAdvisorDate(msg.time)}
+            </span>
+        )}
+        </div>
+    );
+});
+
+// The whole scrollable history, also memoized as a unit — so a keystroke in
+// the composer (state that lives in AdvisorPanel, outside this component)
+// never even reaches AdvisorMessageRow's own per-row check above.
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+    <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+    {messages.length === 0 && (
+        <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
+        No messages yet. Ask your advisor something!
+        </p>
+    )}
+
+    {/* The retry is offered on the LAST message only, and only when it is the
+        error: retrying anything older would re-ask a question the conversation
+        has already moved past. */}
+    {messages.map((msg, i) => (
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onPlaceDeployment={onPlaceDeployment}
+        onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
+    ))}
+
+    {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
+        <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
+        <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+        <ThinkingDots />
+        </div>
+        </div>
+    )}
+    <div ref={messagesEndRef} />
+    </div>
+));
+
+const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef            = useRef(null);
+    // The scrollable history div, and whether it should be kept pinned to the
+    // bottom as new content (streaming tokens, a new reply) arrives. Starts
+    // true (a fresh reply should follow); flips false the moment the player
+    // scrolls away from the bottom, so a still-streaming reply doesn't yank
+    // them back down while they're reading up through the history. Reset to
+    // true on the NEXT message the player sends — the pause is scoped to
+    // "while I'm reading this one", not permanent.
+    const messagesContainerRef      = useRef(null);
+    const shouldAutoScrollRef       = useRef(true);
+    // The transcript and the current runTurn, readable from a stable callback
+    // (handleRetryTurn) without making that callback depend on either.
+    const messagesRef               = useRef(messages);
+    const runTurnRef                = useRef(null);
+    const handleMessagesScroll = React.useCallback(() => {
+        const el = messagesContainerRef.current;
+        if (!el) return;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        shouldAutoScrollRef.current = distanceFromBottom < 60;
+    }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [activeTab, setActiveTab] = useState("advisor");
@@ -243,8 +885,38 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
     }, [hasBootstrapped, isAdvisorOpen]);
 
     useEffect(() => {
+        if (!shouldAutoScrollRef.current) return;
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
+
+    // A starter message from outside (the Actions panel's "Help brainstorm
+    // actions" button, a project card's "Ask advisor") lands in the input box,
+    // not auto-sent — the player still reviews/edits it before it becomes a real
+    // message. Waits for bootstrap so it never races the history-load effect
+    // above into stomping on a restored draft-less session.
+    //
+    // APPENDED, never assigned over. This was setInput(requestedPrompt), so a
+    // half-typed question was destroyed by pressing a button somewhere else in
+    // the HUD — and the player's own words are the one thing in this panel that
+    // cannot be got back. Two prompts stacked in the composer read oddly for a
+    // moment; deleting the one you did not want is a keystroke, retyping the one
+    // you did is not.
+    useEffect(() => {
+        if (!requestedPrompt || !hasBootstrapped) return;
+        setInput((current) => {
+            const typed = current.trim();
+            if (!typed) return requestedPrompt;
+            // Already sitting there (they pressed the same button twice): leave
+            // the composer exactly as it is rather than stuttering the prompt.
+            if (typed.includes(requestedPrompt.trim())) return current;
+            return `${current.replace(/\s+$/, "")}\n\n${requestedPrompt}`;
+        });
+        onConsumeRequest?.();
+        const el = inputRef.current;
+        el?.focus();
+        // Caret at the end, on the text that was just added.
+        if (el) el.selectionStart = el.selectionEnd = el.value.length;
+    }, [requestedPrompt, hasBootstrapped, onConsumeRequest]);
 
     const resizeTextarea = React.useCallback(() => {
         const el = inputRef.current;
@@ -260,18 +932,31 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
         resizeTextarea();
     }, [input, resizeTextarea]);
 
-    const handleSend = async () => {
-        const text = input.trim();
+    // One turn with the advisor, from either entry point: the composer
+    // (handleSend) or the Retry button on a failed turn (handleRetryTurn).
+    //
+    // `replaceTrailingError` is what makes a retry a retry rather than a second
+    // question: the failed attempt's error bubble is dropped and the player's
+    // original question stays where it is, so the transcript reads as one
+    // exchange. sendMessage pops its own history entry when a call throws (see
+    // main.jsx), so the model never sees the question twice either.
+    const runTurn = async (text, { replaceTrailingError = false } = {}) => {
         if (!text || isLoading) return;
 
-        const { gameDate } = await readJson(JSON_URLS.game, {
-            defaultValue: { gameDate: null },
+        // `round` rides along with the date for applyAdvisorProjects — see its
+        // comment for why a project update without one reads as stale.
+        const { gameDate, round: gameRound } = await readJson(JSON_URLS.game, {
+            defaultValue: { gameDate: null, round: 0 },
             force: true,
-        }).catch(() => ({ gameDate: null }));
+        }).catch(() => ({ gameDate: null, round: 0 }));
 
-        const userMessage = { role: "user", text, time: gameDate };
-        setInput("");
-        setMessages(prev => [...prev, userMessage]);
+        // A fresh question re-engages auto-scroll even if the player had
+        // paused it reading up through history — the pause is scoped to the
+        // reply they scrolled away from, not the whole session.
+        shouldAutoScrollRef.current = true;
+        setMessages(prev => (replaceTrailingError
+            ? (prev[prev.length - 1]?.role === "error" ? prev.slice(0, -1) : prev.slice())
+            : [...prev, { role: "user", text, time: gameDate }]));
         setIsLoading(true);
 
         // Streaming: the ThinkingDots show until the first token, then a live
@@ -290,15 +975,75 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
 
         try {
             const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full) });
+            // Apply any ```actions proposal in the reply to the real queue BEFORE
+            // finalising the message, so the confirmation card that renders with it
+            // reflects what actually happened — not a re-derivation done later at
+            // render time (which can't know what the queue looked like when this
+            // reply arrived).
+            const { json: actionsProposal } = extractFencedJson(reply, "actions");
+            const actionsSummary = await applyAdvisorActions(actionsProposal).catch((error) => {
+                console.error("Failed to apply advisor-proposed actions:", error);
+                return null;
+            });
+            // Same one-shot treatment for the projects board, with truncation
+            // salvage: a full backfill of a long campaign is the one block big
+            // enough to be cut off mid-array by the reply token cap.
+            const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
+                dropped: projectsDropped, excerpt: projectsExcerpt } =
+                extractFencedJson(reply, "projects", { salvageTruncated: true });
+            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+                console.error("Failed to apply advisor-proposed projects:", error);
+                return null;
+            });
+            // Every way this can fail used to look identical to the player: a wall
+            // of JSON in the chat and a board that never moved. If the model
+            // plainly tried and nothing landed, say so and offer the retry.
+            // "Some of it landed" is its own outcome, and the most common one now
+            // that a single malformed entry no longer costs the batch.
+            const projectsProblem = projectsSummary
+                ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
+                : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
+            // "None of the ops applied" is a distinct failure from "we could not
+            // read them": the block parsed fine and every op named a project that
+            // does not exist. Telling them apart is the difference between "ask
+            // again" and "it is trying to update something that was never opened".
+            const projectsDetail = projectsProblem === "partial"
+                ? `${projectsDropped} entr${projectsDropped === 1 ? "y was" : "ies were"} malformed and skipped.`
+                : projectsProblem === "unusable"
+                    ? (projectsReason || "every entry referred to a project that is not on the board")
+                    : "";
+            // The desktop build has no developer tools bound, so the text that
+            // actually broke has to reach the screen or it is unreportable.
+            const projectsExcerptText = (projectsProblem === "unusable" || projectsProblem === "partial")
+                ? projectsExcerpt
+                : "";
+            // What the reply DID, next to the reply itself in the log. A block
+            // the advisor clearly sent and the board never showed is the most
+            // common complaint on this path, and it has three quite different
+            // causes — the fence was never found, it parsed and applied nothing,
+            // or it applied and the panel is stale. Only this line tells them
+            // apart, and it is logged whether or not anything went wrong so the
+            // "it worked, the player looked at the wrong panel" case is on the
+            // record too.
+            logDebugEvent("advisor", "Advisor reply blocks applied.", {
+                actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
+                actionsApplied: actionsSummary ? `${actionsSummary.length} change(s)` : "nothing",
+                projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
+                projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
+                projectsProblem: projectsProblem || "(none)",
+                projectsDetail: projectsDetail || "",
+                projectsExcerpt: projectsExcerptText || "",
+            }, { verbose: true });
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
+                const finalMessage = { role: "advisor", text: reply, time: gameDate, ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
-                    next[next.length - 1] = { role: "advisor", text: reply, time: gameDate };
+                    next[next.length - 1] = finalMessage;
                 } else {
-                    next.push({ role: "advisor", text: reply, time: gameDate });
+                    next.push(finalMessage);
                 }
                 saveMessages(next);
                 return next;
@@ -307,7 +1052,14 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
-                const updated = [...base, { role: "error", text: err.message, time: gameDate }];
+                // Keep whatever the transport managed to learn about the failure,
+                // so the Copy button still works after a reload.
+                const updated = [...base, {
+                    role: "error",
+                    text: err.message,
+                    time: gameDate,
+                    ...(err?.diagnostics ? { diagnostics: err.diagnostics } : {}),
+                }];
                 saveMessages(updated);
                 return updated;
             });
@@ -316,14 +1068,99 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
         }
     };
 
+    const handleSend = () => {
+        const text = input.trim();
+        if (!text || isLoading) return;
+        setInput("");
+        return runTurn(text);
+    };
+
+    // Asks the last question again. Reads the transcript through a ref and calls
+    // runTurn through one, so this stays a stable reference across renders —
+    // AdvisorMessageList is memoized on its props, and a callback that changed
+    // identity every message would re-render the whole history each time (see
+    // AdvisorMessageRow's comment).
+    const handleRetryTurn = React.useCallback(() => {
+        const lastQuestion = [...messagesRef.current].reverse().find((msg) => msg.role === "user")?.text;
+        if (!lastQuestion) return;
+        runTurnRef.current?.(lastQuestion, { replaceTrailingError: true });
+    }, []);
+
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+    useEffect(() => { runTurnRef.current = runTurn; });
+
     const handleKeyDown = (e) => {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
-    const formatDate = (dateStr) => {
-        if (!dateStr) return "";
-        return new Date(dateStr).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
-    };
+    // Sends one drafted message (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx)
+    // straight to its country's diplomatic chat, then marks it sent on the
+    // ADVISOR message itself (not just local UI state) so the button stays
+    // "✓ Sent" across a reload instead of reappearing clickable. A stable
+    // reference (no deps) so it never breaks AdvisorMessageList's memoization —
+    // see the comment on that component for why that matters.
+    // Puts the follow-up in the composer rather than sending it: the player may
+    // want to narrow what they are asking for, and this file has never auto-sent
+    // anything on the player's behalf (see the requestedPrompt effect above).
+    const handleRetryProjects = React.useCallback(() => {
+        setInput("Continue putting my projects and operations on the board — the last reply was cut off. "
+            + "Pick up from where you stopped and skip anything already on the board. Send no more than ten, "
+            + "one sentence each. Only include efforts that genuinely appear in our history — if everything real "
+            + "is already on the board, just tell me that and add nothing.");
+        inputRef.current?.focus();
+    }, []);
+
+    // Hands the drafted letter to the diplomacy panel: opens (or reuses) the
+    // chat with that country and drops the text in its composer, where the
+    // player sends it themselves. Nothing is written to the transcript here, so
+    // there is no state to persist and nothing that can half-succeed.
+    const handleDraftMessage = React.useCallback((draft) => {
+        // The letter as the advisor wrote it. What is eventually SENT is logged
+        // separately by the diplomacy path (AI/main.jsx), after whatever the
+        // player edited in the composer — and the pair is the only way to answer
+        // "the advisor drafted one thing and something else went out".
+        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${draft.country}.`, draft.text, { verbose: true });
+        requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
+    }, []);
+
+    // Places one deployment the advisor recommended, through the very same
+    // deployUnit the Forces panel uses — so it lands as a pending unit with a
+    // queued order for the AI to adjudicate, exactly like a hand-placed one, and
+    // then flies the map there so the player sees it. Marked on the ADVISOR
+    // message (not local state) so the button stays "✓ placed" across a reload.
+    // Stable reference, for the same memoization reason as handleDraftMessage.
+    const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
+        try {
+            const { deployUnit } = await import("../Map/unitsController.js");
+            await deployUnit({
+                type: String(deployment.type).toLowerCase(),
+                strength: Math.max(1, Math.min(100, Number(deployment.strength) || 100)),
+                name: String(deployment.name).trim(),
+                composition: String(deployment.composition ?? "").trim(),
+                lng: Number(deployment.lng),
+                lat: Number(deployment.lat),
+            });
+            mapRef?.current?.getMap?.()?.flyTo?.({
+                center: [Number(deployment.lng), Number(deployment.lat)],
+                zoom: 4.5,
+            });
+            setMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                next[msgIndex] = {
+                    ...target,
+                    placedDeployments: [...(target.placedDeployments || []), deployIndex],
+                };
+                saveMessages(next);
+                return next;
+            });
+            return { ok: true };
+        } catch (err) {
+            console.warn("[advisor] could not place the recommended deployment:", err);
+            return { ok: false };
+        }
+    }, [mapRef]);
 
     if (!hasOpened) return null;
 
@@ -401,60 +1238,25 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
         </div>
 
         <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        {/* Messages */}
-        <div style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
-        {messages.length === 0 && (
-            <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
-            No messages yet. Ask your advisor something!
-            </p>
-        )}
-
-        {messages.map((msg, i) => {
-            const { text, chartConfig } = msg.role === "advisor"
-            ? parseMessage(msg.text)
-            : { text: msg.text, chartConfig: null };
-            const asWritten = msg.role === "advisor" && chatDiffers;
-            return (
-                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                {msg.role !== "user" && (
-                    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
-                    {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
-                    </span>
-                )}
-                {/* Player-typed text stays verbatim under UI translation. */}
-                <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
-                    maxWidth: "90%", width: chartConfig ? "90%" : undefined,
-                    padding: "0.6rem 0.85rem",
-                    borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-                    backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
-                    fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
-                    boxSizing: "border-box",
-                }}>
-                {msg.role === "user" ? text : (
-                    <div className="advisor-markdown"><ReactMarkdown>{text}</ReactMarkdown></div>
-                )}
-                {chartConfig && <AdvisorChart config={chartConfig} />}
-                </div>
-                {msg.time && msg.role !== "user" && (
-                    <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
-                    {formatDate(msg.time)}
-                    </span>
-                )}
-                </div>
-            );
-        })}
-
-        {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
-            <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
-            <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
-            <ThinkingDots />
-            </div>
-            </div>
-        )}
-        <div ref={messagesEndRef} />
-        </div>
+        {/* Messages — memoized as its own component so typing below (state that
+            lives in AdvisorPanel) doesn't re-render the whole history on every
+            keystroke. See AdvisorMessageRow's comment for why that mattered. */}
+        <AdvisorMessageList
+        messages={messages}
+        isLoading={isLoading}
+        chatDiffers={chatDiffers}
+        chatDir={chatDir}
+        onOpenActions={onOpenActions}
+        onOpenProjects={onOpenProjects}
+        onRetryProjects={handleRetryProjects}
+        onRetry={handleRetryTurn}
+        retrying={isLoading}
+        onDraftMessage={handleDraftMessage}
+        onPlaceDeployment={handlePlaceDeployment}
+        messagesEndRef={messagesEndRef}
+        containerRef={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+        />
 
         {/* Input */}
         <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -482,31 +1284,6 @@ const AdvisorPanel = ({ isAdvisorOpen, onClose, width, onResize }) => {
         </div>
         </>
     );
-};
-
-const markdownStyles = `
-.advisor-markdown p { margin: 0 0 0.5rem 0; }
-.advisor-markdown p:last-child { margin-bottom: 0; }
-.advisor-markdown ul, .advisor-markdown ol { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; }
-.advisor-markdown li { margin-bottom: 0.2rem; }
-.advisor-markdown strong { color: rgba(255,255,255,0.95); }
-.advisor-markdown em { color: rgba(255,255,255,0.75); }
-.advisor-markdown code { background: rgba(0,0,0,0.3); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; }
-.advisor-markdown pre { background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 8px; overflow-x: auto; margin: 0.5rem 0; }
-.advisor-markdown h1, .advisor-markdown h2, .advisor-markdown h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; color: rgba(255,255,255,0.9); }
-.advisor-markdown blockquote { border-left: 2px solid rgba(59,130,246,0.6); margin: 0.5rem 0; padding-left: 0.75rem; color: rgba(255,255,255,0.6); }
-`;
-
-const MarkdownStyleInjector = () => {
-    useEffect(() => {
-        if (!document.getElementById("advisor-md-styles")) {
-            const style = document.createElement("style");
-            style.id = "advisor-md-styles";
-            style.textContent = markdownStyles;
-            document.head.appendChild(style);
-        }
-    }, []);
-    return null;
 };
 
 export { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel };
