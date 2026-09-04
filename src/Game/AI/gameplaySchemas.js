@@ -1516,6 +1516,38 @@ export const decodeGameMasterTransportPayload = (value) => {
   }
 };
 
+// The unit director's answer: unit operations to attach to the military events
+// the jump already wrote, keyed by the supplied event index. Native code
+// sanitizes every op before it reaches an event.
+export const UNIT_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation military orchestration pass. It reuses persistent units and moves, "
+    + "reinforces or removes them only where the supplied events require it.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "Unit operations to attach to military events, keyed by the supplied eventIndex.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          unitOps: {
+            type: "array",
+            items: unitOpSchema,
+          },
+          reason: textSchema("Short reason these operations are needed for map/state continuity."),
+        },
+        required: ["eventIndex", "unitOps"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of how the existing order of battle was advanced this turn."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
+
 // The Projects & Operations board, moved OUT of the jump and into its own call.
 //
 // Why: projectOps was the single largest thing in the jump contract by a wide
@@ -1913,6 +1945,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   catalystExecutor: CATALYST_EXECUTOR_SCHEMA,
   catalystSummary: CATALYST_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
+  unitDirector: UNIT_DIRECTOR_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -1987,6 +2020,12 @@ export const GAME_MASTER_TOOL = makeTool(
   GAME_MASTER_TRANSPORT_SCHEMA,
 );
 
+export const UNIT_DIRECTOR_TOOL = makeTool(
+  "submit_unit_director",
+  "Submit conservative persistent-unit operations for the supplied military events.",
+  UNIT_DIRECTOR_SCHEMA,
+);
+
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
   "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
@@ -2025,6 +2064,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   catalystExecutor: CATALYST_EXECUTOR_TOOL,
   catalystSummary: CATALYST_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
+  unitDirector: UNIT_DIRECTOR_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,

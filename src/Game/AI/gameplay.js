@@ -2,6 +2,7 @@
 import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
+import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -1188,6 +1189,14 @@ So use the wider picture to choose the sender and the moment — never to give t
     if (eventReaction) {
       systemPrompt = `${systemPrompt}\n\n[Event-triggered reaction — one-shot]\nA human administrator explicitly allowed NPCs to react to the canonical event below. Evaluate THIS event in the current diplomatic world. Silence remains valid and must be chosen when nobody would plausibly contact the player. But do not confuse "minor" with "unworthy of human contact": a friendly ally may simply congratulate the player, express sympathy, show interest, or make a brief good-natured remark even when no treaty, warning, or mechanical consequence is needed. Keep any opener natural and proportionate. Return at most one initiating chat for this one-shot evaluation, and no unit movement.\n\n${eventReaction}`;
     }
+  }
+
+  // The unit director's runtime rules travel with the call so a campaign's
+  // frozen prompt pack (which predates the task) still gets the current contract.
+  if (taskKey === "unitDirector") {
+    const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
+    const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
+    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit when the event says that formation advances, withdraws, redeploys, mobilizes toward a front, or otherwise changes position, and set its posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting. A conscription law, mobilization order, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n3. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again.\n4. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n5. Do not invent military activity for diplomatic, political or economic events. It is valid to return no ops for an event.\n6. Never change territory. The territory layer is separate.\n7. Use only supplied existing unit ids. Keep movement local and plausible for the era.\n\nReturn exactly the required tool payload.`;
   }
 
   // GM territorial semantics on this build: the map shows who HOLDS a region
@@ -6750,10 +6759,41 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
 
+  // The surviving military events then make the persistent order of battle
+  // move: the unit director proposes ops for existing units, native rules keep
+  // only the plausible ones, and they ride the same application path as the
+  // simulator's own unitOps (a long move becomes a standing order). A failed or
+  // unavailable director never costs the turn — the events pass through as written.
+  let directedEvents = merged.events;
+  try {
+    directedEvents = await directGeneratedUnitOps({
+      events: merged.events,
+      game: bundle.game,
+      world: bundle.world,
+      analyzeBatch: ({ candidates, units }) =>
+        runJsonTask("unitDirector", {
+          fallback: () => ({ eventOrders: [], summary: "Unit director unavailable; existing simulator unitOps preserved." }),
+          signal,
+          userMessage:
+            "Advance the supplied military events through the existing persistent units. Return one eventOrders entry only where a real unit operation is warranted; leaving an event untouched is a valid answer. Return JSON only.",
+          variables: {
+            unitDirectorCandidates: JSON.stringify(candidates, null, 2),
+            unitDirectorUnits: JSON.stringify(units, null, 2),
+            unitDirectorGameDate: normalizeString(bundle.game.gameDate),
+            unitDirectorRound: String(bundle.game.round || 1),
+          },
+        }),
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[OH unit director] pass failed; the simulator's unit operations stand.", error);
+    directedEvents = merged.events;
+  }
+
   const result = {
     catalyst: merged.catalyst,
     clearActions: merged.clearActions,
-    events: merged.events,
+    events: directedEvents,
     mode,
     outreach: merged.diplomaticOutreach,
     stopDate: merged.stopDate,
