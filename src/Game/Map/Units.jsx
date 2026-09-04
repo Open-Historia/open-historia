@@ -152,7 +152,7 @@ const stationRing = (lng, lat, radiusKm) => {
 
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
-const Units = ({ vNext = false }) => {
+const Units = () => {
   const [colorMap, setColorMap] = useState({});
   const [orders, setOrders] = useState([]);
   const { current: map } = useMap();
@@ -175,7 +175,7 @@ const Units = ({ vNext = false }) => {
     mapInstance.on("styledata", check);
     return () => mapInstance.off?.("styledata", check);
   }, [map]);
-  const labelBeforeId = vNext && labelsReady ? "country-curved-labels" : undefined;
+  const labelBeforeId = labelsReady ? "country-curved-labels" : undefined;
   // Pinned for the session (see runtime/mapSettings.js). Counters, flags and
   // names are the same in both systems — only the standing-order overlay differs.
   const betaUnits = isBetaUnits();

@@ -10,14 +10,6 @@ import {
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
-// Marker kinds are free-form ("military base", "missile silo", "embassy", …),
-// so the on-map shape is picked by keyword: military-flavored structures get a
-// triangle, everything else a square — the same glyph family the city layer
-// draws with, so the font is guaranteed to have them.
-const MILITARY_KIND = /\b(base|fort|fortress|bunker|silo|garrison|missile|radar|airfield|airbase|barracks|outpost|citadel|castle)\b/;
-
-const glyphForKind = (kind) => (MILITARY_KIND.test(kind) ? "▲" : "■");
-
 const MARKER_STATUS_LABEL = {
   planned: "Planned",
   under_construction: "Under construction",
@@ -79,7 +71,7 @@ const V_NEXT_TIER_LAYERS = [
   },
 ];
 
-const MarkersLayer = ({ vNext = false }) => {
+const MarkersLayer = () => {
   const { markers } = useWorldState();
   const [colorMap, setColorMap] = useState({});
 
@@ -107,8 +99,8 @@ const MarkersLayer = ({ vNext = false }) => {
               id: marker.id,
               name: marker.name,
               // Lifecycle is encoded by opacity and remains fully described in
-              // the feature popup. VNext does not make every map label longer.
-              displayName: vNext || status === "active" ? marker.name : `${marker.name} · ${statusLabel}`,
+              // the feature popup, so the map label stays the plain name.
+              displayName: marker.name,
               kind: marker.kind || "landmark",
               ownerCode: marker.ownerCode || "",
               status,
@@ -118,17 +110,16 @@ const MarkersLayer = ({ vNext = false }) => {
               priority: presentation.priority,
               sortKey: presentation.sortKey,
               visibilityTier: presentation.visibilityTier,
-              glyph: vNext ? presentation.glyph : glyphForKind(String(marker.kind || "")),
+              glyph: presentation.glyph,
               rgb: ownerColorString(colorMap, marker.ownerCode),
             },
           };
         }),
     };
-  }, [markers, colorMap, vNext]);
+  }, [markers, colorMap]);
 
-  if (vNext) {
-    return (
-      <Source id="markers-source" type="geojson" data={data}>
+  return (
+    <Source id="markers-source" type="geojson" data={data}>
         {V_NEXT_TIER_LAYERS.map((entry) => (
           <Layer
             key={entry.shapeId}
@@ -182,48 +173,6 @@ const MarkersLayer = ({ vNext = false }) => {
           />
         ))}
       </Source>
-    );
-  }
-
-  return (
-    <Source id="markers-source" type="geojson" data={data}>
-      <Layer
-        id="markers-shapes"
-        type="symbol"
-        layout={{
-          "text-field": ["get", "glyph"],
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-          "text-padding": 2,
-          "text-size": ["interpolate", ["linear"], ["zoom"], 2, 9, 6, 14, 10, 20],
-        }}
-        paint={{
-          "text-color": ["get", "rgb"],
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 1,
-          "text-opacity": ["get", "statusOpacity"],
-        }}
-      />
-      <Layer
-        id="markers-labels"
-        type="symbol"
-        minzoom={2.6}
-        layout={{
-          "text-field": ["get", "displayName"],
-          "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-          "text-padding": 5,
-          "text-radial-offset": 0.7,
-          "text-size": ["interpolate", ["linear"], ["zoom"], 3, 8.5, 10, 10],
-          "text-variable-anchor": ["top", "bottom", "left", "right"],
-        }}
-        paint={{
-          "text-color": "#ffffff",
-          "text-halo-color": "#333333",
-          "text-halo-width": 2,
-          "text-opacity": ["get", "statusOpacity"],
-        }}
-      />
-    </Source>
   );
 };
 

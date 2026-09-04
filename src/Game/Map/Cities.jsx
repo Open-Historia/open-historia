@@ -80,13 +80,13 @@ const cityLabelExpr = (renames) => {
     return expr;
 };
 
-const StockCities = ({ label, pop, vNext }) => (
+const StockCities = ({ label, pop }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
     id="cities-shapes"
     type="symbol"
     source-layer="cities"
-    beforeId={vNext ? "country-curved-labels" : undefined}
+    beforeId="country-curved-labels"
     minzoom={3.4}
     filter={populationFilter(pop)}
     layout={{
@@ -130,8 +130,8 @@ const StockCities = ({ label, pop, vNext }) => (
     id="cities-labels"
     type="symbol"
     source-layer="cities"
-    beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={vNext ? 4.2 : 3.4}
+    beforeId="country-curved-labels"
+    minzoom={4.2}
     filter={populationFilter(pop)}
     layout={{
         "symbol-sort-key": ["-", pop],
@@ -160,13 +160,13 @@ const StockCities = ({ label, pop, vNext }) => (
 
 // Same visual language as the stock layers (★/◆/■ markers, haloed labels), but
 // fed from the scenario's cities.geojson and gated by the authored tier.
-const CustomCities = ({ data, label, pop, vNext }) => (
+const CustomCities = ({ data, label, pop }) => (
     <Source id="cities-source" type="geojson" data={data}>
     <Layer
     id="cities-shapes"
     type="symbol"
-    beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={vNext ? 2.65 : 3.1}
+    beforeId="country-curved-labels"
+    minzoom={2.65}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey(pop),
@@ -199,8 +199,8 @@ const CustomCities = ({ data, label, pop, vNext }) => (
     <Layer
     id="cities-labels"
     type="symbol"
-    beforeId={vNext ? "country-curved-labels" : undefined}
-    minzoom={vNext ? 3.0 : 3.1}
+    beforeId="country-curved-labels"
+    minzoom={3.0}
     filter={customTierFilter}
     layout={{
         "symbol-sort-key": customSortKey(pop),
@@ -231,7 +231,7 @@ const CustomCities = ({ data, label, pop, vNext }) => (
     </Source>
 );
 
-const Cities = ({ vNext = false }) => {
+const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
     // so the map doesn't fire its own independent 5s poll.
@@ -299,12 +299,12 @@ const Cities = ({ vNext = false }) => {
     if (customFlag) {
         if (customData === null) return null;
         if (!customLoadFailed && customCityFeatureCount(customData) > 0) {
-            return <CustomCities data={customData} label={label} pop={pop} vNext={vNext} />;
+            return <CustomCities data={customData} label={label} pop={pop} />;
         }
-        return <StockCities label={label} pop={pop} vNext={vNext} />;
+        return <StockCities label={label} pop={pop} />;
     }
 
-    return <StockCities label={label} pop={pop} vNext={vNext} />;
+    return <StockCities label={label} pop={pop} />;
 };
 
 export default Cities;

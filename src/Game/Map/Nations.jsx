@@ -20,7 +20,6 @@ import {
   PMTILES_PROTOCOL_URLS,
   ensurePmtilesProtocol,
   getNationColors,
-  primeCustomRegionCatalog,
   primeCustomRegionCatalogEntries,
   readJson,
   reportPerfOperation,
@@ -249,8 +248,9 @@ const buildStripeImage = (rgbList) => {
 
 // Neutral tone for unowned custom regions (land with no owner code).
 const NEUTRAL_LAND_COLOR = "rgb(88, 98, 110)";
-// Constant GL expression — the colour data is baked into each feature's
-// _fillColor property by enrichedCustomRegionData above.
+// Constant GL expression: live ownership arrives through feature-state, the
+// dissolved polity surfaces carry their own _fillColor, and authored features
+// may carry an ownerColor; neutral land otherwise.
 const CUSTOM_FILL_COLOR = [
   "coalesce",
   ["feature-state", "fillColor"],
@@ -281,15 +281,6 @@ const GADM_GEOMETRY_FILTER = [">=", ["index-of", ".", ["get", "id"]], 0];
 // dot test — stock and author-only maps render identically to before.
 const AUTHORED_GEOMETRY_FILTER = ["any", CUSTOM_GEOMETRY_FILTER, ["==", ["get", "edited"], true]];
 const STOCK_GEOMETRY_FILTER = ["all", GADM_GEOMETRY_FILTER, ["!=", ["get", "edited"], true]];
-// keep the seed fill under the close-up tiles instead of crossfading it away.
-// if a vector tile is late (or gets evicted while panning), the coarse geometry is
-// still there rather than briefly revealing the basemap. the tile layer becomes
-// fully opaque once it takes over, so the fallback does not soften its borders.
-// Keep the low-zoom political wash slightly translucent, then make the seed
-// fully opaque before detailed tiles begin fading in. Once the handoff starts,
-// a late/missing tile and a loaded tile therefore resolve to the same colour
-// instead of randomly shifting whole regions between two shades.
-const BASE_FILL_OPACITY = ["interpolate", ["linear"], ["zoom"], 5, 0.90, 5.5, 1];
 // Physical geography should be part of the political map rather than hidden
 // beneath it. Keep the far/continental wash translucent enough for relief and
 // bathymetry to read, then progressively strengthen ownership color as the
@@ -312,125 +303,6 @@ const PAX_POLITICAL_FILL_OPACITY = [
   14.0, 0.585,
 ];
 const TILE_FILL_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 1];
-// Dispute stripes are an overlay, so unlike the solid seed fallback they still
-// hand off to the tile-native stripe layer instead of stacking at close zoom.
-const FAR_OVERLAY_FADE = ["interpolate", ["linear"], ["zoom"], 5.5, 0.90, 6.5, 0];
-
-// ---- Owner labels for custom maps -----------------------------------------
-// The stock label pipeline labels modern countries from countries.pmtiles, which
-// is wrong on scenario maps (it printed "Russia"/"Ukraine" over the Soviet Union
-// and nothing said "Soviet Union"). For custom maps we build labels per OWNER:
-// each owner's regions are clustered by proximity, and every sufficiently large
-// cluster gets the owner's era name — so the USSR reads as one "Soviet Union",
-// while a global empire is named once per landmass, atlas-style.
-
-const largestRingOf = (geometry) => {
-  if (!geometry) return null;
-  const polys = geometry.type === "Polygon"
-    ? [geometry.coordinates]
-    : geometry.type === "MultiPolygon" ? geometry.coordinates : [];
-  let best = null;
-  let bestArea = -1;
-  for (const poly of polys) {
-    const ring = poly?.[0];
-    if (!ring || ring.length < 3) continue;
-    let area = 0;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      area += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
-    }
-    area = Math.abs(area / 2);
-    if (area > bestArea) {
-      bestArea = area;
-      best = ring;
-    }
-  }
-  return best ? { ring: best, area: bestArea } : null;
-};
-
-const ringCentroidLngLat = (ring) => {
-  let x = 0;
-  let y = 0;
-  let a = 0;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const f = ring[i][0] * ring[j][1] - ring[j][0] * ring[i][1];
-    a += f;
-    x += (ring[i][0] + ring[j][0]) * f;
-    y += (ring[i][1] + ring[j][1]) * f;
-  }
-  const s = a * 3 || 1;
-  return [x / s, y / s];
-};
-
-// Clusters are primarily CONTIGUOUS territory (region adjacency, below); the
-// centroid join only mops up islands near their mainland and hairline adjacency
-// misses. Keeping it small is what gives a colony or exclave its own label —
-// at the old 28° France's metropole merged with its African empire across the
-// Mediterranean and only the empire got named.
-const CLUSTER_JOIN_DEGREES = 10; // centroids closer than this merge into one label cluster
-const MIN_CLUSTER_AREA = 1.5; // in lng/lat degrees^2 — skips tiny extra islands
-
-// Which regions physically touch, from shared border vertices. The seed
-// simplifies each region on its own, so mid-border vertices don't always match
-// between neighbours — but junction corners (tripoints) survive any
-// simplification, and most border runs still share long identical stretches.
-// Hashing EVERY vertex on a ~11m grid (1e-4°) catches both; the centroid
-// mop-up in the label builder heals whatever this still misses. Owner-agnostic
-// (geometry only) so it can be memoized per world and reused across ownership
-// changes.
-const buildRegionAdjacency = (regionsFC) => {
-  const features = regionsFC?.features ?? [];
-  const firstSeen = new Map(); // packed vertex -> first feature index
-  const neighbors = features.map(() => null);
-  const link = (a, b) => {
-    (neighbors[a] ??= new Set()).add(b);
-    (neighbors[b] ??= new Set()).add(a);
-  };
-  for (let index = 0; index < features.length; index += 1) {
-    const geometry = features[index]?.geometry;
-    const polys = geometry?.type === "Polygon"
-      ? [geometry.coordinates]
-      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-    for (const poly of polys) {
-      for (const ring of poly ?? []) {
-        if (!ring) continue;
-        for (let v = 0; v < ring.length; v += 1) {
-          const pt = ring[v];
-          // 1e-4° grid, packed into one number (fits 2^53).
-          const key = Math.round((pt[0] + 180) * 1e4) * 4194304 + Math.round((pt[1] + 90) * 1e4);
-          const seen = firstSeen.get(key);
-          if (seen === undefined) firstSeen.set(key, index);
-          else if (seen !== index) link(seen, index);
-        }
-      }
-    }
-  }
-  return neighbors;
-};
-
-// Merge same-owner clusters until stable — the greedy pass alone under-merges
-// long landmass chains (Siberia), which printed the same name a dozen times.
-const mergeOwnerClusters = (clusters, joinDeg) => {
-  let merged = true;
-  while (merged) {
-    merged = false;
-    outer: for (let i = 0; i < clusters.length; i += 1) {
-      for (let j = i + 1; j < clusters.length; j += 1) {
-        const a = clusters[i];
-        const b = clusters[j];
-        if (Math.hypot(a.cx - b.cx, a.cy - b.cy) <= joinDeg) {
-          const total = a.area + b.area;
-          a.cx = (a.cx * a.area + b.cx * b.area) / total;
-          a.cy = (a.cy * a.area + b.cy * b.area) / total;
-          a.area = total;
-          clusters.splice(j, 1);
-          merged = true;
-          break outer;
-        }
-      }
-    }
-  }
-  return clusters;
-};
 
 // GADM assigns disputed / undetermined boundary areas the codes Z01-Z09 (the
 // slivers around India — Kashmir, Aksai Chin, Arunachal Pradesh). The base map
@@ -442,116 +314,6 @@ const DISPUTED_TERRITORY_CLAIMANT = {
   Z06: "Pakistan", Z07: "India", Z08: "China", Z09: "India",
 };
 
-const buildOwnerLabelCollection = (regionsFC, overrides, polityOverrides, nameResolver, adjacency = null) => {
-  const allFeatures = regionsFC?.features ?? [];
-  const countryNameByCode = new Map(); // gid0 -> modern country name (fallback labels)
-  const ownerByIndex = new Array(allFeatures.length).fill("");
-  const entryByIndex = new Array(allFeatures.length).fill(null);
-
-  for (let index = 0; index < allFeatures.length; index += 1) {
-    const props = allFeatures[index].properties || {};
-    if (props.gid0 && props.country && !countryNameByCode.has(props.gid0)) {
-      countryNameByCode.set(props.gid0, props.country);
-    }
-    const rawOwner = overrides?.[props.id] ?? props.owner;
-    // Captured-region override stores the AI's owner CODE ("ESP"); the seed stores the NAME
-    // ("Spain"). Canonicalize so both share one cluster + label instead of the code splitting
-    // off as a phantom new country.
-    const owner = toCountryName(rawOwner);
-    if (!owner) continue;
-    const best = largestRingOf(allFeatures[index].geometry);
-    if (!best || best.area <= 0) continue;
-    ownerByIndex[index] = owner;
-    entryByIndex[index] = { c: ringCentroidLngLat(best.ring), area: best.area };
-  }
-
-  // Union-find over same-owner ADJACENT regions: each root is one contiguous
-  // territory. Contiguity, not distance, is what separates a colony from its
-  // metropole: France's mainland and French West Africa sit close enough that
-  // distance clustering merged them into one label across the Mediterranean,
-  // while a touching chain like Siberia must stay a single label.
-  const parent = new Int32Array(allFeatures.length);
-  for (let i = 0; i < parent.length; i += 1) parent[i] = i;
-  const find = (i) => {
-    let root = i;
-    while (parent[root] !== root) root = parent[root];
-    while (parent[i] !== root) {
-      const next = parent[i];
-      parent[i] = root;
-      i = next;
-    }
-    return root;
-  };
-  if (adjacency) {
-    for (let i = 0; i < allFeatures.length; i += 1) {
-      if (!ownerByIndex[i] || !adjacency[i]) continue;
-      for (const j of adjacency[i]) {
-        if (j <= i || ownerByIndex[j] !== ownerByIndex[i]) continue;
-        const ri = find(i);
-        const rj = find(j);
-        if (ri !== rj) parent[rj] = ri;
-      }
-    }
-  }
-
-  // Fold each region into its territory's cluster (area-weighted centroid).
-  const perOwner = new Map(); // owner -> Map(root -> cluster)
-  for (let index = 0; index < allFeatures.length; index += 1) {
-    const owner = ownerByIndex[index];
-    const entry = entryByIndex[index];
-    if (!owner || !entry) continue;
-    let roots = perOwner.get(owner);
-    if (!roots) {
-      roots = new Map();
-      perOwner.set(owner, roots);
-    }
-    const root = find(index);
-    const cluster = roots.get(root);
-    if (cluster) {
-      const total = cluster.area + entry.area;
-      cluster.cx = (cluster.cx * cluster.area + entry.c[0] * entry.area) / total;
-      cluster.cy = (cluster.cy * cluster.area + entry.c[1] * entry.area) / total;
-      cluster.area = total;
-    } else {
-      roots.set(root, { cx: entry.c[0], cy: entry.c[1], area: entry.area });
-    }
-  }
-
-  const features = [];
-  let id = 0;
-  for (const [owner, roots] of perOwner) {
-    // Islands still join their nearby mainland (and any adjacency near-miss
-    // heals) via the small centroid merge.
-    const clusters = mergeOwnerClusters([...roots.values()], CLUSTER_JOIN_DEGREES);
-    clusters.sort((a, b) => b.area - a.area);
-    const rawName = DISPUTED_TERRITORY_CLAIMANT[owner]
-      ? `Disputed (${DISPUTED_TERRITORY_CLAIMANT[owner]})`
-      : polityOverrides?.[owner]?.name || countryNameByCode.get(owner) || owner;
-    const name = String(nameResolver ? nameResolver(rawName, owner) : rawName).toUpperCase();
-    for (let index = 0; index < clusters.length; index += 1) {
-      const cluster = clusters[index];
-      // Every owner keeps its largest cluster (tiny states still get a label);
-      // additional clusters must clear the size bar.
-      if (index > 0 && cluster.area < MIN_CLUSTER_AREA) continue;
-      features.push({
-        type: "Feature",
-        id: `owner-label-${id++}`,
-        geometry: { type: "Point", coordinates: [cluster.cx, cluster.cy] },
-        properties: {
-          name,
-          areaScale: Math.sqrt(cluster.area) * 17500,
-          rotation: 0,
-          // See GLOBE_LAT_CORRECTION — same globe text-size fix (issue #6).
-          lat: cluster.cy,
-        },
-      });
-    }
-  }
-
-  return { type: "FeatureCollection", features };
-};
-
-
 const PERF_MAP_WARN_MS = 40;
 const measureMapWork = (label, fn) => {
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -562,7 +324,7 @@ const measureMapWork = (label, fn) => {
   return value;
 };
 
-const WorldMap = ({ isGlobe = false, vNext = false }) => {
+const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
   const [colorMap, setColorMap] = useState({});
   const {
@@ -581,10 +343,6 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   };
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
-  // Legacy custom-map geometry only. Map vNext never parses the giant authored
-  // regions file on the UI thread; the dedicated worker owns that parse and
-  // MapLibre consumes the URL directly in its own worker pool.
-  const [customRegionData, setCustomRegionData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionMeta, setCustomRegionMeta] = useState(EMPTY_CUSTOM_REGION_META);
   const [disputedRegionData, setDisputedRegionData] = useState(EMPTY_FEATURE_COLLECTION);
   const [polityBoundaryData, setPolityBoundaryData] = useState(EMPTY_FEATURE_COLLECTION);
@@ -604,25 +362,17 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const countriesUrl = PMTILES_PROTOCOL_URLS.countries;
   const regionsUrl = PMTILES_PROTOCOL_URLS.regions;
   const regionsGeojsonUrl = JSON_URLS.regionsGeojson;
-  const legacyCustomActive = customFlag && Array.isArray(customRegionData?.features) && customRegionData.features.length > 0;
-  const customActive = customFlag && (vNext ? customRegionMeta.ready : legacyCustomActive);
-  const hasDrawnGeometry = customActive && (
-    vNext
-      ? customRegionMeta.hasDrawnGeometry
-      : customRegionData.features.some((feature) => !/\./.test(String(feature?.properties?.id ?? "")))
-  );
-  const fullyAuthoredGeometry = Boolean(vNext && customActive && customRegionMeta.fullyAuthoredGeometry);
-  const shouldMountStockRegions = !customFlag || !vNext
+  // The worker's compact metadata is all the geometry knowledge the UI thread
+  // holds; the authored regions file itself is never parsed here.
+  const customActive = customFlag && customRegionMeta.ready;
+  const hasDrawnGeometry = customActive && customRegionMeta.hasDrawnGeometry;
+  const fullyAuthoredGeometry = Boolean(customActive && customRegionMeta.fullyAuthoredGeometry);
+  const shouldMountStockRegions = !customFlag
     || (customRegionMeta.ready && !customRegionMeta.fullyAuthoredGeometry);
-  const ownedCountryCodes = useMemo(() => {
-    if (vNext) return new Set(customRegionMeta.ownedCountryCodes ?? []);
-    const set = new Set();
-    for (const feature of customRegionData?.features ?? []) {
-      const props = feature.properties || {};
-      if (props.owner && props.gid0) set.add(props.gid0);
-    }
-    return set;
-  }, [customRegionData, customRegionMeta.ownedCountryCodes, vNext]);
+  const ownedCountryCodes = useMemo(
+    () => new Set(customRegionMeta.ownedCountryCodes ?? []),
+    [customRegionMeta.ownedCountryCodes],
+  );
   const ownedCodesKey = useMemo(() => [...ownedCountryCodes].sort().join(","), [ownedCountryCodes]);
 
   // Bumped when the translator learns new strings, so labels rebuild with
@@ -636,7 +386,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
 
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
-    if (!vNext || !mapInstance?.getZoom) return undefined;
+    if (!mapInstance?.getZoom) return undefined;
 
     const updateZoom = () => {
       const next = Number(mapInstance.getZoom?.() ?? 3.5);
@@ -652,7 +402,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     // change polity label eligibility.
     mapInstance.on("zoomend", updateZoom);
     return () => mapInstance.off("zoomend", updateZoom);
-  }, [map, vNext]);
+  }, [map]);
 
   // Disputed-region stripe tiles, generated the moment the style asks for one.
   // Reactive (rather than pre-registered) so any stripe combination works and
@@ -675,40 +425,13 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     return () => mapInstance.off("styleimagemissing", onMissing);
   }, [map]);
 
-  // Owner (polity) labels for custom maps — one label per landmass-cluster per
-  // owner, named by the scenario's polity registry ("Soviet Union", not "Russia").
-  // Recomputed as ownership overrides poll in, so labels follow conquests.
-  // Geometry-only, so it survives ownership polls — rebuilt only when the
-  // world's region geometry itself changes.
-  // Legacy-only fallback. Map vNext gets dissolved polity surfaces from the
-  // worker, so synchronously building a 4.8k-region adjacency graph and owner
-  // label clusters on the UI thread is pure duplicate work.
-  const regionAdjacency = useMemo(
-    () => (!vNext && legacyCustomActive
-      ? measureMapWork("region adjacency", () => buildRegionAdjacency(customRegionData))
-      : null),
-    [legacyCustomActive, customRegionData, vNext],
-  );
-
-  const ownerLabelData = useMemo(() => {
-    if (vNext || !legacyCustomActive) return EMPTY_FEATURE_COLLECTION;
-    return measureMapWork("owner labels", () => buildOwnerLabelCollection(
-      customRegionData,
-      regionOwnershipOverrides,
-      polityOverrides,
-      (raw, owner) => translateLabel(resolveCountryDisplayName(raw, owner)),
-      regionAdjacency,
-    ));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vNext, legacyCustomActive, customRegionData, regionOwnershipOverrides, polityOverrides, regionAdjacency, labelEpoch]);
-
   const contextualPolityLabels = useMemo(
     () => resolveContextualPolityLabels(politySurfaceData, polityOverrides),
     [polityOverrides, politySurfaceData],
   );
 
   const polityLabelCollections = useMemo(() => {
-    if (!vNext || !politySurfaceData?.features?.length) {
+    if (!politySurfaceData?.features?.length) {
       return {
         labelData: EMPTY_FEATURE_COLLECTION,
         pointLabelData: EMPTY_FEATURE_COLLECTION,
@@ -730,9 +453,9 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     ));
     // labelEpoch: rebuild once new translations land.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextualPolityLabels, labelEpoch, polityOverrides, politySurfaceData, vNext]);
+  }, [contextualPolityLabels, labelEpoch, polityOverrides, politySurfaceData]);
 
-  const useLivePolityLabels = vNext && polityLabelCollections.labelData.features.length > 0;
+  const useLivePolityLabels = polityLabelCollections.labelData.features.length > 0;
 
   // R5.4.6: renderer-confirmed polity label handoff.
   //
@@ -744,7 +467,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   // time renderer scan.
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
-    if (!vNext || !customFlag || !useLivePolityLabels || !mapInstance?.on) {
+    if (!customFlag || !useLivePolityLabels || !mapInstance?.on) {
       setRenderConfirmedCurveOwners((current) => (current.length ? [] : current));
       return undefined;
     }
@@ -801,7 +524,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       mapInstance.off("movestart", clearRenderConfirmation);
       mapInstance.off("idle", confirmRenderedCurves);
     };
-  }, [customFlag, map, useLivePolityLabels, vNext]);
+  }, [customFlag, map, useLivePolityLabels]);
 
   // Development-time proof instead of screenshot guesswork. One authoritative
   // record per polity is exposed for inspection and the known regression set is
@@ -834,8 +557,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
     if (
-      !vNext
-      || isGlobe
+      isGlobe
       || initialFramingAppliedRef.current
       || !polityLabelCollections.labelData.features.length
       || !mapInstance?.jumpTo
@@ -888,7 +610,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     return () => {
       cancelled = true;
     };
-  }, [isGlobe, map, polityLabelCollections, polityOverrides, politySurfaceData, vNext]);
+  }, [isGlobe, map, polityLabelCollections, polityOverrides, politySurfaceData]);
 
   // On custom maps the stock modern-country labels are replaced wholesale by the
   // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
@@ -966,13 +688,9 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     ],
   ], [currentLabelZoom]);
 
-  const activePointLabelData = !worldKnown
-    ? EMPTY_FEATURE_COLLECTION
-    : customFlag
-      ? useLivePolityLabels
-        ? EMPTY_FEATURE_COLLECTION
-        : ownerLabelData
-      : pointLabelData;
+  // A custom map is named by the live polity layers alone; the stock
+  // modern-country points belong to stock worlds.
+  const activePointLabelData = worldKnown && !customFlag ? pointLabelData : EMPTY_FEATURE_COLLECTION;
 
   // Stock curved-label data remains separate. R5.4.6 renderer confirmation
   // applies only to the two live custom-polity curve layers above.
@@ -992,18 +710,14 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         ? [
           "custom-regions-fill",
           "custom-regions-disputed-vnext",
-          "custom-regions-disputed",
           "custom-regions-fill-far",
-          "custom-regions-disputed-far",
         ]
         : [
           "custom-regions-fill",
           "custom-regions-disputed-vnext",
-          "custom-regions-disputed",
           "regions-fill",
           "regions-disputed",
           "custom-regions-fill-far",
-          "custom-regions-disputed-far",
         ]
       ).filter((id) => map.getLayer(id));
       if (!candidateLayers.length) return null;
@@ -1249,41 +963,8 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       };
     }),
   }), [ownerColorCss, politySurfaceData]);
-  const hasPolitySurfaces = vNext && enrichedPolitySurfaceData.features.length > 0;
+  const hasPolitySurfaces = enrichedPolitySurfaceData.features.length > 0;
 
-
-  // Legacy map only: preserve the old main-thread GeoJSON path for the non-vNext
-  // renderer. R5.0's live map never JSON.parse()s the authored region archive on
-  // the UI thread.
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!customFlag || vNext) {
-      setCustomRegionData(EMPTY_FEATURE_COLLECTION);
-      return undefined;
-    }
-
-    readJson(regionsGeojsonUrl, {
-      defaultValue: EMPTY_FEATURE_COLLECTION,
-      force: true,
-      clone: false,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        const resolved = data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION;
-        primeCustomRegionCatalog(resolved, { url: regionsGeojsonUrl });
-        setCustomRegionData(resolved);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("Error loading legacy custom regions:", error);
-        setCustomRegionData(EMPTY_FEATURE_COLLECTION);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [customFlag, regionsGeojsonUrl, vNext]);
 
   // R5.0: the worker owns the giant authored-region fetch + JSON parse. The main
   // thread receives only compact metadata plus dissolved polity surfaces/frontiers.
@@ -1296,7 +977,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     initializedBoundaryOwnershipRef.current = null;
     initializedBoundaryClaimantsRef.current = null;
 
-    if (!vNext || !customFlag) {
+    if (!customFlag) {
       setCustomRegionMeta(EMPTY_CUSTOM_REGION_META);
       setDisputedRegionData(EMPTY_FEATURE_COLLECTION);
       setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
@@ -1397,11 +1078,11 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       worker.terminate();
       if (polityBoundaryWorkerRef.current === worker) polityBoundaryWorkerRef.current = null;
     };
-  }, [customFlag, regionsGeojsonUrl, vNext]);
+  }, [customFlag, regionsGeojsonUrl]);
 
   useEffect(() => {
     const worker = polityBoundaryWorkerRef.current;
-    if (!vNext || !customFlag || !worker || !customRegionMeta.ready) return;
+    if (!customFlag || !worker || !customRegionMeta.ready) return;
     if (
       initializedBoundaryOwnershipRef.current === regionOwnershipOverrides
       && initializedBoundaryClaimantsRef.current === regionClaimants
@@ -1416,7 +1097,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       ownershipOverrides: regionOwnershipOverrides,
       regionClaimants,
     });
-  }, [customFlag, customRegionMeta.ready, regionClaimants, regionOwnershipOverrides, vNext]);
+  }, [customFlag, customRegionMeta.ready, regionClaimants, regionOwnershipOverrides]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1473,61 +1154,12 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         : stops.length > 0
         ? ["match", ["get", "GID_0"], ...stops, fallback]
         : fallback,
-      "fill-opacity": vNext ? PAX_POLITICAL_FILL_OPACITY : 0.90,
+      "fill-opacity": PAX_POLITICAL_FILL_OPACITY,
     };
-  }, [colorMap, regionOwnershipOverrides, ownerColorCss, vNext]);
-
-  // Legacy renderer still enriches its in-memory GeoJSON. Map vNext renders the
-  // authored URL directly and applies only the tiny live-override table through
-  // feature-state; it never clones/maps all 4.8k geometries on the UI thread.
-  const enrichedCustomRegionData = useMemo(() => {
-    if (vNext) return EMPTY_FEATURE_COLLECTION;
-    if (!customRegionData?.features) return customRegionData;
-    return measureMapWork("custom region enrichment", () => {
-      const overrideColor = {};
-      for (const [regionId, ownerCode] of Object.entries(regionOwnershipOverrides)) {
-        overrideColor[regionId] = ownerColorCss(ownerCode);
-      }
-
-      const rgbForOwner = (owner) => resolveOwnerRgb(owner) ?? fallbackRgbFromOwner(owner);
-      return {
-        ...customRegionData,
-        features: customRegionData.features.map((f) => {
-          const props = f.properties || {};
-          const id = props.id;
-          const fillColor = overrideColor[id]
-            || (props.owner ? ownerColorCss(props.owner) : NEUTRAL_LAND_COLOR);
-          let stripes = null;
-          const claimants = regionClaimants[id]?.length
-            ? regionClaimants[id]
-            : Array.isArray(props.claimants) && props.claimants.length > 0
-              ? props.claimants
-              : null;
-          if (claimants) {
-            const liveOwner = regionOwnershipOverrides[id] ?? props.owner ?? "";
-            const seen = new Set();
-            const stripeRgbs = [];
-            for (const name of (liveOwner ? [liveOwner, ...claimants] : claimants)) {
-              const key = String(name ?? "").trim();
-              if (!key || seen.has(key)) continue;
-              seen.add(key);
-              stripeRgbs.push(rgbForOwner(key));
-            }
-            if (stripeRgbs.length >= 2) stripes = stripeImageId(stripeRgbs);
-          }
-          return {
-            ...f,
-            properties: stripes
-              ? { ...props, _fillColor: fillColor, _stripes: stripes }
-              : { ...props, _fillColor: fillColor },
-          };
-        }),
-      };
-    });
-  }, [vNext, customRegionData, regionOwnershipOverrides, regionClaimants, ownerColorCss, resolveOwnerRgb]);
+  }, [colorMap, regionOwnershipOverrides, ownerColorCss]);
 
   const enrichedDisputedRegionData = useMemo(() => {
-    if (!vNext || !disputedRegionData?.features?.length) return EMPTY_FEATURE_COLLECTION;
+    if (!disputedRegionData?.features?.length) return EMPTY_FEATURE_COLLECTION;
     return {
       ...disputedRegionData,
       features: disputedRegionData.features.map((feature) => {
@@ -1553,82 +1185,60 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         };
       }),
     };
-  }, [disputedRegionData, ownerColorCss, resolveOwnerRgb, vNext]);
+  }, [disputedRegionData, ownerColorCss, resolveOwnerRgb]);
 
   // GADM disputed regions also paint the stock tiles (the crisp close-detail
-  // twin). On vNext this comes from compact worker metadata, not a 190 MB parsed
+  // twin), read from the worker's compact metadata rather than a parsed
   // geometry graph retained on the UI thread.
   const disputedTileStops = useMemo(() => {
-    if (vNext && fullyAuthoredGeometry) return [];
+    if (fullyAuthoredGeometry) return [];
     const stops = [];
-    if (vNext) {
-      for (const record of customRegionMeta.records ?? []) {
-        const id = String(record?.id ?? "");
-        if (!id.includes(".")) continue;
-        const claimants = regionClaimants[id]?.length ? regionClaimants[id] : record?.claimants;
-        if (!Array.isArray(claimants) || !claimants.length) continue;
-        const liveOwner = regionOwnershipOverrides[id] ?? record?.owner ?? "";
-        const seen = new Set();
-        const stripeRgbs = [];
-        for (const name of (liveOwner ? [liveOwner, ...claimants] : claimants)) {
-          const key = String(name ?? "").trim();
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          stripeRgbs.push(resolveOwnerRgb(key) ?? fallbackRgbFromOwner(key));
-        }
-        if (stripeRgbs.length >= 2) stops.push(id, stripeImageId(stripeRgbs));
+    for (const record of customRegionMeta.records ?? []) {
+      const id = String(record?.id ?? "");
+      if (!id.includes(".")) continue;
+      const claimants = regionClaimants[id]?.length ? regionClaimants[id] : record?.claimants;
+      if (!Array.isArray(claimants) || !claimants.length) continue;
+      const liveOwner = regionOwnershipOverrides[id] ?? record?.owner ?? "";
+      const seen = new Set();
+      const stripeRgbs = [];
+      for (const name of (liveOwner ? [liveOwner, ...claimants] : claimants)) {
+        const key = String(name ?? "").trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        stripeRgbs.push(resolveOwnerRgb(key) ?? fallbackRgbFromOwner(key));
       }
-      return stops;
-    }
-    for (const f of enrichedCustomRegionData?.features ?? []) {
-      const props = f.properties || {};
-      if (!props._stripes || !String(props.id ?? "").includes(".")) continue;
-      stops.push(String(props.id), props._stripes);
+      if (stripeRgbs.length >= 2) stops.push(id, stripeImageId(stripeRgbs));
     }
     return stops;
-  }, [vNext, fullyAuthoredGeometry, customRegionMeta.records, enrichedCustomRegionData, regionClaimants, regionOwnershipOverrides, resolveOwnerRgb]);
+  }, [fullyAuthoredGeometry, customRegionMeta.records, regionClaimants, regionOwnershipOverrides, resolveOwnerRgb]);
 
   const ownerByRegionId = useMemo(() => {
     const lookup = new Map();
     if (!customActive) return lookup;
-    if (vNext) {
-      for (const record of customRegionMeta.records ?? []) {
-        const id = String(record?.id ?? "");
-        if (!id) continue;
-        lookup.set(id, regionOwnershipOverrides[id] ?? record?.owner ?? "");
-      }
-      return lookup;
-    }
-    for (const feature of customRegionData?.features ?? []) {
-      const props = feature.properties || {};
-      if (!props.id) continue;
-      lookup.set(props.id, regionOwnershipOverrides[props.id] ?? props.owner ?? "");
+    for (const record of customRegionMeta.records ?? []) {
+      const id = String(record?.id ?? "");
+      if (!id) continue;
+      lookup.set(id, regionOwnershipOverrides[id] ?? record?.owner ?? "");
     }
     return lookup;
-  }, [customActive, customRegionData, customRegionMeta.records, regionOwnershipOverrides, vNext]);
+  }, [customActive, customRegionMeta.records, regionOwnershipOverrides]);
 
   const ownerLookupRef = useRef(new Map());
   useEffect(() => {
     ownerLookupRef.current = ownerByRegionId;
   }, [ownerByRegionId]);
 
-  const editedStockIds = useMemo(() => {
-    if (!customActive) return [];
-    if (vNext) return customRegionMeta.editedStockIds ?? [];
-    const ids = [];
-    for (const f of customRegionData?.features ?? []) {
-      const props = f.properties || {};
-      if (props.edited && String(props.id ?? "").includes(".")) ids.push(String(props.id));
-    }
-    return ids;
-  }, [customActive, customRegionData, customRegionMeta.editedStockIds, vNext]);
+  const editedStockIds = useMemo(
+    () => (customActive ? customRegionMeta.editedStockIds ?? [] : []),
+    [customActive, customRegionMeta.editedStockIds],
+  );
 
   // Only live ownership overrides touch the URL-backed authored source. Seed
   // colours remain properties of the scenario file; conquests are a tiny state
   // diff rather than a full GeoJSON replacement.
   const appliedCustomFillStateRef = useRef(new Map());
   useEffect(() => {
-    if (!vNext || !customFlag) return undefined;
+    if (!customFlag) return undefined;
     const mapInstance = map?.getMap ? map.getMap() : map;
     if (!mapInstance?.setFeatureState) return undefined;
     let cancelled = false;
@@ -1664,7 +1274,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       cancelled = true;
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [customFlag, map, ownerColorCss, regionOwnershipOverrides, vNext]);
+  }, [customFlag, map, ownerColorCss, regionOwnershipOverrides]);
 
   // Detailed PMTiles previously evaluated a region-id match table containing
   // thousands of entries on every rendered frame. Store the resolved colour on
@@ -1773,13 +1383,13 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
           // antialiasing every polygon edge creates the hairline "pixel gaps"
           // visible at continental scale even when the geometry is watertight.
           "fill-antialias": true,
-          ...(vNext ? { "fill-outline-color": DETAIL_FILL_COLOR } : {}),
+          "fill-outline-color": DETAIL_FILL_COLOR,
         }
       : { "fill-opacity": 0 },
-    [customActive, hasPolitySurfaces, vNext],
+    [customActive, hasPolitySurfaces],
   );
   const customRegionFillOpacity = customFlag
-    ? hasPolitySurfaces ? 0 : vNext ? PAX_POLITICAL_FILL_OPACITY : BASE_FILL_OPACITY
+    ? hasPolitySurfaces ? 0 : PAX_POLITICAL_FILL_OPACITY
     : 0;
 
   // Stock country fills/borders render ONLY once the world is known to be a
@@ -1800,12 +1410,8 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const regionsOutlinePaint = {
     "line-color": "rgba(7, 10, 14, 0.88)",
     "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.22, 6, 0.32, 8, 0.48, 12, 0.78],
-    "line-opacity": worldKnown
-      ? vNext
-        ? customActive
-          ? 0
-          : ["interpolate", ["linear"], ["zoom"], 6.8, 0, 7.4, 0.08, 8.2, 0.16, 10, 0.28, 12, 0.42]
-        : ["interpolate", ["linear"], ["zoom"], 5.5, 0, 6.5, 0.34, 8, 0.44, 12, 0.56]
+    "line-opacity": worldKnown && !customActive
+      ? ["interpolate", ["linear"], ["zoom"], 6.8, 0, 7.4, 0.08, 8.2, 0.16, 10, 0.28, 12, 0.42]
       : 0,
   };
 
@@ -1825,34 +1431,34 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(vNext ? 0.72 : 0.86, isGlobe, vNext ? 64 : 254),
+    "text-size": buildCountryTextSize(0.72, isGlobe, 64),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": false,
-    "text-letter-spacing": vNext ? ["coalesce", ["get", "letterSpacing"], 0.12] : 0.10,
-    ...(vNext ? { "text-max-width": 100 } : {}),
-    "text-padding": vNext ? 6 : 8,
-    ...(vNext ? { "symbol-sort-key": ["-", ["coalesce", ["get", "priorityScale"], ["get", "areaScale"]]] } : {}),
+    "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.12],
+    "text-max-width": 100,
+    "text-padding": 6,
+    "symbol-sort-key": ["-", ["coalesce", ["get", "priorityScale"], ["get", "areaScale"]]],
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels, vNext]);
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(vNext ? 0.78 : 0.86, isGlobe, vNext ? 78 : 254),
+    "text-size": buildCountryTextSize(0.78, isGlobe, 78),
     "text-rotate": ["get", "rotation"],
     "text-offset": ["coalesce", ["get", "textOffset"], ["literal", [0, 0]]],
     "text-anchor": "center",
     "text-allow-overlap": true,
-    "text-ignore-placement": vNext,
+    "text-ignore-placement": true,
     "text-pitch-alignment": "map",
     "text-rotation-alignment": "map",
     "text-keep-upright": false,
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
-  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels, vNext]);
+  }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
   const livePointLabelLayerLayout = useMemo(() => ({
     ...pointLabelLayerLayout,
@@ -1895,22 +1501,14 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
     "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.92)",
     "text-halo-width": 1.1,
     "text-halo-blur": 0.32,
-    "text-opacity": vNext
-      ? [
-          "interpolate", ["linear"], ["zoom"],
-          4, 0.98,
-          5.8, 0.90,
-          6.6, 0.52,
-          7.1, 0,
-        ]
-      : [
-          "interpolate", ["linear"], ["zoom"],
-          4, 0.98,
-          6, 0.92,
-          8, 0.28,
-          9, 0,
-        ],
-  }), [labelHaloColor, labelTextColor, vNext]);
+    "text-opacity": [
+      "interpolate", ["linear"], ["zoom"],
+      4, 0.98,
+      5.8, 0.90,
+      6.6, 0.52,
+      7.1, 0,
+    ],
+  }), [labelHaloColor, labelTextColor]);
   const curvedLabelLayerPaint = useMemo(() => ({
     ...labelLayerPaint,
     "text-opacity": [
@@ -1968,21 +1566,19 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       </Source>
       )}
 
-      {vNext && (
-        <Source id="polity-surfaces-source" type="geojson" data={enrichedPolitySurfaceData} tolerance={0.25}>
-          <Layer
-            id="polity-surfaces-fill"
-            type="fill"
-            paint={{
-              "fill-color": CUSTOM_FILL_COLOR,
-              "fill-opacity": customActive && worldKnown
-                ? PAX_POLITICAL_FILL_OPACITY
-                : 0,
-              "fill-antialias": true,
-            }}
-          />
-        </Source>
-      )}
+      <Source id="polity-surfaces-source" type="geojson" data={enrichedPolitySurfaceData} tolerance={0.25}>
+        <Layer
+          id="polity-surfaces-fill"
+          type="fill"
+          paint={{
+            "fill-color": CUSTOM_FILL_COLOR,
+            "fill-opacity": customActive && worldKnown
+              ? PAX_POLITICAL_FILL_OPACITY
+              : 0,
+            "fill-antialias": true,
+          }}
+        />
+      </Source>
 
       {/* Deliberately NOT gated on customFlag, unlike countries-source above —
           this source is not decoration on a custom map, it is the close-detail
@@ -2020,7 +1616,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         <Layer
           id="regions-outline"
           type="line"
-          minzoom={vNext ? 8.25 : undefined}
+          minzoom={8.25}
           source-layer="regions"
           filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
           paint={regionsOutlinePaint}
@@ -2039,8 +1635,8 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
       <Source
         id="custom-regions-source"
         type="geojson"
-        data={vNext ? regionsGeojsonUrl : enrichedCustomRegionData}
-        promoteId={vNext ? "id" : undefined}
+        data={regionsGeojsonUrl}
+        promoteId="id"
         tolerance={0.6}
       >
         {/* coarse seed geometry sits underneath the tile layer as a safety net.
@@ -2054,47 +1650,9 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
             "fill-color": CUSTOM_FILL_COLOR,
             "fill-opacity": customRegionFillOpacity,
             "fill-antialias": true,
-            ...(vNext ? { "fill-outline-color": CUSTOM_FILL_COLOR } : {}),
+            "fill-outline-color": CUSTOM_FILL_COLOR,
           }}
         />
-        {/* Seed hairlines stay beneath the detailed tile outlines through the
-            handoff window. A late tile can then lose detail, not the border
-            itself; once close-detail tiles are established this fades away. */}
-        <Layer
-          id="custom-regions-hairline-far"
-          type="line"
-          beforeId={shouldMountStockRegions ? "regions-outline" : undefined}
-          minzoom={vNext ? 8.25 : undefined}
-          maxzoom={9}
-          filter={STOCK_GEOMETRY_FILTER}
-          paint={{
-            "line-color": "rgba(7, 10, 14, 0.88)",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.26, 6.5, 0.42, 9, 0.58],
-            "line-opacity": customActive
-              ? vNext
-                ? 0
-                : ["interpolate", ["linear"], ["zoom"],
-                    3, 0.32,
-                    5.5, 0.42,
-                    6.5, 0.30,
-                    8, 0.18,
-                    9, 0]
-              : 0,
-          }}
-        />
-        {/* Striped fill over disputed regions: far twin for GADM seed geometry,
-            all-zoom twin for author-drawn shapes. The stripes REPLACE the solid
-            look (they sit above it at the same opacity, administrator's color
-            first), so a contested border reads at a glance. */}
-        {!vNext && (
-          <Layer
-            id="custom-regions-disputed-far"
-            type="fill"
-            maxzoom={7}
-            filter={["all", STOCK_GEOMETRY_FILTER, ["has", "_stripes"]]}
-            paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? FAR_OVERLAY_FADE : 0 }}
-          />
-        )}
         <Layer
           id="custom-regions-fill"
           type="fill"
@@ -2103,86 +1661,55 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
             "fill-color": CUSTOM_FILL_COLOR,
             "fill-opacity": customRegionFillOpacity,
             "fill-antialias": true,
-            ...(vNext ? { "fill-outline-color": CUSTOM_FILL_COLOR } : {}),
-          }}
-        />
-        {!vNext && (
-          <Layer
-            id="custom-regions-disputed"
-            type="fill"
-            filter={["all", AUTHORED_GEOMETRY_FILTER, ["has", "_stripes"]]}
-            paint={{ "fill-pattern": ["get", "_stripes"], "fill-opacity": customActive ? 0.90 : 0 }}
-          />
-        )}
-        <Layer
-          id="custom-regions-outline"
-          type="line"
-          minzoom={vNext ? 8.25 : undefined}
-          filter={AUTHORED_GEOMETRY_FILTER}
-          paint={{
-            "line-color": "rgba(7, 10, 14, 0.88)",
-            "line-width": [
-              "interpolate", ["linear"], ["zoom"],
-              3, 0.22,
-              8, 0.46,
-              12, 0.78,
-            ],
-            "line-opacity": customActive
-              ? vNext
-                ? 0
-                : ["interpolate", ["linear"], ["zoom"], 3, 0.26, 4, 0.34, 8, 0.46, 12, 0.56]
-              : 0,
+            "fill-outline-color": CUSTOM_FILL_COLOR,
           }}
         />
         {/* Provinces are a local interaction grid, not part of the political
             silhouette. R18 brings them in at regional zoom instead of waiting
             for an already-close camera. The first appearance is deliberately
             faint, then ramps smoothly into a proper province grid.
-            This remains ONE canonical scenario-geometry outline layer; the old
-            duplicate tile/authored outline paths stay silent in vNext. */}
-        {vNext && (
-          <Layer
-            id="custom-regions-local-outline"
-            type="line"
-            minzoom={4.20}
-            layout={{ "line-cap": "round", "line-join": "round" }}
-            paint={{
-              "line-color": "rgba(8, 12, 18, 0.90)",
-              "line-width": [
-                "interpolate", ["linear"], ["zoom"],
-                4.20, 0.14,
-                4.75, 0.17,
-                5.25, 0.21,
-                6.0, 0.27,
-                7.0, 0.35,
-                8.0, 0.45,
-                10, 0.61,
-                12, 0.79,
-                14, 0.96,
-              ],
-              "line-opacity": customActive && worldKnown
-                ? [
-                    "interpolate", ["linear"], ["zoom"],
-                    4.20, 0.00,
-                    4.45, 0.045,
-                    4.85, 0.075,
-                    5.25, 0.11,
-                    5.75, 0.16,
-                    6.25, 0.22,
-                    7.0, 0.30,
-                    8.0, 0.39,
-                    10, 0.49,
-                    12, 0.58,
-                    14, 0.67,
-                  ]
-                : 0,
-            }}
-          />
-        )}
+            This is the one canonical scenario-geometry outline layer. */}
+        <Layer
+          id="custom-regions-local-outline"
+          type="line"
+          minzoom={4.20}
+          layout={{ "line-cap": "round", "line-join": "round" }}
+          paint={{
+            "line-color": "rgba(8, 12, 18, 0.90)",
+            "line-width": [
+              "interpolate", ["linear"], ["zoom"],
+              4.20, 0.14,
+              4.75, 0.17,
+              5.25, 0.21,
+              6.0, 0.27,
+              7.0, 0.35,
+              8.0, 0.45,
+              10, 0.61,
+              12, 0.79,
+              14, 0.96,
+            ],
+            "line-opacity": customActive && worldKnown
+              ? [
+                  "interpolate", ["linear"], ["zoom"],
+                  4.20, 0.00,
+                  4.45, 0.045,
+                  4.85, 0.075,
+                  5.25, 0.11,
+                  5.75, 0.16,
+                  6.25, 0.22,
+                  7.0, 0.30,
+                  8.0, 0.39,
+                  10, 0.49,
+                  12, 0.58,
+                  14, 0.67,
+                ]
+              : 0,
+          }}
+        />
       </Source>
       )}
 
-      {vNext && enrichedDisputedRegionData.features.length > 0 && (
+      {enrichedDisputedRegionData.features.length > 0 && (
         <Source id="custom-regions-disputed-source" type="geojson" data={enrichedDisputedRegionData} tolerance={0.6}>
           <Layer
             id="custom-regions-disputed-vnext"
@@ -2196,47 +1723,45 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         </Source>
       )}
 
-      {vNext && (
-        <Source id="polity-boundaries-source" type="geojson" data={polityBoundaryData} tolerance={0.25}>
-          <Layer
-            id="polity-boundaries-shadow"
-            type="line"
-            layout={{ "line-cap": "round", "line-join": "round" }}
-            paint={{
-              "line-color": "rgba(1, 4, 8, 0.72)",
-              "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 3, 2.5, 6, 3.6, 9, 4.7, 12, 5.8],
-              "line-blur": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.15, 12, 1.5],
-              "line-opacity": customActive && worldKnown ? 0.52 : 0,
-            }}
-          />
-          <Layer
-            id="polity-boundaries"
-            type="line"
-            layout={{ "line-cap": "round", "line-join": "round" }}
-            paint={{
-              "line-color": "rgba(5, 8, 13, 0.96)",
-              "line-width": [
-                "interpolate", ["linear"], ["zoom"],
-                1, 0.58,
-                3, 0.92,
-                6, 1.34,
-                9, 1.72,
-                12, 2.08,
-              ],
-              "line-opacity": customActive && worldKnown ? 0.94 : 0,
-            }}
-          />
-        </Source>
-      )}
+      <Source id="polity-boundaries-source" type="geojson" data={polityBoundaryData} tolerance={0.25}>
+        <Layer
+          id="polity-boundaries-shadow"
+          type="line"
+          layout={{ "line-cap": "round", "line-join": "round" }}
+          paint={{
+            "line-color": "rgba(1, 4, 8, 0.72)",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 3, 2.5, 6, 3.6, 9, 4.7, 12, 5.8],
+            "line-blur": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.15, 12, 1.5],
+            "line-opacity": customActive && worldKnown ? 0.52 : 0,
+          }}
+        />
+        <Layer
+          id="polity-boundaries"
+          type="line"
+          layout={{ "line-cap": "round", "line-join": "round" }}
+          paint={{
+            "line-color": "rgba(5, 8, 13, 0.96)",
+            "line-width": [
+              "interpolate", ["linear"], ["zoom"],
+              1, 0.58,
+              3, 0.92,
+              6, 1.34,
+              9, 1.72,
+              12, 2.08,
+            ],
+            "line-opacity": customActive && worldKnown ? 0.94 : 0,
+          }}
+        />
+      </Source>
 
       <Source id="country-curved-label-source" type="geojson" data={activeCurvedLabelData}>
         <Layer
           id="country-curved-labels"
           type="symbol"
-          minzoom={vNext && customFlag && useLivePolityLabels ? 3.85 : undefined}
-          maxzoom={vNext ? 7.1 : undefined}
+          minzoom={customFlag && useLivePolityLabels ? 3.85 : undefined}
+          maxzoom={7.1}
           layout={curvedLabelLayerLayout}
-          paint={vNext && customFlag && useLivePolityLabels ? curvedLabelLayerPaint : labelLayerPaint}
+          paint={customFlag && useLivePolityLabels ? curvedLabelLayerPaint : labelLayerPaint}
         />
       </Source>
 
@@ -2258,7 +1783,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         maxzoom={3}
         buffer={256}
       >
-        {vNext && customFlag && useLivePolityLabels && (
+        {customFlag && useLivePolityLabels && (
           <Layer
             id="country-line-labels-live-world"
             source="country-live-polity-line-label-source"
@@ -2273,7 +1798,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
             paint={integratedLabelLayerPaint}
           />
         )}
-        {vNext && customFlag && useLivePolityLabels && (
+        {customFlag && useLivePolityLabels && (
           <Layer
             id="country-line-labels-live-detail"
             source="country-live-polity-line-label-source"
@@ -2299,7 +1824,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         maxzoom={3}
         buffer={256}
       >
-        {vNext && customFlag && useLivePolityLabels && (
+        {customFlag && useLivePolityLabels && (
           <Layer
             id="country-labels-live-managed"
             source="country-live-polity-point-label-source"
@@ -2313,7 +1838,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
             paint={integratedLabelLayerPaint}
           />
         )}
-        {vNext && customFlag && useLivePolityLabels && (
+        {customFlag && useLivePolityLabels && (
           <Layer
             id="country-labels-live-overlap"
             source="country-live-polity-point-label-source"
@@ -2336,7 +1861,7 @@ const WorldMap = ({ isGlobe = false, vNext = false }) => {
         <Layer
           id="country-labels"
           type="symbol"
-          maxzoom={vNext ? 7.1 : undefined}
+          maxzoom={7.1}
           layout={pointLabelLayerLayout}
           paint={labelLayerPaint}
         />
