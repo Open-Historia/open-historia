@@ -14,6 +14,7 @@ import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProject
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
+import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -22,11 +23,17 @@ import {
     readGameData,
     readWorldState,
 } from "../../runtime/gameState.js";
+import {
+    buildFocusContext,
+    buildPlaceCatalog,
+    deriveEventFocusBounds,
+    mergeFeatureParts,
+    tileGeometryParts,
+} from "./eventFocus.js";
 import { setWorldStateOverride } from "../Map/useWorldState.js";
 import { setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
-import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
+import { MAP_SETTING_KEYS, isBetaUnits, useMapSetting } from "../../runtime/mapSettings.js";
 
 dayjs.extend(advancedFormat);
 
@@ -273,65 +280,10 @@ const buildEventLookup = (events) => new Map((events ?? []).map((event) => [even
 let regionBoundsPromise = null;
 let countryBoundsPromise = null;
 
-const tilePointToLngLat = (px, py, extent = 4096) => {
-    const lng = (px / extent) * 360 - 180;
-    const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * py) / extent)));
-    const lat = latRad * (180 / Math.PI);
-    return [lng, lat];
-};
-
-const extendBounds = (currentBounds, nextBounds) => {
-    if (!nextBounds) {
-        return currentBounds;
-    }
-
-    if (!currentBounds) {
-        return nextBounds;
-    }
-
-    return [
-        [
-            Math.min(currentBounds[0][0], nextBounds[0][0]),
-            Math.min(currentBounds[0][1], nextBounds[0][1]),
-        ],
-        [
-            Math.max(currentBounds[1][0], nextBounds[1][0]),
-            Math.max(currentBounds[1][1], nextBounds[1][1]),
-        ],
-    ];
-};
-
-const geometryToBounds = (geometry, extent = 4096) => {
-    let minLng = Number.POSITIVE_INFINITY;
-    let minLat = Number.POSITIVE_INFINITY;
-    let maxLng = Number.NEGATIVE_INFINITY;
-    let maxLat = Number.NEGATIVE_INFINITY;
-
-    for (const ring of geometry ?? []) {
-        for (const point of ring ?? []) {
-            const [lng, lat] = tilePointToLngLat(point.x, point.y, extent);
-            minLng = Math.min(minLng, lng);
-            minLat = Math.min(minLat, lat);
-            maxLng = Math.max(maxLng, lng);
-            maxLat = Math.max(maxLat, lat);
-        }
-    }
-
-    if (
-        !Number.isFinite(minLng) ||
-        !Number.isFinite(minLat) ||
-        !Number.isFinite(maxLng) ||
-        !Number.isFinite(maxLat)
-    ) {
-        return null;
-    }
-
-    return [
-        [minLng, minLat],
-        [maxLng, maxLat],
-    ];
-};
-
+// Bounds for every feature in an archive's overview tile (0/0/0 — the tile the
+// game already treats as the complete country/region catalog), keyed by the id
+// the events refer to. Rings are kept apart until the merge so an outlying
+// island can be told from the mainland and dropped (see mergeFeatureParts).
 const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
     const pmtiles = getPmtilesArchive(archiveUrl);
     const tileData = await pmtiles.getZxy(0, 0, 0);
@@ -346,7 +298,7 @@ const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
     }
 
     const extent = layer.extent || 4096;
-    const boundsLookup = new Map();
+    const partsByKey = new Map();
 
     for (let index = 0; index < layer.length; index += 1) {
         const feature = layer.feature(index);
@@ -359,16 +311,26 @@ const loadFeatureBounds = async (archiveUrl, layerName, keyResolvers) => {
             continue;
         }
 
-        const featureBounds = geometryToBounds(feature.loadGeometry(), extent);
-        if (!featureBounds) {
+        const parts = tileGeometryParts(feature.loadGeometry(), extent);
+        if (parts.length === 0) {
             continue;
         }
 
         const normalizedKey = String(key);
-        boundsLookup.set(
-            normalizedKey,
-            extendBounds(boundsLookup.get(normalizedKey) || null, featureBounds),
-        );
+        const bucket = partsByKey.get(normalizedKey);
+        if (bucket) {
+            bucket.push(...parts);
+        } else {
+            partsByKey.set(normalizedKey, parts);
+        }
+    }
+
+    const boundsLookup = new Map();
+    for (const [key, parts] of partsByKey) {
+        const bounds = mergeFeatureParts(parts);
+        if (bounds) {
+            boundsLookup.set(key, bounds);
+        }
     }
 
     return boundsLookup;
@@ -408,67 +370,6 @@ const loadCountryBounds = async () => {
     return countryBoundsPromise;
 };
 
-const getEventFocusBounds = (event, { countryBounds, regionBounds }) => {
-    let resolvedBounds = null;
-
-    for (const transfer of event?.impacts?.regionTransfers ?? []) {
-        const regionId = String(transfer?.regionId ?? "");
-        if (!regionId) {
-            continue;
-        }
-
-        resolvedBounds = extendBounds(resolvedBounds, regionBounds.get(regionId) || null);
-    }
-
-    for (const change of event?.impacts?.polityChanges ?? []) {
-        const code = String(change?.code ?? "");
-        if (!code) {
-            continue;
-        }
-
-        resolvedBounds = extendBounds(resolvedBounds, countryBounds.get(code) || null);
-    }
-
-    return resolvedBounds;
-};
-
-// Every event moves the camera. When the impacts don't pin a location, fall
-// back to the chat participants, then to the countries the event's text
-// actually mentions.
-const deriveEventFocusBounds = (event, { countryBounds, regionBounds, polityLookup }) => {
-    const impactBounds = getEventFocusBounds(event, { countryBounds, regionBounds });
-    if (impactBounds) {
-        return impactBounds;
-    }
-
-    let bounds = null;
-    for (const chat of event?.impacts?.createdChats ?? []) {
-        for (const country of chat?.countries ?? []) {
-            if (country?.code) {
-                bounds = extendBounds(bounds, countryBounds.get(String(country.code)) || null);
-            }
-        }
-    }
-    if (bounds) {
-        return bounds;
-    }
-
-    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
-    for (const [code, name] of polityLookup) {
-        // Very short names ("Chad") false-match inside other words rarely
-        // enough to accept; sub-4-character names don't.
-        if (!name || String(name).length < 4) {
-            continue;
-        }
-
-        if (haystack.includes(String(name).toLowerCase())) {
-            bounds = extendBounds(bounds, countryBounds.get(code) || null);
-        }
-    }
-
-    return bounds;
-};
-
 const getMapInstance = (mapRef) => mapRef?.current?.getMap?.() ?? mapRef?.current ?? null;
 
 const focusMapOnBounds = (mapRef, bounds) => {
@@ -489,6 +390,12 @@ const focusMapOnBounds = (mapRef, bounds) => {
         north += 0.45;
     }
 
+    // Padding bigger than the viewport makes fitBounds throw, and 80px is a
+    // quarter of a phone screen — scale it down on small canvases.
+    const canvas = map.getCanvas?.();
+    const shortSide = Math.min(canvas?.clientWidth || 0, canvas?.clientHeight || 0);
+    const padding = shortSide > 0 ? Math.max(16, Math.min(80, Math.round(shortSide * 0.12))) : 40;
+
     map.fitBounds(
         [
             [west, south],
@@ -498,7 +405,7 @@ const focusMapOnBounds = (mapRef, bounds) => {
             duration: 1800,
             essential: true,
             maxZoom: 6.8,
-            padding: 80,
+            padding,
         },
     );
 };
@@ -1117,72 +1024,19 @@ const TimelineSkipPanel = ({
             </div>
         )}
 
-        {/* A HELD turn, not a failed one: the events are generated and valid, and
-            the whole turn is waiting unwritten because the Projects board could
-            not be brought in step with them. Amber rather than red, and worded so
-            the player knows their turn still exists — Retry re-runs only the
-            board, which is seconds rather than the minutes the events cost. */}
-        {projectsHeld && (
+        {error && (
             <div
             style={{
-                background: "rgba(120,53,15,0.28)",
-                border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: "16px",
-                color: "#fde68a",
-                display: "flex",
-                flexDirection: "column",
-                fontSize: "0.76rem",
-                gap: "0.7rem",
-                lineHeight: "1.5",
-                padding: "0.85rem 0.9rem",
+                background: "rgba(127,29,29,0.24)",
+                   border: "1px solid rgba(248,113,113,0.3)",
+                   borderRadius: "16px",
+                   color: "#fecaca",
+                   fontSize: "0.76rem",
+                   lineHeight: "1.5",
+                   padding: "0.85rem 0.9rem",
             }}
             >
-            <div>{projectsHeld}</div>
-            {projectsRetries > 0 && !isRetryingProjects && (
-                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
-                Tried {projectsRetries === 1 ? "once" : `${projectsRetries} times`} — the board still
-                did not update. Retrying again may help if the problem was temporary;
-                otherwise discard the turn and run it again.
-                </div>
-            )}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                type="button"
-                disabled={isRetryingProjects}
-                onClick={onRetryProjects}
-                style={{
-                    background: "rgba(251,191,36,0.18)",
-                    border: "1px solid rgba(251,191,36,0.4)",
-                    borderRadius: "12px",
-                    color: "#fde68a",
-                    cursor: isRetryingProjects ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingProjects ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                {isRetryingProjects ? "Retrying the board…" : "Retry the board"}
-                </button>
-                <button
-                type="button"
-                disabled={isRetryingProjects}
-                onClick={onDiscardProjects}
-                style={{
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.16)",
-                    borderRadius: "12px",
-                    color: "rgba(255,255,255,0.72)",
-                    cursor: isRetryingProjects ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingProjects ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                Discard the turn
-                </button>
-            </div>
+            {error}
             </div>
         )}
 
@@ -1259,6 +1113,79 @@ const TimelineSkipPanel = ({
             </div>
         )}
 
+        {/* A HELD turn, not a failed one: the events are generated and valid but
+            nothing has been written, because the Projects & Operations board
+            could not be brought in step with them. Deliberately amber rather
+            than red, and worded so the player knows their turn still exists —
+            Retry re-runs only the board, which is seconds rather than the
+            minutes regenerating the events would cost. */}
+        {projectsHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>{projectsHeld}</div>
+            {/* A failed retry otherwise re-renders the identical message, so the
+                button reads as dead even though it ran. Say plainly that it was
+                tried and did not work. */}
+            {projectsRetries > 0 && !isRetryingProjects && (
+                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+                Tried {projectsRetries === 1 ? "once" : `${projectsRetries} times`} — the board still
+                did not update. Retrying again may help if the problem was temporary;
+                otherwise discard the turn and run it again.
+                </div>
+            )}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                disabled={isRetryingProjects}
+                onClick={onRetryProjects}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isRetryingProjects ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingProjects ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isRetryingProjects ? "Retrying the board…" : "Retry the board"}
+                </button>
+                <button
+                type="button"
+                disabled={isRetryingProjects}
+                onClick={onDiscardProjects}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingProjects ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingProjects ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the turn
+                </button>
+            </div>
+            </div>
+        )}
+
         {/* The ladder has twice found the same lower method working for this
             endpoint. Offered, never applied silently: the app did the discovery,
             the player makes the decision — and declining is remembered so this
@@ -1323,33 +1250,19 @@ const TimelineSkipPanel = ({
             </div>
             </div>
         )}
-
-        {error && (
-            <div
-            style={{
-                background: "rgba(127,29,29,0.24)",
-                   border: "1px solid rgba(248,113,113,0.3)",
-                   borderRadius: "16px",
-                   color: "#fecaca",
-                   fontSize: "0.76rem",
-                   lineHeight: "1.5",
-                   padding: "0.85rem 0.9rem",
-            }}
-            >
-            {error}
-            </div>
-        )}
         </PanelChrome>
     );
 };
 
 const TimelineHistoryPanel = ({
     isOpen,
-    onCopyDebugMessage,
     onRevealNextEvent,
     onRevealAll,
     lookups,
     onClose,
+    canRollbackTurn,
+    onCopyDebugMessage,
+    onRollbackTurn,
     record,
     topOffset,
     visibleEventCount,
@@ -1371,6 +1284,18 @@ const TimelineHistoryPanel = ({
         const succeeded = await onCopyDebugMessage();
         setCopyState(succeeded ? "copied" : "failed");
         setTimeout(() => setCopyState("idle"), 2000);
+    };
+    // idle | working — the undo runs without switching panels, so this button is
+    // the only place the player can see that anything is happening.
+    const [rollbackState, setRollbackState] = useState("idle");
+    const handleRollbackClick = async () => {
+        if (rollbackState === "working" || !canRollbackTurn || typeof onRollbackTurn !== "function") return;
+        setRollbackState("working");
+        try {
+            await onRollbackTurn();
+        } finally {
+            setRollbackState("idle");
+        }
     };
 
     useEffect(() => {
@@ -1407,12 +1332,12 @@ const TimelineHistoryPanel = ({
             }}
             >
             {warning}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.6rem" }}>
             {typeof onCopyDebugMessage === "function" && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.6rem" }}>
                 <button
                 type="button"
                 onClick={handleCopyClick}
-                title="Copies everything needed to debug this — what was attempted, game/provider context, and the raw model response — so it can be pasted straight into a bug report, no DevTools needed."
+                title="Copies everything needed to debug this — what was attempted, game/provider context, and the raw model response — so it can be pasted straight to Claude, no DevTools needed."
                 style={{
                     alignItems: "center",
                     background: copyState === "copied" ? "rgba(34,197,94,0.16)" : "rgba(251,191,36,0.1)",
@@ -1431,8 +1356,39 @@ const TimelineHistoryPanel = ({
                 >
                 {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy — try again" : copyState === "copying" ? "Copying…" : "📋 Copy debugging message"}
                 </button>
-                </div>
             )}
+            {/* Only offered while a restore point actually exists — a fallback on
+                the very first turn has nothing behind it to roll back to. The
+                working state keeps it rendered: canRollbackTurn goes false the
+                moment the undo starts loading, which would otherwise unmount the
+                button mid-click and take its progress label with it. */}
+            {typeof onRollbackTurn === "function" && (canRollbackTurn || rollbackState === "working") && (
+                <button
+                type="button"
+                onClick={handleRollbackClick}
+                disabled={rollbackState === "working"}
+                title="Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
+                style={{
+                    alignItems: "center",
+                    background: "rgba(180,83,9,0.22)",
+                    border: "1px solid rgba(245,158,11,0.45)",
+                    borderRadius: "8px",
+                    color: "#fcd9a8",
+                    cursor: rollbackState === "working" ? "default" : "pointer",
+                    display: "flex",
+                    fontFamily: "sans-serif",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    gap: "0.35rem",
+                    opacity: rollbackState === "working" ? 0.7 : 1,
+                    padding: "0.4rem 0.7rem",
+                    transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                }}
+                >
+                {rollbackState === "working" ? "Rolling back…" : "↩ Rollback turn"}
+                </button>
+            )}
+            </div>
             </div>
         )}
         {!record ? (
@@ -1500,33 +1456,41 @@ const DateWidget = ({
     const [events, setEvents] = useState([]);
     const [worldState, setWorldState] = useState(null);
     const [countryBounds, setCountryBounds] = useState(new Map());
-    const [polityLookup, setPolityLookup] = useState(new Map());
+    const [countryCatalog, setCountryCatalog] = useState([]);
     const [regionBounds, setRegionBounds] = useState(new Map());
-    const [regionLookup, setRegionLookup] = useState(new Map());
+    const [regionCatalog, setRegionCatalog] = useState([]);
     const [localOpenPanel, setLocalOpenPanel] = useState(null);
-    // A structured-output method the ladder has found this endpoint honours,
-    // offered to the player between turns (AI/structuredMode.js); null when
-    // there is nothing to offer or they have already answered.
-    const [modeSuggestion, setModeSuggestion] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
     // What the spinner says while a jump runs. Empty for a single-request jump —
     // the notice falls back to its own wording — and set per segment when a long
     // skip is generated in pieces (AI/jumpSegments.js).
     const [jumpProgress, setJumpProgress] = useState("");
-    // A jump held on a failed segment: the notice text, how many retries have
-    // been tried, and whether one is running now.
+    const [error, setError] = useState("");
+    const [fallbackWarning, setFallbackWarning] = useState("");
     // A turn that is generated and valid but NOT written, because the Projects &
     // Operations board could not be brought in step with it. Set means a turn is
     // waiting: the player retries just the board, or discards and runs the turn
     // again. Nothing has been saved either way.
     const [projectsHeld, setProjectsHeld] = useState("");
     const [isRetryingProjects, setIsRetryingProjects] = useState(false);
+    // How many times the board has been retried for the turn currently held.
+    // Without it a failed retry re-renders the identical message and reads as a
+    // dead button - which is exactly how it read in testing.
     const [projectsRetries, setProjectsRetries] = useState(0);
+    // A jump whose segments are part-generated: one segment failed and the rest
+    // of the round was never asked for. Set means a turn is waiting — the player
+    // retries that one segment, or discards. Nothing has been written either way,
+    // so there is no rollback to run: the game is still on its pre-jump date.
     const [segmentHeld, setSegmentHeld] = useState("");
-    const [segmentRetries, setSegmentRetries] = useState(0);
     const [isRetryingSegment, setIsRetryingSegment] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState("");
-    const [fallbackWarning, setFallbackWarning] = useState("");
+    // How many times the failed segment has been retried for the jump currently
+    // held — same reason as projectsRetries.
+    const [segmentRetries, setSegmentRetries] = useState(0);
+    // The structured-output ladder has now twice found the same lower method
+    // working for this endpoint. Offered rather than applied: the app does the
+    // discovery, the player makes the decision. Checked after a turn ends, so it
+    // never interrupts one.
+    const [modeSuggestion, setModeSuggestion] = useState(null);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
@@ -1562,9 +1526,9 @@ const DateWidget = ({
                 }
 
                 setCountryBounds(nextCountryBounds);
-                setPolityLookup(new Map((countries ?? []).map((entry) => [entry.code, entry.name])));
+                setCountryCatalog(countries ?? []);
                 setRegionBounds(nextRegionBounds);
-                setRegionLookup(new Map((regions ?? []).map((entry) => [entry.id, entry])));
+                setRegionCatalog(regions ?? []);
             } catch (lookupError) {
                 if (!cancelled) {
                     console.error("Failed to load timeline lookups:", lookupError);
@@ -1619,9 +1583,27 @@ const DateWidget = ({
         loadState();
         const interval = setInterval(loadState, 5000);
 
+        // The staleness guard above cannot tell a stale read from a rollback — both
+        // arrive as "older than what is on screen" — so it rejected the restored
+        // state too, and the panel kept showing the undone turn's date, its events
+        // and its fallback warning until the app was restarted. rollBackToSnapshot
+        // announces itself (gameplay.js); clearing the stamp lets the restored read
+        // through, and reloading now means the player doesn't wait out the 5s tick.
+        const handleRolledBack = () => {
+            gameStampRef.current = { round: 0, date: "" };
+            setVisibleEventCount(1);
+            // The live warning belongs to the turn that just got undone. The
+            // persisted one clears itself, since it is derived from the restored
+            // simulationHistory that loadState is about to pull in.
+            setFallbackWarning("");
+            loadState();
+        };
+        window.addEventListener("oh:rolled-back", handleRolledBack);
+
         return () => {
             cancelled = true;
             clearInterval(interval);
+            window.removeEventListener("oh:rolled-back", handleRolledBack);
         };
     }, []);
 
@@ -1652,8 +1634,10 @@ const DateWidget = ({
     }, [gameData, worldState, events]);
 
     function setPanel(panelName) {
-        // Which panel the player had open, in detailed mode: this is what turns
-        // "it broke" into a reproduction.
+        // Where the player was looking, in detailed mode. On its own a panel
+        // change is trivia; interleaved with the turn and API entries it is what
+        // turns "it broke" into a reproduction — which panel was open when the
+        // crash landed, and what they had opened just before.
         logDebugEvent("ui", `Panel: ${panelName || "closed"}`, undefined, { verbose: true });
         if (typeof onSetPanel === "function") {
             onSetPanel(panelName);
@@ -1685,18 +1669,20 @@ const DateWidget = ({
 
         setPanel("skip");
         setIsLoading(true);
+        setJumpProgress("");
         setError("");
         setFallbackWarning("");
-        setJumpProgress("");
-        // simulateTimelineJump abandons any held jump when it starts, so a notice
+        // simulateTimelineJump abandons any held turn when it starts, so a notice
         // left on screen would offer buttons with nothing behind them.
         setSegmentHeld("");
         setSegmentRetries(0);
         setProjectsHeld("");
         setProjectsRetries(0);
 
-        // Start and finish are separate entries on purpose: a turn that never
-        // finishes is the report this exists for, and the two real-world
+        // The turn is the unit a bug report is written in ("I jumped a month and
+        // the border went wrong"), so both ends of it go in the diagnostics log
+        // with the timing between them — a jump that took eleven minutes and one
+        // that took eleven seconds are different bugs, and the wall-clock
         // timestamps are the only way to tell them apart after the fact.
         const startedAt = Date.now();
         logDebugEvent("turn", `Timeline ${mode === "auto" ? "auto-jump" : "jump"} started: ${days} day(s) from ${gameData.gameDate || "unknown"}.`, {
@@ -1724,9 +1710,10 @@ const DateWidget = ({
             const elapsed = `${Math.round((Date.now() - startedAt) / 1000)}s`;
             if (result.generation?.source === "fallback") {
                 setFallbackWarning(`Turn generated by fallback: ${result.generation.fallbackReason || "structured AI output was unavailable"}`);
-                // Always recorded, with the reason: a fallback is the single most
-                // reported failure, and this entry is what says WHY it happened —
-                // for every fallback in the session, not only the last one.
+                // A fallback is the single most reported bug in the game, and the
+                // reason is otherwise only reachable through the history panel's
+                // own Copy button — which covers the LAST turn only, so a session
+                // with three fallbacks could report exactly one of them.
                 logDebugEvent("turn", `Turn FELL BACK after ${elapsed}: ${result.generation.fallbackReason || "structured AI output was unavailable"}`, {
                     round: result.game?.round ?? 0,
                     toDate: result.game?.gameDate || "",
@@ -1738,9 +1725,15 @@ const DateWidget = ({
                     source: result.generation?.source || "ai",
                 });
             }
-            // What the turn changed, in detailed mode: the event titles plus how
-            // many borders, polities, units and structures moved. This is what
-            // exposes a turn that narrates a conquest while moving no borders.
+            // What the turn actually DID to the world, in detailed mode. This is
+            // the entry that answers the most common report there is — "the
+            // event said my army took the province but the border never moved" —
+            // because a turn that narrates a capture with zero region transfers
+            // shows up here as `regionTransfers: 0` beside an event list that
+            // clearly describes one. Titles and counts, not event prose: the
+            // prose is in the player's own screenshot, and it is the part of a
+            // log they are least comfortable posting.
+            const lastTurn = (result.world?.simulationHistory ?? [])[0] ?? null;
             const changeCount = (impactKey) => (result.events ?? [])
                 .reduce((total, event) => total + (event?.impacts?.[impactKey]?.length ?? 0), 0);
             logDebugEvent("turn", `Turn ${result.game?.round ?? 0} world changes.`, {
@@ -1749,9 +1742,14 @@ const DateWidget = ({
                 polityChanges: changeCount("polityChanges"),
                 unitOps: changeCount("unitOps"),
                 markerOps: changeCount("markerOps"),
-                chats: changeCount("createdChats"),
+                projectOps: changeCount("projectOps"),
+                createdChats: changeCount("createdChats"),
                 units: result.world?.units?.length ?? 0,
+                pendingUnitOrders: result.world?.pendingUnitOrders?.length ?? 0,
+                projects: result.world?.projects?.length ?? 0,
+                summary: lastTurn?.summary || "",
             }, { verbose: true });
+
             setPanel("history");
         } catch (jumpError) {
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
@@ -1771,11 +1769,11 @@ const DateWidget = ({
                 // Not a failed turn: the events are generated and valid, and the
                 // whole turn is being HELD unwritten because the Projects board
                 // could not be brought in step with them. Retrying re-runs only
-                // the board call — the events are not regenerated.
+                // the board call — the events are not regenerated, which on a slow
+                // model is the difference between ten seconds and ten minutes.
                 setError("");
                 setProjectsHeld(jumpError.message || "The Projects & Operations board did not update.");
                 setProjectsRetries(0);
-                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s: the Projects board did not update; nothing was written.`);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
@@ -1792,6 +1790,47 @@ const DateWidget = ({
 
     const cancelJump = () => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    };
+
+    // Finish a held turn by re-running ONLY the board call. The events are not
+    // regenerated: they are already valid, and on a slow model regenerating them
+    // is the difference between a few seconds and several minutes.
+    const retryHeldProjects = async () => {
+        if (isRetryingProjects) return;
+        setIsRetryingProjects(true);
+        setProjectsRetries((count) => count + 1);
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await retryPendingProjectsJump({ signal: controller.signal });
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            setProjectsHeld("");
+            setProjectsRetries(0);
+            logDebugEvent("turn", `Held turn finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+        } catch (retryError) {
+            if (controller.signal.aborted || retryError?.name === "AbortError") {
+                // Cancelled. The turn is still held and still unwritten, so leave
+                // the notice up rather than implying it was resolved.
+                logDebugEvent("turn", "Board retry cancelled; the turn is still held.");
+            } else if (retryError?.projectsHeld) {
+                setProjectsHeld(retryError.message);
+            } else {
+                // The board worked but the write did not. The held turn is gone
+                // with it, so this is an ordinary turn failure from here.
+                setProjectsHeld("");
+                setError(retryError.message || "Failed to finish the held turn.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsRetryingProjects(false);
+        }
     };
 
     // Finish a held jump by re-running ONLY the segment that failed and the ones
@@ -1850,46 +1889,13 @@ const DateWidget = ({
         }
     };
 
-    // Finish a held turn by re-running ONLY the board call. The events are not
-    // regenerated: they are already valid, and on a slow model regenerating them
-    // is the difference between a few seconds and several minutes.
-    const retryHeldProjects = async () => {
-        if (isRetryingProjects) return;
-        setIsRetryingProjects(true);
-        setProjectsRetries((count) => count + 1);
-        const startedAt = Date.now();
-        const controller = new AbortController();
-        jumpAbortRef.current = controller;
-        try {
-            const result = await retryPendingProjectsJump({ signal: controller.signal });
-            setGameData(result.game);
-            setEvents(result.events);
-            setWorldState(result.world);
-            setVisibleEventCount(1);
-            setProjectsHeld("");
-            setProjectsRetries(0);
-            logDebugEvent("turn", `Held turn finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
-                round: result.game?.round ?? 0,
-                events: result.events?.length ?? 0,
-            });
-            setPanel("history");
-        } catch (retryError) {
-            if (controller.signal.aborted || retryError?.name === "AbortError") {
-                // Cancelled. The turn is still held and still unwritten, so leave
-                // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", "Board retry cancelled; the turn is still held.");
-            } else if (retryError?.projectsHeld) {
-                setProjectsHeld(retryError.message);
-            } else {
-                // The board worked but the write did not. The held turn is gone
-                // with it, so this is an ordinary turn failure from here.
-                setProjectsHeld("");
-                setError(retryError.message || "Failed to finish the held turn.");
-            }
-        } finally {
-            jumpAbortRef.current = null;
-            setIsRetryingProjects(false);
-        }
+    // Throw the held jump away. Nothing was ever written, so there is nothing to
+    // undo and no rollback to run — the game is still on its pre-jump date and
+    // the player simply loses the segments generated so far.
+    const discardHeldSegment = () => {
+        discardPendingJumpSegment();
+        setSegmentHeld("");
+        setSegmentRetries(0);
     };
 
     // Throw the held turn away. Nothing was ever written, so there is nothing to
@@ -1898,15 +1904,6 @@ const DateWidget = ({
         discardPendingProjectsJump();
         setProjectsHeld("");
         setProjectsRetries(0);
-    };
-
-    // Throw the held jump away. Nothing was ever written, so there is nothing to
-    // undo and no rollback to run — the game is still on its pre-jump date and
-    // the player simply loses the segments generated so far.
-    const discardHeldSegment = () => {
-        discardPendingJumpSegment();
-        setSegmentHeld("");
-        setSegmentRetries(0);
     };
 
     const acceptModeSuggestion = () => {
@@ -1932,12 +1929,16 @@ const DateWidget = ({
         return () => { active = false; };
     }, [gameData?.round]);
 
-    const runUndo = async () => {
+    // stayOnHistory: called from the fallback warning's "Rollback turn" button,
+    // which lives in the history panel — yanking that panel away mid-undo would
+    // hide the very thing the player just acted on. The Timeline panel's own
+    // undo button still switches, since that is where it is already looking.
+    const runUndo = async ({ stayOnHistory = false } = {}) => {
         if (isLoading || undoCount <= 0) {
-            return;
+            return false;
         }
 
-        setPanel("skip");
+        if (!stayOnHistory) setPanel("skip");
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
@@ -1956,6 +1957,7 @@ const DateWidget = ({
                 setVisibleEventCount(1);
                 setUndoCount(result.remaining);
                 setPanel("history");
+                return true;
             }
         } catch (undoError) {
             console.error("Failed to undo turn:", undoError);
@@ -1963,7 +1965,19 @@ const DateWidget = ({
         } finally {
             setIsLoading(false);
         }
+        return false;
     };
+
+    // Display-name lookups for the timeline's own labels, off the same catalogs
+    // the camera resolves places from.
+    const polityLookup = useMemo(
+        () => new Map(countryCatalog.map((entry) => [entry.code, entry.name])),
+        [countryCatalog],
+    );
+    const regionLookup = useMemo(
+        () => new Map(regionCatalog.map((entry) => [entry.id, entry])),
+        [regionCatalog],
+    );
 
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
@@ -2004,9 +2018,11 @@ const DateWidget = ({
         || polityLookup.get(playerCountryCode)
         || playerCountryCode)
     : "";
-    // The report header's campaign line, kept current as the date advances. Set
-    // here because this component is the one place that knows all four at once;
-    // everything else in the log reads them back out of the context.
+
+    // Keeps the diagnostics log's header — and the in-game date stamped on every
+    // entry it records from here on — in step with the campaign. This component
+    // owns the game bundle, so it is the only place that knows all four of these
+    // at once; everything else in the log reads them back out of the context.
     useEffect(() => {
         setDebugLogContext({
             gameDate: gameData?.gameDate || "",
@@ -2015,6 +2031,7 @@ const DateWidget = ({
             playerCountry: playerCountry || playerCountryCode || "",
         });
     }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
+
     // "Copy debugging message" (TimelineHistoryPanel, next to the fallback
     // warning): everything a report needs in one paste — what was attempted,
     // the game/provider context, and the raw model response — so a fallback
@@ -2075,8 +2092,9 @@ const DateWidget = ({
     };
 
     // Through the shared helper, not navigator.clipboard directly: that API needs a
-    // secure context, and a browser reaching this game over plain http on the LAN
-    // (Settings → Network) does not have one.
+    // secure context, and a browser reaching this game over plain http on the LAN —
+    // which Settings → Network now offers as a supported setup — does not have one.
+    // The button whose whole point is "no DevTools needed" failed every time there.
     const handleCopyDebugMessage = async () => {
         const message = buildFallbackDebugMessage();
         if (!message) return false;
@@ -2099,17 +2117,49 @@ const DateWidget = ({
         setVisibleEventCount(1);
     }, [latestTurnRecord?.id]);
 
+    // Half of what the camera needs to turn the names an event carries
+    // ("Ireland", "Donetsk") into a place on the map: the half that only moves
+    // when the map data itself does.
+    const focusCatalog = useMemo(() => buildPlaceCatalog({
+        countries: countryCatalog,
+        countryBounds,
+        regionBounds,
+        regions: regionCatalog,
+    }), [countryBounds, countryCatalog, regionBounds, regionCatalog]);
+
+    // The other half is the live world (era polities, who owns what), which the
+    // 5s poll replaces wholesale. Reading it through a ref keeps that poll from
+    // re-running the camera effect — which would re-fly to the event already on
+    // screen every few seconds — and the finished context is cached so it is
+    // rebuilt only when an event is actually revealed against a newer world.
+    const focusWorldRef = React.useRef(null);
+    const focusContextRef = React.useRef({ catalog: null, context: null, world: null });
+
+    useEffect(() => {
+        focusWorldRef.current = worldState;
+    }, [worldState]);
+
     // The camera follows EVERY revealed event — impacts pin the exact spot,
-    // otherwise the countries the event involves do. Opt out via the
-    // "Disable camera movement during events" map setting.
+    // otherwise the polities the event involves do, and its own words are the
+    // last resort. Opt out via the "Disable camera movement during events" map
+    // setting.
     useEffect(() => {
         if (!activeVisibleEvent || disableEventCamera) {
             return;
         }
 
-        const bounds = deriveEventFocusBounds(activeVisibleEvent, { countryBounds, regionBounds, polityLookup });
-        focusMapOnBounds(mapRef, bounds);
-    }, [activeVisibleEvent, countryBounds, disableEventCamera, mapRef, polityLookup, regionBounds]);
+        const world = focusWorldRef.current;
+        const cached = focusContextRef.current;
+        if (cached.catalog !== focusCatalog || cached.world !== world || !cached.context) {
+            focusContextRef.current = {
+                catalog: focusCatalog,
+                context: buildFocusContext({ catalog: focusCatalog, world }),
+                world,
+            };
+        }
+
+        focusMapOnBounds(mapRef, deriveEventFocusBounds(activeVisibleEvent, focusContextRef.current.context));
+    }, [activeVisibleEvent, disableEventCamera, focusCatalog, mapRef]);
 
     const revealNextEvent = () => {
         setVisibleEventCount((current) => {
@@ -2192,6 +2242,22 @@ const DateWidget = ({
         const { world: stagedWorld } = applyEventImpactsToWorld({
             colors: {},
             events: revealed,
+            // Same motion the persisted turn used (applySimulationResult), or the
+            // reveal would show units teleporting to positions the saved world
+            // never had. The residual advance past the last event is not replayed
+            // here — the reveal is a partial state by definition, and the map's
+            // position tween absorbs the difference when the override clears.
+            //
+            // "Same as the persisted turn" is the whole point, so this has to
+            // track the unit system exactly as applySimulationResult does.
+            motion: isBetaUnits()
+                ? {
+                    originDate: record.fromDate || "",
+                    round: record.round || 0,
+                    tick: 0,
+                }
+                : null,
+            betaEngine: isBetaUnits(),
             world: stagedBase.world,
         });
         setWorldStateOverride(stagedWorld);
@@ -2239,11 +2305,16 @@ const DateWidget = ({
         />
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
-        onCopyDebugMessage={handleCopyDebugMessage}
         onRevealNextEvent={revealNextEvent}
         onRevealAll={revealAllEvents}
         lookups={lookups}
         onClose={() => setPanel(null)}
+        onCopyDebugMessage={handleCopyDebugMessage}
+        // A fallback turn is usually a turn the player wants gone; the undo it
+        // needs already exists over in the Timeline panel, so this just saves
+        // the trip. Same restore point, same code path.
+        canRollbackTurn={undoCount > 0 && !isLoading}
+        onRollbackTurn={() => runUndo({ stayOnHistory: true })}
         record={latestTurnRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}
