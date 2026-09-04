@@ -10,6 +10,7 @@ import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
+import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     busyProviderMessage,
@@ -1892,8 +1893,198 @@ async function buildPromptVariables({
         eventLimit: 16,
         longEventLimit: 24,
         respondingPolityName: speakingAs,
+        // What this prompt is allowed to have READ. A leader speaks as one polity
+        // and may only see chats that polity was in; the advisor passes no
+        // speakingAs and therefore sees everything, which is correct — it is the
+        // player's own staff, and the player is in every chat.
+        chatVisibleTo: speakingAs,
     });
 }
+
+// Lets the advisor create/edit/remove the player's queued Actions (the same
+// queue the Actions panel manages) as part of an ordinary chat reply, instead
+// of only through the separate "Get AI suggestions" flow. Appended at call
+// time (not baked into defaultPrompts.json's `advisor` text) so it reaches
+// games that carry their own frozen/scenario-authored advisor prompt too —
+// see the frozen-prompt caveat in gameplay.js's runJsonTask.
+const buildAdvisorActionsDirective = (plannedActionsWithIds) => `[Action Planning]
+You can create, edit, or remove the player's queued Actions directly from this conversation — the same queue the Actions panel manages, with no separate confirmation step. Because of that, only propose actions the two of you have actually settled on together in this conversation; never invent or queue one on your own initiative from an open-ended question, and never re-propose something the player already turned down.
+
+To act, end your reply with a fenced \`\`\`actions block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you're proposing or changed; the array itself is stripped from what the player sees). Each entry:
+- Create: {"title":"...","text":"...","kind":"action"} — kind is "action" unless it's specifically a diplomatic outreach, then "chat".
+- Edit an existing one: {"id":"<exact id copied from the list below>","title":"...","text":"..."} — only the fields you include change.
+- Remove an existing one: {"id":"<exact id copied from the list below>","remove":true}.
+IDs must be copied EXACTLY from [Current Planned Actions] below — never invented or guessed. Omit the \`\`\`actions block entirely when nothing should change (most replies need none).
+
+Internal acts belong HERE, not on the Projects board: renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle. Each is a single decision by a government that needs nobody else's consent, it takes effect at the next time skip, and opening a project for one leaves the player watching a progress bar instead of getting what they asked for. Queue it as an action, say plainly when it takes effect, and say what will visibly change (the map label, the country panel, the border). A transfer of territory belongs here too WHEN the other side has already agreed to it, or the ground has already been taken and held — but a contested one does not: that is a project, and you should say what is missing rather than promise it.
+
+Example:
+\`\`\`actions
+[{"title":"Reinforce the eastern border","text":"Deploy two additional divisions to reinforce the frontier garrisons before the thaw."}]
+\`\`\`
+
+[Current Planned Actions]
+${plannedActionsWithIds}`;
+
+// Lets the UI offer a real "Send message to X" button for a drafted diplomatic
+// message instead of the player copy-pasting your blockquote into the
+// Diplomacy panel themselves. Appended at call time for the same frozen-prompt
+// reason as buildAdvisorActionsDirective above.
+//
+// Deliberately does NOT ask the model to retype the letter's text into the
+// JSON field — an earlier version did, and asking a model to duplicate
+// arbitrary prose verbatim inside a JSON string is exactly the kind of thing
+// that silently breaks: one unescaped quote (very likely in diplomatic prose)
+// or one real line break (very likely in a multi-paragraph letter) makes the
+// fence invalid JSON, which advisor.jsx's extractFencedJson discards without
+// a trace — the button just never appears, with nothing to explain why. The
+// JSON now carries only the country name, and advisor.jsx pulls the actual
+// text back out of the blockquote itself, positionally.
+const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
+Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do, and quote nothing else in the reply that way. Immediately after all such blockquotes, in ADDITION to your normal prose (never instead of it), append a single fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, IN THE SAME ORDER their blockquotes appear above: {"country":"<the exact recipient polity name>"}. Do not repeat the message text in this block — do not include a "text" field — the blockquote itself is the message. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
+
+Example:
+> Your Excellency, I write to propose a mutual non-aggression pact between our nations...
+\`\`\`senddraft
+[{"country":"France"}]
+\`\`\``;
+
+// The advisor has always been handed the whole world's unit list, but under a
+// heading reading "Player polity, X, details: ... Military Units:" — so it read
+// them as the player's own army and never used them to answer a question about
+// anyone else. defaultPrompts.json now frames it properly for new games; this is
+// what reaches the campaigns whose advisor prompt is already frozen.
+const buildAdvisorForcesDirective = (forcePosture) => `[Forces on the Map]
+This is EVERY power's forces, not just the player's — what your services can see of the world's armies, fleets and squadrons, including where each one is, what it is doing, whose territory it is in or how far from whose border, and what it is already under orders to do. Use it whenever the player asks about anyone's military position, their own or a rival's. Answer like an intelligence chief: name the formations, say what they are doing and how close they are to what, and say plainly what you think it means. A formation marked unconfirmed has been detected without a known line of support — treat it as real, but say confidence is limited.
+${forcePosture}`;
+
+// Lets the advisor turn "put two divisions on the eastern frontier" into a real
+// button that places the unit, instead of the player reading coordinates off the
+// screen and clicking the map themselves. Appended at call time for the same
+// frozen-prompt reason as the two directives above.
+// What the player can actually do with a formation differs between the two unit
+// systems, and the advisor must not offer what the UI cannot deliver: in beta
+// there is no manual movement or combat at all, while classic is the wargame
+// where the player marches and fights their own units.
+const buildAdvisorDeployDirective = (betaUnits) => `[Placing Forces]
+The player can place their own formations on the map${betaUnits
+    ? "; they cannot move or fight them, so never offer to march or attack with anything"
+    : ", and can move and attack with them directly"}. When you specifically recommend placing a NEW formation of theirs somewhere, and you know where, append a fenced \`\`\`deploy block after your normal prose (never instead of it) containing a JSON array with one entry per recommended deployment: {"type":"infantry|armor|air|naval|artillery|garrison","name":"<what to call it>","composition":"<what it is made of, e.g. 2 frigates>","strength":<1-100, percent of established strength>,"lng":<real longitude>,"lat":<real latitude>}.
+Use real coordinates for the place you are actually recommending — 0,0 is open ocean and is never valid. Omit the block entirely unless you are recommending a specific placement at a specific place; most replies need none, and a general discussion of strategy is not a deployment. Anything the player places is a REQUEST: the simulation confirms, repositions or rejects it, so say so rather than promising it will stand.
+
+Example:
+\`\`\`deploy
+[{"type":"armor","name":"3rd Guards Division","composition":"2 tank regiments","strength":100,"lng":30.52,"lat":50.45}]
+\`\`\``;
+
+// What the advisor's prose is allowed to look like.
+//
+// Its replies are rendered as GitHub-flavoured markdown (src/Game/GameUI/markdown.jsx),
+// and until that renderer grew tables the model had no way to lay anything out —
+// so it improvised, and the player saw the improvisation raw: literal <br> tags
+// where it wanted a line break, and pipe-and-dash tables that never parsed. It
+// now has a real vocabulary, and this is where it is told what is in it and what
+// each part is FOR. Appended at call time for the same frozen-prompt reason as
+// the directives above: the campaigns that most need this already carry their
+// own copy of the advisor prompt.
+//
+// The two prohibitions matter more than the permissions. Raw HTML is not
+// rendered (deliberately — this is model output going into the DOM), so a tag is
+// always visible as text. And "> " blockquotes are load-bearing elsewhere:
+// ADVISOR_MESSAGE_DRAFT_DIRECTIVE reads the drafted letter back OUT of the
+// blockquote positionally, so a blockquote used for emphasis becomes a "send
+// this to France" button attached to something that was never a message.
+const ADVISOR_FORMATTING_DIRECTIVE = `[How Your Replies Are Displayed]
+Your prose is rendered as GitHub-flavoured markdown in a narrow side panel, so you can lay a reply out properly. Use that, but use it lightly: most replies are a few short paragraphs and need no structure at all, and a briefing that is all headings and tables reads like a form rather than like counsel.
+
+What you have:
+- **Bold** for the figure or name that matters, *italics* sparingly for emphasis, ~~strikethrough~~ for something now superseded, and \`inline code\` for an exact designation or codename.
+- ## Headings and ### subheadings to divide a genuinely long reply into sections. #### renders as a small label — use it for a one-line heading over a short block. A reply under about six lines needs no heading whatsoever.
+- Bullet lists with "- ", numbered lists with "1.", nested by indenting two spaces. Checklists with "- [ ] " for things not yet done and "- [x] " for things done.
+- A "---" rule between two major parts of a long briefing. At most one or two in a reply.
+- Tables, for genuinely tabular data ONLY — several items compared on the SAME few fields (fleets by strength and station, projects by progress and date, powers by stance). A table needs at least two columns AND at least two rows to be worth making. Keep it to two to four columns with short cells: the panel is narrow and a wide table has to be scrolled.
+
+Every row must have a real value in EVERY column. A column you leave blank down the whole table still takes its share of a narrow panel and gives the player nothing.
+
+When NOT to use a table: never to describe a single thing. One item's explanation is a paragraph, or a bolded label with prose after it — a two-column "Item / Detail" table with one row is worse than the sentence it replaces. If a cell would hold more than a short phrase, it is prose, not a table. And if you find the whole answer going into the first cell of each row while the other columns sit empty, the table was the wrong shape from the start: write it as a bulleted list instead, one bullet per item, the name in bold and the explanation after a dash.
+
+Two hard rules:
+- No HTML, ever. Tags are not rendered, so the player sees the literal text "<br>". For a line break, press return and write the next line; for a gap between paragraphs, leave a blank line.
+- Never use a "> " blockquote for emphasis, for quoting the player back, or for a nice-looking pull quote. A blockquote means one thing in this conversation: the text of a diplomatic message the player can send, per [Drafting Messages to Send]. Anything else you put in one becomes a send button on something that was never a letter.
+
+Example of a table that earns its place:
+
+| Programme | Progress | Next milestone |
+|---|---|---|
+| Titan (Highlands) | 71% | Sea trials, Nov |
+| Hyperion Mk II | 34% | Core delivery, Jan |`;
+
+// Lets the advisor open and maintain the player's Projects & Operations board
+// from an ordinary chat reply, the same way the ```actions block manages the
+// action queue. Appended at call time for the same frozen-prompt reason as the
+// directives above: every save carries its own copy of the prompt pack, so a
+// defaultPrompts.json edit would only ever reach NEW games — and the single most
+// important thing this feature has to do is populate the board of a campaign
+// that is already fifty rounds deep.
+//
+// The player cannot create a project by hand anywhere in the UI. That is
+// deliberate (the board reflects the narrative, not a wishlist), but it does mean
+// that if the advisor never opens one, nothing will — hence the instruction to
+// open one whenever a sustained effort is actually settled on, rather than
+// waiting to be asked.
+const buildAdvisorProjectsDirective = (projectsSummary) => `[Projects & Operations]
+The player has a Projects & Operations board: the running list of their long-term efforts — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns — each with a description, tags, progress, timeline and next milestone. They can read, sort and filter it, and on THEIR OWN entries set a priority or abandon one outright, but they cannot create an entry or write its content, and they hold neither lever over another power's programme (see [Whose project it is]). You and the world's events are the only things that author what a project IS. A project the player has marked HIGH PRIORITY is one they want moved: brief them on it first and unprompted, and chase it when it goes quiet. One marked low priority may be left alone unless they ask. An abandoned project is closed, and you must not re-open it on your own initiative — but if the player explicitly asks you to resume it, do so: reactivate it with op update and status active, or open a fresh entry, and say plainly that is what you have done. Never set a priority yourself unless they have asked you to in this conversation.
+
+You can create, update and close entries directly from this conversation, with no separate confirmation step. Because of that, only open a project once the two of you have actually settled on a sustained effort — never speculatively from an open-ended question, and never re-open one the player has abandoned. Do open one unprompted when it is clearly warranted: if they commit to something that will run for rounds, it belongs on the board, and nothing else will put it there.
+
+[Whose project it is]
+Roughly half a mature board is not the player's. A foreign power's programme sits there because their services have learned of it, and it is marked THEIRS in the list below; anything not so marked is the player's own. The difference is not decoration:
+- The player's OWN efforts they may steer. They set the priority, and they may abandon one outright. Do as they ask with their own work.
+- A FOREIGN effort they may only watch. They do not set its priority, they cannot call it off, and neither can you on their say-so. If they tell you to cancel, shelve, deprioritise or reprioritise another government's programme, REFUSE it plainly in one sentence — that is not a lever anyone here holds — and send no op for it. Do not quietly comply, and do not pretend to: a cancel op you send for a rival's shipyard would close it on the board and the player would believe their word did it.
+- What you may do instead is the useful half of the answer, and you should offer it in the same breath: they cannot stop another power's programme by wishing it, but they can DO something about it. Sabotage, a covert operation, diplomatic pressure, an export ban, buying up the supply, or simply outbuilding them — that is the player's OWN effort against a foreign one, it is theirs to command, and it belongs on the board as a new entry of theirs (no ownerCode). Open it once they actually settle on it, and say plainly that what you have opened is our operation against their programme, not a change to their programme.
+- You still UPDATE foreign entries freely, because that is what they are for: new intelligence, revised progress, a milestone their services have observed, a programme that has evidently finished or collapsed. That is reporting, and it is your job. What you must not do is act on one as though the player commanded it.
+Retaliation is the one case worth naming twice, because it looks like an exception and is not. "They sabotaged ours, so wreck theirs" is a legitimate order — but the thing it opens is OUR operation to wreck theirs, an entry of the player's own with its own progress and its own way of failing. Their programme keeps running on the board until something actually stops it, and what stops it is an event, not our intention.
+
+[What does not belong on the board]
+The board is for work that genuinely runs for rounds and can fall behind. Three things are not that, and putting one here is worse than doing nothing, because the player then watches a progress bar instead of getting what they asked for:
+- Internal acts. Renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle, the administration of land they already hold. These are one signature by a government that needs nobody's permission. They are ACTIONS — queue them in your \`\`\`actions block, tell the player they take effect at the next time skip, and say what will visibly change when they do (the map label, the country panel).
+- Anything the player has asked you to simply do. A request is not a programme.
+- Single decisions and one-off events. Signing something already agreed, a speech, a state visit, a purchase already funded.
+Territory is the one that needs judgement. Handing a region over is immediate too WHEN the other side has already agreed to it, or when the ground has already been taken and held — a settled hand-over needs no programme. It is only a project when it is genuinely contested: then the campaign to obtain the consent or the ground is the project, the transfer itself rides on its onComplete, and the world's events will mark the territory disputed in the meantime.
+A project needs all three of: it takes months or years, it can be measured, and it can go wrong. If you cannot name a plausible milestone six months out, it is not a project. When you are unsure, the answer is an action.
+
+To act, end your reply with a fenced \`\`\`projects block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you opened or changed; the array itself is stripped from what the player sees). Each entry:
+- Open one: {"op":"create","name":"Project Leviathan","summary":"...","kind":"project","tags":["military","naval"],"status":"active","progress":0,"targetDate":"YYYY-MM-DD","milestones":[{"title":"...","date":"YYYY-MM-DD"}]} — kind is "operation" for a military, intelligence or covert undertaking and "project" for a programme or build. Add "secrecy":"covert" for something deniable, and "ownerCode":"<full country name>" for a FOREIGN power's programme you have learned of (omit it entirely for the player's own).
+- Change one: {"op":"update","id":"<exact id from the list below>","name":"<its exact name>","progress":58,"status":"stalled","lastUpdate":"One sentence on what just changed."} — send only the fields that actually change.
+- Record a checkpoint: {"op":"milestone","id":"<exact id>","name":"<its exact name>","milestone":{"title":"Sea trials","date":"YYYY-MM-DD","status":"pending"}} — status is pending, done, or missed.
+- End one: {"op":"complete"|"cancel"|"fail","id":"<exact id>","name":"<its exact name>","note":"How it ended."} — complete if it succeeded, cancel if it was called off, fail if it was defeated. All three keep it on the board, where the player can see it under Closed. Do NOT use "op":"remove" for any of these: remove erases the entry entirely and is only for something that should never have been opened.
+Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations] below — never invented or guessed, or the change lands on nothing and is silently dropped. Omit the \`\`\`projects block entirely when nothing should change; most replies need none.
+
+Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
+
+Some checkpoints come round again. For a standing commitment — an annual drill, a quarterly review, a monthly rotation — add "repeat":"annual" (or weekly, monthly, quarterly, biennial) to the milestone, and give it a date so it keeps the slot it falls on. Then simply send it as done each time it is actually performed: the engine advances it to the next occurrence, keeping the same day of the year, and sets it pending again on its own. Do NOT create a fresh milestone for each year, and do NOT hand-write the next date — just mark the one that exists as done and it rolls. A checkpoint that happens once and is then finished takes no repeat.
+
+Not everything ends. For a standing effort with no planned completion — a permanent patrol, a continuous intelligence or security programme, an alliance kept in good repair — set "ongoing":true and leave targetDate out entirely. Never invent an end date for something that is simply meant to continue: the board flags a project overdue once its target date passes, so a made-up deadline turns a healthy standing operation into a false alarm. An ongoing effort still takes milestones, and can still be completed or cancelled later if it genuinely ends. Once set, it STAYS ongoing until you explicitly say otherwise — to give one a deadline later, send "ongoing":false together with the targetDate, or the date is ignored.
+
+When you mention a project that is already on the board, send only the fields that actually changed. Everything you leave out is kept as it was, so you never need to restate a project in full just to note that it progressed — and a brief mention can never quietly reset its status, progress or settings.
+
+The block must be STRICT JSON, and the one thing that reliably breaks it is a double quote inside a value: write (the Titan-class megalith), not (the "Titan-class" megalith). Use no quotation marks inside any summary, name or note — and no line breaks inside a value either. Straight double quotes around keys and values only; never curly quotes.
+
+Keep the block SMALL. Your reply has a length limit, and a block that runs past it is cut off mid-array and lost — the board does not update at all. So: one sentence per summary, and only the milestones that still matter (those still ahead, plus at most one already achieved; the board keeps its own history of the events behind each project, so you do not need to restate it). If there is a lot to open at once, do TEN AT MOST in one reply, say which ones you have covered and that more remain, and let the player ask for the next batch. Ten entries that land beat forty that do not.
+
+Some projects exist to make a concrete change to the world, and those must say what the change IS when you open them, not merely describe it. Add "onComplete" to the create op: {"onComplete":{"polityChanges":[{"code":"Ruritania","name":"Federal Republic of Ruritania"}],"regionTransfers":[{"regionId":"Northern Marches","toCode":"Ruritania"}]}}. The engine applies it the moment the project is completed, exactly once, and never on a cancel or a failure — so an annexation that finishes actually moves the border, and a unification that finishes actually renames the polity, instead of the bar reaching 100% while the map stays exactly as it was. Keep "code" as the polity's CURRENT name; the engine matches on it and stores the new one. One rule about these, and it is absolute: YOU DO NOT CLOSE A PROJECT THAT CARRIES AN onComplete. Only the world's events may move a border or rename a polity, and you are not the world's events — so if you send op complete for one of these, the engine keeps it open, tells the player the next time skip will enact it, and nothing changes yet. That is correct and you should not fight it: say in prose that the effort has succeeded and the change lands at the next jump, and let the simulation close it. Most projects have no onComplete at all: a research programme, a construction project or a campaign of influence finishes narratively and takes none. Attach one only when completion causes a specific, nameable change of territory or of a polity's identity.
+
+Keep it honest. Progress and dates are what the board shows the player, and the engine flags a project overdue on its own once its target date passes — so do not quietly push a target date back to hide a slip. Say the programme is late and mark it stalled.
+
+Never invent a project. Every entry must be something that actually happened in this campaign's record — the event history, the player's own actions, or intelligence you have genuinely been given. If you are asked to continue a backfill and everything worth tracking is already on the board, the correct answer is to SAY SO and send no block at all. "That is all of them" is a complete and useful reply; padding the batch with plausible-sounding programmes to fill it corrupts the board, and the player has no way to tell an invented entry from a real one. If you are unsure whether something counts, name it in your prose and ask, rather than opening it.
+
+Example:
+\`\`\`projects
+[{"op":"update","id":"project-abc123","name":"Project Leviathan","progress":58,"lastUpdate":"Hull section three is complete; the yard says sea trials hold for November."}]
+\`\`\`
+
+[Current Projects & Operations]
+${projectsSummary}`;
 
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
@@ -1916,7 +2107,20 @@ async function buildAdvisorSystemPrompt() {
     });
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    return renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    // The forces directive is beta-only — promptContext leaves forcePosture empty
+    // in the classic system rather than paying for the territory index, so the
+    // heading would introduce a section with nothing under it.
+    const betaUnits = isBetaUnits();
+    const directives = [
+        buildAdvisorActionsDirective(variables.plannedActionsWithIds),
+        ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        buildAdvisorDeployDirective(betaUnits),
+        buildAdvisorProjectsDirective(variables.projectsSummary),
+        ...(betaUnits ? [buildAdvisorForcesDirective(variables.forcePosture)] : []),
+        ADVISOR_FORMATTING_DIRECTIVE,
+    ];
+    return `${rendered}\n\n${directives.join("\n\n")}`;
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both
@@ -2146,3 +2350,53 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     }
 }
 
+// A one-off diplomatic exchange for callers with no live ConversationView
+// mounted — the Advisor's "Send message to <country>" button (advisor.jsx,
+// via gameplay.js's sendAdvisorDraftedMessage). Builds its OWN local history
+// from the target chat's own saved messages instead of touching the
+// module-level `diplomaticHistory` above, which always reflects whichever
+// chat a ConversationView currently has open in the Diplomacy panel — reusing
+// it here would splice this unrelated exchange into whatever chat the player
+// happens to be mid-reading.
+export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], opts }) {
+    const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry, speakingAs);
+
+    let history = priorMessages
+        .filter((msg) => ["user", "leader"].includes(msg.role))
+        .map((msg) => ({
+            role: msg.role === "user" ? "user" : "model",
+            parts: [{ text: msg.text }],
+        }));
+    history = compactConversationHistory(history);
+    history.push({ role: "user", parts: [{ text: playerMessage }] });
+    history = compactConversationHistory(history);
+
+    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
+
+    const historyWithInstruction = [
+        ...history,
+        { role: "user", parts: [{ text: turnInstruction }] },
+    ];
+
+    // Marked as the advisor's send rather than the panel's, because this is the
+    // path where "the letter the advisor drafted is not what arrived" happens —
+    // and the text logged here is the one that was actually transmitted, after
+    // whatever the player edited in the composer.
+    const startedAt = Date.now();
+    logDebugEvent("diplomacy",
+        `Player → ${speakingAs} via an advisor-drafted message (table: ${participantLabel(participantNames)}, ${String(playerMessage ?? "").length} chars).`,
+        playerMessage, { verbose: true });
+
+    try {
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}` });
+        const parsed = parseReaction(raw);
+        logDebugEvent("diplomacy",
+            `${speakingAs} → player in ${elapsedSeconds(startedAt)}${parsed.reaction ? ` (reaction ${parsed.reaction})` : ""}.`,
+            { reply: parsed.reply, rawChars: String(raw ?? "").length, reaction: parsed.reaction || "(none)" },
+            { verbose: true });
+        return parsed;
+    } catch (err) {
+        logDebugEvent("diplomacy", `${speakingAs} failed to answer the advisor-drafted message after ${elapsedSeconds(startedAt)}.`, err);
+        throw err;
+    }
+}

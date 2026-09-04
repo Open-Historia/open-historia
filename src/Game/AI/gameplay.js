@@ -1,5 +1,5 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { callAI } from "./main.jsx";
+import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
@@ -1380,6 +1380,91 @@ const regionKey = (value) => normalizeString(value)
   .toLowerCase()
   .replace(/\s+/g, " ");
 
+// Case/diacritic-insensitive identity for a chat's participant SET (order-blind:
+// "France, Spain" and "Spain, France" are the same conversation). Drives the
+// dedup below: a country picking up an old thread must land back in that thread,
+// not beside it in a freshly forked one.
+const chatParticipantKey = (countries) =>
+  (Array.isArray(countries) ? countries : [])
+    .map((country) => regionKey(country?.name))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+
+// Every message the game itself puts into a diplomatic thread passes through the
+// fold below — the notes a jump generates, the idle pulse, and the advisor's own
+// "send this to <country>" — so this is where a detailed log records them, with
+// WHICH thread they landed in: "it opened a second thread with France instead of
+// answering in the one I had" is invisible without that.
+const logGeneratedChat = (built, outcome) => {
+  const participants = (built?.countries ?? [])
+    .map((country) => country?.name || country?.code || "")
+    .filter(Boolean)
+    .join(", ") || "(no participants)";
+  logDebugEvent("diplomacy",
+    `Generated note ${outcome} — ${participants}: "${built?.title || "(untitled)"}" (source: ${built?.source || "unknown"}).`,
+    (built?.messages ?? []).map((msg) => `${msg?.speaker || msg?.role || "?"}: ${msg?.text ?? ""}`),
+    { verbose: true });
+};
+
+// Route freshly-generated chats into whichever existing OPEN thread already has
+// the same participants (appending their messages there) instead of always
+// forking a new one. `built` may itself contain chats that duplicate each other
+// (two events in the same turn both reaching out to France), so a match against
+// an entry already folded in THIS pass counts too, not just against `storageChats`.
+// Every message gets stamped with `stampTime` when it has none of its own —
+// including a brand-new chat's own opener: the UI groups and sorts chats by
+// their messages' own `time`, so an unstamped opener left the whole chat
+// looking dateless.
+// `dropEchoes` discards a note that merely parrots something already in the
+// thread it would land in. Even when told not to, a model hands back the line it
+// was just shown, and posting it has the polity repeat the player to their face —
+// worse than saying nothing.
+//
+// `dropped` on the returned array counts the notes discarded this way, so a
+// caller that must know whether anything actually landed can tell without
+// diffing the result.
+const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "", dropEchoes = false } = {}) => {
+  let chats = [...storageChats];
+  const created = [];
+  let dropped = 0;
+  const stamp = (messages) => (stampTime
+    ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
+    : messages);
+
+  for (const built of builtChats) {
+    const key = chatParticipantKey(built.countries);
+    const existingIdx = key ? chats.findIndex((chat) =>
+      chat.status !== "closed" && chatParticipantKey(chat.countries) === key) : -1;
+    if (existingIdx !== -1) {
+      if (dropEchoes && built.messages.some((msg) =>
+        echoesExistingMessage(msg.text, chats[existingIdx].messages))) {
+        logGeneratedChat(built, "dropped — it echoed a message already in the thread");
+        dropped += 1;
+        continue;
+      }
+      logGeneratedChat(built, "appended to an existing thread");
+      chats = chats.map((chat, index) => (index === existingIdx
+        ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
+        : chat));
+      continue;
+    }
+    const createdIdx = key ? created.findIndex((chat) => chatParticipantKey(chat.countries) === key) : -1;
+    if (createdIdx !== -1) {
+      logGeneratedChat(built, "merged into another note from the same turn");
+      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };
+      continue;
+    }
+    logGeneratedChat(built, "opened a new thread");
+    created.push({ ...built, messages: stamp(built.messages) });
+  }
+
+  const result = [...created, ...chats];
+  // Non-enumerable so this never rides along into a JSON write of the chats.
+  Object.defineProperty(result, "dropped", { value: dropped, enumerable: false });
+  return result;
+};
+
 const resolveRegionTransfers = async (containers, world) => {
   const catalog = await loadRegionCatalog().catch(() => []);
   // Without a catalog we cannot tell a good id from a bad one, and dropping real
@@ -2053,6 +2138,75 @@ export const rollBackToSnapshot = async (index = 0) => {
   }
 };
 
+// Sends a message the Advisor drafted (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in
+// main.jsx) straight into the diplomatic channel with `countryName`, exactly
+// as if the player had typed it into the Diplomacy panel and waited for a
+// reply — used by advisor.jsx's "Send message to <country>" button so a
+// drafted message never has to be manually copy-pasted. Reuses the same
+// participant-set matching foldGeneratedChatsIntoStorage applies to
+// AI-initiated notes, so this lands in an existing 1-on-1 thread with that
+// country instead of forking a duplicate one, and takes the same busy-lock
+// every other chat.json writer takes so it can't race the idle pulse or a
+// jump/rollback in flight.
+export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
+  const trimmedText = normalizeString(text);
+  if (!trimmedText) throw new Error("There's no message text to send.");
+
+  beginSimulation();
+  try {
+    const bundle = await readGameStateBundle({ force: true });
+    const playerName = normalizeString(bundle.game?.country);
+    if (!playerName) throw new Error("No active game to send a message in.");
+
+    const [recipient] = await resolveInvitees([countryName], bundle.world);
+    if (!recipient) throw new Error(`Could not identify "${countryName}" among the known polities.`);
+    if (regionKey(recipient.name) === regionKey(playerName)) {
+      throw new Error("Can't send a diplomatic message to your own polity.");
+    }
+
+    const chats = normalizeChats(await readChatsState({ force: true }));
+    const recipientKey = chatParticipantKey([recipient]);
+    const existing = chats.find((chat) =>
+      chat.status !== "closed" && chatParticipantKey(chat.countries) === recipientKey);
+    const priorMessages = existing?.messages ?? [];
+
+    const gameDate = normalizeString(bundle.game?.gameDate);
+    const { reply, reaction } = await sendDiplomaticMessageOnceOff({
+      playerMessage: trimmedText,
+      speakingAs: recipient.name,
+      participantNames: [playerName, recipient.name],
+      playerCountry: playerName,
+      priorMessages,
+    });
+
+    const userMessage = {
+      role: "user",
+      speaker: playerName,
+      text: trimmedText,
+      time: gameDate,
+      ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
+    };
+    const leaderMessage = { role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate };
+
+    const built = normalizeChatEntry({
+      countries: [recipient],
+      messages: [userMessage, leaderMessage],
+      source: "advisor",
+      status: "open",
+      title: existing?.title || `Chat with ${recipient.name}`,
+    });
+    if (!built) throw new Error("Could not build the message.");
+
+    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
+    await writeChatsState(nextChats);
+
+    const finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    return { chat: finalChat, reply };
+  } finally {
+    endSimulation();
+  }
+};
+
 // `projects` opts this turn into the Projects & Operations board task. It runs
 // HERE rather than in the caller because the board's whole job is to move with
 // the events, and espionage does not produce its events until partway through
@@ -2372,7 +2526,7 @@ const applySimulationResult = async ({
         fallbackTitle: event.title,
         playerName: baseGame.country,
       });
-      if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
+      if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
     }
   }
 
@@ -2408,7 +2562,14 @@ const applySimulationResult = async ({
   // the read fails, which is the old behaviour and never loses a generated chat.
   let chatsToWrite;
   try {
-    chatsToWrite = [...generatedChats, ...normalizeChats(await readChatsState({ force: true }))];
+    // Folding (not prepending) matters as much as the re-read: a country that
+    // already has an open thread with the player must have its new note land
+    // THERE, not beside it in a duplicate chat opened from scratch.
+    chatsToWrite = foldGeneratedChatsIntoStorage(
+      normalizeChats(await readChatsState({ force: true })),
+      generatedChats,
+      { stampTime: nextGame.gameDate },
+    );
   } catch {
     chatsToWrite = nextChats;
   }
@@ -3684,30 +3845,17 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_PULSE_CHANCE } = {}
     });
     if (!built) return null;
     const chats = normalizeChats(await readChatsState({ force: true }));
-    // A note from a country the player already has an open 1:1 with lands in
-    // that thread; anything else (including group approaches) opens a new chat.
-    const single = built.countries.length === 1 ? regionKey(built.countries[0].name) : "";
-    const existing = single
-      ? chats.find((chat) => chat.status !== "closed"
-          && Array.isArray(chat.countries)
-          && chat.countries.length === 1
-          && regionKey(chat.countries[0]?.name) === single)
-      : null;
-    let nextChats;
-    if (existing) {
-      const note = built.messages[0];
-      if (!note) return null;
-      // Even told not to, a model hands back the line it was just shown. Posting
-      // it would have the polity parrot the player in their own thread, which is
-      // worse than saying nothing — and silence is what this whole path defaults
-      // to anyway.
-      if (echoesExistingMessage(note.text, existing.messages)) return null;
-      nextChats = chats.map((chat) => (chat === existing
-        ? { ...chat, messages: [...chat.messages, { ...note, time: normalizeString(bundle.game?.gameDate) }] }
-        : chat));
-    } else {
-      nextChats = [built, ...chats];
-    }
+    // A note from a country the player already has an open thread with (1:1 or a
+    // standing group) lands in that thread; only a genuinely new set of
+    // participants opens a fresh chat. Matching 1:1 threads only meant a group
+    // approach always opened a duplicate — the participant-set key handles both.
+    // dropEchoes discards a note that just repeats what is already in that
+    // thread; silence is what this whole path defaults to anyway.
+    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {
+      stampTime: normalizeString(bundle.game?.gameDate),
+      dropEchoes: true,
+    });
+    if (nextChats.dropped) return null;
     if (isSimulationBusy()) return null;
     await writeChatsState(nextChats);
     return built;

@@ -140,6 +140,11 @@ const Main = ({
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
+  // A starter message queued for the advisor's input box — set when something
+  // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
+  // button) opens it wanting to prime the conversation, rather than opening it
+  // blank. Consumed (cleared) once AdvisorPanel has placed it in its input.
+  const [pendingAdvisorPrompt, setPendingAdvisorPrompt] = useState("");
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
@@ -275,8 +280,9 @@ const Main = ({
     };
   }, []);
 
-  const openAdvisor = useCallback(() => {
+  const openAdvisor = useCallback((seedPrompt) => {
     setIsAdvisorOpen(true);
+    if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
 
   // Called on every pointermove while the user drags the advisor's edge.
@@ -335,7 +341,17 @@ const Main = ({
       />
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
-          <LazyAdvisorPanel isAdvisorOpen={isAdvisorOpen} onClose={() => setIsAdvisorOpen(false)} width={advisorWidth} onResize={handleAdvisorResize} />
+          <LazyAdvisorPanel
+            isAdvisorOpen={isAdvisorOpen}
+            mapRef={mapRef}
+            onClose={() => setIsAdvisorOpen(false)}
+            width={advisorWidth}
+            onResize={handleAdvisorResize}
+            onOpenActions={() => setActiveBottomPanel("actions")}
+            onOpenProjects={() => setActiveBottomPanel("projects")}
+            requestedPrompt={pendingAdvisorPrompt}
+            onConsumeRequest={() => setPendingAdvisorPrompt("")}
+          />
         )}
       </Suspense>
       <Suspense fallback={null}>
