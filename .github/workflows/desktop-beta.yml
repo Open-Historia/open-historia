@@ -8,14 +8,17 @@
 # instead of being walked onto the stable build. Nothing here touches the stable
 # release or its `desktop-stable` tag.
 #
-# Two ways to start it:
+# Two ways to start it, the same two the stable workflow offers:
 #
-#   * push a tag matching `desktop-beta-v*` at a commit on `beta` — this is the one
-#     that works today, because a tag push runs the workflow file from the tagged
-#     tree, wherever that tree came from;
-#   * Run workflow → `beta`, once a copy of this file also sits on the default
-#     branch. GitHub only lists a workflow_dispatch entry if the file is on the
-#     default branch, which is why the SeventhDread beta keeps a copy on `main`.
+#   * Actions → Desktop beta installers → Run workflow → `beta`. GitHub only
+#     lists a workflow_dispatch entry if the file is on the DEFAULT branch, so a
+#     copy of this file is kept on `main` purely to make the entry appear — the
+#     copy on the branch you select is the one that actually runs. Same
+#     arrangement as desktop-seventhdread-beta.yml and android-apk-beta.yml.
+#     Clearing the tag field builds the installers without publishing them.
+#   * push a tag matching `desktop-beta-v*` at a commit on `beta`. A tag push
+#     runs the workflow file from the tagged tree, so this works whatever is on
+#     `main`.
 #
 # The tag pattern deliberately does not match the stable `desktop-v*` trigger in
 # desktop-installer.yml: a tag that matched both would publish a beta build to the
@@ -141,15 +144,23 @@ jobs:
             release/*.deb
           if-no-files-found: error
 
+      # Clearing the tag field on a dispatch run builds the installers and stops.
+      # They are still uploaded as run artifacts above, so this is how you get a
+      # build to try without offering it to anyone. Same escape hatch, and the same
+      # condition, as the stable workflow.
       - name: Attach to the beta release
+        if: github.event_name == 'push' || inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          # A FIXED tag, never the branch or a per-build tag: this exact URL is baked
-          # into every shipped build twice over — BETA_UPDATE_MANIFEST in
-          # electron/main.cjs and `publish` in electron-builder.beta.yml — so
-          # publishing anywhere else silently stops testers being offered updates.
-          # The input exists only for one-off builds that deliberately go somewhere
-          # private, and it deliberately does not reach either of those two.
+          # A FIXED tag, never the branch and never the tag that was pushed — and
+          # this is the ONE place this workflow deliberately does not do what the
+          # stable one does. desktop-installer.yml publishes a tag push to the tag
+          # that was pushed; here that would leave the build at `desktop-beta-v5`,
+          # which neither of the beta's two update feeds reads: both hardcode
+          # `desktop-beta` (BETA_UPDATE_MANIFEST in electron/main.cjs and `publish`
+          # in electron-builder.beta.yml), so testers would simply never be offered
+          # it. The input exists only for one-off builds that deliberately go
+          # somewhere private, and it deliberately does not reach either of those.
           TAG: ${{ inputs.tag || 'desktop-beta' }}
         shell: bash
         run: |
