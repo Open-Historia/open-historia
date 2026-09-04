@@ -20,6 +20,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
@@ -56,8 +57,20 @@ const countryMatchesIdentity = (country, identity) => {
 
 // ── Flags ─────────────────────────────────────────────────────────────────────
 // Country flags render as images rather than emoji. Resolution order per
-// country: 1 flagcdn.com artwork via countryFlags.js 2. for a custom nation that table doesn't know, the map
-// author's own flag for that owner code, from the scenario's flags.json getNationFlags) 
+// country, the same as the map, the polity badge and the country panel:
+//   1. polityFlags.js resolvePolityFlag — the scenario author's flag for the
+//      polity (flags.json, by stable key, name or alias), a legacy per-polity
+//      flag, an explicit map reference, then the stock flag of the polity's
+//      own identity. This is what makes a 1911 Kingdom of Greece or a Russian
+//      flag over the Grand Duchy of Finland show up here and not only on the
+//      map — the picker used to jump straight to flagcdn for any name that
+//      had a modern country code, which is the wrong flag for every
+//      historical polity.
+//   2. flagcdn.com artwork by code, then by name (countryFlags.js) — the
+//      resolver declines when a stock identity is ambiguous (two Chinas, a
+//      Pakistan beside an Islamic Republic of Pakistan) and the picker's code
+//      still knows which one this tile is.
+//   3. the scenario's flags.json by code, then a community-hub flag post.
 
 const FALLBACK_FLAG_EMOJI = "🏳";
 
@@ -91,30 +104,51 @@ const findCommunityFlagPost = (posts, { code, name }) => {
     }) ?? null;
 };
 
+// The read-only world view: resolvePolityFlag needs the polity records
+// (aliases, mapRefs, legacy flags) to find an authored flag by identity.
+const getWorldForFlags = () => readWorldStateView().catch(() => ({}));
+
 const resolveFlagImageUrl = ({ code, name } = {}) => {
     if (!code && !name) return Promise.resolve(null);
     const key = `${code ?? ""}::${name ?? ""}`;
     if (flagUrlCache.has(key)) return flagUrlCache.get(key);
 
-    const builtIn = flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name);
-    const promise = builtIn
-        ? Promise.resolve(builtIn)
-        : getScenarioFlagMap()
-            .then((flags) => (code && flags?.[code]) || null)
-            .catch(() => null)
-            .then((scenarioFlag) => {
-                if (scenarioFlag) return scenarioFlag;
-                return getCommunityFlagPosts()
-                    .then((posts) => {
-                        const match = findCommunityFlagPost(posts, { code, name });
-                        return match ? loadCommunityFlagDataUrl(match).catch(() => null) : null;
-                    })
-                    .catch(() => null);
-            });
+    const promise = Promise.all([getScenarioFlagMap(), getWorldForFlags()])
+        .then(([flags, world]) => {
+            try {
+                const resolved = resolvePolityFlag({ polity: { name, code }, world: world || {}, flags: flags || {} });
+                if (resolved?.imageUrl) return resolved.imageUrl;
+            } catch {
+                /* fall through to the stock artwork */
+            }
+            const builtIn = flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name);
+            if (builtIn) return builtIn;
+            const scenarioFlag = code && flags?.[code];
+            if (scenarioFlag) return scenarioFlag;
+            return getCommunityFlagPosts()
+                .then((posts) => {
+                    const match = findCommunityFlagPost(posts, { code, name });
+                    return match ? loadCommunityFlagDataUrl(match).catch(() => null) : null;
+                })
+                .catch(() => null);
+        })
+        .catch(() => flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name) ?? null);
 
     flagUrlCache.set(key, promise);
     return promise;
 };
+
+// Resolved URLs are cached for the session, so they have to be dropped when the
+// answer can change: the author saves a flag (assets.js dispatches this on the
+// flags write) or another save becomes active (its own flags, its own world).
+if (typeof window !== "undefined") {
+    const dropFlagCaches = () => {
+        flagUrlCache.clear();
+        nationFlagsPromise = null;
+    };
+    window.addEventListener("oh:flags-updated", dropFlagCaches);
+    window.addEventListener("oh:active-game-changed", dropFlagCaches);
+}
 
 const useCountryFlagUrl = ({ code, name } = {}) => {
     const [url, setUrl] = useState(null);
