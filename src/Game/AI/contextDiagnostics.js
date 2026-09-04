@@ -230,7 +230,7 @@ const extractTemplatePlaceholderKeys = (template) => {
 };
 
 const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
-  actions: Object.freeze(["playerPolity", "playerPolityReputationContext"]),
+  actions: Object.freeze(["playerPolity", "playerPolityReputationContext", "playerPolityIntelligenceContext"]),
   autoJumpForward: Object.freeze([
     "playerPolity",
     "date",
@@ -242,6 +242,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "territorialControlContext",
     "worldInitiativeContext",
     "playerPolityReputationContext",
+    "playerPolityIntelligenceContext",
     "pendingUnitOrders",
     "unitsSummary",
     "forcePosture",
@@ -250,8 +251,8 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "diplomaticContinuity",
     "worldBeforeRoundOne",
   ]),
-  catalystCreation: Object.freeze(["playerPolity", "playerPolityReputationContext"]),
-  catalystExecutor: Object.freeze(["playerPolity", "playerPolityReputationContext"]),
+  catalystCreation: Object.freeze(["playerPolity", "playerPolityReputationContext", "playerPolityIntelligenceContext"]),
+  catalystExecutor: Object.freeze(["playerPolity", "playerPolityReputationContext", "playerPolityIntelligenceContext"]),
   countryStatSheet: Object.freeze([
     "statsTerritorialContext",
     "statsTerritorialReferenceContext",
@@ -286,6 +287,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "territorialControlContext",
     "worldInitiativeContext",
     "playerPolityReputationContext",
+    "playerPolityIntelligenceContext",
     "pendingUnitOrders",
     "unitsSummary",
     "forcePosture",
