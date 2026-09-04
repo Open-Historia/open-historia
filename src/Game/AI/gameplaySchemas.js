@@ -381,6 +381,12 @@ const unitOpSchema = {
   ],
 };
 
+const markerStatusSchema = {
+  type: "string",
+  enum: ["planned", "under_construction", "active", "damaged", "inactive", "abandoned", "destroyed"],
+  description: "Current lifecycle state of the persistent physical feature.",
+};
+
 const markerSchema = {
   type: "object",
   description:
@@ -391,6 +397,7 @@ const markerSchema = {
     name: nonEmptyTextSchema("Display name of the structure."),
     kind: nonEmptyTextSchema("What the structure is, as a short lowercase noun phrase."),
     ownerCode: textSchema("Owning polity's FULL country name (\"Spain\") when owned, never a country code."),
+    status: markerStatusSchema,
     lng: {
       type: "number",
       description: "Longitude of the structure.",
@@ -411,7 +418,10 @@ const markerSchema = {
 };
 
 const markerOpSchema = {
-  description: "A structure/place mutation. Use op build, remove, or rename and fill the fields that op needs.",
+  description:
+    "Persistent physical-world mutation. Use build for a genuinely new feature; update or rename for an "
+    + "existing stable object; remove only for canonical deletion; population when a city's population changes. "
+    + "Fill the fields that op needs.",
   anyOf: [
     {
       type: "object",
@@ -436,6 +446,7 @@ const markerOpSchema = {
         name: nonEmptyTextSchema("Name of the structure or place."),
         kind: textSchema("What it is: city, base, bunker, silo, embassy, port."),
         ownerCode: textSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
+        status: markerStatusSchema,
         lng: { type: "number", description: "Longitude.", minimum: -180, maximum: 180 },
         lat: { type: "number", description: "Latitude.", minimum: -90, maximum: 90 },
         note: textSchema("Brief explanation."),
@@ -446,12 +457,28 @@ const markerOpSchema = {
     {
       type: "object",
       properties: {
-        op: { type: "string", enum: ["remove"] },
-        markerId: textSchema("Existing marker identifier, when known."),
-        name: nonEmptyTextSchema("Name of the structure to remove."),
-        note: textSchema("Brief explanation of the removal."),
+        op: { type: "string", enum: ["update"] },
+        markerId: textSchema("Existing stable marker id. Prefer this whenever the current map structures list one."),
+        name: textSchema("Existing feature name, only as a fallback when markerId is unavailable."),
+        kind: textSchema("New/current feature kind when materially changed."),
+        ownerCode: textSchema("New/current operating polity's FULL country name when control or ownership changes."),
+        status: markerStatusSchema,
+        lng: { type: "number", description: "New longitude only when the feature genuinely relocates.", minimum: -180, maximum: 180 },
+        lat: { type: "number", description: "New latitude only when the feature genuinely relocates.", minimum: -90, maximum: 90 },
+        note: textSchema("Updated brief current description after this event."),
       },
-      required: ["op", "name"],
+      required: ["op"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["remove"] },
+        markerId: textSchema("Existing stable marker identifier, preferred when known."),
+        name: textSchema("Existing feature name when markerId is unavailable."),
+        note: textSchema("Brief explanation of the canonical deletion or correction."),
+      },
+      required: ["op"],
       additionalProperties: false,
     },
     {
@@ -1185,15 +1212,308 @@ export const CATALYST_SUMMARY_SCHEMA = {
   additionalProperties: false,
 };
 
-export const GAME_MASTER_SCHEMA = {
+const gmEventIndexesSchema = {
+  type: "array",
+  description: "0-based indexes into this GM transaction's events array.",
+  maxItems: 8,
+  items: { type: "integer", minimum: 0 },
+};
+
+const gmWarUpdateSchema = {
   type: "object",
-  description: "A direct game-master intervention and its structured world-state changes.",
+  description: "One authoritative world.wars lifecycle operation.",
   properties: {
-    summary: textSchema("Concise account of how the GM request changed the world."),
+    id: nonEmptyTextSchema("Stable canonical war id. Reuse the existing id for an existing conflict."),
+    op: {
+      type: "string",
+      enum: ["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"],
+    },
+    actors: stringArraySchema("Polities acted on by this operation. Full polity names only."),
+    opponents: stringArraySchema("Opposing side for a new war or when otherwise useful. Full polity names only."),
+    eventIndexes: gmEventIndexesSchema,
+    note: textSchema("Brief canonical reason for the belligerency change."),
+  },
+  required: ["id", "op", "actors", "opponents", "eventIndexes", "note"],
+  additionalProperties: false,
+};
+
+const gmRelationUpdateSchema = {
+  type: "object",
+  description: "One absolute bilateral political-climate update for world.relations.",
+  properties: {
+    a: nonEmptyTextSchema("First polity, using its full canonical name."),
+    b: nonEmptyTextSchema("Second polity, using its full canonical name."),
+    score: { type: "integer", minimum: -100, maximum: 100 },
+    status: {
+      type: "string",
+      enum: ["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"],
+    },
+    eventIndexes: gmEventIndexesSchema,
+    summary: textSchema("Concise reason/current meaning of the relation state."),
+  },
+  required: ["a", "b", "score", "status", "eventIndexes", "summary"],
+  additionalProperties: false,
+};
+
+const gmAgreementUpdateSchema = {
+  type: "object",
+  description: "One formal agreement lifecycle operation for world.agreements.",
+  properties: {
+    id: nonEmptyTextSchema("Stable agreement id. Reuse an existing id for later lifecycle operations."),
+    op: {
+      type: "string",
+      enum: ["start", "update", "suspend", "resume", "end", "expire"],
+    },
+    type: {
+      type: "string",
+      enum: [
+        "alliance",
+        "mutual_defense",
+        "guarantee",
+        "non_aggression",
+        "friendship_consultation",
+        "trade_economic",
+        "military_cooperation",
+        "military_access",
+        "neutrality",
+        "peace_settlement",
+        "other",
+      ],
+    },
+    parties: stringArraySchema("Formal parties, using full canonical polity names."),
+    eventIndexes: gmEventIndexesSchema,
+    title: textSchema("Canonical agreement title; required when starting a new agreement."),
+    terms: textSchema("Compact durable terms or lifecycle note."),
+  },
+  required: ["id", "op", "type", "parties", "eventIndexes", "title", "terms"],
+  additionalProperties: false,
+};
+
+const gmCountryStatPatchSchema = {
+  type: "object",
+  description:
+    "One authoritative current-baseline Stats edit. This is for exact GM/admin correction, not ordinary simulated economic drift.",
+  properties: {
+    country: nonEmptyTextSchema("Existing target polity's full canonical name."),
+    patch: {
+      type: "object",
+      properties: {
+        capital: textSchema("Capital, when explicitly changed."),
+        continent: textSchema("Continent/broad region label, when explicitly changed."),
+        government: textSchema("Government system/ideology, when explicitly changed."),
+        leader: textSchema("Current leader, when explicitly changed."),
+        stability: { type: "number", minimum: 0, maximum: 100 },
+        population: {
+          type: "object",
+          properties: {
+            total: { type: "integer", minimum: 1 },
+          },
+          required: ["total"],
+          additionalProperties: false,
+        },
+        indices: {
+          type: "object",
+          properties: {
+            sovereignty: { type: "number", minimum: 0, maximum: 100 },
+            foodAutonomy: { type: "number", minimum: 0, maximum: 100 },
+            energyAutonomy: { type: "number", minimum: 0, maximum: 100 },
+            economicIndependence: { type: "number", minimum: 0, maximum: 100 },
+            internalSecurity: { type: "number", minimum: 0, maximum: 100 },
+            internationalReputation: { type: "number", minimum: 0, maximum: 100 },
+          },
+          additionalProperties: false,
+        },
+        economy: {
+          type: "object",
+          properties: {
+            gdp: { type: "number", minimum: 1 },
+            gdpGrowth: { type: "number", minimum: -1000, maximum: 1000 },
+            currency: textSchema("Current currency."),
+            inflation: { type: "number", minimum: -1000, maximum: 1000 },
+            unemployment: { type: "number", minimum: 0, maximum: 100 },
+            publicDebt: { type: "number", minimum: 0, maximum: 1000 },
+            budgetBalance: { type: "number", minimum: -1000, maximum: 1000 },
+          },
+          additionalProperties: false,
+        },
+        gdpBreakdown: {
+          type: "object",
+          properties: {
+            agriculture: { type: "integer", minimum: 0, maximum: 100 },
+            industry: { type: "integer", minimum: 0, maximum: 100 },
+            services: { type: "integer", minimum: 0, maximum: 100 },
+          },
+          required: ["agriculture", "industry", "services"],
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    eventIndexes: gmEventIndexesSchema,
+    reason: textSchema("Why the authoritative baseline is being changed."),
+  },
+  required: ["country", "patch", "eventIndexes", "reason"],
+  additionalProperties: false,
+};
+
+// A GM-authored event carries the FULL impacts contract: unlike the jump, which
+// hands the Projects & Operations board to its own second call, the GM has no
+// second pass, so its events keep projectOps.
+const gameMasterEventSchema = {
+  ...eventSchema,
+  properties: {
+    ...eventSchema.properties,
     impacts: impactsSchema,
   },
-  required: ["summary", "impacts"],
+};
+
+// The GM transaction the app validates and previews. The AI plans structured
+// canonical operations; the payload is not itself permission to persist them —
+// only the administrator's Apply of the exact preview is.
+export const GAME_MASTER_SCHEMA = {
+  type: "object",
+  description:
+    "A previewable native GM transaction. The AI plans structured canonical operations; this payload is not itself permission to persist them.",
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["direct", "exact-event", "world-intervention"],
+      description: "GM mode selected by the administrator.",
+    },
+    summary: textSchema("Concise explanation of what this transaction would change if applied."),
+    events: {
+      type: "array",
+      description: "Canonical timeline events authored by this transaction. Direct corrections may legitimately contain none.",
+      maxItems: 8,
+      items: gameMasterEventSchema,
+    },
+    countryStatPatches: {
+      type: "array",
+      description: "Authoritative whole-polity/current-baseline Stats corrections.",
+      maxItems: 12,
+      items: gmCountryStatPatchSchema,
+    },
+    warUpdates: {
+      type: "array",
+      description: "Structured canonical belligerency changes. Never encode these as strings.",
+      maxItems: 12,
+      items: gmWarUpdateSchema,
+    },
+    relationUpdates: {
+      type: "array",
+      description: "Structured canonical bilateral political-climate changes.",
+      maxItems: 16,
+      items: gmRelationUpdateSchema,
+    },
+    agreementUpdates: {
+      type: "array",
+      description: "Structured formal agreement lifecycle changes.",
+      maxItems: 12,
+      items: gmAgreementUpdateSchema,
+    },
+    diplomaticOutreach: {
+      type: "array",
+      description: "Direct NPC-to-player chats not attached to one specific authored event.",
+      maxItems: 3,
+      items: createdChatSchema,
+    },
+  },
+  required: [
+    "mode",
+    "summary",
+    "events",
+    "countryStatPatches",
+    "warUpdates",
+    "relationUpdates",
+    "agreementUpdates",
+    "diplomaticOutreach",
+  ],
   additionalProperties: false,
+};
+
+// Provider transport: Gemini rejects very large/deep function declaration
+// schemas with HTTP 400 "Request contains an invalid argument." Keep the GM
+// transaction fully structured inside the app, but send it through a
+// deliberately shallow tool contract. Each subsystem is JSON array text, decoded
+// immediately and then validated against GAME_MASTER_SCHEMA before any preview
+// is accepted.
+export const GAME_MASTER_TRANSPORT_SCHEMA = {
+  type: "object",
+  description: "Compact provider transport for a previewable native GM transaction.",
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["direct", "exact-event", "world-intervention"],
+    },
+    summary: textSchema("Concise explanation of what the transaction would change if applied."),
+    eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
+    countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
+    warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
+    relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
+    agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
+    diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
+  },
+  required: [
+    "mode",
+    "summary",
+    "eventsJson",
+    "countryStatPatchesJson",
+    "warUpdatesJson",
+    "relationUpdatesJson",
+    "agreementUpdatesJson",
+    "diplomaticOutreachJson",
+  ],
+  additionalProperties: false,
+};
+
+const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
+  ["eventsJson", "events"],
+  ["countryStatPatchesJson", "countryStatPatches"],
+  ["warUpdatesJson", "warUpdates"],
+  ["relationUpdatesJson", "relationUpdates"],
+  ["agreementUpdatesJson", "agreementUpdates"],
+  ["diplomaticOutreachJson", "diplomaticOutreach"],
+]);
+
+const parseGameMasterTransportArray = (value, field) => {
+  if (Array.isArray(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`$.${field} must contain valid JSON array text: ${error?.message || error}.`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`$.${field} must decode to a JSON array.`);
+  }
+  return parsed;
+};
+
+export const decodeGameMasterTransportPayload = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { payload: value, error: "" };
+  }
+
+  const isTransport = GAME_MASTER_TRANSPORT_FIELDS.some(([field]) => Object.prototype.hasOwnProperty.call(value, field));
+  if (!isTransport) {
+    // Raw/local providers may already return the internal structured transaction.
+    return { payload: value, error: "" };
+  }
+
+  try {
+    const payload = {
+      mode: String(value.mode ?? "").trim(),
+      summary: String(value.summary ?? "").trim(),
+    };
+    for (const [field, key] of GAME_MASTER_TRANSPORT_FIELDS) {
+      payload[key] = parseGameMasterTransportArray(value[field], field);
+    }
+    return { payload, error: "" };
+  } catch (error) {
+    return { payload: null, error: String(error?.message || error || "Invalid GM transport payload.") };
+  }
 };
 
 // The Projects & Operations board, moved OUT of the jump and into its own call.
@@ -1663,8 +1983,8 @@ export const PROJECTS_TOOL = makeTool(
 
 export const GAME_MASTER_TOOL = makeTool(
   "submit_game_master",
-  "Submit the summary and structured map or world-state effects of a game-master request.",
-  GAME_MASTER_SCHEMA,
+  "Submit the compact provider transport for a previewable native GM transaction. Native code decodes and validates the structured transaction; nothing is applied by this call.",
+  GAME_MASTER_TRANSPORT_SCHEMA,
 );
 
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(

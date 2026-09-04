@@ -3,7 +3,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, isChatGenerationLikely } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker, isChatGenerationLikely, processPendingEventOutreach } from "../AI/gameplay.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -21,7 +21,7 @@ import {
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState, applyProjectOpsToWorld } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readInterceptsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld } from "../../runtime/gameState.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
@@ -1822,6 +1822,72 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     useEffect(() => {
         const iv = setInterval(() => setIsGenerating(isChatGenerationLikely()), 800);
         return () => clearInterval(iv);
+    }, []);
+
+    // Event Editor diplomatic reaction scheduler. The queue lives in world.json,
+    // so refreshes do not cancel the grace window. Deadline-driven rather than a
+    // poll: read once, sleep until the next pending evaluation, then let
+    // gameplay.js re-check the event and deliver (or deliberately choose silence)
+    // through the normal chat fold.
+    useEffect(() => {
+        let cancelled = false;
+        let timer = null;
+
+        const clear = () => {
+            if (timer) clearTimeout(timer);
+            timer = null;
+        };
+
+        const scheduleFromWorld = async (minimumDelayMs = 0) => {
+            if (cancelled) return;
+            clear();
+            try {
+                const world = await readWorldStateView({ force: false });
+                const queue = Array.isArray(world?.pendingEventOutreach) ? world.pendingEventOutreach : [];
+                if (queue.length === 0) return;
+
+                const now = Date.now();
+                const dueTimes = queue
+                    .map((entry) => Date.parse(String(entry?.deliverAfter || "")))
+                    .filter(Number.isFinite)
+                    .sort((a, b) => a - b);
+                if (dueTimes.length === 0) return;
+
+                const delay = Math.max(minimumDelayMs, dueTimes[0] - now, 100);
+                timer = setTimeout(async () => {
+                    if (cancelled) return;
+                    const result = await processPendingEventOutreach({ debug: true }).catch((error) => ({
+                        reason: "scheduler-error",
+                        retryAfterMs: 30000,
+                        message: error?.message || String(error),
+                    }));
+                    if (cancelled) return;
+                    const retry = Math.max(0, Number(result?.retryAfterMs) || 0);
+                    scheduleFromWorld(retry);
+                }, Math.min(delay, 2147483000));
+            } catch {
+                // A transient world read should not permanently orphan persisted work.
+                timer = setTimeout(() => scheduleFromWorld(), 30000);
+            }
+        };
+
+        const queueChanged = () => scheduleFromWorld();
+        const visibilityChanged = () => {
+            if (!document.hidden) scheduleFromWorld();
+        };
+
+        scheduleFromWorld();
+        window.addEventListener("oh:event-outreach-queue-changed", queueChanged);
+        window.addEventListener("oh:active-game-changed", queueChanged);
+        document.addEventListener("visibilitychange", visibilityChanged);
+
+        return () => {
+            cancelled = true;
+            clear();
+            window.removeEventListener("oh:event-outreach-queue-changed", queueChanged);
+            window.removeEventListener("oh:active-game-changed", queueChanged);
+            document.removeEventListener("visibilitychange", visibilityChanged);
+        };
     }, []);
 
     useEffect(() => {
