@@ -837,6 +837,16 @@ const eventSchema = {
       type: "boolean",
       description: "Whether the event directly concerns the player polity.",
     },
+    warId: textSchema(
+      "Canonical world.wars id for this event when it declares/joins/ends a war or depicts actual combat. Blank for non-war events.",
+    ),
+    combatants: {
+      type: "array",
+      description:
+        "For actual battlefield combat, the polity names directly fighting in this event. Must include belligerents from both sides of warId.",
+      maxItems: 8,
+      items: nonEmptyTextSchema("One canonical belligerent polity name."),
+    },
     impacts: jumpImpactsSchema,
   },
   required: ["date", "title", "description"],
@@ -921,6 +931,25 @@ export const JUMP_FORWARD_SCHEMA = {
         + "plausibly reach out this period.",
       items: createdChatSchema,
     },
+    // The canonical ledgers (nativeWarLedger.js, nativeDiplomaticDirector.js)
+    // travel as compact text lines rather than nested objects: a large nested
+    // schema is exactly what Gemini function calling and strict tool modes
+    // choke on, and the line formats are taught in the live prompt.
+    warUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated canonical war-state operations. Empty string when no belligerency changes. Record format is documented in the live prompt.",
+    },
+    relationUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated bilateral relation updates. Empty string when no material bilateral political relation changes. Record format is documented in the live prompt.",
+    },
+    agreementUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated formal treaty/agreement lifecycle updates. Empty string when no formal commitment starts, changes, suspends, resumes, ends, or expires. Record format is documented in the live prompt.",
+    },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
   // reads it as `payload?.clearActions !== false`, so a missing value already
@@ -948,8 +977,69 @@ const pregameEventSchema = {
     description: textSchema("Specific narrative description and its consequences."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
+    warId: textSchema(
+      "Canonical war id when this pre-game event is the one that started, joined, paused or ended a war listed in canonicalUpdates. Blank otherwise.",
+    ),
   },
   required: ["date", "title", "description"],
+  additionalProperties: false,
+};
+
+// The pre-game bootstrap answers with ONE flat envelope for every canonical
+// ledger it seeds (wars, relations, agreements) instead of three mini-languages:
+// function-calling in "any" mode is sensitive to schema depth, so the transport
+// is deliberately flat and all-required - the model supplies the semantic values
+// and gameplay.js (expandCanonicalUpdateEnvelope) dispatches each item to the
+// ledger its "kind" names, ignoring the fields that kind does not use.
+const canonicalUpdateSchema = {
+  type: "object",
+  description:
+    "One canonical-state fact already true on the start date. Every field is required for provider reliability; use an empty string, empty array, or 0 for fields irrelevant to this kind.",
+  properties: {
+    kind: {
+      type: "string",
+      description:
+        "Semantic kind code. Use relation; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start.",
+    },
+    id: { type: "string", description: "Stable war/agreement id, or empty for a relation." },
+    polities: {
+      type: "array",
+      description:
+        "Primary polities. Relation: exactly [A,B]. War: actors / side A. Agreement: parties.",
+      items: { type: "string" },
+    },
+    opponents: {
+      type: "array",
+      description: "War opponents / side B; empty for non-war items.",
+      items: { type: "string" },
+    },
+    score: {
+      type: "integer",
+      description: "Relation absolute score -100..100; 0 for non-relation items. The engine clamps it and derives the status.",
+    },
+    category: {
+      type: "string",
+      description: "Agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other); otherwise empty.",
+    },
+    title: {
+      type: "string",
+      description: "Agreement title when relevant; otherwise empty.",
+    },
+    detail: {
+      type: "string",
+      description: "Relation summary, war note, or agreement terms.",
+    },
+  },
+  required: [
+    "kind",
+    "id",
+    "polities",
+    "opponents",
+    "score",
+    "category",
+    "title",
+    "detail",
+  ],
   additionalProperties: false,
 };
 
@@ -965,6 +1055,13 @@ export const PREGAME_HISTORY_SCHEMA = {
       items: pregameEventSchema,
     },
     summary: textSchema("One-paragraph summary of the era leading into the start date."),
+    canonicalUpdates: {
+      type: "array",
+      description:
+        "Wars, bilateral relations and formal agreements ALREADY TRUE on the start date. Empty array only when no such Day-1 state exists. The engine dispatches and binds every item.",
+      maxItems: 32,
+      items: canonicalUpdateSchema,
+    },
   },
   required: ["events", "summary"],
   additionalProperties: false,

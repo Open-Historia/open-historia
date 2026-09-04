@@ -73,6 +73,29 @@ import {
   writeWorldState,
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
+import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
+import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import {
+  applyWarUpdates,
+  bindWarUpdatesToEvents,
+  buildCanonicalWarContext,
+  decodeWarUpdates,
+  reconcileCombatWarState,
+  validateCanonicalWarEvents,
+  validateWarLedgerPayload,
+} from "./nativeWarLedger.js";
+import {
+  DIPLOMATIC_LEDGER_VERSION,
+  applyDiplomaticUpdates,
+  bindAgreementUpdatesToEvents,
+  bindRelationUpdatesToEvents,
+  buildBoundedDiplomaticContext,
+  decodeAgreementUpdates,
+  decodeRelationUpdates,
+  migrateLegacyDiplomaticState,
+  validateDiplomaticLedgerPayload,
+} from "./nativeDiplomaticDirector.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
@@ -309,10 +332,385 @@ const buildPlayerPolityReputationText = async (bundle) => {
   return `International reputation: ${clamped}/100 (${band}).`;
 };
 
+// ---- Canonical war and diplomacy ledgers ------------------------------------
+// world.wars, world.relations and world.agreements are engine-owned state (see
+// nativeWarLedger.js and nativeDiplomaticDirector.js). The model changes them
+// only through the compact warUpdates / relationUpdates / agreementUpdates lines
+// on a jump payload: validated per segment against the world as the earlier
+// segments left it (validateSegmentLedgers), bound to event ids so the segments
+// can be merged, and folded into the world once per turn (applySimulationResult).
+// The directives below are appended at call time, so frozen prompt packs get
+// them too; the line formats live here rather than in the tool schema.
+
+const canonicalCampaignPolity = (value, world, identityIndex = null) => {
+  const raw = normalizeString(value);
+  if (!raw) return "";
+  const resolved = resolvePolityIdentity(raw, world && typeof world === "object" ? world : {}, {
+    allowUnknown: true,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+    identityIndex,
+  });
+  return normalizeString(resolved?.resolved) || toCountryName(raw) || raw;
+};
+
+const relationStatusForScore = (value) => {
+  const score = Math.max(-100, Math.min(100, Math.round(Number(value) || 0)));
+  if (score >= 55) return "friendly";
+  if (score >= 20) return "cordial";
+  if (score >= -10) return "neutral";
+  if (score >= -30) return "cautious";
+  if (score >= -60) return "strained";
+  if (score > -90) return "hostile";
+  return "rival";
+};
+
+const WORLD_WAR_TRANSITION_HINTS = Object.freeze({
+  start: /\b(declar(?:e|es|ed|ation)|war begins|hostilities begin|invad(?:e|es|ed|ing|sion)|opens? hostilities)\b/i,
+  "join-a": /\b(joins?|enters?|interven(?:e|es|ed|tion)|declares? war)\b/i,
+  "join-b": /\b(joins?|enters?|interven(?:e|es|ed|tion)|declares? war)\b/i,
+  leave: /\b(leaves?|withdraws?|withdrawal|exits?|separate peace)\b/i,
+  ceasefire: /\b(cease[- ]?fire|armistice|truce|suspends? hostilities)\b/i,
+  resume: /\b(resumes? hostilities|cease[- ]?fire collapses?|armistice collapses?|fighting resumes?)\b/i,
+  end: /\b(peace|surrenders?|capitulat(?:e|es|ed|ion)|war ends?|ends? the war|peace settlement)\b/i,
+});
+
+// The model decides WHAT happened; the engine owns which event a war record is
+// bound to. Model-supplied event numbers are hints only and are rebound here from
+// event.warId plus the transition's own vocabulary, so a wrong number can never
+// bind a declaration to an unrelated event.
+const normalizeWorldWarEventLinks = (candidate) => {
+  if (!candidate || typeof candidate !== "object") return { rebound: 0 };
+  const events = normalizeArray(candidate?.events);
+  const updates = decodeWarUpdates(candidate?.warUpdates);
+  let rebound = 0;
+
+  const normalized = updates.map((update) => {
+    const warId = normalizeString(update?.id);
+    const supplied = normalizeArray(update?.eventIndexes)
+      .map(Number)
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < events.length);
+
+    const sameWar = events
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => normalizeString(event?.warId) === warId);
+
+    const hint = WORLD_WAR_TRANSITION_HINTS[normalizeString(update?.op).toLowerCase()];
+    const semantic = hint
+      ? sameWar.filter(({ event }) =>
+          hint.test(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`))
+      : [];
+
+    let eventIndexes = [];
+    if (semantic.length === 1) {
+      eventIndexes = [semantic[0].index];
+    } else if (sameWar.length === 1) {
+      eventIndexes = [sameWar[0].index];
+    } else {
+      const suppliedSameWar = supplied.filter((index) =>
+        normalizeString(events[index]?.warId) === warId);
+      const suppliedSemantic = semantic.length
+        ? suppliedSameWar.filter((index) => semantic.some((row) => row.index === index))
+        : suppliedSameWar;
+      if (suppliedSemantic.length === 1) eventIndexes = suppliedSemantic;
+    }
+
+    if (JSON.stringify(eventIndexes) !== JSON.stringify(supplied)) rebound += 1;
+    return {
+      ...update,
+      eventIndexes,
+      eventIds: [],
+    };
+  });
+
+  candidate.warUpdates = normalized;
+  if (rebound) {
+    console.info(`[ai] war ledger: rebound ${rebound} record(s) from event.warId and transition semantics.`);
+  }
+  return { rebound, updates: normalized };
+};
+
+const buildWarLedgerDirective = (variables) => {
+  const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
+  const canonicalWarContext = normalizeString(variables?.canonicalWarContext);
+  return `[Canonical War-State Ledger]
+world.wars is the AUTHORITATIVE source of belligerency. A tense relationship, an alliance, a mobilisation or real-world history does NOT make two polities belligerents; only this ledger does.
+
+CURRENT CANONICAL CONFLICTS:
+${canonicalWarContext || "No active or ceasefire canonical wars are recorded."}
+
+Hard rules:
+- Actual battlefield combat requires an ACTIVE canonical war.
+- Battle/offensive/invasion/bombardment/raid/siege/front-combat events MUST carry event.warId and event.combatants.
+- event.combatants must name real belligerent polities from BOTH opposing sides of that war.
+- A declaration of war, entry into an existing war, departure, ceasefire, resumption, or peace/end MUST emit a matching top-level warUpdates record AND a real event carrying the same warId. The engine binds the record to that event; do not spend effort counting event positions.
+- An alliance does not silently activate. Mobilization does not silently activate. A historical war does not silently activate.
+- If a historically expected belligerent has not actually joined in THIS campaign, it has no battlefield front.
+- WAR-DEPENDENT DOMESTIC / ECONOMIC FRAMING is ledger-bound too. A polity that is NOT a belligerent must not be described as operating under its own wartime economy, rationing, mobilisation, war taxes, blockade conditions or comparable home-front conditions merely because the calendar matches real history or because OTHER countries are fighting. Spillover into a neutral is allowed only with a concrete causal bridge (disrupted imports, refugee pressure, sanctions) and must be described as spillover from the named foreign conflict.
+- Real-world chronology is never evidence that an absent war, blockade, mobilisation or home-front regime exists in THIS campaign.
+- ${playerName} may not be inserted into a war merely because history or alliance logic suggests it. The player-agency rules still control every new player commitment.
+- warUpdates is compact text, one record per line, fields separated by ~ (never use ~ inside a field):
+  warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
+  ops: start | join-a | join-b | leave | ceasefire | resume | end
+  For start, actorsCSV is side A and opponentsCSV is side B; for join-a/join-b/leave, actorsCSV names the polities joining or leaving. eventNumbersCSV is the 1-based number of the event that establishes the transition and may be blank: the engine binds from warId and the transition's own wording. Use a stable, descriptive warId (e.g. war-france-germany-1914) and reuse it for later lifecycle records.
+- Return warUpdates:"" when belligerency does not change in this pass.`;
+};
+
+const buildDiplomaticLedgerDirective = (variables) => {
+  const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
+  const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
+  return `[Canonical Diplomatic Ledger]
+${canonicalDiplomacy || "No canonical bilateral relations or formal agreements are recorded yet."}
+
+Lasting bilateral political shifts use top-level relationUpdates; signed, ratified or concluded formal treaties, alliances, guarantees and pacts use top-level agreementUpdates. polityChanges remains for polity metadata and reputation, regionTransfers for legal territorial settlements, and unitOps for concrete military coordination. A.I.-controlled polities have their own diplomacy and may negotiate, threaten, align, mediate, trade or make agreements among themselves without waiting for ${playerName}; private A.I.-to-A.I. diplomacy belongs in the TIMELINE as events, never in a chat the player is not part of.
+
+Relation decision model: a canonical bilateral relation score/status is persistent political climate, not decoration. Use it as a strong prior for A.I. trust, threat interpretation, bargaining posture, willingness to cooperate or compromise, tolerance of strategic risk and severity of reaction. It is NOT a hard acceptance probability or veto: national interest, formal obligations, geography, relative power, domestic constraints, reputation and the concrete proposal remain independent causes, so a friendly government may reject a dangerous demand and a hostile one may cooperate under necessity. Formal agreements, bilateral warmth and actual war are separate facts: a strained ally may still owe treaty duties; friendly states without a treaty have promised nothing; hostility alone does not create belligerency. When a NEW event materially changes a bilateral climate, emit a relationUpdates record with the new ABSOLUTE score bound to that event; never drift scores merely because time passed, and let the same foreign action provoke different responses from a trusted partner than from a distrusted rival.
+
+- relationUpdates is compact text, one record per line, fields separated by ~ (never use ~ inside a field):
+  A~B~score~status~eventNumbersCSV~summary
+  score is the new absolute score from -100 to 100; status is one of friendly | cordial | neutral | cautious | strained | hostile | rival (blank derives it from the score); eventNumbersCSV is the 1-based number of the causal event and may be blank (the engine binds the one event that matches).
+- agreementUpdates is compact text, one record per line:
+  agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms
+  ops: start | update | suspend | resume | end | expire. type is one of alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other. Use a stable, descriptive agreementId (e.g. franco-russian-alliance-1894) and reuse it for later lifecycle records; every record needs a real causal event in this response, and only start needs the full type/parties/title.
+- Return relationUpdates:"" and agreementUpdates:"" when nothing material changes.`;
+};
+
+const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
+Treat the canonical bilateral relation score/status as a strong prior for diplomatic tone and willingness to initiate contact. Friendly relations make reassurance, congratulations, candid consultation, alliance follow-up and commercial feelers more plausible; strained or hostile relations make protests, warnings, guarded clarification, counter-balancing or silence more plausible. This is not a hard threshold: current interests and events still decide whether anybody has a real reason to write.`;
+
+const buildPregameBootstrapDirective = (variables) => {
+  const roundOneDate =
+    normalizeString(variables?.pregameStartDate) ||
+    normalizeString(variables?.dateReadable) ||
+    normalizeString(variables?.date) ||
+    "the game start date";
+  const vocabulary = normalizeString(variables?.pregameCanonicalPolityVocabulary) || "No current polity vocabulary was available.";
+  return `[Round-Zero World Bootstrap Contract]
+This ONE pregameHistory response writes bounded history strictly BEFORE ${roundOneDate} and compiles the belligerency and diplomacy ALREADY TRUE at Round 1 into the canonical war, relation and agreement ledgers. It is not a future-history scheduler.
+
+CANONICAL ENVELOPE
+Use canonicalUpdates only. Every item uses the same flat required fields; fill the fields a kind does not use with "", [] or 0.
+Kinds:
+- relation: polities=[A,B], score (absolute, -100..100), detail (summary).
+- war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
+- agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
+Never output relation status or event indexes/ids; the engine owns those.
+
+ROUND-ZERO AUDIT
+- Every war still live at Round 1 must be represented.
+- Every materially important active formal agreement explicit in the source must be represented.
+- Persist the sparse bilateral relations needed to explain how the central actors make decisions on Day 1; do not leave central actors blank when the source establishes allies, patrons, rivals or enemies.
+- Keep wars, relations and agreements distinct. Preserve causal inertia where its causes remain intact; never schedule future outcomes.
+
+[Round-Zero Runtime Grounding]
+Start date: ${roundOneDate}
+
+CURRENT ROUND-ONE POLITIES (structured-output authority):
+${vocabulary}
+
+Rules:
+- Every polity token inside canonicalUpdates.polities/opponents MUST resolve to one of the current polities above. Historical or prose labels are descriptive only; never create a structured umbrella or legacy polity that does not exist in the current save.
+- Titles and details may use natural historical prose; structured polity identity must remain canonical.
+
+CURRENT CANONICAL STATE ALREADY PRESENT:
+Wars:
+${normalizeString(variables?.canonicalWarContext) || "None recorded."}
+
+Diplomacy:
+${normalizeString(variables?.canonicalDiplomaticContext) || "None recorded."}
+
+Do not duplicate canonical state already present. Return canonicalUpdates:[] only when no qualifying Day-1 canonical state exists.
+
+[Round-Zero Diplomatic Baseline]
+Round-Zero relations are absolute as-of-start political memory, not single-event deltas. Existing agreements are standing Day-1 state, not necessarily newly signed during the displayed backstory window. Emit historically justified relation and agreement baseline records even when no single generated event card uniquely anchors them: the engine attaches a source event when one is clear and otherwise keeps the valid baseline fact without inventing causality. Do NOT create filler event cards solely to satisfy bookkeeping; within the envelope's capacity, cover the material diplomatic graph rather than stopping after a handful of obvious pairs.`;
+};
+
+// Pregame history answers with one flat "canonicalUpdates" envelope (see
+// canonicalUpdateSchema); it is expanded here into the three ledger transports
+// the rest of the code reads, so the validators and appliers have one shape.
+const CANONICAL_UPDATE_ENVELOPE_TASKS = new Set(["pregameHistory"]);
+
+const canonicalUpdateKind = (value) => {
+  const [family = "", ...rest] = normalizeString(value).toLowerCase().split(":");
+  return { family: family.trim(), operation: rest.join(":").trim() };
+};
+
+const expandCanonicalUpdateEnvelope = (candidate) => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+
+  const warUpdates = [];
+  const relationUpdates = [];
+  const agreementUpdates = [];
+
+  for (const raw of normalizeArray(candidate.canonicalUpdates)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+
+    const { family, operation } = canonicalUpdateKind(raw.kind);
+    const polities = normalizeArray(raw.polities).map(normalizeString).filter(Boolean);
+    const opponents = normalizeArray(raw.opponents).map(normalizeString).filter(Boolean);
+
+    if (family === "war") {
+      warUpdates.push({
+        id: normalizeString(raw.id),
+        op: operation,
+        actors: polities,
+        opponents,
+        eventIndexes: [],
+        eventIds: [],
+        note: normalizeString(raw.detail),
+      });
+    } else if (family === "relation") {
+      relationUpdates.push({
+        a: normalizeString(polities[0]),
+        b: normalizeString(polities[1]),
+        score: Number(raw.score),
+        // The director derives the status band from the score.
+        eventIndexes: [],
+        eventIds: [],
+        summary: normalizeString(raw.detail),
+      });
+    } else if (family === "agreement") {
+      agreementUpdates.push({
+        id: normalizeString(raw.id),
+        op: operation,
+        type: normalizeString(raw.category).toLowerCase(),
+        parties: polities,
+        eventIndexes: [],
+        eventIds: [],
+        title: normalizeString(raw.title),
+        terms: normalizeString(raw.detail),
+      });
+    }
+  }
+
+  const expanded = { ...candidate, warUpdates, relationUpdates, agreementUpdates };
+  delete expanded.canonicalUpdates;
+  return expanded;
+};
+
+// One jump segment's ledger records, checked against the world as the earlier
+// segments left it. Strict while a retry remains (the model gets the exact
+// error), salvaged on the final attempt: an ambiguous combat event is dropped
+// together with the war record only it established, rather than the whole
+// segment going to the fallback. Ends by binding every record to this
+// segment's event ids, which is what lets mergeSegmentPayloads concatenate.
+const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0 }) => {
+  const events = normalizeArray(candidate?.events);
+  // Temporary ids: the canonical round-scoped ones are minted once the whole
+  // round is in hand (applySimulationResult), and the records follow them.
+  events.forEach((event, index) => {
+    if (event && typeof event === "object" && !normalizeString(event.id)) {
+      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
+    }
+  });
+
+  // Combat the model narrated but did not bind: attach it to the one matching
+  // active war, resume the one matching ceasefire, or start a war from two
+  // explicit opposing combatants; anything ambiguous comes back as an error.
+  const combatWarRepair = reconcileCombatWarState(candidate, { world });
+  if (combatWarRepair.unresolved.length && strict) {
+    const first = combatWarRepair.unresolved[0];
+    return `Combat event "${first.title || `event ${first.index + 1}`}" could not be canonically bound: ${first.reason}. ` +
+      "If this is real battlefield combat, name the direct opposing combatants in event.combatants and supply the matching warUpdates lifecycle record. If it is deployment, readiness, an exercise, deterrence, military cooperation or other non-combat activity, remove warId/combatants/warUpdates rather than inventing belligerency.";
+  }
+
+  normalizeWorldWarEventLinks(candidate);
+  let warError = validateWarLedgerPayload(candidate, { world });
+
+  if (warError && !strict && combatWarRepair.unresolved.length) {
+    const dropIndexes = new Set(combatWarRepair.unresolved.map((entry) => entry.index));
+    // A war record is causal with the event that established it: if every
+    // establishing event of a record is being dropped, the record goes too.
+    const boundBefore = decodeWarUpdates(candidate?.warUpdates);
+    const orphaned = new Set();
+    boundBefore.forEach((update, updateIndex) => {
+      const eventIndexes = normalizeArray(update?.eventIndexes)
+        .map(Number)
+        .filter((index) => Number.isInteger(index) && index >= 0);
+      if (eventIndexes.length && eventIndexes.every((index) => dropIndexes.has(index))) orphaned.add(updateIndex);
+    });
+    candidate.events = normalizeArray(candidate.events).filter((_, index) => !dropIndexes.has(index));
+    if (orphaned.size) candidate.warUpdates = boundBefore.filter((_, index) => !orphaned.has(index));
+    console.warn(
+      `[ai] war ledger salvage: dropped ${dropIndexes.size} ambiguous hard-combat event(s) and ${orphaned.size} orphaned war record(s) ` +
+      "after the model failed its corrective retry; keeping the rest of the segment.",
+    );
+    normalizeWorldWarEventLinks(candidate);
+    warError = validateWarLedgerPayload(candidate, { world });
+  }
+  if (warError) return warError;
+
+  const diplomaticError = validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true });
+  if (diplomaticError) return diplomaticError;
+
+  const boundEvents = normalizeArray(candidate.events);
+  candidate.warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), boundEvents);
+  candidate.relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), boundEvents);
+  candidate.agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), boundEvents);
+  return "";
+};
+
+// The world a later segment is validated against and shown: the base world plus
+// the war and diplomacy records of the segments already in hand. No impacts are
+// applied here - the round's events are applied once, at the end.
+const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) => {
+  const events = normalizeArray(payload?.events);
+  const warMerge = applyWarUpdates({
+    world,
+    updates: normalizeArray(payload?.warUpdates),
+    events,
+    stopDate,
+    round,
+  });
+  return applyDiplomaticUpdates({
+    world: warMerge.world,
+    relationUpdates: normalizeArray(payload?.relationUpdates),
+    agreementUpdates: normalizeArray(payload?.agreementUpdates),
+    events,
+    stopDate,
+    round,
+  }).world;
+};
+
+// A save from before the ledgers existed has its treaties and alliances only as
+// events (and some standing alliances only in chats). Seed the two ledgers from
+// them once; the version stamp keeps it from running again.
+const withDiplomaticLedgerMigration = (bundle) => {
+  const migration = migrateLegacyDiplomaticState({
+    world: bundle.world,
+    events: bundle.events,
+    chats: bundle.chats,
+    game: bundle.game,
+  });
+  if (!migration.migrated) return bundle;
+  console.info(
+    `[ai] diplomacy ledger seeded from ${migration.scannedEvents} legacy event(s) and ${migration.scannedChats || 0} chat(s): ` +
+    `${migration.agreementsAdded} agreement(s), ${migration.relationsAdded} relation(s).`,
+  );
+  logDebugEvent("turn", "Diplomacy ledger seeded from the save's legacy treaty events.", {
+    scannedEvents: migration.scannedEvents,
+    agreementsAdded: migration.agreementsAdded,
+    relationsAdded: migration.relationsAdded,
+  }, { verbose: true });
+  return { ...bundle, world: migration.world };
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const variables = await buildPromptContext(bundle, options);
+  // The diplomatic slice is bounded to the player plus, for a chat task, the
+  // polities in the thread; wars are few enough to show whole.
+  const focusActors = normalizeArray(options?.chat?.countries)
+    .map((country) => normalizeString(country?.name || country?.code))
+    .filter(Boolean);
   return {
     ...variables,
+    canonicalWarContext: buildCanonicalWarContext(bundle.world),
+    canonicalDiplomaticContext: buildBoundedDiplomaticContext(bundle.world, {
+      playerPolity: normalizeString(bundle?.game?.country),
+      focusActors,
+      maxActors: 8,
+    }).text,
     playerPolityReputationContext: await buildPlayerPolityReputationText(bundle),
     unitsSummary:
       variables.unitsSummary +
@@ -558,6 +956,21 @@ So use the wider picture to choose the sender and the moment — never to give t
     }
   }
 
+  // The canonical war and diplomacy ledgers: current state plus the compact
+  // line formats the payload carries them in (see the helpers above).
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    systemPrompt = `${systemPrompt}\n\n${buildWarLedgerDirective(variables)}\n\n${buildDiplomaticLedgerDirective(variables)}`;
+  }
+  if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) {
+    const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
+    if (canonicalDiplomacy) {
+      systemPrompt = `${systemPrompt}\n\n[Canonical Diplomatic State]\n${canonicalDiplomacy}\n\n${IDLE_RELATION_DECISION_MODEL}`;
+    }
+  }
+  if (taskKey === "pregameHistory") {
+    systemPrompt = `${systemPrompt}\n\n${buildPregameBootstrapDirective(variables)}`;
+  }
+
   // The actions menu goes last so the system prompt for every jump ends with the full
   // list of levers the model can pull (reaches existing games too — see ACTIONS_REFERENCE).
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
@@ -682,7 +1095,7 @@ So use the wider picture to choose the sender and the moment — never to give t
         viaToolCall: Boolean(response?.toolInput),
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
-      const parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object
@@ -713,6 +1126,11 @@ So use the wider picture to choose the sender and the moment — never to give t
       let validation = parsed
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      // The flat envelope validates against the schema; everything after this
+      // point (the task validator, the caller) reads the three ledger transports.
+      if (validation.valid && CANONICAL_UPDATE_ENVELOPE_TASKS.has(taskKey)) {
+        parsed = expandCanonicalUpdateEnvelope(parsed);
+      }
       // Clearing the schema means this is a complete, applicable turn. Only the
       // task validator can still reject it below, and while a retry remains it
       // does so STRICTLY — for shape-of-story problems it would have salvaged
@@ -2240,7 +2658,19 @@ const applySimulationResult = async ({
   // impacts, or land in this turn's record (also see the [New Developments Only]
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
-  const freshEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
+  // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
+  // across the whole save, so a ledger or history reference is never ambiguous.
+  // Existing history is never renamed. The ledger records were bound to the
+  // segments' temporary ids; they follow the rename here.
+  const canonicalEventIdentity = allocateCanonicalTurnEventIds({
+    existingEvents: priorEvents,
+    newEvents: dedupeGeneratedEvents(priorEvents, generatedEvents),
+    round: (baseGame.round || 1) + 1,
+  });
+  const freshEvents = canonicalEventIdentity.events;
+  const warUpdates = remapLedgerEventIds(normalizeArray(result.warUpdates), canonicalEventIdentity.idMap);
+  const relationUpdates = remapLedgerEventIds(normalizeArray(result.relationUpdates), canonicalEventIdentity.idMap);
+  const agreementUpdates = remapLedgerEventIds(normalizeArray(result.agreementUpdates), canonicalEventIdentity.idMap);
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -2260,61 +2690,6 @@ const applySimulationResult = async ({
 
   // Which unit system this session is running, pinned at startup.
   const betaUnits = isBetaUnits();
-
-  // Espionage resolves on the world the turn produced, deterministically (keyed
-  // on the round), and its consequences are EVENTS the model reads next turn —
-  // an exposed ring, a suspected agent — so what was found out changes what
-  // happens.
-  //
-  // HOSTILITY IS A STAND-IN. There is no war state in the world yet, so
-  // `hostile` is guessed: a polity the player spies on, or one whose reputation
-  // is in the gutter, goes looking for a spy of its own.
-  //
-  // ── For whoever wires real wars in ──────────────────────────────────────
-  // This block is the ONLY place hostility is derived; spycraft.js just takes
-  // what it is handed. When world state carries wars, replace the two-line
-  // heuristic below with the real thing and leave the rest alone:
-  //
-  //   1. Keep the contract: candidates is [{ polity, hostile }], one entry per
-  //      polity that could plant an agent this round. Every polity in the
-  //      world should be a candidate — being at peace only lowers the odds.
-  //
-  //   2. hostile: true for every polity currently AT WAR with the player. Keep
-  //      the reputation clause as an OR if you like (a pariah state still spies
-  //      on everyone); drop the "spiedOn" tit-for-tat, which only exists because
-  //      nothing better was available.
-  //
-  //   3. If wars carry a scale (skirmish vs total war, or belligerent vs
-  //      co-belligerent), pass `hostility` as a 0..1 number instead of the
-  //      boolean and read it in spycraft.js foreignDeployChance — the note
-  //      there says how. Do NOT change the seeded roll keys (`${polity}:deploy`)
-  //      or every existing save replays its next round differently.
-  //
-  //   4. Consider a target at war EXPELLING rather than turning a caught agent
-  //      (spycraft.js resolveEspionage, the turnChance branch): wartime
-  //      counter-intelligence tends to make arrests public. That is a design
-  //      choice, not a bug fix — leave it if you want double agents in wartime.
-  //
-  //   5. The simulator's [Espionage] block (spycraft.js espionageBrief) should
-  //      say who is at war with whom next to the agent list, so the model can
-  //      connect a stolen plan to the front it matters on. That is one line
-  //      added to the brief, fed from the same war state.
-  //
-  // What NOT to touch: detectionChance / suspicionChance are about the two
-  // services, not the relationship, and should stay independent of war.
-  const espionageCandidates = (() => {
-    const player = normalizeString(baseGame.country);
-    const named = new Set([
-      ...Object.keys(baseWorld.polityOverrides ?? {}),
-      ...Object.keys(baseWorld.intelligence ?? {}),
-      ...normalizeChats(baseChats).flatMap((chat) => chat.countries.map((country) => normalizeString(country.name))),
-    ]);
-    const spiedOn = new Set(normalizeSpies(baseWorld.spies).filter((spy) => spy.owner === player && (spy.status === "active" || spy.status === "turned")).map((spy) => spy.target));
-    return [...named].filter((polity) => polity && polity !== player).map((polity) => ({
-      polity,
-      hostile: spiedOn.has(polity) || Number(baseWorld.internationalReputation?.[polity] ?? 50) <= 30,
-    }));
-  })();
 
   const { colors: nextColors, world: impactedWorld } = applyEventImpactsToWorld({
     colors: baseColors,
@@ -2392,9 +2767,64 @@ const applySimulationResult = async ({
     )
     : impactedWorld;
 
-  // Espionage resolves on the world the whole turn produced — after the standing
+  // The war ledger merges BEFORE espionage, so a war declared this turn already
+  // counts when the world's services decide whom to spy on; the diplomatic
+  // ledger merges after it, so a publicly exposed ring can sour a relation in
+  // the same pass. Both are pure: they return a new normalized world.
+  const warMerge = applyWarUpdates({
+    world: worldWithImpacts,
+    updates: warUpdates,
+    events: freshEvents,
+    stopDate: nextGame.gameDate,
+    round: nextGame.round,
+  });
+  worldWithImpacts = warMerge.world;
+
+  // Espionage resolves on the world the whole turn produced - after the standing
   // orders above have advanced, so an agent's round is decided against where the
-  // fleets actually ended up rather than where they started.
+  // fleets actually ended up rather than where they started - deterministically
+  // (keyed on the round), and its consequences are EVENTS the model reads next
+  // turn: an exposed ring, a suspected agent.
+  //
+  // Hostility is read from the ledgers (this is the only place it is derived;
+  // spycraft.js takes what it is handed): an active war against the player is 1,
+  // a ceasefire 0.55, a relation at -70 or worse 0.6, at -40 or worse 0.4, and a
+  // pariah reputation 0.35. foreignDeployChance reads the number; `hostile` is
+  // the boolean it still accepts. detectionChance / suspicionChance stay
+  // independent of the relationship - they are about the two services.
+  const espionageIdentityIndex = buildPolityIdentityIndex(worldWithImpacts);
+  const canonicalEspionagePolity = (name) => canonicalCampaignPolity(name, worldWithImpacts, espionageIdentityIndex);
+  const playerLedgerPolity = canonicalEspionagePolity(baseGame.country);
+  const espionageCandidates = [...new Set([
+    ...Object.keys(worldWithImpacts.polityOverrides ?? {}),
+    ...Object.keys(worldWithImpacts.intelligence ?? {}),
+    ...Object.values(worldWithImpacts.regionOwnershipOverrides ?? {}),
+    ...normalizeChats(baseChats).flatMap((chat) => chat.countries.map((country) => normalizeString(country.name))),
+    ...normalizeArray(worldWithImpacts.wars).flatMap((war) => [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]),
+    ...normalizeArray(worldWithImpacts.relations).flatMap((relation) => [relation?.a, relation?.b]),
+  ].map(canonicalEspionagePolity).filter((name) => name && name !== playerLedgerPolity))].map((polity) => {
+    let hostility = 0;
+    for (const war of normalizeArray(worldWithImpacts.wars)) {
+      const sideA = new Set(normalizeArray(war?.sideA).map(canonicalEspionagePolity));
+      const sideB = new Set(normalizeArray(war?.sideB).map(canonicalEspionagePolity));
+      const opponents = (sideA.has(playerLedgerPolity) && sideB.has(polity)) || (sideB.has(playerLedgerPolity) && sideA.has(polity));
+      if (!opponents) continue;
+      if (war.status === "active") { hostility = 1; break; }
+      if (war.status === "ceasefire") hostility = Math.max(hostility, 0.55);
+    }
+    if (hostility < 1) {
+      for (const relation of normalizeArray(worldWithImpacts.relations)) {
+        const a = canonicalEspionagePolity(relation?.a);
+        const b = canonicalEspionagePolity(relation?.b);
+        if (!((a === playerLedgerPolity && b === polity) || (b === playerLedgerPolity && a === polity))) continue;
+        const score = Number(relation?.score);
+        if (Number.isFinite(score) && score <= -70) hostility = Math.max(hostility, 0.6);
+        else if (Number.isFinite(score) && score <= -40) hostility = Math.max(hostility, 0.4);
+      }
+      if (Number(worldWithImpacts.internationalReputation?.[polity] ?? 50) <= 30) hostility = Math.max(hostility, 0.35);
+    }
+    return { polity, hostility, hostile: hostility >= 0.75 };
+  });
   const espionage = resolveEspionage(worldWithImpacts, {
     round: nextGame.round,
     date: nextGame.gameDate,
@@ -2405,12 +2835,64 @@ const applySimulationResult = async ({
   // A spy in the world needs a seal for what it will report under.
   if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
   const espionageEventIds = [];
-  for (const event of espionage.events) {
+  // A PUBLIC exposure is not just prose: it lands in the relation ledger as an
+  // event-linked deterioration of the pair, the same way ordinary diplomacy does.
+  // Secret discoveries and turns stay secret and move nothing.
+  const espionageRelationUpdates = [];
+  espionage.events.forEach((event, espionageIndex) => {
     const entry = normalizeEventEntry({ ...event, id: "espionage-" + nextGame.round + "-" + freshEvents.length }, freshEvents.length);
-    if (entry) {
-      freshEvents.push(entry);
-      espionageEventIds.push(entry.id);
-    }
+    if (!entry) return;
+    freshEvents.push(entry);
+    espionageEventIds.push(entry.id);
+    const notice = espionage.notices?.[espionageIndex] || null;
+    const spy = notice?.kind === "exposed" && notice.spyId
+      ? espionage.spies.find((candidate) => candidate?.id === notice.spyId)
+      : null;
+    if (!spy) return;
+    const owner = canonicalEspionagePolity(spy.owner);
+    const target = canonicalEspionagePolity(spy.target);
+    if (!owner || !target || owner === target) return;
+    const samePair = (record) => {
+      const left = canonicalEspionagePolity(record?.a);
+      const right = canonicalEspionagePolity(record?.b);
+      return (left === owner && right === target) || (left === target && right === owner);
+    };
+    const sameTurnUpdate = [...relationUpdates].reverse().find(samePair);
+    const priorRelation = normalizeArray(worldWithImpacts.relations).find(samePair);
+    const baseScore = Number.isFinite(Number(sameTurnUpdate?.score))
+      ? Number(sameTurnUpdate.score)
+      : Number.isFinite(Number(priorRelation?.score)) ? Number(priorRelation.score) : 0;
+    const score = Math.max(-100, Math.min(100, Math.round(baseScore) - 20));
+    espionageRelationUpdates.push({
+      id: `relation-update-espionage-${nextGame.round}-${espionageIndex}`,
+      a: owner,
+      b: target,
+      score,
+      status: relationStatusForScore(score),
+      eventIndexes: [],
+      eventIds: [entry.id],
+      summary: `Public exposure of ${owner}'s espionage operation in ${target}.`,
+    });
+  });
+
+  const diplomaticMerge = applyDiplomaticUpdates({
+    world: worldWithImpacts,
+    relationUpdates: [...relationUpdates, ...espionageRelationUpdates],
+    agreementUpdates,
+    events: freshEvents,
+    stopDate: nextGame.gameDate,
+    round: nextGame.round,
+  });
+  worldWithImpacts = diplomaticMerge.world;
+  // Each segment was checked on its own; this is the merged round. A finished
+  // turn is never lost to this check, but its verdict is worth a report.
+  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld });
+  if (canonicalWarError) {
+    console.warn(`[ai] canonical war-state check on the merged turn: ${canonicalWarError}`);
+    logDebugEvent("warn", "[turn] The canonical war-state check flagged the merged turn.", { error: canonicalWarError });
+  }
+  if (warMerge.appliedIds.length || diplomaticMerge.appliedRelationIds.length || diplomaticMerge.appliedAgreementIds.length) {
+    logDebugEvent("turn", `Ledgers updated: ${warMerge.appliedIds.length} war op(s), ${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`, undefined, { verbose: true });
   }
   // Built HERE rather than beside freshEvents above, because the loop that just
   // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
@@ -3238,9 +3720,21 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
       // once for the whole jump and only the dates move per segment.
-      const segmentVariables = segmentCount > 1
-        ? { ...variables, targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) }
-        : variables;
+      // The ledgers as the segments already in hand left them: what this segment
+      // is validated against, and what it is shown (the rest of the expensive
+      // context is built once for the whole jump).
+      const ledgerWorld = state.ledgerWorld || bundle.world;
+      const segmentVariables = {
+        ...variables,
+        ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
+        ...(segmentIndex > 0 ? {
+          canonicalWarContext: buildCanonicalWarContext(ledgerWorld),
+          canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld, {
+            playerPolity: normalizeString(bundle.game.country),
+            maxActors: 8,
+          }).text,
+        } : {}),
+      };
       reportProgress(segmentIndex);
 
       const { generation: segmentGeneration, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
@@ -3278,6 +3772,10 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          // Mechanical: a batch whose dates are all real is put in date order
+          // before anything counts positions (a malformed date is left for the
+          // date validator below to report).
+          sortTimelineEventsChronologically(candidate);
           const eventCount = normalizeArray(candidate?.events).length;
           if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
             return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
@@ -3296,12 +3794,19 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
             if (strict) return dateError;
             clampTimelineDates(candidate, { mode, originDate: state.segmentOrigin, targetDate: segmentTarget });
           }
-          return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
+          // The war ledger must see the sanitized impacts, so world changes go first.
+          const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
+          if (worldChangeError) return worldChangeError;
+          return validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex });
         },
         variables: segmentVariables,
       });
 
       state.segmentPayloads.push(payload);
+      state.ledgerWorld = advanceLedgerWorld(ledgerWorld, payload, {
+        stopDate: normalizeString(payload?.stopDate) || segmentTarget,
+        round: (bundle.game.round || 1) + 1,
+      });
       state.generatedSoFar.push(...normalizeArray(payload?.events));
       state.generation = segmentGeneration;
       // Where the next segment picks up. An auto jump can stop short of its span on
@@ -3374,6 +3879,9 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     outreach: merged.diplomaticOutreach,
     stopDate: merged.stopDate,
     summary: merged.summary,
+    warUpdates: merged.warUpdates,
+    relationUpdates: merged.relationUpdates,
+    agreementUpdates: merged.agreementUpdates,
     generation: state.generation,
   };
   const applyArgs = {
@@ -3406,7 +3914,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   discardPendingJumpSegment();
   beginSimulation();
   try {
-  const bundle = await readGameStateBundle({ force: true });
+  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
@@ -3467,6 +3975,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     nextSegment: 0,
     segmentOrigin: originDate,
     segmentPayloads: [],
+    // The base world plus the ledger records of the segments in hand.
+    ledgerWorld: bundle.world,
   };
 
   await runJumpSegments({ context: jumpContext, onProgress, signal, state: jumpState });
@@ -3592,6 +4102,180 @@ const validatePregameEvents = (candidate, { startDate, strict }) => {
   return "";
 };
 
+// ---- Round-zero ledger bootstrap --------------------------------------------
+// The polities the pre-game bootstrap may name in structured ledger records:
+// every current owner on the map plus every registered polity, canonicalised.
+const buildCurrentCanonicalPolityVocabulary = async (world) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const tokens = new Set();
+  const collect = (token) => {
+    const raw = normalizeString(token);
+    if (raw) tokens.add(raw);
+  };
+
+  for (const key of Object.keys(normalizedWorld.polityOverrides || {})) collect(key);
+  for (const owner of Object.values(normalizedWorld.regionOwnershipOverrides || {})) collect(owner);
+
+  const scenarioRegions = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
+  const scenarioFeatures = normalizeArray(scenarioRegions?.features);
+  if (scenarioFeatures.length > 0) {
+    for (const feature of scenarioFeatures) {
+      const props = feature?.properties || {};
+      collect(
+        props.owner ||
+        props.COUNTRY ||
+        props.Country ||
+        props.country ||
+        toCountryName(props.GID_0 || props.gid0 || props.gid_0) ||
+        "",
+      );
+    }
+  } else {
+    const catalog = await loadRegionCatalog().catch(() => []);
+    for (const region of normalizeArray(catalog)) {
+      const regionId = normalizeString(region?.id);
+      collect(
+        (regionId && normalizedWorld.regionOwnershipOverrides?.[regionId]) ||
+        region?.country ||
+        toCountryName(region?.countryCode) ||
+        "",
+      );
+    }
+  }
+
+  const identityIndex = buildPolityIdentityIndex(normalizedWorld);
+  const byKey = new Map();
+  for (const raw of tokens) {
+    const canonical = canonicalCampaignPolity(raw, normalizedWorld, identityIndex);
+    const key = canonical.toLowerCase();
+    if (key && !byKey.has(key)) byKey.set(key, canonical);
+  }
+  return [...byKey.values()].sort((a, b) => a.localeCompare(b));
+};
+
+const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolities = [] } = {}) => {
+  const allowedByKey = new Map(
+    normalizeArray(canonicalPolities)
+      .map((name) => normalizeString(name))
+      .filter(Boolean)
+      .map((name) => [name.toLowerCase(), name]),
+  );
+  if (!allowedByKey.size) return "";
+
+  const checkToken = (token, path) => {
+    const raw = normalizeString(token);
+    if (!raw) return "";
+    const resolved = resolvePolityIdentity(raw, world, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    const canonical = normalizeString(resolved?.resolved);
+    if (canonical && allowedByKey.has(canonical.toLowerCase())) return "";
+    const sample = [...allowedByKey.values()].slice(0, 80).join("; ");
+    return `${path} uses the non-current or unresolved polity "${raw}". Round-One ledger records may use ONLY current canonical polities from the save; do not invent an umbrella or legacy actor - decompose it into the applicable current polity or polities. Current polity vocabulary: ${sample}.`;
+  };
+
+  const warUpdates = decodeWarUpdates(candidate?.warUpdates);
+  for (let i = 0; i < warUpdates.length; i += 1) {
+    for (const [field, tokens] of [["actors", normalizeArray(warUpdates[i]?.actors)], ["opponents", normalizeArray(warUpdates[i]?.opponents)]]) {
+      for (let j = 0; j < tokens.length; j += 1) {
+        const error = checkToken(tokens[j], `$.warUpdates record ${i + 1} ${field}[${j}]`);
+        if (error) return error;
+      }
+    }
+  }
+  const relationUpdates = decodeRelationUpdates(candidate?.relationUpdates);
+  for (let i = 0; i < relationUpdates.length; i += 1) {
+    const aError = checkToken(relationUpdates[i]?.a, `$.relationUpdates record ${i + 1}.a`);
+    if (aError) return aError;
+    const bError = checkToken(relationUpdates[i]?.b, `$.relationUpdates record ${i + 1}.b`);
+    if (bError) return bError;
+  }
+  const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
+  for (let i = 0; i < agreementUpdates.length; i += 1) {
+    const parties = normalizeArray(agreementUpdates[i]?.parties);
+    for (let j = 0; j < parties.length; j += 1) {
+      const error = checkToken(parties[j], `$.agreementUpdates record ${i + 1} parties[${j}]`);
+      if (error) return error;
+    }
+  }
+  return "";
+};
+
+// Validates only the canonical state that must survive INTO round one; it does
+// not demand that every old battle or treaty in the backstory be replayed as a
+// mutation. The ledgers' own decoders and appliers stay the sole owners of the
+// persisted shapes.
+const validatePregameCanonicalBootstrap = (
+  candidate,
+  { world = {}, startDate = "", strict = true, canonicalPolities = [] } = {},
+) => {
+  const eventError = validatePregameEvents(candidate, { startDate, strict });
+  if (eventError) return eventError;
+
+  const polityError = validatePregamePolityVocabulary(candidate, { world, canonicalPolities });
+  if (polityError) return polityError;
+
+  // Rebind after any date salvage/sorting so a model-supplied number can never
+  // point at the wrong historical event: wars bind from event.warId, diplomacy
+  // from the director's own semantic binder.
+  normalizeWorldWarEventLinks(candidate);
+  if (!strict) {
+    candidate.relationUpdates = decodeRelationUpdates(candidate?.relationUpdates)
+      .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
+    candidate.agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates)
+      .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
+  }
+
+  const events = normalizeArray(candidate?.events);
+  const warUpdates = decodeWarUpdates(candidate?.warUpdates);
+  for (let index = 0; index < warUpdates.length; index += 1) {
+    const update = warUpdates[index];
+    if (!["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"].includes(normalizeString(update?.op))) {
+      return `$.warUpdates record ${index + 1} has the unsupported operation ${normalizeString(update?.op) || "<blank>"}.`;
+    }
+    const indexes = normalizeArray(update?.eventIndexes);
+    if (!indexes.length) {
+      return `$.warUpdates record ${index + 1} (${normalizeString(update?.id) || "unnamed war"}) must link to a real pre-game event: set the matching event.warId on the causal pre-game event; the engine owns the binding.`;
+    }
+    if (indexes.some((eventIndex) => eventIndex < 0 || eventIndex >= events.length)) {
+      return `$.warUpdates record ${index + 1} references a pre-game event outside $.events.`;
+    }
+  }
+
+  // Probe the ledger in memory: catches an invalid start/join/ceasefire order
+  // without applying the hard-combat validator to records of old battles.
+  const warProbe = applyWarUpdates({ world, updates: warUpdates, events, stopDate: startDate, round: 1 });
+  if (warProbe.appliedIds.length !== warUpdates.length) {
+    return "$.warUpdates contains an invalid Round-One war lifecycle sequence. Bootstrap only wars that actually survive into the start date, beginning with a valid start operation.";
+  }
+  for (const warId of new Set(warUpdates.map((update) => normalizeString(update?.id)).filter(Boolean))) {
+    const war = normalizeArray(warProbe.wars).find((entry) => normalizeString(entry?.id) === warId);
+    if (!war || !["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) {
+      return `$.warUpdates leaves ${warId} ${normalizeString(war?.status) || "missing"} at Round One. A war that ended before the campaign belongs only in the pre-game events, not the live war ledger.`;
+    }
+  }
+
+  const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
+  for (let index = 0; index < agreementUpdates.length; index += 1) {
+    if (normalizeString(agreementUpdates[index]?.op).toLowerCase() !== "start") {
+      return `$.agreementUpdates record ${index + 1} must use op=start for a formal commitment already in force when this fresh save begins. Ended, expired or suspended historical instruments belong in the backstory, not the active Day-1 ledger.`;
+    }
+  }
+
+  // Round zero is state that already exists on the start date; its bounded
+  // event cards are evidence, not a requirement that every baseline relation or
+  // standing treaty have one attributable card. The director binds a causal
+  // event when one is clear and otherwise keeps the baseline fact.
+  return validateDiplomaticLedgerPayload(candidate, {
+    world,
+    allowNativeBinding: true,
+    allowUnboundBaseline: true,
+  });
+};
+
 // A fresh game whose scenario wrote a "World Before Round One" briefing gets
 // its backstory generated once, the first time the player opens it: the
 // briefing (plus rules and map) becomes real timeline events dated before the
@@ -3611,11 +4295,28 @@ export const maybeGeneratePregameHistory = async () => {
 
   beginSimulation();
   try {
-    const variables = await buildTemplateVariables(bundle);
+    // The backstory now doubles as the round-zero bootstrap of the war and
+    // diplomacy ledgers: a campaign that opens mid-war starts with that war on
+    // the books, and a standing alliance is a fact from day one.
+    const canonicalPolities = await buildCurrentCanonicalPolityVocabulary(bundle.world);
+    const variables = {
+      ...(await buildTemplateVariables(bundle)),
+      pregameStartDate: startDate,
+      pregameCanonicalPolityVocabulary: canonicalPolities.length
+        ? canonicalPolities.map((name) => `- ${name}`).join("\n")
+        : "No current polity vocabulary was available.",
+    };
     const { payload } = await runJsonTask("pregameHistory", {
-      userMessage: "Write the pre-game historical timeline as JSON only.",
+      userMessage: `Write the pre-game historical timeline AND the canonical Round-One bootstrap for ${startDate} as JSON only. ` +
+        "Put every war, bilateral relation and formal agreement already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
+        "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A relation or standing agreement does NOT need its own event card merely to exist; include historical events because they are important timeline anchors, not as bookkeeping padding.",
       validatePayload: (candidate, { finalAttempt } = {}) =>
-        validatePregameEvents(candidate, { startDate, strict: !finalAttempt }),
+        validatePregameCanonicalBootstrap(candidate, {
+          world: bundle.world,
+          startDate,
+          strict: !finalAttempt,
+          canonicalPolities,
+        }),
       variables,
     });
 
@@ -3638,8 +4339,39 @@ export const maybeGeneratePregameHistory = async () => {
       .filter(Boolean);
     if (generatedEvents.length === 0) return null;
 
+    // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
+    // backstory events and merge them into the world the game starts on. The
+    // version stamp tells the legacy migration there is nothing left to seed.
+    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), generatedEvents);
+    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), generatedEvents);
+    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), generatedEvents);
+    const warMerge = applyWarUpdates({
+      world: currentWorld,
+      updates: warUpdates,
+      events: generatedEvents,
+      stopDate: startDate,
+      round: 1,
+    });
+    const diplomaticMerge = applyDiplomaticUpdates({
+      world: warMerge.world,
+      relationUpdates,
+      agreementUpdates,
+      events: generatedEvents,
+      stopDate: startDate,
+      round: 1,
+      allowUnboundBaseline: true,
+    });
+    const bootstrapWorld = {
+      ...diplomaticMerge.world,
+      diplomaticLedgerVersion: Math.max(Number(diplomaticMerge.world.diplomaticLedgerVersion) || 0, DIPLOMATIC_LEDGER_VERSION),
+    };
+    console.info(
+      `[ai] pregame bootstrap: ${generatedEvents.length} event(s), ${warMerge.appliedIds.length} war op(s), ` +
+      `${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`,
+    );
+
     const summary = normalizeString(payload?.summary);
-    currentWorld.simulationHistory = [
+    bootstrapWorld.simulationHistory = [
       {
         catalyst: null,
         date: startDate,
@@ -3656,11 +4388,12 @@ export const maybeGeneratePregameHistory = async () => {
     ];
     await Promise.all([
       writeEventsState(generatedEvents),
-      writeWorldState(currentWorld),
+      writeWorldState(bootstrapWorld),
     ]);
     return generatedEvents;
-  } catch {
-    // Silent: backstory is a bonus. The next open retries.
+  } catch (error) {
+    // The next open retries; logged because this now seeds the ledgers too.
+    console.warn("[ai] pregame bootstrap failed; the next open retries.", error);
     return null;
   } finally {
     endSimulation();

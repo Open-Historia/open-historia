@@ -194,10 +194,24 @@ export const buildSegmentInstruction = ({
 //   diplomaticOutreach  concatenated — every approach made during the round.
 //   clearActions        the final segment's word, keeping the `!== false` default
 //                       (absent means resolved) the single-call path has always had.
+const asLedgerRecords = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value !== "string") return [];
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+};
+
 export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const segments = asArray(payloads).filter(Boolean);
   const events = [];
   const diplomaticOutreach = [];
+  // Ledger records (warUpdates / relationUpdates / agreementUpdates). By the
+  // time a segment is accepted its records are bound to that segment's own
+  // event ids (gameplay.js validateSegmentLedgers), so they simply concatenate;
+  // a record still in its raw line form is split into lines, which the ledger
+  // decoders accept too.
+  const warUpdates = [];
+  const relationUpdates = [];
+  const agreementUpdates = [];
   const summaries = [];
   let catalyst = null;
   let clearActions = true;
@@ -206,6 +220,9 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   for (const payload of segments) {
     events.push(...asArray(payload.events));
     diplomaticOutreach.push(...asArray(payload.diplomaticOutreach));
+    warUpdates.push(...asLedgerRecords(payload.warUpdates));
+    relationUpdates.push(...asLedgerRecords(payload.relationUpdates));
+    agreementUpdates.push(...asLedgerRecords(payload.agreementUpdates));
     const summary = normalizeString(payload.summary);
     if (summary) summaries.push(summary);
     if (payload.catalyst) catalyst = payload.catalyst;
@@ -217,9 +234,12 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   return {
     catalyst,
     clearActions,
+    agreementUpdates,
     diplomaticOutreach,
     events,
+    relationUpdates,
     stopDate: stopDate || normalizeString(targetDate),
+    warUpdates,
     summary: summaries.join("\n\n"),
   };
 };

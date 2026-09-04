@@ -6,6 +6,7 @@ import { normalizeTagList } from "./countryTags.js";
 import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
+import { resolvePolityIdentity } from "./polityIdentity.js";
 import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
@@ -110,6 +111,20 @@ export const WORLD_DEFAULTS = {
   // overridable per-world without touching geometry. Wins over feature props.
   regionClaimants: {},
   regionOwnershipOverrides: {},
+  // Canonical diplomacy and belligerency, owned by the engine (see
+  // AI/nativeDiplomaticDirector.js and AI/nativeWarLedger.js). Relations say
+  // how warm a pair of polities is; agreements are the formal instruments in
+  // force between them; wars say who is mechanically at war with whom - the
+  // ONLY thing that licenses a battle event. The model changes them through the
+  // compact warUpdates / relationUpdates / agreementUpdates lines on a jump
+  // payload, never by writing them. Listed in the normalizeWorldState return
+  // too, for the usual reason.
+  relations: [],
+  agreements: [],
+  // Bumped once migrateLegacyDiplomaticState has seeded the two ledgers from a
+  // save's older treaty/alliance events, so that only ever happens once.
+  diplomaticLedgerVersion: 0,
+  wars: [],
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
@@ -230,6 +245,15 @@ const normalizeOptionalString = (value) => {
 };
 
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+
+// Canonical ledger vocabularies (AI/nativeWarLedger.js, AI/nativeDiplomaticDirector.js).
+const WORLD_WAR_STATUS_SET = new Set(["active", "ceasefire", "ended"]);
+const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
+const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
+const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
+const MAX_WORLD_WARS = 64;
+const MAX_WORLD_RELATIONS = 256;
+const MAX_WORLD_AGREEMENTS = 128;
 
 const normalizeTextLike = (value) => {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -2415,6 +2439,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
       kind: "world",
       notable: false,
       playerRelated: false,
+      warId: "",
+      combatants: [],
       source: "scenario",
       title,
     };
@@ -2442,6 +2468,15 @@ export const normalizeEventEntry = (entry, index = 0) => {
     kind: normalizeOptionalString(entry.kind) || "world",
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
+    // Canonical war metadata: the world.wars id an event fights in, declares,
+    // joins or ends, and for actual combat the polities on the field from both
+    // sides (AI/nativeWarLedger.js validates them against the ledger).
+    warId: normalizeOptionalString(entry.warId),
+    combatants: [...new Set(
+      normalizeActionParticipants(entry.combatants)
+        .map((name) => toCountryName(normalizeOptionalString(name)) || normalizeOptionalString(name))
+        .filter(Boolean),
+    )].slice(0, 8),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };
@@ -2528,6 +2563,195 @@ const normalizeConsolidatedHistory = (value) => normalizeArray(value)
     };
   })
   .filter(Boolean);
+
+// ---- Canonical war and diplomacy ledgers ------------------------------------
+// The shapes the war ledger (AI/nativeWarLedger.js) and the diplomatic director
+// (AI/nativeDiplomaticDirector.js) persist. Normalised here, on every read and
+// write, for the same reason units and projects are: a field this module does
+// not know is a field the next round trip loses. Polity names inside them share
+// the owner namespace, so a relation between "Germany" and "the German Empire"
+// resolves to one pair.
+const normalizeWorldWar = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+
+  const canonicalPolity = (value) => {
+    const raw = normalizeOptionalString(value);
+    return raw ? (toCountryName(raw) || raw) : "";
+  };
+  const uniquePolities = (value, limit = 12) => {
+    const seen = new Set();
+    const result = [];
+    for (const raw of normalizeArray(value)) {
+      const polity = canonicalPolity(raw);
+      const key = polity.toLocaleLowerCase();
+      if (!polity || seen.has(key)) continue;
+      seen.add(key);
+      result.push(polity);
+      if (result.length >= limit) break;
+    }
+    return result;
+  };
+
+  const id = normalizeOptionalString(entry.id) || `war-${index}`;
+  const sideA = uniquePolities(entry.sideA);
+  const sideAKeys = new Set(sideA.map((name) => name.toLocaleLowerCase()));
+  const sideB = uniquePolities(entry.sideB)
+    .filter((name) => !sideAKeys.has(name.toLocaleLowerCase()));
+  if (!sideA.length || !sideB.length) return null;
+
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_WAR_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const sourceEventIds = [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24);
+  const storylineIds = [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(-12);
+  const title = normalizeOptionalString(entry.title) || `${sideA[0]}–${sideB[0]} War`;
+
+  return {
+    id,
+    title,
+    status,
+    sideA,
+    sideB,
+    startedDate: canonicalizeDateString(entry.startedDate),
+    endedDate: status === "ended" ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate) : "",
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
+    cause: normalizeTextLike(entry.cause),
+    note: normalizeTextLike(entry.note),
+    sourceEventIds,
+    storylineIds,
+    createdRound: Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0 ? Math.trunc(Number(entry.createdRound)) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0 ? Math.trunc(Number(entry.updatedRound)) : 0,
+  };
+};
+
+const normalizeWorldWars = (value) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldWar(entry, index);
+    if (!normalized) return;
+    deduped.set(normalized.id, normalized);
+  });
+  const statusRank = { active: 0, ceasefire: 1, ended: 2 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.startedDate || "").localeCompare(String(a.lastUpdatedDate || a.startedDate || "")) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_WARS);
+};
+
+const resolveWorldDiplomaticPolity = (token, identityWorld) => {
+  const raw = normalizeOptionalString(token);
+  if (!raw) return "";
+  const resolved = resolvePolityIdentity(raw, identityWorld, {
+    allowUnknown: true,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return normalizeOptionalString(resolved?.resolved || toCountryName(raw) || raw);
+};
+
+const worldRelationPairKey = (a, b) => [normalizeOptionalString(a), normalizeOptionalString(b)]
+  .map((value) => value.toLocaleLowerCase())
+  .sort()
+  .join("||");
+
+const normalizeWorldRelation = (entry, identityWorld, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const aRaw = resolveWorldDiplomaticPolity(entry.a, identityWorld);
+  const bRaw = resolveWorldDiplomaticPolity(entry.b, identityWorld);
+  if (!aRaw || !bRaw || aRaw.toLocaleLowerCase() === bRaw.toLocaleLowerCase()) return null;
+  const ordered = [aRaw, bRaw].sort((a, b) => a.toLocaleLowerCase().localeCompare(b.toLocaleLowerCase()));
+  const scoreNumber = Number(entry.score);
+  const score = Number.isFinite(scoreNumber) ? Math.max(-100, Math.min(100, Math.round(scoreNumber))) : 0;
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_RELATION_STATUS_SET.has(rawStatus)
+    ? rawStatus
+    : score >= 55 ? "friendly"
+      : score >= 20 ? "cordial"
+        : score >= -10 ? "neutral"
+          : score >= -30 ? "cautious"
+            : score >= -60 ? "strained"
+              : "hostile";
+  return {
+    id: normalizeOptionalString(entry.id) || `relation-${index}`,
+    a: ordered[0],
+    b: ordered[1],
+    score,
+    status,
+    summary: normalizeTextLike(entry.summary),
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate),
+    sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
+    createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
+  };
+};
+
+const normalizeWorldRelations = (value, identityWorld) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldRelation(entry, identityWorld, index);
+    if (!normalized) return;
+    deduped.set(worldRelationPairKey(normalized.a, normalized.b), normalized);
+  });
+  return [...deduped.values()]
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score) || a.id.localeCompare(b.id))
+    .slice(0, MAX_WORLD_RELATIONS);
+};
+
+const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const id = normalizeOptionalString(entry.id) || `agreement-${index}`;
+  const parties = [...new Set(normalizeArray(entry.parties)
+    .map((party) => resolveWorldDiplomaticPolity(party, identityWorld))
+    .filter(Boolean))].slice(0, 12);
+  if (!id || parties.length < 2) return null;
+  const rawType = normalizeOptionalString(entry.type).toLowerCase().replace(/[ -]+/g, "_");
+  const type = WORLD_AGREEMENT_TYPE_SET.has(rawType) ? rawType : "other";
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_AGREEMENT_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const guarantor = type === "guarantee"
+    ? resolveWorldDiplomaticPolity(entry.guarantor || parties[0], identityWorld)
+    : "";
+  const beneficiary = type === "guarantee"
+    ? resolveWorldDiplomaticPolity(entry.beneficiary || parties[1], identityWorld)
+    : "";
+  return {
+    id,
+    title: normalizeOptionalString(entry.title) || id,
+    type,
+    status,
+    parties,
+    startedDate: canonicalizeDateString(entry.startedDate),
+    endedDate: ["ended", "expired"].includes(status)
+      ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate)
+      : "",
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
+    terms: normalizeTextLike(entry.terms),
+    ...(guarantor && beneficiary ? { guarantor, beneficiary } : {}),
+    sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
+    createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
+    ...(entry.migratedLegacy === true ? { migratedLegacy: true } : {}),
+  };
+};
+
+const normalizeWorldAgreements = (value, identityWorld) => {
+  const deduped = new Map();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldAgreement(entry, identityWorld, index);
+    if (normalized) deduped.set(normalized.id, normalized);
+  });
+  const statusRank = { active: 0, suspended: 1, ended: 2, expired: 3 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.startedDate || "").localeCompare(String(a.lastUpdatedDate || a.startedDate || "")) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_AGREEMENTS);
+};
 
 export const normalizeWorldState = (world) => {
   const nextWorld = world && typeof world === "object" ? world : {};
@@ -2617,6 +2841,10 @@ export const normalizeWorldState = (world) => {
 
   const units = normalizeUnits(nextWorld.units);
 
+  // The ledgers resolve their polity names against the overrides computed above,
+  // not the raw input, so a renamed polity folds onto one identity.
+  const diplomaticIdentityWorld = { ...nextWorld, polityOverrides, regionOwnershipOverrides };
+
   return {
     ...WORLD_DEFAULTS,
     ...nextWorld,
@@ -2697,6 +2925,12 @@ export const normalizeWorldState = (world) => {
         .map(([city, value]) => [normalizeOptionalString(city).toLowerCase(), Number(value)])
         .filter(([city, value]) => city && Number.isFinite(value) && value >= 0),
     ),
+    relations: normalizeWorldRelations(nextWorld.relations, diplomaticIdentityWorld),
+    agreements: normalizeWorldAgreements(nextWorld.agreements, diplomaticIdentityWorld),
+    diplomaticLedgerVersion: Number.isFinite(Number(nextWorld.diplomaticLedgerVersion))
+      ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
+      : 0,
+    wars: normalizeWorldWars(nextWorld.wars),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units,
