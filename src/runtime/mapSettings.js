@@ -12,10 +12,20 @@ export const MAP_SETTING_KEYS = {
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
-    // timeline-jump generation gets a 5-minute deadline and falls back to
-    // canned events past it. OFF (the default) waits as long as the model
-    // needs — the fallback is only reachable through a real error, never a
-    // slow model (Cancel still works either way).
+    // an AI task gives up when the model goes quiet — 5 minutes part-way through
+    // an answer, 15 with no answer at all — and falls back to canned events. Off
+    // waits as long as the model needs.
+    //
+    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
+    // an absent key here means "on", not "off".
+    //
+    // It ships on because it now measures SILENCE rather than elapsed time (see
+    // AI/idleDeadline.js). The old version was a stopwatch started when the
+    // request was sent — five minutes for a jump, however well it was going —
+    // which threw away good turns from slow models, so it had to default off,
+    // which left a genuinely stalled request hanging forever. A window that
+    // every token restarts never interrupts a model that is answering, so it is
+    // safe to have on, and it is the only thing that ever ends a stall.
     limitAiGeneration: "ai_limit_generation",
 };
 
@@ -26,6 +36,17 @@ export function getMapSetting(key) {
     // off, which is the shipped default anyway.
     if (typeof localStorage === "undefined") return false;
     return localStorage.getItem(key) === "1";
+}
+
+// The same read for a setting that ships ON: only an explicit "0" (the player
+// turned it off) disables it, so a fresh install or cleared storage gets the
+// feature without opting in. Mirrors getReasoningEnabled() in AI/providerConfig.js.
+//
+// A default-on setting CANNOT use getMapSetting above — an absent key reads as
+// "1" !== null, i.e. off — so every consumer of such a key must come through here.
+export function getMapSettingDefaultOn(key) {
+    if (typeof localStorage === "undefined") return true;
+    return localStorage.getItem(key) !== "0";
 }
 
 // Storage keys are what the game persists; they are not what a maintainer wants

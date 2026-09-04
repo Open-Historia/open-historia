@@ -2,6 +2,7 @@
 import { callAI } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
@@ -50,7 +51,9 @@ import {
 } from "../../runtime/gameState.js";
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -224,97 +227,7 @@ const sentenceCase = (value) => {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 };
 
-const maybeJsonParse = (value) => {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-};
-
-// Parse, and when that fails, repair the JSON slips small local models make
-// most: trailing commas before } or ], and curly "smart" quotes as string
-// delimiters. Repairs are only ever attempted AFTER a strict parse failed, so
-// well-formed output is never touched.
-const lenientJsonParse = (value) => {
-  const direct = maybeJsonParse(value);
-  if (direct) return direct;
-  const repaired = value
-    .replace(/[“”]/g, '"')
-    .replace(/,\s*([}\]])/g, "$1");
-  return maybeJsonParse(repaired);
-};
-
-// Every balanced top-level {...} or [...] block in the text, string-aware, in
-// order of appearance. A greedy first-{-to-last-} regex dies when the model
-// writes prose containing a brace after its JSON, or emits two objects; walking
-// candidates and parsing each one survives both.
-const balancedJsonCandidates = (text) => {
-  const candidates = [];
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let opener = "";
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (start === -1) {
-      if (ch === "{" || ch === "[") {
-        start = i;
-        depth = 1;
-        opener = ch;
-        inString = false;
-        escaped = false;
-      }
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-    } else if (ch === "\\") {
-      escaped = inString;
-    } else if (ch === '"') {
-      inString = !inString;
-    } else if (!inString) {
-      if (ch === "{" || ch === "[") depth += 1;
-      else if (ch === "}" || ch === "]") {
-        depth -= 1;
-        if (depth === 0) {
-          candidates.push(text.slice(start, i + 1));
-          start = -1;
-        }
-      }
-    }
-  }
-  // Objects first: the payload is an object, and a stray inline array (e.g. in
-  // the model's commentary) must not shadow it.
-  return candidates.sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
-};
-
-export const extractJsonPayload = (rawText) => {
-  // Reasoning models (and several Ollama chat templates) prepend a think block
-  // the strict parser chokes on; the answer follows it.
-  const text = rawText
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^[\s\S]*?<\/think>/i, "")
-    .trim();
-
-  const direct = lenientJsonParse(text);
-  if (direct) return direct;
-
-  // Any fenced block, not just ```json — small models label fences ```JSON,
-  // ```javascript, or not at all.
-  for (const fence of text.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)) {
-    const parsed = fence[1] ? lenientJsonParse(fence[1].trim()) : null;
-    if (parsed && typeof parsed === "object") return parsed;
-  }
-
-  for (const candidate of balancedJsonCandidates(text)) {
-    const parsed = lenientJsonParse(candidate);
-    if (parsed && typeof parsed === "object") return parsed;
-  }
-
-  return null;
-};
+export { extractJsonPayload } from "./jsonSalvage.js";
 
 const loadPromptCatalog = async ({ force = false } = {}) =>
   normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
@@ -394,10 +307,32 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // time so it reaches existing frozen-prompt games too.
 const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color ONLY on a regime change (never for a mere new leader). On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
+// Written into a fallback's rawResponse when there is no model output to show.
+// Exported so the debug report (time.jsx) can tell this apart from real model
+// text and label its section honestly, rather than matching on the wording.
+export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
+export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
+
+// "Limit AI generation" (ON by default) — the whole policy, in one place rather
+// than a number per call site.
+//
+// It used to be a stopwatch: five minutes for a jump, two for most tasks, one
+// for the small ones, counted from the moment the request was sent and applied
+// whether or not the model was answering. That could not tell a slow model from
+// a stopped one, so it was off by default and the game waited forever instead —
+// which is no protection at all, and left players watching a dead spinner.
+//
+// Now it counts SILENCE (idleDeadline.js): five minutes with nothing arriving
+// part-way through an answer, fifteen with no answer at all. A model that keeps
+// writing is never interrupted however long the turn takes, so the setting is
+// safe to ship on; a stalled one is caught instead of hanging the turn forever.
+// Off still means "wait as long as the model needs".
+const taskIdleTimeoutMs = () =>
+  (getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
-  timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0,
   userMessage,
   validatePayload,
   variables,
@@ -513,15 +448,65 @@ const runJsonTask = async (taskKey, {
     if (signal.aborted) controller.abort(signal.reason);
     else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
   }
-  const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
-  const timeoutError = new Error(`AI task "${taskKey}" timed out.`);
-  const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
+  const idleMs = taskIdleTimeoutMs();
+  const timeoutError = new Error(
+    `AI task "${taskKey}" timed out: the model stopped answering. `
+      + "Turn off \"Limit AI generation\" in Settings to wait as long as the model needs.",
+  );
+  // Two windows (idleDeadline.js): a long one for an answer that has not started
+  // — prompt evaluation and buffered endpoints both look like a stall from here —
+  // and a short one between the pieces of an answer that has.
+  const idle = createIdleDeadline(
+    { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
+    () => controller.abort(timeoutError),
+  );
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
+  // Detailed mode follows every AI task, not only the ones that fail. Sizes and
+  // shapes, never the prompt itself: a jump's system prompt is tens of thousands
+  // of characters of campaign, which would fill the whole log budget in one
+  // entry — but "the prompt was 92k characters and there was no tool schema" is
+  // most of what a stuck task needs, and it is invisible otherwise.
+  const taskStartedAt = Date.now();
+  logDebugEvent("ai", `Task "${taskKey}" started.`, {
+    promptChars: systemPrompt.length,
+    userMessageChars: String(userMessage ?? "").length,
+    tool: tool?.name || "(none — raw JSON expected)",
+    idleTimeoutMs: idleMs || "(no deadline — waits as long as the model needs)",
+    ...(idleMs ? { firstByteTimeoutMs: AI_FIRST_BYTE_TIMEOUT_MS } : {}),
+  }, { verbose: true });
+  // The instruction itself, separately. It is short (a sentence), it is the one
+  // part of the prompt that differs between two runs of the same task, and it is
+  // what a reader compares against a payload that came back about the wrong
+  // thing.
+  logDebugEvent("ai", `Task "${taskKey}" instruction.`, userMessage, { verbose: true });
   let failureReason = "The model did not return valid structured output.";
+  // The player's only recourse when a turn falls back is "give Claude the
+  // logs" — but the fallback warning below used to log only failureReason, a
+  // short label ("Response did not contain parseable JSON..."), never the
+  // actual text that failed to parse. Kept across attempts so whichever one
+  // the loop last saw is what the warning below can show.
+  let lastRawText = "";
+  // Whether ANY attempt got as far as a response body. An empty lastRawText has
+  // two very different meanings — the request died in transport (a 404 from a
+  // mistyped base URL, a timeout, DNS) so the model never answered, versus the
+  // model answering with nothing — and the copied debug report used to blame
+  // both on "logging wasn't added yet". The first case is the more common one
+  // and points straight at provider settings, so say which happened.
+  let sawResponseBody = false;
+  // Why the FIRST answer was rejected, and the answer itself when it was a
+  // complete one. Both exist for the same reason: attempt 2 can die before it
+  // produces anything (a provider 500, a timeout), and when it does, everything
+  // learned from attempt 1 used to be thrown away with it. See the catch block
+  // and the salvage pass below the loop.
+  let firstFailureReason = "";
+  let salvageCandidate = null;
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
+      // Per attempt, not per task: a retry re-sends the whole prompt and so
+      // re-does the wait for a first byte.
+      idle.start();
       logAi("ai.request", `${taskKey} attempt ${outputAttempt}`, {
         task: taskKey,
         attempt: outputAttempt,
@@ -537,12 +522,32 @@ const runJsonTask = async (taskKey, {
         // canned events that carry NO regionTransfers and NO diplomacy, which is why
         // the map never changed and no chats opened. main.jsx now lets each provider
         // use its own model maximum when no maxTokens is passed.
-        deadline,
+        // The moment this task gives up if nothing more arrives — null while
+        // nothing has come back yet. The providers read it to decide whether a
+        // busy-retry wait still fits inside the window.
+        deadline: idle.deadline,
+        // Every network chunk of the answer restarts that window.
+        onActivity: idle.note,
         signal: controller.signal,
         tool,
+        // Names this call in the ai-call transport entries, so a task's own
+        // entries and the request/response pair underneath them line up.
+        logLabel: `task "${taskKey}"`,
       });
+      // This attempt is answered: stop counting silence against it. Validation,
+      // salvage and the retry's own prompt evaluation all happen with nothing on
+      // the wire, and leaving the window armed across them would have attempt
+      // 1's clock abort a perfectly healthy attempt 2. The next answer re-arms it.
+      idle.cancel();
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
-      const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+      lastRawText = rawText;
+      sawResponseBody = true;
+      logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} answered.`, {
+        responseChars: rawText.length,
+        viaToolCall: Boolean(response?.toolInput),
+        elapsedMs: Date.now() - taskStartedAt,
+      }, { verbose: true });
+      const parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object
@@ -573,6 +578,11 @@ const runJsonTask = async (taskKey, {
       let validation = parsed
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+      // Clearing the schema means this is a complete, applicable turn. Only the
+      // task validator can still reject it below, and while a retry remains it
+      // does so STRICTLY — for shape-of-story problems it would have salvaged
+      // had this been the last word. Worth keeping for exactly that case.
+      const schemaValid = validation.valid;
       if (validation.valid && validatePayload) {
         // finalAttempt tells the validator this is the last chance: callers use
         // it to switch from strict (return a corrective error for the retry) to
@@ -589,10 +599,29 @@ const runJsonTask = async (taskKey, {
       }
 
       if (validation.valid) {
+        logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
+        // The payload that was ACCEPTED, not only the ones that were rejected.
+        // A turn that validates cleanly and still produces the wrong world — a
+        // transfer to a polity that does not exist, a chat opened with nobody in
+        // it — is a report about content that passed every check, and until now
+        // the only output text the log kept was from answers that failed.
+        // Logged from the payload rather than rawText so a tool call, which has
+        // no raw text at all, is recorded the same way as a JSON reply.
+        logDebugEvent("ai", `Task "${taskKey}" accepted payload.`, parsed, { verbose: true });
         return { generation: { source: "ai", fallbackReason: "" }, payload: parsed };
       }
 
+      // Every rejection, including the one attempt 2 goes on to fix. A turn that
+      // came out right on the retry still tells you which rule the model keeps
+      // breaking, and that is invisible in a log that only records failures.
+      logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} REJECTED: ${validation.error}`, {
+        clearedSchema: schemaValid,
+        rawResponse: rawText,
+      }, { verbose: true });
+
       failureReason = validation.error;
+      if (!firstFailureReason) firstFailureReason = validation.error;
+      if (schemaValid && !salvageCandidate) salvageCandidate = parsed;
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
@@ -614,14 +643,23 @@ const runJsonTask = async (taskKey, {
     }
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
-    failureReason = normalizeString(actualError?.message || actualError) || failureReason;
+    const transportReason = normalizeString(actualError?.message || actualError);
+    // The retry dying in transport used to ERASE why the first answer was
+    // rejected, so the debug report the player copies out read "Internal server
+    // error" above a raw response that had nothing to do with it — the text
+    // shown is attempt 1's (lastRawText is only reassigned once a call returns),
+    // and its actual rejection reason was gone. Report the first answer's reason
+    // first, since that is the one the raw text belongs to.
+    failureReason = firstFailureReason
+      ? `${firstFailureReason}${transportReason ? ` The retry then failed: ${transportReason}` : ""}`
+      : transportReason || failureReason;
     logAi("ai.failed", `${taskKey}: ${failureReason}`, {
       task: taskKey,
       aborted: controller.signal.aborted,
       stack: actualError?.stack ? String(actualError.stack).slice(0, 4000) : undefined,
     }, "error");
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+    idle.cancel();
   }
 
   // A deliberate user cancel must NOT silently fall back to canned events —
@@ -633,13 +671,56 @@ const runJsonTask = async (taskKey, {
       : new DOMException("Timeline jump cancelled.", "AbortError");
   }
 
+  // Last chance before the canned fallback. An earlier answer that cleared the
+  // schema is a finished turn — every event, transfer and chat the model
+  // wrote — and the task validator rejected it only under `strict`, which is on
+  // solely BECAUSE a retry remained: an event count, a stray date, an invented
+  // region name, all of which it repairs in place on the final attempt. When the
+  // retry then produced nothing usable (a provider 500, a timeout, a second
+  // answer that failed outright), that final-attempt pass never ran, and the
+  // player lost a complete turn to a rule the model was never given the chance
+  // to satisfy. Run it now — the same salvage the second answer would have got.
+  if (salvageCandidate) {
+    try {
+      const salvageError = validatePayload
+        ? normalizeString(await validatePayload(salvageCandidate, { attempt: 2, finalAttempt: true }))
+        : "";
+      if (!salvageError) {
+        logDebugEvent("ai", `Task "${taskKey}" salvaged an earlier answer after the retry failed — the turn is real, not canned.`, undefined, { verbose: true });
+        return { generation: { source: "ai", fallbackReason: "" }, payload: salvageCandidate };
+      }
+    } catch {
+      // Salvage validation is best-effort; fall through to the fallback below.
+    }
+  }
+
   if (typeof fallback !== "function") {
     throw new Error(`AI task "${taskKey}" failed: ${failureReason}`);
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
+  // Capped so one runaway response can't bloat world.json (this rides along on
+  // every recent fallback's simulationHistory entry, see applySimulationResult)
+  // or flood the console. Surfaced to the player as the "Copy debugging
+  // message" button next to the fallback warning (time.jsx) — that button, not
+  // DevTools, is the primary way this reaches anyone now.
+  const RAW_RESPONSE_LIMIT = 12000;
+  const capturedRawText = lastRawText.length > RAW_RESPONSE_LIMIT
+    ? `${lastRawText.slice(0, RAW_RESPONSE_LIMIT)}\n…[${lastRawText.length - RAW_RESPONSE_LIMIT} more characters truncated]`
+    : lastRawText;
+  // No body at all is itself the diagnosis, so say so instead of leaving the
+  // field empty and letting the report guess it is an old turn. The marker
+  // goes in the same field the raw text uses, so it survives the reload path
+  // (applySimulationResult → world.json) with no extra plumbing.
+  const rawResponse = capturedRawText
+    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+  if (capturedRawText) {
+    console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
+  } else {
+    console.warn(`[ai] task "${taskKey}" — ${rawResponse}`);
+  }
   return {
-    generation: { source: "fallback", fallbackReason: failureReason },
+    generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
     payload: await fallback(),
   };
 };
@@ -672,7 +753,6 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
         actions.length ? `Player orders resolved: ${actions.map((action) => action.title).join("; ")}` : "",
       ].filter(Boolean).join("\n"),
     }),
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     variables,
   });
@@ -1641,6 +1721,11 @@ const applySimulationResult = async ({
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
           plannedActions: plannedActionSnapshot,
+          // The raw model response that failed to parse (runJsonTask), so the
+          // fallback warning's "Copy debugging message" button (time.jsx) has
+          // something to copy even after a reload — only ever non-empty on a
+          // fallback turn; a normal AI turn carries nothing here.
+          rawResponse: normalizeString(result.generation?.rawResponse),
           round: nextGame.round,
           summary: normalizeString(result.summary),
           source: result.generation?.source || "ai",
@@ -2383,7 +2468,6 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     // The "Limit AI generation" toggle opts back into a 5-minute bound for
     // players who prefer a guaranteed turn over a guaranteed answer (Cancel
     // works either way).
-    timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
     userMessage:
       mode === "auto"
         ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
@@ -2559,7 +2643,6 @@ export const maybeGeneratePregameHistory = async () => {
   try {
     const variables = await buildTemplateVariables(bundle);
     const { payload } = await runJsonTask("pregameHistory", {
-      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
       userMessage: "Write the pre-game historical timeline as JSON only.",
       validatePayload: (candidate, { finalAttempt } = {}) =>
         validatePregameEvents(candidate, { startDate, strict: !finalAttempt }),
@@ -2657,7 +2740,6 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       + " write, return {\"chat\": null}.",
     ].join("\n");
     const { payload } = await runJsonTask("idleDiplomacy", {
-      timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
       userMessage:
         "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now."
         + conversationContext
