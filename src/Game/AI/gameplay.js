@@ -15,6 +15,14 @@ import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
+import {
+  describeDoubtedForPrompt,
+  doubtedAwaitingFreshSource,
+  spyIntelDoubtOps,
+  spyOperationOps,
+  isProjectOpen,
+  spyProvenanceOps,
+} from "../../runtime/projects.js";
 import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
@@ -39,6 +47,7 @@ import {
 import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
+  applyProjectOpsToWorld,
   enforceUnitVolume,
   readInterceptsState,
   writeInterceptsState,
@@ -319,7 +328,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs nothing more. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then stores the new one; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then stores the new one; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -395,12 +404,18 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
   }
 
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+  // Two tasks get the espionage picture, framed differently because they do
+  // different jobs with it: the simulator turns it into events, the board turns
+  // it into entries. Both see the same uncensored brief.
+  if (["jumpForward", "autoJumpForward", "projects"].includes(taskKey)) {
     try {
       const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
       const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
       if (brief) {
-        systemPrompt = systemPrompt + "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n" + brief;
+        const framing = taskKey === "projects"
+          ? "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n"
+          : "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n";
+        systemPrompt = systemPrompt + framing + brief;
       }
     } catch {
       /* no espionage context this turn */
@@ -474,6 +489,55 @@ const runJsonTask = async (taskKey, {
   // their militaries existed only when something dramatic happened TO the player.
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Other Powers' Militaries]\nThe map should not read as though only ${normalizeString(variables.playerPolity) || "the player's polity"} fields any forces. When a major or currently-relevant power (a scenario-defined actor, a country the player has clashed or negotiated with, a power actively at war or mobilizing) plausibly has forces in the field this period - mobilizing, patrolling a border, escorting a fleet, garrisoning a front, reinforcing an ally - reflect it with impacts.unitOps even when nothing dramatic is happening to the player specifically. A brief, minor event (or a line folded into a larger one) is enough to justify it; it does not need its own headline. Keep this proportionate: a country at peace far from any conflict does not need forces conjured for their own sake, and this must never be used to manufacture aggression toward the player that their own actions or the wider story do not warrant.`;
+  }
+
+  // What a player's order actually costs them in time, and the single rule that
+  // decides it: does this act need anyone else's consent?
+  //
+  // Field report behind this: a player asked to rename their country. The
+  // advisor opened a Projects board entry for it — the only lever it has — and
+  // the rename sat at 15% for twelve in-game months while the advisor reported
+  // that the seals had been updated. Nothing had. A rename is one signature.
+  //
+  // The other half matters just as much in the opposite direction: a transfer of
+  // somebody else's land is NOT a signature, and must not resolve just because the
+  // player asked. regionClaims is what makes that answerable rather than a refusal.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
+    systemPrompt = `${systemPrompt}
+
+[Sovereign Acts and What Needs Consent]
+Before you decide how long one of ${playerName}'s orders takes, ask one question: does this act need anyone else's agreement?
+
+NO - IT IS INTERNAL. Their own name, colour, flag, style, title, anthem, official language, capital designation, ministry structure, proclamations, and the administration of territory they already hold. Their own government decides and nobody may refuse. THESE RESOLVE IN THIS JUMP. Enact each with a single event dated inside the covered period, carrying the impact that makes it real - polityChanges for a change of name, colour, style or tags; markerOps rename for a renamed city or capital - and list that action's id in actionIds. They cannot fail for lack of consent, they need no programme, budget or timetable, and they never take multiple rounds. Narrate the reaction if it is interesting - a rival's contempt, a domestic celebration, the old name lingering in foreign newspapers - but the act itself is DONE. Never open a Projects entry for one, and never report one as in progress.
+
+YES - IT TOUCHES ANOTHER POLITY. Region transfers, cessions, annexations, border adjustments: anything that moves land or binds another government. These need one of two things first, and it must actually be in the campaign record: CONSENT (that polity agreed, in a diplomatic exchange, a treaty, or an event where they conceded) or a FAIT ACCOMPLI (the ground has already been taken and held, so they have no say left - the map and the units are the evidence). Where either is already true, enact it THIS JUMP with regionTransfers; a hand-over both sides accept needs no programme either.
+
+Where NEITHER is true yet, the order is not refused and not quietly deferred - it splits in two, and BOTH halves happen now. First, record the claim with regionClaims, so the region shows as disputed on the map immediately and the player can see that their declaration landed. Second, say plainly what is missing - whose agreement, or what has to be taken - and open the project for the campaign that will obtain it, with the transfer itself on that project's onComplete so the border moves the moment the effort actually succeeds. A declaration that changes nothing the player can see is the failure this rule exists to prevent.`;
+  }
+
+  // The Projects & Operations board. It exists precisely so long-running work
+  // does not vanish between rounds, which only holds if the jump that narrates a
+  // programme also MOVES it — otherwise the board freezes at whatever the advisor
+  // last said and the player stops trusting it. Only the game master moves the
+  // board inline: the jump hands it to the separate `projects` task
+  // (generateProjectOps), whose whole prompt is the board and whose schema is the
+  // only place projectOps now appears for a jump.
+  if (taskKey === "gameMaster") {
+    const projects = normalizeString(variables.projectsSummary);
+    const board = projects && !projects.startsWith("No projects")
+      ? `\n\nThe board as it stands:\n${projects}`
+      : "";
+    systemPrompt = `${systemPrompt}\n\n[Projects & Operations]\nThe player keeps a board of long-running efforts - research and industrial programmes, construction projects, military and covert operations, sustained political campaigns - each with a status, progress, timeline and next milestone. Keep it in step with what you narrate, using impacts.projectOps.\nWhen an event advances, delays, funds, starves, exposes or ends one of the efforts below, that SAME event must carry a projectOps entry moving it: op update for progress or a change of status, op milestone when a checkpoint is reached or missed, op complete when it finishes. Copy the id and name EXACTLY as they appear below - an op that names something not on the board is dropped. When an event STARTS a new multi-round effort (a power lays down a programme, opens a construction project, mounts an operation), open it with op create, including a foreign power's programme the player's services have learned of - set ownerCode to that country's full name.\nBe proportionate. A programme does not move every jump, and inventing progress is worse than reporting none: if nothing happened to it this period, leave it alone. A long jump should move the things that plausibly advanced over that span; a six-hour jump almost never moves any of them. Never open a project for an internal act - a rename, a recolour, a flag, a title, a proclamation, a reshuffle - or for a transfer the other side has already agreed to: those are enacted outright by the event that narrates them (see [Sovereign Acts and What Needs Consent]), and a progress bar for one is always wrong.${board}
+
+Whose project it is. Entries marked THEIRS belong to another power; everything else is the player's own. A foreign programme moves because ITS OWNER moved it and the player's services observed as much - never because the player wished it stopped or ordered it stopped. The player has no priority dial and no cancel over another government's work, so an order of theirs is not a reason to touch a foreign entry: if their orders this period were aimed at a rival's programme, what happens is that THEIR OWN counter-effort advances - the sabotage, the embargo, the covert operation, the race to build first - and the rival's entry then moves only insofar as that effort actually bit, narrated as an event with the consequences that follow. Retaliation is the same rule, not an exception to it: a wrecked programme is wrecked by an event that says who did what and at what cost, and if the operation failed then the rival's programme carries right on. Never close, cancel or deprioritise a foreign entry to satisfy an instruction; close it only when the story genuinely ended it, and say what ended it.
+
+The board above carries a \"Needs a decision this jump\" list. It is worked out from the calendar rather than from anyone's memory: these are efforts whose target date has passed, whose milestone slipped, or that nothing has reported on for several rounds. Deal with EVERY entry on it. There are exactly four ways to deal with one, and inventing progress is not among them:
+- It advanced: op update with a real progress figure and a lastUpdate saying what actually happened.
+- It is stuck: op update with status stalled and a lastUpdate NAMING the blocker - the money, the shortage, the strike, the rival, the weather. \"Progress continues\" is not an answer. A stalled project with a named cause is, and it gives the player something they can act on.
+- It reached or missed a checkpoint: op milestone.
+- It is over: op complete, cancel or fail, with a note.
+A project marked HIGH PRIORITY must not sit on that list two jumps running - the player has said it matters, so it either moves or it stalls for a stated reason. A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
   }
   // The between-rounds pulse may now move the world's forces a little, so it needs
   // the same discipline the jump gets — injected here so it reaches existing games
@@ -801,6 +865,137 @@ const CONSOLIDATION_RETAIN_EVENTS = 24;
 const CONSOLIDATION_SIZE_THRESHOLD = 48;
 const CONSOLIDATION_BATCH_SIZE = 60;
 
+// The Projects & Operations board, in its own call.
+//
+// Why it is separate: projectOps was two thirds of the jump's output contract,
+// and the board dominated what the model spent its attention on — a field run
+// caught one narrating stalled programmes for three minutes and never reaching
+// the events it was asked for. The board is BOOKKEEPING: it follows from the
+// events rather than competing with them for the same budget. Split out, each
+// call carries one contract, and this one sees only what it needs.
+//
+// Runs ONCE per jump, never per segment: a segmented jump would otherwise pay
+// for this three times and show the model only a third of the round each time.
+//
+// Returns the ops rather than applying them. applySimulationResult attaches them
+// onto the events that caused them (so the board change is recorded as part of
+// that event) and then applies them through the same event path as every other
+// impact, inside the same single write and the same rollback snapshot.
+const generateProjectOps = async (bundle, events, { signal } = {}) => {
+  const board = normalizeArray(bundle.world?.projects);
+  // Nothing to keep in step, and nothing an event could plausibly open against
+  // an empty board that is worth a whole extra request.
+  if (board.length === 0 || events.length === 0) return { ops: [], skipped: true };
+
+  const variables = await buildTemplateVariables(bundle, {});
+  // The events, numbered, because eventIndex is how an op says which one moved
+  // the effort. Impacts are deliberately left out: this call decides what the
+  // STORY did to the board, and the other levers are noise for that question.
+  const eventList = events
+    .map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`)
+    .join("\n\n");
+
+  // Doubted entries the player now has a clean pair of eyes on. Named explicitly
+  // rather than left for the model to notice, because settling one is only honest
+  // when a fresh source genuinely exists — and that is a fact about world state,
+  // not something readable from the board text. The sealed file is enough: only
+  // `planted` is read, so nothing has to be decrypted.
+  const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
+  const pendingDoubts = doubtedAwaitingFreshSource(
+    normalizeSpies(bundle.world?.spies),
+    board,
+    {
+      playerPolity: normalizeString(bundle.game?.country),
+      intercepts: normalizeIntercepts(gathered),
+    },
+  );
+  const doubtBlock = pendingDoubts.length
+    ? `\n\nThese doubted entries can now be settled — a fresh agent is in place:\n${describeDoubtedForPrompt(pendingDoubts)}`
+    : "";
+
+  const { generation, payload } = await runJsonTask("projects", {
+    signal,
+    userMessage:
+      `These events have just been simulated. Move the board to match them, and return `
+      + `{"projectOps":[]} if nothing on it genuinely moved.\n\n${eventList}${doubtBlock}`,
+    variables,
+    // No fallback: an empty board is exactly what a failed call should leave
+    // behind, and runJsonTask throwing is what lets the caller tell the player
+    // the board did not update rather than pretending it did.
+  });
+  return { generation, ops: normalizeArray(payload?.projectOps) };
+};
+
+// The turn is generated and waiting, not lost. Flagged so the UI can tell this
+// apart from an ordinary jump failure and offer to retry just the board rather
+// than regenerating the whole round.
+const projectsHeldError = (cause) => {
+  const error = new Error(
+    "Your events are ready, but the Projects & Operations board did not update, so nothing has been "
+    + `saved yet: ${cause?.message || "the board task returned no usable answer"}. `
+    + "Retry the board to finish the turn, or discard it and run the turn again.",
+  );
+  error.projectsHeld = true;
+  error.cause = cause;
+  return error;
+};
+
+// Finish a held turn by re-running ONLY the board call. The events are not
+// regenerated — they are already valid, and on a slow model they may have cost
+// ten minutes. Because nothing was written, this is the same code path as the
+// first attempt rather than a second one to keep in step.
+export const retryPendingProjectsJump = async ({ signal } = {}) => {
+  if (!pendingProjectsJump) throw new Error("There is no turn waiting on the Projects board.");
+  const { applyArgs } = pendingProjectsJump;
+  beginSimulation();
+  try {
+    // Released BEFORE the attempt, so a turn can never be applied twice, and
+    // re-held only if the BOARD fails again — a failure after that point is a
+    // different situation and must not pretend otherwise.
+    pendingProjectsJump = null;
+    // The RETRY's signal, not the held turn's — that one belongs to a request
+    // that already finished, and if the player cancelled it this call would abort
+    // before it started.
+    applyArgs.projects = { ...applyArgs.projects, signal };
+    // Re-running the whole apply is safe and is why this is one call rather than
+    // a second code path to keep in step: it is pure until its final writes, and
+    // every step in between is deterministic — espionage included, since its rolls
+    // are seeded on the round.
+    return await applySimulationResult(applyArgs);
+  } catch (error) {
+    if (error?.projectsHeld) {
+      logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
+      pendingProjectsJump = { applyArgs };
+    }
+    throw error;
+  } finally {
+    endSimulation();
+  }
+};
+
+// Put each op onto the event that caused it, so the board move is part of that
+// event's impacts. An op with no usable eventIndex lands on the LAST event: the
+// alternative is dropping it, and a board change the model asked for is worth
+// more than perfect attribution of which event caused it.
+const attachProjectOpsToEvents = (events, ops) => {
+  if (!events.length || !ops.length) return 0;
+  let attached = 0;
+  for (const op of ops) {
+    if (!op || typeof op !== "object") continue;
+    const raw = Number(op.eventIndex);
+    const index = Number.isInteger(raw) && raw >= 0 && raw < events.length ? raw : events.length - 1;
+    const event = events[index];
+    if (!event.impacts || typeof event.impacts !== "object") event.impacts = {};
+    if (!Array.isArray(event.impacts.projectOps)) event.impacts.projectOps = [];
+    // eventIndex was addressing, not content — it means nothing once the op is
+    // sitting on its event, and normalizeProjectOp would only have to ignore it.
+    const { eventIndex, ...rest } = op;
+    event.impacts.projectOps.push(rest);
+    attached += 1;
+  }
+  return attached;
+};
+
 const consolidateHistoryBatch = async (bundle, events, chats, actions = []) => {
   const variables = await buildTemplateVariables(bundle, {
     // Resolved orders are consolidated alongside the events they caused. Capping
@@ -921,6 +1116,16 @@ const mergePolityCatalog = (countryCatalog, world) => {
 let activeSimulations = 0;
 const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
+// A turn whose events are generated and validated but NOT yet written, because
+// the Projects & Operations board could not be brought in step with them.
+//
+// Nothing is applied while this is set. That is deliberate and is what keeps the
+// retry honest: the board's ops must ride in on the events that caused them and
+// be applied before the world is written. Holding the whole turn means the retry
+// is the SAME path as the first attempt, with no privileged bypass to add. If it
+// cannot be resolved the turn fails like any other and the player rolls back.
+let pendingProjectsJump = null;
+
 // A jump whose segments are part-generated: one segment failed, the ones before
 // it are still in hand, and NOTHING has been written. Held so the player is told
 // which segment failed and can retry just that segment or discard the turn (see
@@ -962,7 +1167,20 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
 
 // A held jump counts as busy: the idle pulse checks this before it writes, so it
 // cannot write into a world that is about to be replaced by the held turn.
-export const isSimulationBusy = () => activeSimulations > 0 || pendingJumpSegment !== null;
+export const isSimulationBusy = () => activeSimulations > 0
+  || pendingProjectsJump !== null
+  || pendingJumpSegment !== null;
+
+export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
+
+// Abandon the held turn. Nothing was written, so there is nothing to undo — the
+// player simply loses the generation, the same as cancelling a jump.
+export const discardPendingProjectsJump = () => {
+  const had = pendingProjectsJump !== null;
+  pendingProjectsJump = null;
+  if (had) logDebugEvent("turn", "Held turn discarded; the board was never updated and nothing was written.");
+  return had;
+};
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
@@ -1447,11 +1665,37 @@ const CAPTURE_LANGUAGE = /\b(captur\w*|seiz\w*|annex\w*|conquer\w*|occup(?:y|ies
 // ops are DROPPED in place instead ("$.events[4].impacts.unitOps[0].unitId
 // does not identify an existing unit" used to trash whole good turns to the
 // canned fallback over one stale id).
+// What to tell the model when a projectOp names something that is not on the
+// board. Same shape as buildTransferFeedback: state the problem, then list the
+// real vocabulary, so the single retry has what it needs instead of guessing
+// again. Capped because a long board would crowd out the rest of the retry.
+const buildProjectFeedback = (operationPath, operation, knownProjects) => {
+  const named = normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project);
+  const names = [...new Set(knownProjects.values())].slice(0, 24);
+  if (names.length === 0) {
+    return `${operationPath} changes "${named}", but no project by that name exists and the board is empty. `
+      + `Open it first with {"op":"create","name":"...","summary":"..."}, or drop the op.`;
+  }
+  return `${operationPath} changes "${named}", which is not on the board. `
+    + `Use one of these exact names: ${names.map((name) => `"${name}"`).join(", ")}. `
+    + `If this is genuinely a new effort, open it with {"op":"create","name":"...","summary":"..."} instead.`;
+};
+
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{ impacts: candidate?.impacts, path: "$.impacts" }];
+  // Every project an op could legitimately address: what is already on the
+  // board, plus anything a create earlier in this same payload opens.
+  const knownProjects = new Map();
+  for (const project of normalizeArray(world?.projects)) {
+    const name = normalizeString(project?.name);
+    if (!name) continue;
+    knownProjects.set(name.toLowerCase(), name);
+    if (normalizeString(project?.id)) knownProjects.set(normalizeString(project.id), name);
+  }
+
   const unresolvedTransfers = await resolveRegionTransfers(containers, world);
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
@@ -1559,6 +1803,46 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       keptMarkerOps.push(operation);
     }
     if (impacts && Array.isArray(impacts.markerOps)) impacts.markerOps = keptMarkerOps;
+
+    // Project ops aimed at nothing. applyProjectOps drops these silently (which
+    // is the right runtime behaviour - a phantom project conjured from a typo is
+    // worse than a missed update), but silence is exactly what makes the failure
+    // invisible: the event narrates a programme advancing and the board never
+    // moves. On the strict attempt, hand the model the real board so the retry
+    // can use the right name; on the final attempt, drop the op and keep the turn.
+    const keptProjectOps = [];
+    for (let index = 0; index < normalizeArray(impacts?.projectOps).length; index += 1) {
+      const operation = impacts.projectOps[index];
+      const operationPath = `${path}.projectOps[${index}]`;
+      const op = normalizeString(operation?.op).toLowerCase();
+
+      if (["create", "start", "launch", "open", "add"].includes(op)) {
+        const project = operation.project ?? operation;
+        if (!normalizeString(project?.name)) {
+          if (strict) return `${operationPath} must name the project it is opening.`;
+          continue;
+        }
+        // A create is also how a project first appears, so remember it: a later
+        // op in the SAME turn may legitimately reference something opened above.
+        knownProjects.set(normalizeString(project.name).toLowerCase(), normalizeString(project.name));
+        if (normalizeString(project.id)) knownProjects.set(normalizeString(project.id), normalizeString(project.name));
+        keptProjectOps.push(operation);
+        continue;
+      }
+
+      const target = normalizeString(operation?.projectId || operation?.id).toLowerCase()
+        || normalizeString(operation?.name || operation?.project).toLowerCase();
+      if (!target) {
+        if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
+        continue;
+      }
+      if (!knownProjects.has(target)) {
+        if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
+        continue;
+      }
+      keptProjectOps.push(operation);
+    }
+    if (impacts && Array.isArray(impacts.projectOps)) impacts.projectOps = keptProjectOps;
   }
 
   // Unprompted outreach chats (top-level, not tied to an event) need real
@@ -1732,30 +2016,61 @@ export const loadRollbackSnapshots = async () => {
 // per-turn assets, discard that restore point and every newer one (those turns
 // no longer happened), and return the freshly-normalized bundle so the caller
 // can update immediately. Returns null if there is no such snapshot.
+//
+// Wrapped in the same beginSimulation/endSimulation busy-lock every jump,
+// game-master and catalyst call already uses — without it, the idle pulse (on
+// its own real-time timer) could read chat.json mid-rollback, then write its own
+// read-modify-write back AFTER this function's restore, resurrecting the
+// pre-rollback chat history with its own new note landed on top.
 export const rollBackToSnapshot = async (index = 0) => {
-  const snapshots = await loadRollbackSnapshots();
-  const snap = snapshots[index];
-  if (!snap) return null;
-  const s = snap.state ?? {};
-  await Promise.all([
-    writeJson(JSON_URLS.game, s.game ?? {}, { pretty: true }),
-    writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
-    writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
-    writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
-    writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
-    writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
-  ]);
-  await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
-  const bundle = await readGameStateBundle({ force: true });
-  return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+  beginSimulation();
+  try {
+    const snapshots = await loadRollbackSnapshots();
+    const snap = snapshots[index];
+    if (!snap) return null;
+    const s = snap.state ?? {};
+    await Promise.all([
+      // writeGameData rather than a raw writeJson: the snapshot was captured a
+      // whole turn ago and carries that turn's unit-system flag, and a setting
+      // must not roll back with the turn. See writeGameData in gameState.js.
+      writeGameData(s.game ?? {}),
+      writeJson(JSON_URLS.world, s.world ?? {}, { pretty: true }),
+      writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
+      writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
+      writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
+      writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
+    ]);
+    await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
+    const bundle = await readGameStateBundle({ force: true });
+    // A rollback is the one event that legitimately moves the clock BACKWARDS.
+    // The timeline's poll refuses any read older than what it already shows, so
+    // without this announcement it discarded every read of the restored state
+    // and the panel stayed pinned on the undone turn until the app restarted.
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:rolled-back"));
+    return { bundle, round: snap.round, remaining: snapshots.length - (index + 1) };
+  } finally {
+    endSimulation();
+  }
 };
 
+// `projects` opts this turn into the Projects & Operations board task. It runs
+// HERE rather than in the caller because the board's whole job is to move with
+// the events, and espionage does not produce its events until partway through
+// this function — a board call made before it never saw an exposure, so a covert
+// operation could be rolled up in the story while its entry carried on filling.
+//
+// Everything the board could need is settled by then and nothing is written yet,
+// so a failure still means "nothing happened" and the turn can be held and
+// retried. Callers that own the board through their own impacts
+// (applyGameMasterCommand) or have no board story (advanceActiveCatalyst)
+// simply omit it and are unchanged.
 const applySimulationResult = async ({
   baseActions,
   baseChats,
   baseColors,
   baseEvents,
   baseGame,
+  projects = null,
   baseWorld,
   result,
 }) => {
@@ -1959,6 +2274,96 @@ const applySimulationResult = async ({
       ...olderTurns,
     ];
   }
+  // Keep the board's covert operations in step with the agents they track,
+  // BEFORE the board task runs, so the model is shown an entry that already
+  // matches this turn's espionage rather than one describing an agent that was
+  // caught a moment ago. Engine bookkeeping, not narrative: it only opens an
+  // entry and closes it (projects.js spyOperationOps says why).
+  const playerPolity = normalizeString(baseGame.country);
+  const spySync = [
+    // Order matters: provenance first, so an entry stamped this turn can be
+    // doubted in the same pass rather than a turn later.
+    ...spyOperationOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
+      date: nextGame.gameDate,
+      playerPolity,
+    }),
+    ...spyProvenanceOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, { playerPolity }),
+  ];
+  if (spySync.length) {
+    worldWithImpacts = applyProjectOpsToWorld({
+      date: nextGame.gameDate,
+      ops: spySync,
+      playerCountry: playerPolity,
+      round: nextGame.round,
+      world: worldWithImpacts,
+    }).world;
+  }
+  // Doubt runs on the world the two passes above just produced, so a foreign entry
+  // linked a moment ago is covered by the same turn's suspicion.
+  const doubtOps = spyIntelDoubtOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
+    playerPolity,
+    date: nextGame.gameDate,
+  });
+  if (doubtOps.length) {
+    worldWithImpacts = applyProjectOpsToWorld({
+      date: nextGame.gameDate,
+      ops: doubtOps,
+      playerCountry: playerPolity,
+      round: nextGame.round,
+      world: worldWithImpacts,
+    }).world;
+  }
+  if (spySync.length || doubtOps.length) {
+    logDebugEvent("turn", `Covert operations synced to the board: ${spySync.length} op(s), ${doubtOps.length} doubted.`, undefined, { verbose: true });
+  }
+
+  // The board, in its own call, once for the whole round — after the segments
+  // merged so it sees the complete story, after espionage so an exposed ring can
+  // stall the operation it belonged to, and BEFORE anything is written so its ops
+  // ride in on the events that caused them.
+  if (projects) {
+    try {
+      const { ops, skipped } = await generateProjectOps(
+        // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
+        // read before the turn ran, so its board carries none of this turn's
+        // impacts and none of the covert-operation sync just above.
+        { ...projects.bundle, game: nextGame, world: worldWithImpacts },
+        freshEvents,
+        { signal: projects.signal },
+      );
+      if (!skipped && ops.length) {
+        const attached = attachProjectOpsToEvents(freshEvents, ops);
+        // Recorded on the events above; APPLIED here, through the same event path
+        // every other impact takes (release of completion effects included), so
+        // the board the player sees after this write is the one the model moved.
+        // Only the project ops are replayed: the events' other impacts were
+        // applied when the world was first impacted, and must not run twice.
+        const boardEvents = freshEvents
+          .filter((event) => normalizeArray(event.impacts?.projectOps).length)
+          .map((event) => ({ ...event, impacts: { projectOps: event.impacts.projectOps } }));
+        if (boardEvents.length) {
+          worldWithImpacts = applyEventImpactsToWorld({
+            colors: nextColors,
+            events: boardEvents,
+            world: worldWithImpacts,
+            motion: null,
+            betaEngine: betaUnits,
+            round: nextGame.round,
+          }).world;
+        }
+        logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
+      }
+    } catch (error) {
+      // A deliberate cancel is the player's and aborts the turn like any other.
+      if (error?.name === "AbortError") throw error;
+      // Nothing has been written at this point, so the caller can hold the turn
+      // and re-run just this call. Marked, not held, here: the caller is the one
+      // holding the arguments a retry needs.
+      logDebugEvent("turn", "Turn HELD: the board did not update, so nothing was written.", error);
+      throw projectsHeldError(error);
+    }
+  }
+
   let nextWorld = worldWithImpacts;
 
   for (const event of freshEvents) {
@@ -2232,12 +2637,32 @@ export const gatherIntelligence = async (target, { signal } = {}) => {
   const variables = { ...(await buildTemplateVariables(bundle)), targetPolity: name, disinformation };
   const dossier = await buildTargetDossier(bundle, name);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
+  // Standing orders. A doubted entry can only be settled from material that
+  // actually bears on it, and nothing was sending the agent to look: this task
+  // wrote whatever traffic seemed plausible, so a replacement could report for
+  // months about rail corridors and rare earths while the question that cost the
+  // player an agent went unanswered. Appended to the user message rather than put
+  // in the prompt template, so it reaches campaigns whose prompts are frozen.
+  const openQuestions = normalizeArray(bundle.world?.projects)
+    .filter((project) => project.verification === "doubted"
+      && isProjectOpen(project)
+      && regionKey(project.ownerCode) === regionKey(name))
+    .map((project) => `- "${project.name}": ${project.summary || "no detail on record"}`);
+  const orders = openQuestions.length
+    ? "STANDING ORDERS — these sit on our books from a source we no longer trust, and this agent was sent to settle them."
+      + " At least one exchange must bear on them: either show the programme discussed as real work, with money, people and"
+      + " dates behind it, or show the traffic of a government that plainly has no such programme."
+      + " Never have anyone mention our interest in it.\n"
+      + openQuestions.join("\n")
+    : "";
+
   const { payload } = await runJsonTask("spyIntercept", {
     signal,
     userMessage: [
       `Report what the spy in ${name} intercepted this period.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      orders,
     ].filter(Boolean).join("\n\n"),
     variables,
   });
@@ -2769,7 +3194,7 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
 // Merge the segments into the one round the player asked for and write it.
 // Shared by the first attempt and by a retry that finished the held segments, so
 // there is only ever one way a jump lands.
-const finishTimelineJump = async ({ context, state }) => {
+const finishTimelineJump = async ({ context, signal, state }) => {
   const { baseColors, bundle, mode, targetDate } = context;
   // Every segment is in hand, so there is no longer a jump to resume.
   pendingJumpSegment = null;
@@ -2790,8 +3215,7 @@ const finishTimelineJump = async ({ context, state }) => {
     summary: merged.summary,
     generation: state.generation,
   };
-
-  return applySimulationResult({
+  const applyArgs = {
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -2799,13 +3223,25 @@ const finishTimelineJump = async ({ context, state }) => {
     baseGame: bundle.game,
     baseWorld: bundle.world,
     result,
-  });
+  };
+
+  // The board runs inside applySimulationResult so that it sees the espionage
+  // events too. All this side does is hold the turn when it fails, because this
+  // is where the arguments a retry needs are held.
+  applyArgs.projects = { bundle, signal };
+  try {
+    return await applySimulationResult(applyArgs);
+  } catch (error) {
+    if (error?.projectsHeld) pendingProjectsJump = { applyArgs };
+    throw error;
+  }
 };
 
 export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, signal } = {}) => {
   // Starting a fresh turn abandons any jump still held on a failed segment. Its
   // state was captured against a world snapshot this one is about to re-read, so
   // applying it later would write a turn built on stale ground.
+  discardPendingProjectsJump();
   discardPendingJumpSegment();
   beginSimulation();
   try {
@@ -2873,7 +3309,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   };
 
   await runJumpSegments({ context: jumpContext, onProgress, signal, state: jumpState });
-  return await finishTimelineJump({ context: jumpContext, state: jumpState });
+  return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
   } finally {
     endSimulation();
   }
@@ -2892,7 +3328,7 @@ export const retryPendingJumpSegment = async ({ onProgress, signal } = {}) => {
     // Re-holds itself on another failure, so the player can retry again or
     // discard — exactly as they could the first time.
     await runJumpSegments({ context, onProgress, signal, state });
-    return await finishTimelineJump({ context, state });
+    return await finishTimelineJump({ context, signal, state });
   } finally {
     endSimulation();
   }

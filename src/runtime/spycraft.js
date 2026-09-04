@@ -366,6 +366,20 @@ export const espionageBrief = (world, intercepts, { playerPolity = "" } = {}) =>
   }
   for (const spy of finished) lines.push(`${spy.target} publicly expelled a ${spy.owner} agent on ${spy.exposedAt || "an earlier date"}.`);
 
+  // Targets we HAVE read and can no longer read. Without this the brief simply
+  // goes quiet about them, and silence is indistinguishable from "nothing
+  // happened" — so anything already recorded about that polity's own programmes
+  // drifts on looking current, and whoever is asked about it next has to invent
+  // why it went dark. Saying so lets it be marked unconfirmed instead.
+  const lost = [];
+  for (const [target, entry] of Object.entries(intercepts || {})) {
+    if (mine.some((s) => s.target === target)) continue;
+    lost.push(`${target} (last read ${entry.gatheredAt || "an earlier period"})`);
+  }
+  if (lost.length) {
+    lines.push(`${player} no longer has an agent inside: ${lost.join("; ")}. What is already known about those polities stands as of those dates and cannot be confirmed now.`);
+  }
+
   for (const [target, entry] of Object.entries(intercepts || {})) {
     if (!mine.some((s) => s.target === target)) continue;
     for (const exchange of entry.exchanges.slice(0, 3)) {

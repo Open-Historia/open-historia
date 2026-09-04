@@ -3,6 +3,7 @@ import { JSON_URLS, readJson, reportPerfOperation, writeJson } from "./assets.js
 import { getBetaUnitsToStamp } from "./mapSettings.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
+import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
 import {
@@ -94,6 +95,14 @@ export const WORLD_DEFAULTS = {
   // pruneSatisfiedUnitOrders below.
   pendingUnitOrders: [],
   polityOverrides: {},
+  // Long-running efforts the player is pursuing or has learned of: research
+  // programmes, construction projects, military and political operations. Only
+  // the AI writes these -- events via impacts.projectOps, the advisor via its
+  // ```projects block -- because a hand-editable board would drift out of step
+  // with the narrative that is supposed to be driving it. Listed in the
+  // normalizeWorldState return too: this spread is overwritten by the incoming
+  // world, so a field declared only here never survives a round trip.
+  projects: [],
   // Region id -> claimant polity names: the world-data way to mark a region
   // DISPUTED (striped in the administrator's + claimants' colors). Same effect
   // as a claimants list on the region's geojson feature, but declarable by a
@@ -586,8 +595,8 @@ const normalizeRegionTransfer = (entry) => {
 // renames through it, and applyEventImpactsToWorld deletes the entry when the
 // region actually changes hands. But nothing could ever CREATE one except the
 // scenario seed and the cheats panel — so a unilateral claim had nowhere to go,
-// and the simulation's only way to acknowledge one was to narrate a
-// border that never moved.
+// and the simulation's only way to acknowledge one was to open a project and let
+// a progress bar stand in for a border that never moved (see issue #7).
 //
 // `drop` is the other half, and it matters as much: a claim renounced, or a
 // claimant defeated, has to be able to clear its stripes. A dispute nothing can
@@ -900,6 +909,915 @@ export const applyMarkerOps = (markers, ops) => {
           : marker);
     }
   }
+  return next;
+};
+
+// Projects & Operations: the long-running efforts board (world.projects[]).
+//
+// A project is anything that spans rounds and has a state worth tracking — a
+// research programme, a shipbuilding project, a covert operation, a diplomatic
+// campaign. It is deliberately NOT the actions queue: an action is one thing the
+// player does this round and a jump resolves it, while a project persists across
+// many rounds and accumulates milestones.
+//
+// Enums are closed where the UI switches on the value and open where the
+// vocabulary is a judgement call the model makes every turn. `status` is closed
+// because the panel colour-codes it; `tags` is wide open (normalizeTagList, the
+// same rule country tags use) because "which categories exist" is exactly the
+// thing the AI should be free to invent per campaign.
+export const PROJECT_STATUSES = [
+  "proposed",
+  "active",
+  "stalled",
+  "paused",
+  "complete",
+  "failed",
+  "cancelled",
+];
+const PROJECT_STATUS_SET = new Set(PROJECT_STATUSES);
+// Statuses that are still running: they can go overdue and belong on the default
+// board view. Exported because the panel and the derived-flag helpers both need
+// the same answer, and two copies of this list would drift apart.
+export const PROJECT_OPEN_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
+const PROJECT_KIND_SET = new Set(["project", "operation"]);
+// Whether an entry sourced from a spy can still be trusted. "" is the ordinary
+// case and covers everything the player learned openly.
+//
+// "doubted" is ENGINE-ONLY and is not in the schema, so no model can emit it: it
+// is stamped when the agent an entry was sourced from turns out to be compromised
+// (projects.js spyIntelDoubtOps). "confirmed" and "refuted" are the model's to
+// give, and only once a FRESH agent is in that polity — that is the whole loop:
+// you are fed a story, your counter-intelligence starts to doubt the source, and
+// the only way to settle it is to send someone else and see.
+const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
+const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
+
+const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
+const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
+
+// The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
+// mark a checkpoint reached writes "completed" or "achieved" about as often as it
+// writes "done", and an unrecognised value fell through to the "pending" default —
+// which is not a no-op: mergeInto below assigns the status unconditionally, so a
+// checkpoint already marked done was pushed BACK to pending by the very op meant to
+// confirm it, while the op still counted as a change and the advisor's receipt card
+// reported "1 updated". The structured event path is fenced by the schema's enum;
+// the advisor's ```projects block has no schema at all, and that is the path every
+// button on the Projects panel drives.
+const PROJECT_MILESTONE_STATUS_ALIASES = {
+  complete: "done", completed: "done", finished: "done", achieved: "done",
+  reached: "done", met: "done", delivered: "done", passed: "done",
+  slipped: "missed", late: "missed", overdue: "missed", failed: "missed", unmet: "missed",
+  outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
+};
+
+// "" when the op carried no status at all, so mergeInto can tell "leave it alone"
+// from "set it to pending" — a model re-dating a checkpoint must not un-complete it.
+const resolveMilestoneStatus = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (!raw) return "";
+  if (PROJECT_MILESTONE_STATUS_SET.has(raw)) return raw;
+  return PROJECT_MILESTONE_STATUS_ALIASES[raw] || "pending";
+};
+
+// Synonyms a model actually writes for these, mapped onto the closed vocabulary.
+// Observed in the field: a real backfill came back with "status":"completed" on
+// a finished operation, which fell through to the "active" default and put a
+// concluded op back on the running board. The op-name aliases above exist for
+// the same reason; the values need them just as much as the verbs do.
+const PROJECT_STATUS_ALIASES = {
+  completed: "complete", finished: "complete", done: "complete", delivered: "complete",
+  canceled: "cancelled", abandoned: "cancelled", dropped: "cancelled", shelved: "cancelled",
+  ongoing: "active", "in progress": "active", inprogress: "active", running: "active", underway: "active",
+  planned: "proposed", proposal: "proposed", pending: "proposed",
+  suspended: "paused", halted: "paused", onhold: "paused", "on hold": "paused",
+  blocked: "stalled", delayed: "stalled", stalling: "stalled",
+};
+
+const resolveProjectStatus = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (PROJECT_STATUS_SET.has(raw)) return raw;
+  return PROJECT_STATUS_ALIASES[raw] || "active";
+};
+
+// How much attention the player wants a project to get. The ONE field on this
+// board the player authors themselves: events and the advisor own what a project
+// IS, and that stays true — this says only how hard to push it, and it is what
+// makes a board of thirty programmes manageable rather than a wall.
+//
+// Read by the prompt summary (promptContext's buildProjectsSummaryText) and acted
+// on by the jump directive: a high-priority effort may not sit unmoved two jumps
+// running, a low-priority one is allowed to drift with a one-line note.
+export const PROJECT_PRIORITIES = ["high", "normal", "low"];
+const PROJECT_PRIORITY_SET = new Set(PROJECT_PRIORITIES);
+// Same alias treatment, and the same reason, as PROJECT_STATUS_ALIASES above: the
+// advisor writes "critical" or "routine" as readily as "high" or "low", and an
+// unrecognised value falling through to the "normal" default does not merely lose
+// a nuance — it silently discards an instruction the PLAYER gave.
+const PROJECT_PRIORITY_ALIASES = {
+  critical: "high", urgent: "high", top: "high", highest: "high", "top priority": "high",
+  priority: "high", important: "high", vital: "high", max: "high",
+  medium: "normal", standard: "normal", default: "normal", moderate: "normal", regular: "normal",
+  routine: "low", background: "low", minor: "low", lowest: "low", deferred: "low",
+  "back burner": "low", backburner: "low", idle: "low",
+};
+
+const resolveProjectPriority = (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase();
+  if (PROJECT_PRIORITY_SET.has(raw)) return raw;
+  return PROJECT_PRIORITY_ALIASES[raw] || "normal";
+};
+
+// world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
+// unitsController), so everything riding inside it is on a bandwidth budget.
+//
+// Sized against a real campaign rather than guessed: a forty-round game came back
+// with 44 live projects, and one project measures ~1 KB (milestones are 39% of
+// that, hence their own tighter cap). 120 leaves that campaign roughly 2.5x of
+// headroom for ~120 KB worst case, against a world.json whose startingTimelineText
+// and consolidatedHistory are already ~105 KB each. If a board ever genuinely
+// needs more than this, the answer is not a bigger number — it is moving projects
+// out to their own runtime asset, which is a real piece of work because rollback
+// snapshots and the staged event reveal both get world.projects for free today.
+const MAX_PROJECTS = 120;
+const MAX_PROJECT_MILESTONES = 8;
+const MAX_PROJECT_EVENT_IDS = 12;
+
+const normalizeProjectMilestone = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") {
+    // A bare string is a title. Models reach for that shorthand constantly, and
+    // an undated milestone still tells the player what comes next.
+    if (typeof entry !== "string") return null;
+    const title = normalizeString(entry);
+    return title
+      ? { id: generateId(`milestone-${index}`), title, date: "", status: "pending", note: "" }
+      : null;
+  }
+
+  const title = normalizeOptionalString(entry.title || entry.name || entry.label);
+  if (!title) return null;
+
+  const completedCount = Number(entry.completedCount);
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`milestone-${index}`),
+    title,
+    date: canonicalizeDateString(entry.date || entry.due || entry.targetDate),
+    // A STORED milestone always has a status, so an absent one is "pending" here.
+    // Whether an OP meant to change it is a separate question — see the
+    // statusProvided flag normalizeProjectOp records.
+    status: resolveMilestoneStatus(entry.status) || "pending",
+    note: normalizeOptionalString(entry.note || entry.description),
+    // A standing commitment that comes round again — an annual drill, a
+    // quarterly review. Marking one done rolls it to its next occurrence rather
+    // than retiring it (see applyProjectOps), so the board keeps showing when
+    // the next one falls due instead of going blank.
+    repeat: normalizeMilestoneRepeat(entry.repeat || entry.recurrence || entry.cadence),
+    completedCount: Number.isFinite(completedCount) && completedCount > 0 ? Math.trunc(completedCount) : 0,
+    lastCompletedAt: canonicalizeDateString(entry.lastCompletedAt),
+  };
+};
+
+const normalizeProjectMilestones = (list) =>
+  normalizeArray(list)
+    .map((entry, index) => normalizeProjectMilestone(entry, index))
+    .filter(Boolean)
+    .slice(0, MAX_PROJECT_MILESTONES);
+
+// The soonest milestone still outstanding. Derived rather than trusted: the model
+// is given both a milestone list and a nextMilestone field, and the two drift the
+// moment it marks one done without restating the other. The list wins where there
+// is one; the stored value is a fallback for a project that carries no list.
+const deriveNextMilestoneFrom = (milestones, stored) => {
+  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending");
+  if (pending.length > 0) {
+    // Dated milestones first, earliest wins. An undated one is a "next, whenever"
+    // and only surfaces when nothing dated is outstanding.
+    const dated = pending.filter((entry) => entry.date).sort((a, b) => a.date.localeCompare(b.date));
+    const next = dated[0] || pending[0];
+    // Carries the recurrence through, so the card can mark it ↻ and show the
+    // tally. projects.js has the same derivation for the live view; if you add a
+    // field to one, add it to the other — the panel reads whichever is present.
+    return {
+      title: next.title,
+      date: next.date,
+      note: next.note,
+      repeat: next.repeat || "",
+      completedCount: Number(next.completedCount) || 0,
+    };
+  }
+
+  if (!stored || typeof stored !== "object") return null;
+  const title = normalizeOptionalString(stored.title || stored.name);
+  if (!title) return null;
+  return {
+    title,
+    date: canonicalizeDateString(stored.date || stored.due),
+    note: normalizeOptionalString(stored.note || stored.description),
+  };
+};
+
+// What COMPLETING this project does to the world.
+//
+// A project has never had an effect of its own: applyProjectOps' close branch
+// sets a status, pins progress to 100 and writes a note, and that is all. So
+// "annex the northern provinces" was a progress bar that reached the end and left
+// the map exactly as it was, and the player had to hope some later event happened
+// to narrate the same thing independently. That is issue #7's second defect, and
+// it is why a rename that "completed" left the country called what it always was.
+//
+// Deliberately the SAME vocabulary as impacts.polityChanges / regionTransfers /
+// regionClaims, normalized by the very same functions: it is applied through the
+// same code path, ACTIONS_REFERENCE already documents the shapes, and the model
+// therefore has nothing new to learn. The caps mirror the reasoning behind
+// MAX_PROJECT_EVENT_IDS — this rides inside world.json, and a completion that
+// rewrites eight polities or hands over forty regions is a model that has
+// misunderstood the field rather than a campaign event.
+//
+// Returns null rather than an empty object when there is nothing, because ~95% of
+// projects have no effects and world.json is force-re-read every five seconds by
+// two pollers: {"polityChanges":[],"regionTransfers":[],"regionClaims":[]} on
+// every entry of a 120-project board is pure wire cost for no information.
+const normalizeProjectOnComplete = (value) => {
+  if (!value || typeof value !== "object") return null;
+
+  const polityChanges = normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean).slice(0, 8);
+  const regionTransfers = normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean).slice(0, 24);
+  const regionClaims = normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean).slice(0, 24);
+
+  if (polityChanges.length === 0 && regionTransfers.length === 0 && regionClaims.length === 0) return null;
+  return { polityChanges, regionClaims, regionTransfers };
+};
+
+const normalizeProjectCoords = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const lng = finiteOrNull(value.lng ?? value.lon ?? value.longitude);
+  const lat = finiteOrNull(value.lat ?? value.latitude);
+  // 0,0 is open ocean off Africa — the coordinate a model emits when it does not
+  // actually know where something is. Same guard normalizeMarkerEntry uses.
+  if (lng === null || lat === null || (lng === 0 && lat === 0)) return null;
+  return { lng, lat };
+};
+
+const normalizeIdList = (value, limit) =>
+  normalizeArray(value)
+    .map((entry) => normalizeOptionalString(entry))
+    .filter(Boolean)
+    .filter((entry, index, list) => list.indexOf(entry) === index)
+    .slice(0, limit);
+
+export const normalizeProjectEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  // The name IS the identity here, exactly as it is for markers and polities: it
+  // is what the player reads, what the advisor says out loud, and what an op
+  // targets when it does not know the id. A nameless project is unaddressable.
+  const name = normalizeOptionalString(entry.name || entry.title || entry.project);
+  if (!name) return null;
+
+  const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
+  const secrecy = normalizeOptionalString(entry.secrecy || entry.classification).toLowerCase();
+  const progress = Number(entry.progress);
+  const milestones = normalizeProjectMilestones(entry.milestones);
+  // A standing effort with no planned end: a permanent patrol, a continuous
+  // intelligence programme, an alliance kept in good repair. Distinct from
+  // merely having no targetDate yet, which is what an entry the model has not
+  // dated looks like — the flag says the absence is DELIBERATE, so the board can
+  // show it as ongoing rather than as an oversight, and the model knows it is
+  // allowed to leave the date off instead of inventing one.
+  const ongoing = entry.ongoing === true || entry.ongoing === "true";
+  const updatedRound = Number(entry.updatedRound);
+
+  return {
+    id: normalizeOptionalString(entry.id) || generateId(`project-${index}`),
+    name,
+    kind: PROJECT_KIND_SET.has(kind) ? kind : "project",
+    // Same owner namespace as units, markers and every other polity-keyed field:
+    // a country NAME, verbatim. Blank means the player — an operation the model
+    // reports without naming an owner is one of theirs, and making it restate the
+    // player's own name on every entry is how that field ends up wrong.
+    ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
+    summary: normalizeTextLike(entry.summary || entry.description),
+    status: resolveProjectStatus(entry.status),
+    // The player's dial, not the model's — see PROJECT_PRIORITIES. Defaults to
+    // "normal", which is also what every project in a save written before this
+    // field existed reads as, so no migration is needed.
+    priority: resolveProjectPriority(entry.priority),
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
+    tags: normalizeTagList(entry.tags),
+    secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
+    startedAt: canonicalizeDateString(entry.startedAt || entry.startDate || entry.began),
+    ongoing,
+    // An ongoing effort has no end date by definition; drop any the model sent
+    // alongside the flag rather than showing a deadline it has already disowned.
+    targetDate: ongoing ? "" : canonicalizeDateString(entry.targetDate || entry.dueDate || entry.completionDate),
+    milestones,
+    nextMilestone: deriveNextMilestoneFrom(milestones, entry.nextMilestone),
+    lastUpdate: normalizeTextLike(entry.lastUpdate),
+    // See normalizeProjectOnComplete. null for the great majority of projects.
+    onComplete: normalizeProjectOnComplete(entry.onComplete || entry.completionEffects),
+    // The one-way latch that makes onComplete fire exactly ONCE.
+    //
+    // Effects are released on the TRANSITION into `complete`, never again. Without
+    // this, a model restating {"op":"complete"} on an already-finished annexation
+    // — and a chatty campaign restates constantly — would hand the same regions
+    // over a second time, or re-apply a rename on top of a name the story has
+    // since moved past. Stamped by applyProjectOps at the moment of the
+    // transition, and read by releaseProjectCompletionEffects just before it.
+    //
+    // Engine-owned: deliberately absent from PROJECT_FIELD_ALIASES and
+    // PROJECT_PATCHABLE_FIELDS, so no model can set or clear it.
+    onCompleteAppliedAt: normalizeOptionalString(entry.onCompleteAppliedAt),
+    // Newest first: the activity feed reads top-down, so the cap must drop the
+    // oldest entry rather than the most recent one.
+    eventIds: normalizeIdList(entry.eventIds, MAX_PROJECT_EVENT_IDS),
+    linkedUnitIds: normalizeIdList(entry.linkedUnitIds, 12),
+    linkedMarkerIds: normalizeIdList(entry.linkedMarkerIds, 12),
+    // The agent an entry is sourced from: the operation a spy IS (spyOperationOps)
+    // or the foreign programme a spy told us about (spyProvenanceOps). What makes
+    // a doubt later find the right entries.
+    //
+    // Patchable, because the engine sets it through an ordinary update op — but
+    // absent from projectSchema, so a strict provider cannot emit it at all. That
+    // absence is the real protection, and it is the same one "doubted" relies on:
+    // the schema decides what a model can say, the whitelist only decides what an
+    // op can carry.
+    linkedSpyIds: normalizeIdList(entry.linkedSpyIds, 12),
+    verification: PROJECT_VERIFICATION_SET.has(normalizeOptionalString(entry.verification))
+      ? normalizeOptionalString(entry.verification)
+      : "",
+    focus: normalizeProjectCoords(entry.focus),
+    note: normalizeTextLike(entry.note),
+    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeOptionalString(entry.updatedAt) || new Date().toISOString(),
+    updatedRound: Number.isFinite(updatedRound) && updatedRound > 0 ? Math.trunc(updatedRound) : 0,
+  };
+};
+
+// What to drop when the board is over its cap.
+//
+// This used to be .slice(0, MAX), i.e. "keep the first N" — so a board that went
+// over lost whatever happened to be last, which is live work as often as not, and
+// said nothing about it. Finished work goes first instead, oldest by last-touched,
+// and only if that is not enough does anything still running get evicted.
+// Survivors keep their original order: the list order is the board's order, and
+// re-sorting it here would reshuffle the panel for reasons nobody can see.
+const capProjectList = (list) => {
+  if (list.length <= MAX_PROJECTS) return list;
+
+  const evictionRank = (project) => (PROJECT_OPEN_STATUSES.has(project.status) ? 1 : 0);
+  const doomed = new Set(
+    [...list]
+      .sort((a, b) => evictionRank(a) - evictionRank(b)
+        || normalizeOptionalString(a.updatedAt).localeCompare(normalizeOptionalString(b.updatedAt)))
+      .slice(0, list.length - MAX_PROJECTS)
+      .map((project) => project.id),
+  );
+  return list.filter((project) => !doomed.has(project.id));
+};
+
+export const normalizeProjects = (projects) =>
+  capProjectList(
+    normalizeArray(projects)
+      .map((entry, index) => normalizeProjectEntry(entry, index))
+      .filter(Boolean)
+      // Deduplicate by name, keeping the FIRST occurrence. Two entries for the same
+      // programme are a model restating itself, and applyProjectOps has already
+      // folded ops together in order, so the first is the merged one.
+      .filter((entry, index, list) =>
+        list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index),
+  );
+
+// The board's size limit, exported so the panel can warn the player as they
+// approach it instead of work quietly vanishing.
+export const PROJECT_BOARD_LIMIT = MAX_PROJECTS;
+
+// Which raw keys map onto each project field, so a partially-specified op can be
+// told apart from a fully-specified one. Mirrors the aliases normalizeProjectEntry
+// accepts — keep the two in step or a field the normalizer understands will look
+// "not provided" and be silently preserved instead of applied.
+const PROJECT_FIELD_ALIASES = {
+  name: ["name", "title", "project"],
+  kind: ["kind", "type"],
+  ownerCode: ["ownerCode", "owner", "code"],
+  summary: ["summary", "description"],
+  status: ["status"],
+  priority: ["priority"],
+  onComplete: ["onComplete", "completionEffects"],
+  progress: ["progress"],
+  tags: ["tags"],
+  secrecy: ["secrecy", "classification"],
+  startedAt: ["startedAt", "startDate", "began"],
+  ongoing: ["ongoing"],
+  targetDate: ["targetDate", "dueDate", "completionDate"],
+  milestones: ["milestones"],
+  lastUpdate: ["lastUpdate"],
+  linkedUnitIds: ["linkedUnitIds"],
+  linkedMarkerIds: ["linkedMarkerIds"],
+  // Listed so the engine's own create carries the link through listProvidedFields
+  // when it restates an entry that already exists. Not patchable — see above.
+  linkedSpyIds: ["linkedSpyIds"],
+  verification: ["verification"],
+  focus: ["focus"],
+  note: ["note"],
+};
+
+// A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
+// replayed by the staged reveal, so this has to survive a JSON round trip.
+const listProvidedFields = (source) => {
+  if (!source || typeof source !== "object") return [];
+  return Object.entries(PROJECT_FIELD_ALIASES)
+    .filter(([, aliases]) => aliases.some((alias) => source[alias] !== undefined))
+    .map(([field]) => field);
+};
+
+// One AI-authored mutation to the projects board.
+//
+// The aliases are generous on purpose. markerOps learned this the hard way: a
+// model asked for "build" writes "found" about a third of the time and the op is
+// then dropped in silence. The vocabulary accepted here (start/launch,
+// cancel/abandon) is what a model actually reaches for when narrating a
+// programme, so take it rather than losing the update.
+const normalizeProjectOp = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+
+  const op = normalizeOptionalString(entry.op || entry.action).toLowerCase();
+  const projectId = normalizeOptionalString(entry.projectId || entry.id);
+  const name = normalizeOptionalString(entry.name || entry.project || entry.title);
+
+  if (op === "create" || op === "start" || op === "launch" || op === "open" || op === "add") {
+    // The payload may be nested under `project` or inlined on the op itself —
+    // both shapes turn up, and markerOps accepts both for the same reason.
+    const source = entry.project ?? entry;
+    const project = normalizeProjectEntry(source, 0);
+    if (!project) return null;
+    // Re-normalizing an op that has already been through here (events.json is
+    // replayed by the staged reveal) must not widen the field list to everything.
+    const provided = Array.isArray(entry.provided) ? entry.provided : listProvidedFields(source);
+    return { op: "create", project, provided };
+  }
+
+  if (op === "update" || op === "progress" || op === "edit") {
+    if (!projectId && !name) return null;
+    return { op: "update", projectId, name, patch: entry.patch ?? entry.project ?? entry };
+  }
+
+  if (op === "milestone") {
+    if (!projectId && !name) return null;
+    const source = entry.milestone ?? entry;
+    const milestone = normalizeProjectMilestone(source, 0);
+    if (!milestone) return null;
+    // Did the op actually SAY what the checkpoint's status is? normalizeProjectMilestone
+    // fills every field, so without this a model re-dating a checkpoint —
+    // {"title":"Sea trials","date":"1936-11-01"} — would silently un-complete it.
+    // Persisted on the op because events.json is replayed by the staged reveal, and
+    // re-normalizing must not widen an absent status into a stated one.
+    const statusProvided = typeof entry.statusProvided === "boolean"
+      ? entry.statusProvided
+      : normalizeOptionalString(source && typeof source === "object" ? source.status : "") !== "";
+    return { op: "milestone", projectId, name, milestone, statusProvided };
+  }
+
+  // Idempotency for the op this function EMITS, not just the ones a model writes.
+  //
+  // Without this branch, no event has ever been able to close a project. The path:
+  // normalizeEventImpacts normalizes an event's projectOps on the way into
+  // events.json, turning {"op":"complete"} into {"op":"close","status":"complete"};
+  // applyProjectOps then defensively re-normalizes every op it is handed (it must,
+  // because the advisor feeds it a freshly parsed block that has NOT been through
+  // here); and "close" matched nothing, so normalizeProjectOp returned null and the
+  // op was dropped on the floor. A jump that narrated a programme finishing left it
+  // sitting at active and 60%, and the same held for cancel and fail. Only the
+  // advisor path worked, because its ops reach the normalizer exactly once.
+  //
+  // `remove` never had the bug because the op it emits is spelled the same as the
+  // op it accepts. This is the general lesson: every op this function returns must
+  // survive being passed back through it.
+  if (op === "close") {
+    if (!projectId && !name) return null;
+    const status = resolveProjectStatus(entry.status);
+    return {
+      op: "close",
+      // Anything that is not a recognised ending is treated as cancelled rather
+      // than silently promoted to a success — the one outcome that releases
+      // onComplete effects must never be reached by a fallback.
+      status: status === "complete" || status === "failed" ? status : "cancelled",
+      projectId,
+      name,
+      note: normalizeOptionalString(entry.note),
+    };
+  }
+
+  if (op === "complete" || op === "finish" || op === "completed") {
+    if (!projectId && !name) return null;
+    return { op: "close", status: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  // Ending badly is still an outcome worth keeping on the board. These used to
+  // alias to remove, which DELETED the entry — so the most natural way for a
+  // model to say "we gave up on this" quietly erased it, and the Closed view it
+  // should have appeared in stayed empty.
+  if (op === "cancel" || op === "cancelled" || op === "abandon" || op === "shelve") {
+    if (!projectId && !name) return null;
+    return { op: "close", status: "cancelled", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  if (op === "fail" || op === "failed") {
+    if (!projectId && !name) return null;
+    return { op: "close", status: "failed", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  // The real erasure, for an entry that should never have been opened.
+  if (op === "remove" || op === "delete" || op === "drop") {
+    if (!projectId && !name) return null;
+    return { op: "remove", projectId, name, note: normalizeOptionalString(entry.note) };
+  }
+
+  return null;
+};
+
+// Fields an `update` op may change. A whitelist rather than a spread, because the
+// patch object is frequently the whole op (see normalizeProjectOp), so a blind
+// merge would write `op`, `projectId` and friends straight into the project.
+// Note the absence of `name`: an inlined update op carries the name it was
+// matched BY, and matching is case-insensitive, so patching it would let
+// {"op":"update","name":"project leviathan"} quietly rename Project Leviathan to
+// lowercase. Renaming goes through an explicit `newName`, the same way a marker
+// rename does.
+const PROJECT_PATCHABLE_FIELDS = [
+  "kind", "ownerCode", "summary", "status", "priority", "progress", "secrecy", "ongoing",
+  "startedAt", "targetDate", "lastUpdate", "note", "focus",
+  "linkedUnitIds", "linkedMarkerIds", "onComplete", "verification", "linkedSpyIds",
+];
+
+// The first key of `field`'s alias list that the patch actually carries, or "" for
+// a field it left out.
+//
+// This used to be a bare `patch[field] !== undefined`, i.e. canonical names only —
+// so every alias PROJECT_FIELD_ALIASES documents and normalizeProjectEntry accepts
+// was silently dropped on an update. A model writing the natural thing,
+// {"op":"update","name":"Project Leviathan","description":"Hull complete",
+// "dueDate":"1938-03-01"}, changed nothing at all: the field never reached the
+// merged object, so the normalizer never saw the alias it knows how to read.
+//
+// The structured event path is fenced by projectOpSchema's canonical-only update
+// variant. The advisor's ```projects block has no schema, and that is the path
+// every button on the Projects panel drives.
+const patchedAlias = (patch, field) => {
+  const aliases = PROJECT_FIELD_ALIASES[field] ?? [field];
+  return aliases.find((alias) => patch[alias] !== undefined) ?? "";
+};
+
+// Which project an op is addressing: id first, then case-insensitive name — the
+// same order applyMarkerOps uses, and for the same reason: the model reliably
+// knows what it called something and only sometimes knows the id it was given.
+//
+// Module-level, and used by BOTH applyProjectOps below and
+// releaseProjectCompletionEffects above it, because those two must never disagree.
+// If the pre-scan that releases a completion's effects matched a different entry
+// than the applier that stamps the latch, the effects would fire for one project
+// and be marked spent on another — and the next restatement would fire them again.
+const findProjectIndexForOp = (list, op) => {
+  if (op.projectId) {
+    const byId = list.findIndex((project) => project.id === op.projectId);
+    if (byId !== -1) return byId;
+  }
+  if (!op.name) return -1;
+  const wanted = op.name.toLowerCase();
+  return list.findIndex((project) => project.name.toLowerCase() === wanted);
+};
+
+// Fold a project op's owner name onto the polity it actually names, before the op
+// is matched or applied.
+//
+// A foreign power's programme must land on the SAME identity as its territory, its
+// units and its colour. The model reads the story it just wrote, so the turn after
+// Germany becomes the Third Reich it opens "the Third Reich's rocket programme" —
+// and stored verbatim that is a second power sitting beside the first, with no
+// flag and no colour, filed under Foreign on the board even when it is the
+// player's own renamed country wearing its new name.
+//
+// Handles both op shapes (payload nested under `project`, or inlined on the op)
+// and every alias PROJECT_FIELD_ALIASES accepts for the field, because an update
+// carrying {"owner":"Third Reich"} splits the polity exactly as a create does.
+// Returns the op untouched when there is nothing to fold, so an op that has been
+// through here is safe to pass through again.
+const resolveProjectOpOwner = (raw, resolveOwner) => {
+  if (!raw || typeof raw !== "object") return raw;
+  const nested = raw.project && typeof raw.project === "object";
+  const source = nested ? raw.project : raw;
+  const alias = PROJECT_FIELD_ALIASES.ownerCode.find((key) => normalizeOptionalString(source[key]));
+  if (!alias) return raw;
+  const owner = resolveOwner(source[alias]);
+  if (!owner || owner === source[alias]) return raw;
+  return nested
+    ? { ...raw, project: { ...raw.project, [alias]: owner } }
+    : { ...raw, [alias]: owner };
+};
+
+// The effects a batch of ops is about to release, worked out BEFORE anything is
+// applied. Pure.
+//
+// This exists because of an ordering constraint that cannot be worked around any
+// other way. applyEventImpactsToWorld applies an event's polityChanges and
+// regionTransfers FIRST (they rebuild the owner alias map that everything else in
+// the event is resolved through) and its projectOps LAST (so the ops see the world
+// the event has already reshaped). Both orderings are right and neither can move.
+// So a project completed by an event has to have its effects folded into that
+// event's OWN polityChanges/regionTransfers before either list is touched — which
+// means knowing, in advance, which projects this batch completes.
+//
+// The purity is load-bearing, not stylistic. The staged event reveal in time.jsx
+// replays a turn's impacts against the pre-turn rollback snapshot to build a
+// display-only world, and it must reproduce exactly what the real apply did. It
+// does, because identical inputs go in. NOTHING may be written back into the
+// event: an effect cached onto events.json impacts would be applied a second time
+// by any later replay, which is precisely the bug the latch exists to prevent.
+export const releaseProjectCompletionEffects = (projects, ops) => {
+  const list = normalizeProjects(projects);
+  const polityChanges = [];
+  const regionClaims = [];
+  const regionTransfers = [];
+  const projectIds = [];
+  const fired = new Set();
+
+  for (const raw of normalizeArray(ops)) {
+    const op = normalizeProjectOp(raw);
+    if (!op) continue;
+
+    // Two ways a project reaches `complete`, and the second is the one a model
+    // reaches for at least as often: an explicit close op, and a plain update
+    // carrying status "complete" (status is in PROJECT_PATCHABLE_FIELDS, so it
+    // lands). Handling only the first would make this fire about half the time,
+    // which is worse than not shipping it — an annexation that transfers the
+    // border on some completions and not others is unreadable to the player.
+    let completing = op.op === "close" && op.status === "complete";
+    if (!completing && op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const alias = patchedAlias(patch, "status");
+      completing = Boolean(alias) && resolveProjectStatus(patch[alias]) === "complete";
+    }
+    if (!completing) continue;
+
+    const index = findProjectIndexForOp(list, op);
+    if (index === -1) continue;
+    const project = list[index];
+
+    if (fired.has(project.id)) continue;
+    if (!project.onComplete) continue;
+    // Only the TRANSITION fires. A project that is already closed is a
+    // restatement, and one already latched has spent its effects.
+    if (!PROJECT_OPEN_STATUSES.has(project.status)) continue;
+    if (project.onCompleteAppliedAt) continue;
+
+    fired.add(project.id);
+    projectIds.push(project.id);
+    polityChanges.push(...project.onComplete.polityChanges);
+    regionClaims.push(...project.onComplete.regionClaims);
+    regionTransfers.push(...project.onComplete.regionTransfers);
+  }
+
+  return { polityChanges, projectIds, regionClaims, regionTransfers };
+};
+
+// Stamps the onComplete latch on the transition into `complete`.
+//
+// The invariant a future edit will break if it is not stated: this fires under
+// EXACTLY the predicate releaseProjectCompletionEffects fires under — the project
+// was open, it carries effects, it is not already latched, and it is completing
+// (not cancelled, not failed). The two agree by construction because they are
+// handed the same list, the same op and the same matcher; if you change the
+// condition in one, change it in the other or a completion will either transfer
+// its regions twice or never transfer them at all.
+//
+// Stamped whether or not THIS caller applied the effects. Both call sites
+// (applyEventImpactsToWorld and applyProjectOpsToWorld) run the release first, and
+// the alternative — threading a "did you apply them?" flag down here — is a flag
+// that eventually arrives false and silently swallows a country's annexation.
+const stampCompletionLatch = (project, completing, when) => (
+  completing && project.onComplete && !project.onCompleteAppliedAt
+    ? when
+    : project.onCompleteAppliedAt);
+
+// Apply a batch of project ops (pure).
+//
+// Matching is findProjectIndexForOp above, shared with the completion pre-scan.
+//
+// `ctx` carries the event that caused the change ({date, eventId, round}), which
+// is what builds the activity feed without the model having to maintain it.
+export const applyProjectOps = (projects, ops, ctx = {}) => {
+  const { date = "", eventId = "", round = 0 } = ctx;
+  const stamp = new Date().toISOString();
+  let next = normalizeProjects(projects);
+
+  const indexOf = (op) => findProjectIndexForOp(next, op);
+
+  // Every mutation routes through here so the "when did this last move" fields
+  // and the activity feed cannot be updated in one branch and forgotten in
+  // another — which is exactly how a board like this goes quietly stale.
+  const touch = (project) => ({
+    ...project,
+    updatedAt: stamp,
+    updatedRound: round > 0 ? round : project.updatedRound,
+    eventIds: eventId
+      ? [eventId, ...project.eventIds.filter((id) => id !== eventId)].slice(0, MAX_PROJECT_EVENT_IDS)
+      : project.eventIds,
+  });
+
+  // Normalize defensively. Ops arriving from applyEventImpactsToWorld have been
+  // through normalizeEventImpacts already, but the advisor feeds this function a
+  // freshly parsed ```projects block that has not -- and normalizeProjectOp is
+  // idempotent, so running it twice costs nothing and skipping it drops the whole
+  // advisor path on the floor.
+  for (const raw of normalizeArray(ops)) {
+    const op = normalizeProjectOp(raw);
+    if (!op) continue;
+    if (op.op === "create") {
+      const existingIndex = indexOf({ projectId: op.project.id, name: op.project.name });
+      if (existingIndex !== -1) {
+        // Re-announcing a running project is a restatement, not a second one, so
+        // treat it as an UPDATE — otherwise a chatty turn fills the board with
+        // duplicate copies of Project Leviathan. Same rule applyMarkerOps applies
+        // to rebuilding under an existing name.
+        //
+        // Crucially a merge, not a replace. This used to spread the whole
+        // normalized op over the existing entry, so a jump that mentioned an
+        // operation in passing — {"op":"create","name":"Standing Watch",
+        // "summary":"The patrol continues."} — silently reset everything the
+        // model had not bothered to restate: ongoing back to false, progress to
+        // 0, status to active, secrecy to public, tags emptied, an operation
+        // demoted to a project. Only apply what the op actually carried.
+        const existing = next[existingIndex];
+        const merged = { ...existing };
+        for (const field of op.provided ?? []) {
+          if (field === "name") continue; // matched BY the name; never rewrite it here
+          merged[field] = op.project[field];
+        }
+        next = next.map((project, index) => (index === existingIndex
+          ? touch({
+            ...merged,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            // A restatement rarely repeats the history, so keep what we had.
+            eventIds: existing.eventIds,
+          })
+          : project));
+        continue;
+      }
+      next = [...next, touch({
+        ...op.project,
+        startedAt: op.project.startedAt || date,
+        createdAt: stamp,
+      })];
+      continue;
+    }
+
+    // An op against a project that does not exist is dropped rather than
+    // creating one: it usually means the model invented an id, and a phantom
+    // project spawned from a typo is worse than a missed update.
+    const index = indexOf(op);
+    if (index === -1) continue;
+    const current = next[index];
+
+    if (op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const merged = { ...current };
+      for (const field of PROJECT_PATCHABLE_FIELDS) {
+        // Written under the CANONICAL key whichever alias carried it, so
+        // normalizeProjectEntry below reads the new value rather than the one it
+        // is replacing (its own `entry.summary || entry.description` fallback
+        // would otherwise keep the old summary and ignore the patch's).
+        const alias = patchedAlias(patch, field);
+        if (alias) merged[field] = patch[alias];
+      }
+      // tags follows the countryTags rule exactly: an ARRAY replaces the list
+      // wholesale (so [] really does mean "this has no tags any more"), while an
+      // absent value means unchanged. Truthiness would conflate the two.
+      const renamed = normalizeOptionalString(patch.newName || patch.rename);
+      if (renamed) merged.name = renamed;
+      if (Array.isArray(patch.tags)) merged.tags = patch.tags;
+      if (Array.isArray(patch.milestones)) merged.milestones = patch.milestones;
+      const normalized = normalizeProjectEntry(
+        { ...merged, id: current.id, createdAt: current.createdAt },
+        index,
+      );
+      if (!normalized) continue;
+      // A model completes a project with a plain status patch at least as often
+      // as with an explicit close op, so the latch has to be stamped here too.
+      const completedHere = PROJECT_OPEN_STATUSES.has(current.status) && normalized.status === "complete";
+      next = next.map((project, i) => (i === index
+        ? touch({
+          ...normalized,
+          onCompleteAppliedAt: stampCompletionLatch(current, completedHere, date || stamp),
+        })
+        : project));
+      continue;
+    }
+
+    if (op.op === "milestone") {
+      const wanted = op.milestone.title.toLowerCase();
+      const existing = current.milestones.find((entry) =>
+        (op.milestone.id && entry.id === op.milestone.id) || entry.title.toLowerCase() === wanted);
+
+      // Merge field by field rather than spreading the normalized op over the
+      // entry. normalizeProjectMilestone fills every field, so a spread wrote
+      // date:"" and note:"" whenever the model marked something done the natural
+      // way — {"title":"Annual drill","status":"done"} — silently erasing when it
+      // had been due and what it was. Only take what the op actually carried.
+      const mergeInto = (entry) => {
+        const merged = {
+          ...entry,
+          title: op.milestone.title || entry.title,
+          date: op.milestone.date || entry.date,
+          // Only when the op said so. An op that merely re-dates or annotates a
+          // checkpoint must not reset a completed one back to pending — see the
+          // statusProvided flag in normalizeProjectOp.
+          status: op.statusProvided ? op.milestone.status : entry.status,
+          note: op.milestone.note || entry.note,
+          repeat: op.milestone.repeat || entry.repeat,
+          id: entry.id,
+        };
+
+        // A recurring commitment is never finished, only performed again. Roll it
+        // to the next occurrence after whichever is later — the date it was due or
+        // the date it was actually marked off — and set it pending, so the board
+        // shows the next one instead of an empty "next milestone".
+        //
+        // Gated on the op HAVING said done, not merely on the merged status being
+        // done: a roll is the answer to "this was performed", and an entry can sit
+        // at done without one (advanceRecurringDate declines an undated
+        // milestone), which a later re-dating op would otherwise bank as a second
+        // performance it never reported.
+        if (op.statusProvided && merged.status === "done" && merged.repeat) {
+          // Anchored on the milestone's own date so an annual drill on 1 June
+          // stays on 1 June — but falling back to the date it was performed when
+          // it has none. A model reaches for {"title":"Annual drill",
+          // "repeat":"annual"} with no date more or less constantly, and
+          // advanceRecurringDate cannot roll from nothing: the commitment was
+          // marked done, never rolled, and quietly retired for good despite
+          // carrying a repeat. Rolling from the performance date keeps a standing
+          // commitment standing, which is the entire point of the flag.
+          const anchor = merged.date || date;
+          const rolled = advanceRecurringDate(anchor, merged.repeat, date || anchor);
+          if (rolled) {
+            return {
+              ...merged,
+              date: rolled,
+              status: "pending",
+              completedCount: (Number(entry.completedCount) || 0) + 1,
+              lastCompletedAt: date || anchor,
+            };
+          }
+        }
+        return merged;
+      };
+
+      const milestones = existing
+        ? current.milestones.map((entry) => (entry === existing ? mergeInto(entry) : entry))
+        : [...current.milestones, op.milestone];
+      // nextMilestone is nulled so normalizeProjectEntry re-derives it from the
+      // list it was just handed, rather than keeping a value the new milestone
+      // may have superseded.
+      const normalized = normalizeProjectEntry({ ...current, milestones, nextMilestone: null }, index);
+      if (!normalized) continue;
+      next = next.map((project, i) => (i === index ? touch(normalized) : project));
+      continue;
+    }
+
+    if (op.op === "close") {
+      const succeeded = op.status === "complete";
+      next = next.map((project, i) => (i === index
+        ? touch({
+          ...project,
+          status: op.status,
+          // Only success implies the work is all done. A cancelled programme at
+          // 40% stays at 40% — that is the informative number.
+          progress: succeeded ? 100 : project.progress,
+          // Nothing is still outstanding once a project has ended, whichever way
+          // it ended. A leftover pending milestone would keep showing a "next"
+          // that will never come and, once its date passed, an OVERDUE badge on
+          // something already finished. Success marks them done; anything else
+          // marks them missed, which is what actually happened.
+          milestones: project.milestones.map((entry) =>
+            (entry.status === "pending" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
+          nextMilestone: null,
+          lastUpdate: op.note || project.lastUpdate,
+          // Cancel and fail never release effects: `succeeded` is the only gate,
+          // so a called-off annexation leaves the border exactly where it was.
+          onCompleteAppliedAt: stampCompletionLatch(
+            project,
+            succeeded && PROJECT_OPEN_STATUSES.has(project.status),
+            date || stamp,
+          ),
+        })
+        : project));
+      continue;
+    }
+
+    if (op.op === "remove") {
+      next = next.filter((_, i) => i !== index);
+    }
+  }
+
   return next;
 };
 
@@ -1447,6 +2365,7 @@ const normalizeEventImpacts = (value) => {
       createdChats: [],
       markerOps: [],
       polityChanges: [],
+      projectOps: [],
       regionClaims: [],
       regionTransfers: [],
       unitOps: [],
@@ -1458,6 +2377,7 @@ const normalizeEventImpacts = (value) => {
     createdChats: normalizeChats(value.createdChats),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
+    projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
@@ -1754,6 +2674,19 @@ export const normalizeWorldState = (world) => {
     markers: normalizeMarkers(nextWorld.markers),
     // Explicit (not via the ...WORLD_DEFAULTS spread) so these new fields survive every
     // write path — the documented new-world-field trap.
+    //
+    // Owners folded on READ, exactly as regionOwnershipOverrides and regionClaimants
+    // above are, and for the same reason: a board written before the ops door began
+    // folding them can still carry a foreign programme filed under a polity's era
+    // display name ("the Third Reich") rather than the token everything else keys off
+    // ("Germany"). Left alone that is a second power beside the first, with no flag
+    // and no colour — and where the renamed polity is the PLAYER'S, it is their own
+    // programme sitting in the Foreign column with both of its controls gone. Idempotent,
+    // so a board already correct reads back unchanged.
+    projects: normalizeProjects(nextWorld.projects).map((project) => {
+      const owner = resolveOwner(project.ownerCode);
+      return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
+    }),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -2024,16 +2957,22 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // op on day 3 of a 90-day jump only moves three days' worth. Passing motion: null
 // (the default) leaves moves unclamped, i.e. exactly the old behaviour — which is
 // also the right fallback for a scenario whose dates are not Gregorian.
-// `round` is the round these events belong to; unit ops read it when a standing
-// order is minted.
+// `round` stamps world.projects[].updatedRound so the board can say how long a
+// programme has sat still. It defaults to 0 (meaning "leave the stamp alone")
+// rather than being required, because the staged event reveal in time.jsx replays
+// impacts purely for display and must not age the projects it is only redrawing.
 // `betaEngine` reaches applyUnitOpBatch unchanged — see its context docs. Pass
 // false alongside motion: null to run a jump entirely under the classic rules.
 // The territory-and-identity half of applying impacts: region transfers, region
 // claims, and everything a polityChange carries (name, colour, reputation, stats,
 // tags).
 //
-// Kept apart from the event loop so a non-event writer can reach it too, with
-// one implementation of the owner-alias resolution rather than two.
+// Extracted from applyEventImpactsToWorld's event loop so that the NON-event
+// writers can reach it too. A project's onComplete effects have to be applied by
+// whoever completes the project, and the advisor's ```projects fence and the
+// Projects panel's own buttons both complete projects without an event anywhere in
+// sight. Two implementations of this would be two chances to get the owner-alias
+// resolution wrong; there is one.
 //
 // Mutates `world` and `colors` in place — both are already the caller's private
 // normalized copies.
@@ -2180,11 +3119,25 @@ export const applyEventImpactsToWorld = ({
   let resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
 
   for (const event of normalizeEvents(events)) {
+    // A project this event COMPLETES releases its effects into this event, before
+    // anything at all is applied. See releaseProjectCompletionEffects for why it
+    // cannot be done further down where the project ops themselves are applied:
+    // those run last, and these have to run first.
+    //
+    // Folded into local copies only. The event in events.json is never rewritten,
+    // so a later replay derives the same effects from the same snapshot rather
+    // than finding them baked in and applying them a second time.
+    const released = releaseProjectCompletionEffects(nextWorld.projects, event.impacts.projectOps);
+
     // Resolve this event's polity changes first — both to fold the renames they
     // make into the alias map before any owner is read through it, and so a
     // change addressed to a polity's current display name lands on that polity
     // rather than creating a second one beside it.
-    const polityChanges = event.impacts.polityChanges.map((change) => ({
+    //
+    // The event's OWN changes go before the released ones: if both rename the same
+    // polity, what this event explicitly narrates should win the alias-map rebuild
+    // rather than fight a project's stored effect for it.
+    const polityChanges = [...event.impacts.polityChanges, ...released.polityChanges].map((change) => ({
       change,
       code: resolveOwner(change.code) || change.code,
     }));
@@ -2198,8 +3151,8 @@ export const applyEventImpactsToWorld = ({
     applyPolityAndTerritoryImpacts({
       colors: nextColors,
       polityChanges,
-      regionClaims: event.impacts.regionClaims,
-      regionTransfers: event.impacts.regionTransfers,
+      regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
+      regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
       resolveOwner,
       world: nextWorld,
     });
@@ -2260,6 +3213,17 @@ export const applyEventImpactsToWorld = ({
       }
     }
 
+    // Projects & Operations last, so the ops see the world this event has already
+    // reshaped. The event's own id and date ride along: that is what stamps the
+    // activity feed and dates a project the event has just started, without the
+    // model having to restate either.
+    if (event.impacts.projectOps?.length) {
+      nextWorld.projects = applyProjectOps(
+        nextWorld.projects,
+        event.impacts.projectOps.map((op) => resolveProjectOpOwner(op, resolveOwner)),
+        { date: event.date, eventId: event.id, round },
+      );
+    }
   }
 
   return {
@@ -2270,3 +3234,86 @@ export const applyEventImpactsToWorld = ({
   };
 };
 
+// The door every NON-EVENT writer to the projects board goes through: the
+// advisor's ```projects fence and the Projects panel's own buttons.
+//
+// The rule this enforces, and the reason it is a separate function from the event
+// path: ONLY AN EVENT MAY CHANGE THE WORLD. The advisor reports and plans; the
+// simulation enacts. Its write channels have always been chart/actions/senddraft/
+// deploy/projects, none of which touches a border or a polity's identity, and
+// onComplete must not become a side door around that — otherwise "rename us" gets
+// answered by opening a project carrying a polityChanges payload and closing it a
+// reply later, which renames the country from a chat window with no jump, no
+// event, and nothing in the campaign record to explain it.
+//
+// So a completing op is REFUSED here when the project carries effects, rather than
+// applied. The project stays open and its id comes back in deferredProjectIds, so
+// the caller can say plainly that the simulation has to enact it. The next jump
+// closes it for real (the jump directive already tells the model to close finished
+// work), and the effects are released there, on the event path, where every other
+// world change is made and where the narration sits beside it.
+//
+// Effects are never applied here, so this deliberately returns no colors change.
+//
+// `actor` says WHO is writing, and only two values exist. "ai" (the default) is
+// the advisor's ```projects fence, which may touch any entry on the board: half of
+// what it does is report what the player's services have learned about somebody
+// else's shipyard. "player" is the Projects panel's own buttons, which may only
+// touch the player's own work — see canPlayerDirect. Anything refused for that
+// reason comes back in refusedProjectIds rather than being applied and rather than
+// throwing; the panel re-reads within five seconds either way.
+export const applyProjectOpsToWorld = ({
+  actor = "ai",
+  date = "",
+  eventId = "",
+  ops,
+  playerCountry = "",
+  round = 0,
+  world,
+}) => {
+  const nextWorld = normalizeWorldState(world);
+  // Same resolver, same reason, as the event path below and as
+  // normalizeWorldState's territory fields — see resolveProjectOpOwner.
+  const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
+
+  // The same pre-scan the event path runs, used here purely as a PREDICATE: what
+  // would this batch release? Anything it names is an op this door may not apply.
+  const released = releaseProjectCompletionEffects(nextWorld.projects, resolved);
+  const deferred = new Set(released.projectIds);
+  const refused = new Set();
+
+  const allowed = resolved.filter((raw) => {
+    const op = normalizeProjectOp(raw);
+    if (!op) return true;
+    const index = findProjectIndexForOp(nextWorld.projects, op);
+    // A create names nothing on the board yet, so there is no owner to check and
+    // no completion to defer. The panel never sends one; the advisor legitimately
+    // opens a rival's programme.
+    if (index === -1) return true;
+    const target = nextWorld.projects[index];
+
+    // The player's door. Priority and abandon are the only two ops it drives, and
+    // neither is a thing one government does to another's programme.
+    if (actor === "player" && !canPlayerDirect(target, playerCountry)) {
+      refused.add(target.id);
+      return false;
+    }
+
+    // Only the completing op is dropped. An update to the same project in the same
+    // batch — progress, a note, a milestone — still lands: refusing to close it is
+    // not a reason to lose everything else the reply said about it.
+    if (!deferred.has(target.id)) return true;
+    if (op.op === "close" && op.status === "complete") return false;
+    if (op.op === "update") {
+      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+      const alias = patchedAlias(patch, "status");
+      if (alias && resolveProjectStatus(patch[alias]) === "complete") return false;
+    }
+    return true;
+  });
+
+  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, { date, eventId, round });
+
+  return { deferredProjectIds: [...deferred], refusedProjectIds: [...refused], world: nextWorld };
+};

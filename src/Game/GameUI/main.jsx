@@ -318,6 +318,7 @@ const Main = ({
         onOpenAdvisor={openAdvisor}
         activePanel={activeBottomPanel}
         onTogglePanel={toggleBottomPanel}
+        mapRef={mapRef}
       />
       <Other rightShift={rightShift} />
       <Search mapRef={mapRef} />

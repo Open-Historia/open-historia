@@ -485,6 +485,262 @@ const markerOpSchema = {
   ],
 };
 
+const projectMilestoneSchema = {
+  type: "object",
+  description: "One dated checkpoint on the way to a project's completion.",
+  properties: {
+    id: textSchema("Stable milestone identifier, when updating an existing one."),
+    title: nonEmptyTextSchema("Short description of the checkpoint, e.g. \"Sea trials begin\"."),
+    date: textSchema("In-game date the checkpoint is expected or was reached (YYYY-MM-DD)."),
+    status: {
+      type: "string",
+      description:
+        "pending until reached; done once achieved; missed if its date passed unmet. "
+        + "For a recurring checkpoint, send done each time it is performed - the engine "
+        + "rolls it to the next occurrence and sets it pending again by itself.",
+      enum: ["pending", "done", "missed"],
+    },
+    repeat: {
+      type: "string",
+      description:
+        "Set for a standing commitment that comes round again - an annual drill, a "
+        + "quarterly review, a monthly rotation. Marking it done does NOT retire it: the "
+        + "engine advances the date by one interval (keeping the same day of the year) and "
+        + "sets it pending, so the board always shows the next one. Give a recurring "
+        + "checkpoint a date, so it keeps the slot it is meant to fall on; without one the "
+        + "engine can only count forward from whenever it was last performed. Leave empty "
+        + "for a one-off checkpoint that happens once and is finished.",
+      enum: ["weekly", "monthly", "quarterly", "annual", "biennial"],
+    },
+    note: textSchema("Brief detail about the checkpoint."),
+  },
+  required: ["title"],
+  additionalProperties: false,
+};
+
+const projectSchema = {
+  type: "object",
+  description:
+    "A long-running effort that spans multiple rounds: a research or industrial "
+    + "programme, a construction project, a military operation, a covert operation, "
+    + "or a sustained political or diplomatic campaign. Distinct from a queued "
+    + "action, which is one thing done this round and resolved by the next jump.",
+  properties: {
+    id: textSchema("Stable project identifier. Copy it EXACTLY from the running-projects list when updating one; omit it when starting something new."),
+    name: nonEmptyTextSchema("The name the project is known by, e.g. \"Project Leviathan\" or \"Operation Kingfisher\"."),
+    kind: {
+      type: "string",
+      description: "operation for a military, intelligence or covert undertaking; project for a programme, build or civil effort.",
+      enum: ["project", "operation"],
+    },
+    ownerCode: textSchema(
+      "Running polity's FULL country name (\"Spain\"), never a country code. Leave empty "
+      + "for the player's own - and this field decides who controls the entry, so getting "
+      + "it wrong matters: an entry with an owner other than the player's is THEIRS, the "
+      + "player can only watch it, and neither they nor you may set its priority or call it "
+      + "off. Set it for a foreign power's programme the player's services have learned of; "
+      + "leave it empty for anything the player is actually running, including an operation "
+      + "of theirs aimed AT a foreign programme.",
+    ),
+    summary: nonEmptyTextSchema("One or two sentences on what this is and what it is meant to achieve."),
+    status: {
+      type: "string",
+      description:
+        "proposed (agreed but not begun), active (under way), stalled (blocked or "
+        + "starved of resources), paused (deliberately suspended), complete, failed, "
+        + "or cancelled.",
+      enum: ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"],
+    },
+    priority: {
+      type: "string",
+      description:
+        "How much attention the PLAYER wants this to get. They set it themselves "
+        + "on the board - leave it out entirely unless they have told you in this "
+        + "conversation to raise or drop something's priority. It is never your own "
+        + "judgement of how important a programme is, and overwriting it discards an "
+        + "instruction they gave. It exists only on the player's OWN work: a foreign "
+        + "power's programme has no priority, they cannot give it one, and asking for "
+        + "one on their behalf is refused.",
+      enum: ["high", "normal", "low"],
+    },
+    progress: {
+      type: "integer",
+      description: "How far along it is, 0-100. Move this whenever the narrative advances or sets it back.",
+      minimum: 0,
+      maximum: 100,
+    },
+    tags: stringArraySchema(
+      "Short lowercase categories the player can filter by - military, political, "
+      + "naval, economic, research, intelligence, infrastructure, nuclear, space. "
+      + "Invent what fits this campaign; reuse the same spelling across projects.",
+    ),
+    secrecy: {
+      type: "string",
+      description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
+      enum: ["public", "restricted", "covert"],
+    },
+    // Only the two VERDICTS are offered. "doubted" is stamped by the engine when
+    // the agent an entry came from turns out to be compromised, and is absent from
+    // this enum on purpose: a model must never be able to cast doubt on the board
+    // itself, only to settle a doubt already cast — and only from a fresh source.
+    verification: {
+      type: "string",
+      description:
+        "Only for an entry the board shows as doubted, and only once a fresh source is in place: "
+        + "confirmed if the new material shows the effort is real, refuted if it shows there was never "
+        + "anything there (pair refuted with failing the entry). Leave it out otherwise.",
+      enum: ["confirmed", "refuted"],
+    },
+    startedAt: textSchema("In-game date work began (YYYY-MM-DD)."),
+    ongoing: {
+      type: "boolean",
+      description:
+        "True for a standing effort with no planned end - a permanent patrol, a "
+        + "continuous intelligence or security programme, an alliance kept in good "
+        + "repair. Leave targetDate empty when this is true, and never invent an end "
+        + "date for something that is simply meant to continue.",
+    },
+    targetDate: textSchema("In-game date it is expected to complete (YYYY-MM-DD). Omit entirely for an ongoing effort. This is what the board measures overdue against."),
+    milestones: {
+      type: "array",
+      description: "Checkpoints along the way, earliest first. The soonest pending one is shown as the project's next milestone.",
+      items: projectMilestoneSchema,
+    },
+    lastUpdate: textSchema("One present-tense sentence on what most recently changed. Shown to the player verbatim."),
+    linkedUnitIds: stringArraySchema("Ids of units carrying this out, copied exactly from the unit list."),
+    linkedMarkerIds: stringArraySchema("Ids of structures this is built around, copied exactly from the structure list."),
+    focus: {
+      type: "object",
+      description: "Where on the map this is happening, so the player can jump the camera to it.",
+      properties: {
+        lng: { type: "number", description: "Longitude.", minimum: -180, maximum: 180 },
+        lat: { type: "number", description: "Latitude.", minimum: -90, maximum: 90 },
+      },
+      required: ["lng", "lat"],
+      additionalProperties: false,
+    },
+    note: textSchema("Anything else worth keeping: estimated cost, blockers, who is running it."),
+    onComplete: {
+      type: "object",
+      description:
+        "What finishing this project DOES to the world, applied automatically the "
+        + "moment it is completed and never applied twice - and never at all if it "
+        + "is cancelled or fails. Use it whenever the project's whole point is a "
+        + "concrete change: a campaign to annex a province (regionTransfers), a "
+        + "unification or regime change that renames or recolours a polity "
+        + "(polityChanges), a claim the effort would drop if it collapsed "
+        + "(regionClaims with drop true). Without this a finished project is only a "
+        + "progress bar that reached 100 while the map stayed exactly as it was. "
+        + "MOST PROJECTS HAVE NO onComplete: a research programme, a construction "
+        + "project or a campaign of influence finishes narratively and takes none. "
+        + "Attach one only when completion causes a specific, nameable change of "
+        + "territory or of a polity's identity.",
+      // Described by reference rather than re-embedded. These three schemas are
+      // already spelled out in full under impacts in the very same payload, and
+      // repeating them here cost ~6.3 KB of every jump prompt to say the same
+      // thing a second time. normalizeProjectOnComplete (runtime/gameState.js)
+      // normalizes whatever arrives, so the loose shape costs nothing at the
+      // ingest end either.
+      properties: {
+        polityChanges: {
+          type: "array",
+          description: "Polity identity changes enacted on completion. Same entry shape as impacts.polityChanges.",
+          items: { type: "object" },
+        },
+        regionTransfers: {
+          type: "array",
+          description: "Map ownership changes enacted on completion. Same entry shape as impacts.regionTransfers.",
+          items: { type: "object" },
+        },
+        regionClaims: {
+          type: "array",
+          description: "Claims asserted or dropped on completion. Same entry shape as impacts.regionClaims.",
+          items: { type: "object" },
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  required: ["name", "summary"],
+  additionalProperties: false,
+};
+
+// ONE flat op, discriminated by `op`, rather than six overlapping anyOf variants.
+//
+// Why: the six-variant version was 41.5 KB serialized — 66% of the ENTIRE jump
+// tool schema, three times what every other impact branch cost put together —
+// because three of its variants (nested create, flat create, update) each
+// restated projectSchema's twenty properties in full. It was ~10k tokens sent on
+// every jump, and on a segmented jump, once per segment.
+//
+// Collapsing it is not only cheaper, it is more reliable. A six-branch anyOf is
+// one of the worst constructs for Gemini's OpenAPI subset (see geminiSchema.js)
+// and for small local models, which routinely pick the wrong branch or emit a
+// blend of two. One object with an op enum is what they handle well.
+//
+// Nothing is lost at the ingest end: normalizeProjectOp (runtime/gameState.js)
+// already resolves every op name and alias, already reads a create written flat
+// OR nested (`operation.project ?? operation`), and already merges a create that
+// names an existing project into an update of only the fields it carried. The
+// old schema was describing tolerance the reducer had all along.
+const projectOpSchema = {
+  type: "object",
+  description:
+    "A change to the player's Projects & Operations board. Set op, name the project, "
+    + "and send ONLY the fields that op needs — everything omitted keeps its current value. "
+    + "op create opens a new effort (give it a summary too); update moves an existing one; "
+    + "milestone records a checkpoint; complete, cancel or fail close it while keeping it on "
+    + "the board; remove erases an entry that should never have been opened, which is NOT how "
+    + "a project ends.",
+  properties: {
+    op: {
+      type: "string",
+      description: "Which change this is.",
+      enum: ["create", "update", "milestone", "complete", "cancel", "fail", "remove"],
+    },
+    projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list. Omit when opening something new."),
+    name: nonEmptyTextSchema(
+      "The project's name — the new name when opening one, otherwise its CURRENT name copied "
+      + "exactly from the running-projects list, which is how it is found when no id is given.",
+    ),
+    newName: textSchema("A new name, only when the project is being renamed."),
+    milestone: projectMilestoneSchema,
+    // Every descriptive field a project has, all optional. `name` is redefined
+    // above (a create names a new project, an update identifies an existing
+    // one), and `id` is spelled projectId here.
+    kind: projectSchema.properties.kind,
+    ownerCode: projectSchema.properties.ownerCode,
+    summary: textSchema("What this is and what it is meant to achieve. Required when opening one; on an update send it only if it changed."),
+    status: projectSchema.properties.status,
+    priority: projectSchema.properties.priority,
+    progress: projectSchema.properties.progress,
+    tags: projectSchema.properties.tags,
+    secrecy: projectSchema.properties.secrecy,
+    startedAt: projectSchema.properties.startedAt,
+    ongoing: projectSchema.properties.ongoing,
+    targetDate: projectSchema.properties.targetDate,
+    milestones: projectSchema.properties.milestones,
+    lastUpdate: projectSchema.properties.lastUpdate,
+    linkedUnitIds: projectSchema.properties.linkedUnitIds,
+    linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
+    focus: projectSchema.properties.focus,
+    note: textSchema("Anything else worth keeping, or — when closing one — a sentence on how it ended."),
+    onComplete: projectSchema.properties.onComplete,
+    // The nested spelling of a create, kept permissive rather than re-embedding
+    // projectSchema for the third time. The model is no longer TOLD to nest, so
+    // this is pure tolerance for one that does anyway: additionalProperties is
+    // false, so without this key a nested create would fail schema validation and
+    // cost the whole turn, which is exactly the failure the flat variant was
+    // added to prevent. normalizeProjectOp reads it either way.
+    project: {
+      type: "object",
+      description: "Legacy nested form of a create. Prefer the flat fields above.",
+    },
+  },
+  required: ["op", "name"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "Optional structured world-state effects. Include only effect arrays that are relevant.",
@@ -532,8 +788,35 @@ const impactsSchema = {
         + "border; use regionTransfers for land that actually changed hands.",
       items: regionClaimSchema,
     },
+    projectOps: {
+      type: "array",
+      description:
+        "Changes to the Projects & Operations board. Use whenever the event starts, "
+        + "advances, sets back, completes or ends a multi-round effort - a research "
+        + "or industrial programme, a construction project, a military or covert "
+        + "operation, a sustained political campaign - so the board matches the "
+        + "story. Prefer updating a running project over starting a duplicate.",
+      items: projectOpSchema,
+    },
   },
   additionalProperties: false,
+};
+
+// The same impacts, minus the board. A jump no longer moves projects inline: it
+// writes the story, and the separate `projects` task reads that story and moves
+// the board to match (PROJECTS_SCHEMA), attaching its ops back onto these very
+// events before anything is written.
+//
+// So this only narrows what the MODEL is asked to produce in a jump. The data
+// path is unchanged — applyEventImpactsToWorld still reads impacts.projectOps,
+// which is exactly how the attached ops get applied. The game master keeps the
+// full impacts object, since a direct "make this happen" command is one call
+// with no separate pass to hand the work to.
+const jumpImpactsSchema = {
+  ...impactsSchema,
+  properties: Object.fromEntries(
+    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
+  ),
 };
 
 const eventSchema = {
@@ -554,7 +837,7 @@ const eventSchema = {
       type: "boolean",
       description: "Whether the event directly concerns the player polity.",
     },
-    impacts: impactsSchema,
+    impacts: jumpImpactsSchema,
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
@@ -816,6 +1099,53 @@ export const GAME_MASTER_SCHEMA = {
   additionalProperties: false,
 };
 
+// The Projects & Operations board, moved OUT of the jump and into its own call.
+//
+// Why: projectOps was the single largest thing in the jump contract by a wide
+// margin, and the board dominated what the model spent its attention on. A field
+// run caught a model narrating its plan for three minutes — enumerating stalled
+// programmes one by one — and never reaching the events it was actually asked
+// for. The board is bookkeeping: it follows from the events rather than
+// competing with them for the same budget.
+//
+// So the jump writes the story, and this call reads that story and moves the
+// board to match. It sees the finished events and the board, and nothing else —
+// no world summary, no city coordinates, no unit list, no chat history.
+export const PROJECTS_SCHEMA = {
+  type: "object",
+  description:
+    "Changes to the Projects & Operations board that follow from the events just simulated.",
+  properties: {
+    projectOps: {
+      type: "array",
+      description:
+        "One entry per change. Return an empty array when nothing on the board moved this "
+        + "period — that is a normal and correct answer, and inventing progress is worse "
+        + "than reporting none.",
+      items: {
+        ...projectOpSchema,
+        properties: {
+          ...projectOpSchema.properties,
+          // Which event caused this. The ops are attached back onto that event
+          // before the world is written, so the board change is recorded as part
+          // of the event that caused it — which is what lets the staged reveal
+          // show them together and what keeps a rollback consistent.
+          eventIndex: {
+            type: "integer",
+            description:
+              "Zero-based index of the event in the list above that causes this change. "
+              + "Use the event that actually moved the effort; omit only when no single "
+              + "event is responsible.",
+            minimum: 0,
+          },
+        },
+      },
+    },
+  },
+  required: ["projectOps"],
+  additionalProperties: false,
+};
+
 const percentageSchema = (description) => ({
   type: "integer",
   description,
@@ -931,6 +1261,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
+  projects: PROJECTS_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -989,6 +1320,12 @@ export const CATALYST_SUMMARY_TOOL = makeTool(
   CATALYST_SUMMARY_SCHEMA,
 );
 
+export const PROJECTS_TOOL = makeTool(
+  "submit_project_ops",
+  "Submit the Projects & Operations board changes that follow from the events just simulated.",
+  PROJECTS_SCHEMA,
+);
+
 export const GAME_MASTER_TOOL = makeTool(
   "submit_game_master",
   "Submit the summary and structured map or world-state effects of a game-master request.",
@@ -1036,6 +1373,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,
+  projects: PROJECTS_TOOL,
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;

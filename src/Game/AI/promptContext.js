@@ -15,6 +15,7 @@ import {
 import { buildRegionOwnershipText } from "./regionVocab.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
 import { buildForcePostureText } from "./forcePosture.js";
+import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -389,6 +390,187 @@ export const buildMarkersSummaryText = (world) => {
   }).join("\n");
 };
 
+// The Projects & Operations board (world.projects), written out for the model.
+//
+// Tiered, because this text rides EVERY advisor message and EVERY jump prompt.
+// Written flat, one full paragraph per project, a real 44-project board cost
+// ~5,300 tokens a call — which is not just expensive, it crowds the campaign
+// history out of the same context window. Three tiers instead:
+//
+//   1. Open projects, in full, most recently touched first, capped at
+//      FULL_DETAIL_PROJECTS. This is what the model reasons WITH.
+//   2. Every remaining open project, one compact line.
+//   3. Closed projects, one compact line, so the model knows they exist and does
+//      not re-open them.
+//
+// Crucially every project appears in some tier WITH ITS ID, because the directive
+// tells the model to copy ids verbatim and an op naming something absent from
+// this list is dropped. Truncating the list outright would quietly make the
+// omitted projects uneditable.
+//
+// Ids are printed with every entry, and the directives insist they be copied
+// verbatim, because the alternative is the model inventing one and its update
+// landing on nothing (applyProjectOps drops an op whose target does not exist —
+// far better than spawning a phantom project from a typo).
+//
+// Also prints what the ENGINE derived rather than what the model last said:
+// overdue, and rounds since the last update. That is the nudge that gets a
+// neglected programme moved along, and it cannot be argued with — it is a
+// function of the calendar, not of anyone's memory.
+const FULL_DETAIL_PROJECTS = 20;
+
+export const buildProjectsSummaryText = (world, game) => {
+  const projects = normalizeArray(world?.projects);
+  if (projects.length === 0) {
+    return "No projects or operations are being tracked yet.";
+  }
+
+  const gameDate = normalizeString(game?.gameDate);
+  const round = Number(game?.round) || 0;
+  // game.country can still be a bare GADM code — the country picker writes the
+  // option's `code`, which on a stock scenario is "GBR" — while a project's
+  // ownerCode has already been through toCountryName ("United Kingdom"). Comparing
+  // the two raw told the model "run by United Kingdom" about the player's OWN
+  // programme. Same canonicalisation buildTerritoryText below already does.
+  const player = toCountryName(normalizeString(game?.country));
+  const OPEN = new Set(["proposed", "active", "stalled", "paused"]);
+
+  // Do not label it twice: half of these are already called "Operation X" or
+  // "Project Y", and 'Operation "Operation Kingfisher"' reads like a mistake.
+  const titleOf = (project) => {
+    const label = project.kind === "operation" ? "Operation" : "Project";
+    return project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
+      ? `"${project.name}"`
+      : `${label} "${project.name}"`;
+  };
+
+  // The board's own predicate, not a second comparison that agrees with it today.
+  // It used to be an inline lowercase compare here and a different one in
+  // projects.js, which is exactly how the panel's Mine/Foreign filter and what the
+  // model is told about the same project come to disagree.
+  const isOurs = (project) => isPlayerProject(project, player);
+
+  const ownerOf = (project) => {
+    const owner = normalizeString(project.ownerCode);
+    // Said in words the directive can point at, because "run by Germany" was being
+    // read as a label rather than a limit: the model would cheerfully mark a rival's
+    // programme high priority or close it because the player asked it to.
+    return isOurs(project) ? "ours" : `run by ${owner} — THEIRS, not ours`;
+  };
+
+  // Printed ONLY when it is not normal, and only on the player's OWN work.
+  //
+  // "priority: normal" on twenty entries spends the model's attention teaching it
+  // that the field means nothing; the two exceptional values are the whole signal.
+  // And priority means "how much of MY attention does this get", which nobody has
+  // over another government's programme — while a board written before the panel
+  // enforced that can still carry a High stamped on a rival's shipyard. Printing
+  // that would tell the model to chase a foreign programme on the player's behalf,
+  // which is the confusion this whole pass exists to end.
+  const priorityNote = (project) => {
+    if (!isOurs(project)) return "";
+    if (project.priority === "high") return " [HIGH PRIORITY]";
+    if (project.priority === "low") return " [low priority]";
+    return "";
+  };
+
+  const timelineOf = (project) => {
+    const timeline = describeTimeline(project, gameDate);
+    return timeline ? `${timeline}.` : "";
+  };
+
+  const warningsOf = (project, flags) => [
+    flags.overdue ? "OVERDUE" : "",
+    flags.milestoneMissed ? "a milestone has slipped" : "",
+    flags.stale ? "no progress reported recently" : "",
+    project.secrecy !== "public" ? project.secrecy : "",
+  ].filter(Boolean);
+
+  const full = (project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    const timeline = timelineOf(project);
+    const next = flags.nextMilestone
+      ? `Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
+      : "";
+    const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
+    const warnings = warningsOf(project, flags);
+    return [
+      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
+      project.summary,
+      project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
+      timeline,
+      next,
+      project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
+      roundsSince > 0 ? `Last updated ${roundsSince} round${roundsSince === 1 ? "" : "s"} ago.` : "",
+      warnings.length ? `[${warnings.join("; ")}]` : "",
+    ].filter(Boolean).join(" ");
+  };
+
+  // Everything the model needs to ADDRESS a project and judge whether it needs
+  // touching, minus the prose it only needs to reason about one in depth.
+  const compact = (project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    const warnings = warningsOf(project, flags);
+    const next = flags.nextMilestone
+      ? ` Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
+      : "";
+    return `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
+      + `${next}${warnings.length ? ` [${warnings.join("; ")}]` : ""}`;
+  };
+
+  const open = projects.filter((project) => OPEN.has(project.status));
+  const closed = projects.filter((project) => !OPEN.has(project.status));
+  // Most recently touched first, so the detail budget goes to live work.
+  const ranked = [...open].sort((a, b) =>
+    normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+  const detailed = ranked.slice(0, FULL_DETAIL_PROJECTS);
+  const brief = ranked.slice(FULL_DETAIL_PROJECTS);
+
+  const sections = [detailed.map(full).join("\n")];
+  if (brief.length > 0) {
+    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compact).join("\n")}`);
+  }
+  if (closed.length > 0) {
+    sections.push(`Finished or abandoned — do not re-open these:\n${closed.map(compact).join("\n")}`);
+  }
+
+  // The engine's own verdict on what has gone quiet, restated at the END as a
+  // short work list.
+  //
+  // The per-project [OVERDUE; no progress reported recently] tags above have been
+  // there all along and were being read as decoration: they sit inside a
+  // twenty-project wall of prose, each qualifying a different entry, and not one
+  // of them ASKS for anything. This does, and the jump directive points straight
+  // at it with the four acceptable answers. Nothing new is judged here — it is
+  // the same derived flags, and that is the point: this is the calendar talking,
+  // and it cannot be argued with the way a written status can.
+  const needsAttention = ranked.filter((project) => {
+    const flags = deriveProjectFlags(project, gameDate, round);
+    return flags.overdue || flags.milestoneMissed || flags.stale;
+  });
+  if (needsAttention.length > 0) {
+    const rows = needsAttention.map((project) => {
+      const flags = deriveProjectFlags(project, gameDate, round);
+      const why = [
+        flags.overdue ? `target date passed ${Math.abs(flags.daysToTarget)} days ago` : "",
+        flags.milestoneMissed ? "a milestone slipped" : "",
+        flags.stale
+          ? `nothing reported for ${Math.max(round - project.updatedRound, STALE_ROUNDS)} rounds`
+          : "",
+      ].filter(Boolean).join(", ");
+      // A foreign entry on this list is not a decision the player makes — it is a
+      // question about what the OTHER power has been doing while nobody looked, and
+      // the answer is a report, not an order. Marked so the directive's four
+      // answers are read in that register.
+      const whose = isOurs(project) ? "" : " (THEIRS — report what has become of it; it is not the player's to decide)";
+      return `- [id ${project.id}] ${project.name}${priorityNote(project)}${whose} — ${why}.`;
+    });
+    sections.push(`Needs a decision this jump:\n${rows.join("\n")}`);
+  }
+
+  return sections.join("\n\n");
+};
+
 // City coordinates for the model, so troop deployments and events land on the
 // actual city instead of a guess. Two sources, mirroring the map's own layer:
 // custom-city scenarios use their era set; everything else uses the significant
@@ -700,6 +882,7 @@ export const buildPromptContext = async (bundle, {
     playerBattalionSummaries: buildUnitsSummaryText(bundle.world),
     playerPolity: bundle.game.country || "Unknown polity",
     playerPolityRegions: await buildPlayerPolityRegionsText(bundle, regionCatalog),
+    projectsSummary: buildProjectsSummaryText(bundle.world, bundle.game),
     recentEvents,
     recentEventsLong: campaignHistory,
     recentRoundsWithDates: buildRecentRoundsWithDates(bundle),
