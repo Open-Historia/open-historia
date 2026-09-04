@@ -437,7 +437,13 @@ const APP_UPDATE_MANIFESTS = {
   // The desktop app checks through here rather than from the page: a release asset
   // sends no CORS headers, and the GitHub API is rate limited per IP. Exactly the
   // reason the Android tracks are served this way.
-  desktop: "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/latest.json",
+  //
+  // The beta build sets OH_DESKTOP_UPDATE_URL (electron/main.cjs) so it polls its
+  // OWN release instead. Without that a tester would be offered the official
+  // installer as an "update" and leave the build they signed up to test. Read once,
+  // at import: main.cjs sets the variable before it imports this file.
+  desktop: process.env.OH_DESKTOP_UPDATE_URL
+    || "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/latest.json",
 };
 // The desktop app imports this server into its Electron main process
 // (electron/main.cjs startServer), so the updater living there is reachable

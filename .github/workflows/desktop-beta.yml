@@ -1,35 +1,42 @@
 # Builds the desktop installers from the `beta` integration branch for Windows,
-# macOS and Linux and leaves them as run artifacts. It publishes nothing: this
-# branch has no beta packaging of its own yet (no electron-builder.beta.yml, no
-# stamp-channel.mjs — that is the S11 work that was deliberately left out), so
-# what comes out installs as "Open Historia" over the stable app and its updater
-# feed still points at `desktop-stable`. Handing those to players from a release
-# page would quietly replace the official build; downloading them from a run and
-# installing them deliberately is fine.
+# macOS and Linux and publishes them to the `desktop-beta` pre-release.
+#
+# It is the same pipeline as desktop-installer.yml with two additions — the channel
+# stamp and a different electron-builder config — and together those are what make
+# the beta a separate application: it installs BESIDE the official Open Historia
+# rather than over it, keeps its own saves, and updates itself from its own release
+# instead of being walked onto the stable build. Nothing here touches the stable
+# release or its `desktop-stable` tag.
 #
 # Two ways to start it:
 #
-#   * push a tag matching `desktop-beta-v*` at a commit on `beta` — this is the
-#     one that works today, because a tag push runs the workflow file from the
-#     tagged tree, wherever that tree came from;
+#   * push a tag matching `desktop-beta-v*` at a commit on `beta` — this is the one
+#     that works today, because a tag push runs the workflow file from the tagged
+#     tree, wherever that tree came from;
 #   * Run workflow → `beta`, once a copy of this file also sits on the default
 #     branch. GitHub only lists a workflow_dispatch entry if the file is on the
 #     default branch, which is why the SeventhDread beta keeps a copy on `main`.
 #
 # The tag pattern deliberately does not match the stable `desktop-v*` trigger in
-# desktop-installer.yml: a tag that matched both would publish a beta build to
-# the `desktop-stable` release.
+# desktop-installer.yml: a tag that matched both would publish a beta build to the
+# `desktop-stable` release. `desktop-beta` — the release tag itself — matches
+# neither, so creating it below cannot start another run.
 name: Desktop beta installers
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish the beta installers to
+        required: false
+        default: desktop-beta
   push:
     tags:
       - "desktop-beta-v*"
 
-# No `contents: write`: nothing here creates or uploads a release.
+# The release is created and its assets uploaded from here.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -49,9 +56,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       # A dispatch run picks its own branch from a dropdown, and `main` is in that
-      # dropdown too — a run from there would package the released code and label
-      # it beta. A tag run is exempt: its ref is the tag, not a branch, and the
-      # tag pattern is what says which line it came from.
+      # dropdown too — a run from there would package the released code, call it the
+      # beta and publish it. A tag run is exempt: its ref is the tag, not a branch,
+      # and the tag pattern is what says which line it came from.
       - name: Refuse to dispatch this from anything but beta
         if: github.event_name == 'workflow_dispatch' && github.repository == 'Open-Historia/open-historia' && github.ref_name != 'beta'
         shell: bash
@@ -77,7 +84,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The map archives are NOT packaged — they are ~200MB and the app downloads
+      # The map archives are NOT packaged — they are ~170MB and the app downloads
       # them on first launch — so nothing here fetches them.
       - name: Stamp the build id
         shell: bash
@@ -85,29 +92,44 @@ jobs:
           echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
           cat electron/build-id.json
 
-      # package.json ships 0.0.0, and an installer whose version never changes is
-      # one Windows will not cleanly install over. run_number is shared by all
-      # three jobs in a run, so one run is one version on every platform.
+      # What makes the packaged app behave as the beta at RUNTIME: its own Chromium
+      # profile, its own save library, its own update feed, its window title. The
+      # installer config below only decides how it is installed and what it is
+      # called. Both are needed — neither implies the other.
+      - name: Stamp the release channel
+        run: node scripts/stamp-channel.mjs beta
+
+      # package.json ships 0.0.0, and electron-updater compares semver: a build whose
+      # version never changes is one it will never offer as an update, and one Windows
+      # will not cleanly install over. run_number is shared by all three jobs in a
+      # run, so one run is one version on every platform, and it only ever goes up.
       - name: Stamp the app version
         shell: bash
         run: |
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "'version: '+require('./package.json').version"
 
+      # server/betaPackaging.test.js is in here, and it is the only thing that
+      # catches the beta's two update feeds drifting onto different tags, or
+      # latest.json below naming a file electron-builder does not produce. Both
+      # fail silently at runtime, so they have to fail loudly here.
       - name: Run the tests
         run: npm test
 
       - name: Build the client
         run: npm run build
 
+      # --config is what separates this from the stable workflow: its own appId,
+      # productName, icon, artifact names and update feed. It REPLACES package.json's
+      # `build` block rather than extending it.
       - name: Build the installer
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        run: npx electron-builder ${{ matrix.args }} --config electron-builder.beta.yml --publish never
         env:
           # No code-signing certificate. Without this electron-builder tries to
           # discover one and fails the build rather than skipping signing.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload the installers
+      - name: Upload as a build artifact
         uses: actions/upload-artifact@v6
         with:
           name: open-historia-beta-${{ matrix.os }}
@@ -118,3 +140,67 @@ jobs:
             release/*.AppImage
             release/*.deb
           if-no-files-found: error
+
+      - name: Attach to the beta release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A FIXED tag, never the branch or a per-build tag: this exact URL is baked
+          # into every shipped build twice over — BETA_UPDATE_MANIFEST in
+          # electron/main.cjs and `publish` in electron-builder.beta.yml — so
+          # publishing anywhere else silently stops testers being offered updates.
+          # The input exists only for one-off builds that deliberately go somewhere
+          # private, and it deliberately does not reach either of those two.
+          TAG: ${{ inputs.tag || 'desktop-beta' }}
+        shell: bash
+        run: |
+          # --prerelease so GitHub labels it, and never marks it "Latest" over the
+          # stable release in the same repo. Three jobs race here, so creating it
+          # tolerates "already exists"; --clobber lets a re-run replace assets.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' \
+              '**Beta build of Open Historia.** Not the official release — that is the one marked `Latest` on this page.' \
+              '' \
+              'It installs **alongside** the official app as *Open Historia Beta*, with its own Start Menu entry and a BETA-badged icon. Both can stay installed; uninstalling one leaves the other.' \
+              '' \
+              '**Your official games are not touched.** The beta keeps its own saves, scenarios and settings, so nothing you play here can reach a campaign in the official app — and nothing you have played there shows up here. That is on purpose: this branch is far enough ahead that a save the beta writes would come back from the official app with the new systems stripped out of it.' \
+              '' \
+              'It does share one thing: the downloaded world map, so there is no second 170MB download if you already have the official app installed.' \
+              '' \
+              '- Windows: `Open-Historia-Beta-Setup.exe`' \
+              '- macOS: `Open-Historia-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
+              '- Linux: `Open-Historia-Beta-x86_64.AppImage`, or `Open-Historia-Beta-amd64.deb`' \
+              '' \
+              'It updates itself from this page, never onto the official build.' \
+              '' \
+              '**Do not run both at once** if you can help it — they are separate apps with separate saves, but they will both want the same map files.' \
+              '' \
+              'Feedback: [open an issue](https://github.com/Open-Historia/open-historia/issues).' \
+              > notes.md
+            # --target pins the tag to the commit this run built. Without it the tag
+            # would be created on the repository's DEFAULT branch — main — which is
+            # the one place a beta release must never point.
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "Open Historia Beta" \
+              --notes-file notes.md || true
+          fi
+          shopt -s nullglob
+          # latest*.yml is what electron-updater actually reads (the `publish` block
+          # in electron-builder.beta.yml points it at this tag). Omit them and the
+          # beta ships with a feed URL that resolves to nothing: the banner still
+          # appears — that comes from latest.json below — but pressing update fails
+          # and falls back to a manual download, with no failing build to notice.
+          # The .blockmap only makes the download differential; missing, it degrades.
+          files=(release/*.exe release/*.exe.blockmap release/*-mac-*.zip release/*.AppImage release/*.deb release/latest*.yml)
+          # Only the Windows job writes latest.json, so three racing jobs cannot each
+          # publish a different view of the same release. The filenames here must
+          # match the artifactNames in electron-builder.beta.yml exactly — a mismatch
+          # breaks the update banner silently, which is what
+          # server/betaPackaging.test.js exists to catch.
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            B="https://github.com/${{ github.repository }}/releases/download/$TAG"
+            printf '{\n  "build": "%s",\n  "notes": "%s",\n  "windows": "%s/Open-Historia-Beta-Setup.exe",\n  "mac": "%s/Open-Historia-Beta-mac-arm64.zip",\n  "linux": "%s/Open-Historia-Beta-x86_64.AppImage"\n}\n' \
+              "${{ github.run_id }}" "A newer Open Historia beta build is available." "$B" "$B" "$B" > latest.json
+            cat latest.json
+            files+=(latest.json)
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
