@@ -331,6 +331,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Roleplay a single non-player polity replying in an ongoing chat; hard rule to **match the player's average message length** and tone; simulate a polity leaving.
 - **Prompt:** top-level `leader` string. **Assembly:** `buildDiplomaticSystemPrompt(countries, playerCountry)` (`main.jsx:1036`, `+difficultyDirective`) then `sendDiplomaticMessage(playerMessage, speakingAs, countries)` (`1138`) adds the per-turn instruction + optional `REACTION:<emoji>`. Free-form text (no tool/schema). `${RESPONDING_POLITY_NAME}` selects the voiced polity.
 
+- **Durable memory:** every reply also carries a hidden `DIPLOMATIC_MEMORY:<summary>` line — the thread's COMPLETE durable memory, modal force and attribution preserved (`buildDiplomaticTurnInstruction`, `runtime/diplomaticEnvelope.js`). `parseDiplomaticEnvelope` strips it and the chat stores it on the message as `memorySummary`; the newest one is fed back as a system-side context entry ahead of the dated, attributed transcript tail (`loadDiplomaticHistory`), and `diplomaticContinuity` (§5.1) shows it to the jump.
 ### 7.15 Root prompt: `advisor` — chief advisor chat
 - **Purpose:** In-character strategic advice, ≤3000 chars, may append a `chart`-fenced Chart.js block. **Assembly:** `buildAdvisorSystemPrompt` (`main.jsx:1012`) + `sendMessage` (`1084`) with rolling `advisorHistory`; language directive only (no difficulty, no schema).
 

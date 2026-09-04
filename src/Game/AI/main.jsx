@@ -8,6 +8,13 @@ import {
 } from "./providerConfig.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import {
+  buildDiplomaticTurnInstruction,
+  diplomaticMemoryContextEntry,
+  formatDiplomaticTranscriptEntry,
+  latestSavedDiplomaticMemory,
+  parseDiplomaticEnvelope,
+} from "../../runtime/diplomaticEnvelope.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { isBetaUnits } from "../../runtime/mapSettings.js";
@@ -31,6 +38,7 @@ import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
 import {
     buildPromptContext,
+    formatDateReadable,
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
@@ -2268,18 +2276,30 @@ export function startChat() {
 }
 
 let diplomaticHistory = [];
+// The open thread's durable memory (the newest DIPLOMATIC_MEMORY a reply
+// carried) and the game date it runs through.
+let diplomaticMemorySummary = "";
+let diplomaticMemoryThroughTime = "";
 
 export function startDiplomaticChat() {
     diplomaticHistory = [];
+    diplomaticMemorySummary = "";
+    diplomaticMemoryThroughTime = "";
     logDebugEvent("diplomacy", "Diplomatic chat opened with no prior messages — history cleared.", undefined, { verbose: true });
 }
 
 export function loadDiplomaticHistory(savedMessages) {
-    diplomaticHistory = savedMessages
-    .filter((msg) => ["user", "leader"].includes(msg.role))
+    const saved = (Array.isArray(savedMessages) ? savedMessages : [])
+        .filter((msg) => ["user", "leader"].includes(msg.role));
+    // The newest durable memory a reply carried stands in for everything
+    // before it; the transcript is dated and attributed line by line.
+    const memory = latestSavedDiplomaticMemory(saved);
+    diplomaticMemorySummary = memory?.summary || "";
+    diplomaticMemoryThroughTime = memory?.time || "";
+    diplomaticHistory = saved
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.text }],
+        parts: [{ text: formatDiplomaticTranscriptEntry(msg, formatDateReadable) }],
     }));
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
     logDebugEvent("diplomacy",
@@ -2295,14 +2315,6 @@ const participantLabel = (countries) => (Array.isArray(countries) ? countries : 
     .filter(Boolean)
     .join(", ") || "(no participants)";
 
-function parseReaction(raw) {
-    const match = raw.match(/[\s]*REACTION\s*:\s*(\S+)\s*$/i);
-    if (!match) return { reply: raw.trimEnd(), reaction: null };
-    const reaction = match[1].trim();
-    const reply = raw.slice(0, match.index).trimEnd();
-    return { reply, reaction };
-}
-
 export async function sendDiplomaticMessage(playerMessage, speakingAs, countries, opts) {
     // speakingAs is passed through now (it used to be dropped, leaving the prompt
     // to guess "first participant" — which with a null playerCountry could pick
@@ -2313,9 +2325,11 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     diplomaticHistory.push({ role: "user", parts: [{ text: playerMessage }] });
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
 
-    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
+    const turnInstruction = buildDiplomaticTurnInstruction({ speakingAs, priorMemory: diplomaticMemorySummary });
 
+    const memoryContext = diplomaticMemoryContextEntry(diplomaticMemorySummary, diplomaticMemoryThroughTime, formatDateReadable);
     const historyWithInstruction = [
+        ...(memoryContext ? [memoryContext] : []),
         ...diplomaticHistory,
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
@@ -2332,7 +2346,14 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}` });
-        const { reply, reaction } = parseReaction(raw);
+        const { reply, reaction, memorySummary: generatedMemorySummary } = parseDiplomaticEnvelope(raw);
+        // A reply that dropped the memory line keeps the last one; the
+        // thread never forgets what it knew because one answer was terse.
+        const memorySummary = generatedMemorySummary || diplomaticMemorySummary;
+        if (memorySummary) {
+            diplomaticMemorySummary = memorySummary;
+            if (generatedMemorySummary) diplomaticMemoryThroughTime = opts?.messageTime || diplomaticMemoryThroughTime;
+        }
         // Both the parsed reply and the reaction the REACTION: line carried. A
         // trailing "REACTION:🙂" that ends up in the bubble instead of on the
         // emoji is a parseReaction bug, and telling that from a model that never
@@ -2342,7 +2363,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { reply, rawChars: String(raw ?? "").length, reaction: reaction || "(none)" },
             { verbose: true });
         diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
-        return { reply, reaction };
+        return { reply, reaction, memorySummary };
     } catch (err) {
         diplomaticHistory.pop();
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);
@@ -2361,19 +2382,22 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], opts }) {
     const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry, speakingAs);
 
+    const priorMemory = latestSavedDiplomaticMemory(priorMessages);
     let history = priorMessages
         .filter((msg) => ["user", "leader"].includes(msg.role))
         .map((msg) => ({
             role: msg.role === "user" ? "user" : "model",
-            parts: [{ text: msg.text }],
+            parts: [{ text: formatDiplomaticTranscriptEntry(msg, formatDateReadable) }],
         }));
     history = compactConversationHistory(history);
     history.push({ role: "user", parts: [{ text: playerMessage }] });
     history = compactConversationHistory(history);
 
-    const turnInstruction = `[It is now ${speakingAs}'s turn to respond to the above. Respond only as the leader of ${speakingAs}, naturally, without prefixing your country name.\n\nOptionally, if the message warrants a emotional reaction (surprise, offense, delight, suspicion, confusion etc.), append a single line at the very end in this exact format:\nREACTION:<emoji>\n- use only a single emoji in utf-8 format after the colon, no spaces, no extra text. Otherwise omit it entirely.]`;
+    const turnInstruction = buildDiplomaticTurnInstruction({ speakingAs, priorMemory: priorMemory?.summary || "" });
 
+    const memoryContext = diplomaticMemoryContextEntry(priorMemory?.summary, priorMemory?.time, formatDateReadable);
     const historyWithInstruction = [
+        ...(memoryContext ? [memoryContext] : []),
         ...history,
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
@@ -2389,7 +2413,8 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}` });
-        const parsed = parseReaction(raw);
+        const parsed = parseDiplomaticEnvelope(raw);
+        if (!parsed.memorySummary && priorMemory?.summary) parsed.memorySummary = priorMemory.summary;
         logDebugEvent("diplomacy",
             `${speakingAs} → player in ${elapsedSeconds(startedAt)}${parsed.reaction ? ` (reaction ${parsed.reaction})` : ""}.`,
             { reply: parsed.reply, rawChars: String(raw ?? "").length, reaction: parsed.reaction || "(none)" },

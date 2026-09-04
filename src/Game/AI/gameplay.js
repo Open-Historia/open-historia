@@ -3485,7 +3485,7 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     const priorMessages = existing?.messages ?? [];
 
     const gameDate = normalizeString(bundle.game?.gameDate);
-    const { reply, reaction } = await sendDiplomaticMessageOnceOff({
+    const { reply, reaction, memorySummary } = await sendDiplomaticMessageOnceOff({
       playerMessage: trimmedText,
       speakingAs: recipient.name,
       participantNames: [playerName, recipient.name],
@@ -3500,7 +3500,10 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
       time: gameDate,
       ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
     };
-    const leaderMessage = { role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate };
+    const leaderMessage = {
+      role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate,
+      ...(memorySummary ? { memorySummary } : {}),
+    };
 
     const built = normalizeChatEntry({
       countries: [recipient],
