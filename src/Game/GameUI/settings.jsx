@@ -1174,6 +1174,8 @@ const SettingsMenu = ({
         // Not getMapSetting: this one ships ON, and an absent key must read as
         // on rather than off (see mapSettings.js).
         limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
+        // Same again: ships ON.
+        chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -1285,6 +1287,14 @@ const SettingsMenu = ({
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
+        </div>
+        <Toggle
+        label="Generate long time skips in segments"
+        enabled={mapSettings.chunkLongJumps}
+        onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
         </div>
         </div>
 
