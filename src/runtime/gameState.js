@@ -1,11 +1,12 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { JSON_URLS, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { getBetaUnitsToStamp } from "./mapSettings.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog } from "./eventDedup.js";
 import { buildOwnerAliasMap, createOwnerResolver, toCountryName } from "./ownerNames.js";
+import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
 import {
   DEFAULT_PATROL_RADIUS_KM,
@@ -2832,11 +2833,14 @@ export const normalizeWorldState = (world) => {
       .filter(([country, list]) => country && list.length),
   );
 
-  // Persisted per-country stat sheets: keep each code -> sheet-object entry as-is (the
-  // Stats pane tolerates missing fields). Explicit, not via the spread — new-field trap.
+  // Persisted per-country stat sheets, each through the native Stats
+  // compatibility boundary (countryStats.js): a legacy sheet stays readable, and
+  // a component ledger recomputes its population/GDP aggregates on every read.
+  // Explicit, not via the spread — new-field trap.
   const countryStats = Object.fromEntries(
     Object.entries(nextWorld.countryStats ?? {})
-      .filter(([code, sheet]) => normalizeOptionalString(code) && sheet && typeof sheet === "object"),
+      .map(([code, sheet]) => [normalizeOptionalString(code), normalizeCountryStatSheet(sheet)])
+      .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
   const units = normalizeUnits(nextWorld.units);
@@ -3077,6 +3081,72 @@ export const readWorldStateView = async ({ force = false } = {}) => {
 export const readWorldState = async ({ force = false } = {}) =>
   normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force }));
 
+// Same-tab cache agreement after a country Stats commit.
+//
+// This is intentionally NOT a second ledger. The worker has written canonical
+// world.json. This helper only makes the same-tab in-memory cache agree with those
+// persisted countryStats/history fields without re-reading, re-normalizing,
+// re-stringifying or re-broadcasting the whole world document.
+export const primeCountryStatsWorkerCommit = async ({
+  country,
+  sheet,
+  historySeries,
+} = {}) => {
+  const key = normalizeOptionalString(country);
+  if (!key || !sheet || typeof sheet !== "object") return null;
+
+  const raw = await readJson(JSON_URLS.world, {
+    defaultValue: WORLD_DEFAULTS,
+    force: false,
+    clone: false,
+  });
+
+  if (!raw || typeof raw !== "object") return null;
+  if (!raw.countryStats || typeof raw.countryStats !== "object") raw.countryStats = {};
+  raw.countryStats[key] = sheet;
+
+  if (Array.isArray(historySeries)) {
+    if (!raw.countryStatsHistory || typeof raw.countryStatsHistory !== "object") {
+      raw.countryStatsHistory = {};
+    }
+    raw.countryStatsHistory[key] = historySeries;
+  }
+
+  // Keep the raw asset cache pointed at the authoritative same-tab object.
+  primeJson(JSON_URLS.world, raw, { clone: false });
+
+  // Keep the explicit read-only normalized view coherent too. Only the Stats
+  // domain is patched; map-facing identity/ownership objects retain their stable
+  // references and therefore do not wake React/MapLibre consumers.
+  if (worldViewRaw && typeof worldViewRaw === "object") {
+    if (!worldViewRaw.countryStats || typeof worldViewRaw.countryStats !== "object") {
+      worldViewRaw.countryStats = {};
+    }
+    worldViewRaw.countryStats[key] = sheet;
+    if (Array.isArray(historySeries)) {
+      if (!worldViewRaw.countryStatsHistory || typeof worldViewRaw.countryStatsHistory !== "object") {
+        worldViewRaw.countryStatsHistory = {};
+      }
+      worldViewRaw.countryStatsHistory[key] = historySeries;
+    }
+  }
+
+  if (worldViewNormalized && typeof worldViewNormalized === "object") {
+    if (!worldViewNormalized.countryStats || typeof worldViewNormalized.countryStats !== "object") {
+      worldViewNormalized.countryStats = {};
+    }
+    worldViewNormalized.countryStats[key] = sheet;
+    if (Array.isArray(historySeries)) {
+      if (!worldViewNormalized.countryStatsHistory || typeof worldViewNormalized.countryStatsHistory !== "object") {
+        worldViewNormalized.countryStatsHistory = {};
+      }
+      worldViewNormalized.countryStatsHistory[key] = historySeries;
+    }
+  }
+
+  return sheet;
+};
+
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
   // Edited/AI-written polity names, aliases and notes get translated (and
@@ -3146,6 +3216,25 @@ export const readChatsState = async ({ force = false } = {}) =>
 export const writeChatsState = async (chats, options = {}) =>
   writeJson(JSON_URLS.chat, normalizeChats(chats), { pretty: true, ...options });
 
+export const readCountryStatsBundle = async ({ force = false } = {}) => {
+  const [actions, events, game, world] = await Promise.all([
+    readActionsState({ force }),
+    readEventsState({ force }),
+    readGameData({ force }),
+    readWorldStateView({ force }),
+  ]);
+
+  // Country Stats is grounded in canonical world/events/actions. It does not need
+  // to normalize/reconcile the entire diplomatic archive merely to display GDP.
+  return {
+    actions,
+    chats: [],
+    events,
+    game,
+    world,
+  };
+};
+
 export const readGameStateBundle = async ({ force = false } = {}) => {
   const [actions, chats, events, game, world] = await Promise.all([
     readActionsState({ force }),
@@ -3210,8 +3299,21 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 //
 // Mutates `world` and `colors` in place — both are already the caller's private
 // normalized copies.
+// Public native mutation seam for a country's persistent stat sheet: every
+// writer (an event's polityChanges.stats, the Stats pane, tracking) goes through
+// the same compatibility + deterministic aggregation path in countryStats.js
+// instead of editing the UI-shaped fields directly.
+export const applyCountryStatPatchToWorld = (world, canonicalName, patch, options = {}) => {
+  if (!world || typeof world !== "object" || !canonicalName) return null;
+  if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
+
+  const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
+  if (next && typeof next === "object") world.countryStats[canonicalName] = next;
+  return next;
+};
+
 const applyPolityAndTerritoryImpacts = ({
-  colors, polityChanges = [], regionClaims = [], regionTransfers = [], resolveOwner, world,
+  colors, eventId = "", polityChanges = [], regionClaims = [], regionTransfers = [], resolveOwner, world,
 }) => {
   // Claims before transfers, so a region claimed and then actually handed over in
   // the same jump ends up settled rather than striped: the transfer's delete below
@@ -3295,30 +3397,23 @@ const applyPolityAndTerritoryImpacts = ({
     if (Number.isFinite(change.reputation)) {
       world.internationalReputation[code] = change.reputation;
       // Keep the persisted sheet's reputation index in sync with the authoritative value.
-      if (world.countryStats?.[code]?.indices) {
-        world.countryStats[code] = {
-          ...world.countryStats[code],
-          indices: { ...world.countryStats[code].indices, internationalReputation: change.reputation },
-        };
+      if (world.countryStats?.[code]) {
+        applyCountryStatPatchToWorld(world, code, {
+          indices: { internationalReputation: change.reputation },
+        });
       }
     }
 
-    // Persistent stat sheet: merge the AI's changed fields into the stored sheet so a
-    // country's stats change ONLY when the AI changes them (not every date). Deep-merge
-    // the nested groups and mirror the reputation index into the authoritative store.
+    // Persistent stat sheet: the AI's changed fields merge into the stored sheet
+    // through the native seam, so a country's stats change ONLY when the AI
+    // changes them (not every date); the event is recorded as accounted for so a
+    // later reassessment does not apply it twice. The reputation index mirrors
+    // into the authoritative store.
     if (change.stats && typeof change.stats === "object") {
-      if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
-      const prev = world.countryStats[code] && typeof world.countryStats[code] === "object"
-        ? world.countryStats[code]
-        : {};
-      const merged = { ...prev, ...change.stats };
-      for (const group of ["indices", "economy", "gdpBreakdown"]) {
-        if (change.stats[group] && typeof change.stats[group] === "object") {
-          merged[group] = { ...(prev[group] || {}), ...change.stats[group] };
-        }
-      }
-      world.countryStats[code] = merged;
-      const rep = Number(merged.indices?.internationalReputation);
+      const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
+        continuity: eventId ? { accountedEventIds: [eventId] } : null,
+      });
+      const rep = Number(merged?.indices?.internationalReputation);
       if (Number.isFinite(rep)) {
         world.internationalReputation[code] = Math.max(0, Math.min(100, Math.round(rep)));
       }
@@ -3384,6 +3479,7 @@ export const applyEventImpactsToWorld = ({
 
     applyPolityAndTerritoryImpacts({
       colors: nextColors,
+      eventId: event.id,
       polityChanges,
       regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
       regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
