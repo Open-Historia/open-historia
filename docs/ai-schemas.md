@@ -172,6 +172,20 @@ Also used for `autoJumpForward`. This is the largest task.
 
 `eventSchema` (`:322`): `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
 
+#### Ledger transports (`warUpdates`, `relationUpdates`, `agreementUpdates`)
+
+Three optional strings, one record per line, fields separated by `~`. They deliberately stay text: the nested object form is what Gemini function calling and strict tool modes choke on, and the formats are taught in the live prompt (`buildWarLedgerDirective` / `buildDiplomaticLedgerDirective` in gameplay.js), so frozen prompt packs get them too.
+
+| Transport | Line | Ops |
+|---|---|---|
+| `warUpdates` | `warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note` | start, join-a, join-b, leave, ceasefire, resume, end |
+| `relationUpdates` | `A~B~score~status~eventNumbersCSV~summary` | absolute score; a blank status is derived from it |
+| `agreementUpdates` | `agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms` | start, update, suspend, resume, end, expire |
+
+`eventNumbersCSV` (1-based) is a hint only: the engine rebinds war records from `event.warId` and the transition's wording (`normalizeWorldWarEventLinks`), and the diplomatic director binds relation and agreement records to the one event that matches. Validation runs per segment against the world as the earlier segments left it (`validateSegmentLedgers`): strict while a retry remains, salvaged on the final attempt. Accepted records are bound to the segment's event ids, concatenated by `mergeSegmentPayloads`, remapped to the canonical round-scoped ids minted in `applySimulationResult` (`src/runtime/eventIdentity.js`), and applied by `applyWarUpdates` / `applyDiplomaticUpdates`. `eventSchema` carries `warId` and `combatants[]` for the combat rule (docs/world-state.md §2b-bis).
+
+`PREGAME_HISTORY_SCHEMA` takes the same facts for round zero as one flat `canonicalUpdates` array (`canonicalUpdateSchema`: `kind` = relation | war:<op> | agreement:start, plus id / polities / opponents / score / category / title / detail), which `expandCanonicalUpdateEnvelope` turns into the three transports before `validatePregameCanonicalBootstrap` runs.
+
 ### 4.8 `catalystSchema` (`:346`) and executor/summary
 
 `CATALYST_CREATION_SCHEMA` is `catalystSchema` directly.

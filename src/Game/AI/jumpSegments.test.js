@@ -228,3 +228,23 @@ test("a missing stopDate falls back to the requested target", () => {
 test("the split threshold is above a quarter so ordinary skips stay single", () => {
   assert.ok(SEGMENTED_JUMP_MIN_DAYS > 92);
 });
+
+test("mergeSegmentPayloads carries every segment's ledger records through the merge", () => {
+  const merged = mergeSegmentPayloads([
+    {
+      events: [{ title: "a" }],
+      warUpdates: [{ id: "war-1", op: "start", eventIds: ["segment-1-event-1"] }],
+      relationUpdates: "A~B~-40~strained~1~note",
+    },
+    {
+      events: [{ title: "b" }],
+      agreementUpdates: [{ id: "pact", op: "start", eventIds: ["segment-2-event-1"] }],
+    },
+    { events: [{ title: "c" }] },
+  ]);
+  assert.equal(merged.warUpdates.length, 1);
+  assert.deepEqual(merged.warUpdates[0].eventIds, ["segment-1-event-1"]);
+  assert.deepEqual(merged.relationUpdates, ["A~B~-40~strained~1~note"]);
+  assert.equal(merged.agreementUpdates.length, 1);
+  assert.equal(merged.events.length, 3);
+});

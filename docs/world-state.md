@@ -62,6 +62,19 @@ Only a **game's** `world.json` is written during play; the scenario copy stays p
 | `countryTags` | `{ country: string[] }` | `{}` | Per-country tags the AI has CHANGED since the scenario started. Wins over the author's `tags.json` where present (see `resolveCountryTags`, `countryTags.js:55`). Keyed by country NAME verbatim (same namespace as reputation/colors — see the desync warning at `:845`). Normalized via `normalizeTagList` (`:850`). |
 | `notes` | `string` | `""` | Free-form world notes. |
 
+### 2b-bis. Canonical ledgers — wars, relations, agreements
+
+Three engine-owned arrays carry the political facts the simulation used to keep only as prose. The AI never writes them directly: a jump payload carries compact text lines (`warUpdates`, `relationUpdates`, `agreementUpdates` — see ai-schemas.md §4.7) that `src/Game/AI/nativeWarLedger.js` and `src/Game/AI/nativeDiplomaticDirector.js` validate against the current world, bind to the event that caused them, and fold in once per turn (`applySimulationResult`).
+
+| Field | Shape | Notes |
+|---|---|---|
+| `wars` | `[{ id, title, status, sideA[], sideB[], startedDate, endedDate, lastUpdatedDate, cause, note, sourceEventIds[], createdRound, updatedRound }]` | `status` ∈ active / ceasefire / ended. **The only source of belligerency:** an event that narrates battlefield combat must carry `warId` and `combatants` naming polities from both sides of an *active* war, or the segment is rejected (on the final attempt the combat event is dropped instead). Transitions are explicit: start, join-a, join-b, leave, ceasefire, resume, end. |
+| `relations` | `[{ id, a, b, score, status, summary, lastUpdatedDate, sourceEventIds[], createdRound, updatedRound }]` | Sparse, one row per unordered pair; `score` −100..100 with `status` derived from it (friendly ≥ 55, cordial ≥ 20, neutral ≥ −10, cautious ≥ −30, strained ≥ −60, else hostile / rival). An untracked pair is *unknown*, not zero. A publicly exposed spy ring lowers the pair's score by 20. |
+| `agreements` | `[{ id, title, type, status, parties[], startedDate, endedDate, lastUpdatedDate, terms, guarantor?, beneficiary?, sourceEventIds[], createdRound, updatedRound }]` | Formal instruments: alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other. `status` ∈ active / suspended / ended / expired. |
+| `diplomaticLedgerVersion` | number | 0 until `migrateLegacyDiplomaticState` has seeded relations and agreements from a pre-ledger save's treaty events and chats (it runs at the start of the next jump), or the pregame bootstrap wrote the ledgers for a fresh game. |
+
+Events gained `warId` and `combatants[]` for the same rule. Polity names inside the ledgers share the owner namespace (`normalizeWorldState` resolves them through `polityIdentity.js`), so a renamed polity folds onto one identity. A fresh game with a "World Before Round One" briefing gets its Day-1 wars, relations and agreements from the pregame bootstrap (`maybeGeneratePregameHistory`, the `canonicalUpdates` envelope), so a campaign that opens mid-war starts with that war on the books. Espionage reads the ledgers too: a polity at war with the player is fully hostile, a ceasefire or a bad relation partly so (`applySimulationResult`, then `spycraft.js foreignDeployChance`).
+
 ### 2c. Country-label styling (§ read by the map)
 
 Empty string = defaults (Impact, white letters, half-black outline). The font renders from the PLAYER's local fonts — MapLibre v5 rasterizes each glyph client-side using the stack as a CSS `font-family` (there is no glyphs endpoint). Set in scenario settings; surfaced to the map by `useWorldState`.
