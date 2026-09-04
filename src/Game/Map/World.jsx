@@ -223,7 +223,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext = false) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -279,14 +279,11 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, vNext
   // relief composition too, so a map authored on Ocean or Dark Gray opened on a
   // satellite-looking globe and only showed its real basemap once the relief
   // had faded out around z5.
-  const usePaxRelief = vNext && (
-    basemapId === "atlas-relief"
-    || basemapId === "atlas-relief-dark"
-  );
+  const usePaxRelief = basemapId === "atlas-relief" || basemapId === "atlas-relief-dark";
   const paxReliefPaints = getPaxReliefPaints(basemapId);
-  const basemapPaint = vNext
-    ? usePaxRelief ? paxReliefPaints.terrain : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT
-    : SATELLITE_PAINT;
+  const basemapPaint = usePaxRelief
+    ? paxReliefPaints.terrain
+    : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
   // World_Ocean_Base bakes political names into the raster, while plain shaded
   // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
   // World Terrain Base is the useful middle ground for the relief presets:
@@ -400,9 +397,6 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // so the map drops ESRI immediately rather than flashing satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
-  // Map vNext is the renderer. The previous source-by-source renderer stayed
-  // reachable behind a setting while vNext was built; it is not a fallback now.
-  const mapVNextEnabled = true;
   // The scenario author's background and basemap are authoritative. There is no
   // in-game basemap picker, so a basemap id left in this browser's localStorage
   // by an older build must not silently replace every scenario's choice.
@@ -421,13 +415,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveCustomBg,
       effectiveBgDeclared,
       styleUsesGlobeCoords,
-      mapVNextEnabled,
     ),
     [
       effectiveBasemap,
       effectiveBgDeclared,
       effectiveCustomBg,
-      mapVNextEnabled,
       styleUsesGlobeCoords,
     ],
   );
@@ -810,10 +802,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         onMoveEnd={handleMoveEnd}
         onSourceData={handleSourceData}
       >
-        <MapScene
-          isGlobe={isGlobe}
-          vNext={mapVNextEnabled}
-        />
+        <MapScene isGlobe={isGlobe} />
       </Map>
       {isGlobe && (
         <canvas

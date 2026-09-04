@@ -12,14 +12,14 @@ import FeaturePopup from "../Selection/Features.jsx";
 
 // The camera/basemap shell lives in World.jsx. Everything that is projected
 // into that world lives here, in deliberate paint/placement order. Keeping the
-// scene graph behind one boundary lets Map vNext replace layers incrementally
-// without coupling that migration to projection, terrain, or GPU lifecycle.
-const MapScene = ({ isGlobe = false, vNext = false }) => (
+// scene graph behind one boundary keeps layer changes decoupled from
+// projection, terrain, or GPU lifecycle.
+const MapScene = ({ isGlobe = false }) => (
   <>
-    <Nations isGlobe={isGlobe} vNext={vNext} />
-    <Cities vNext={vNext} />
-    <MarkersLayer vNext={vNext} />
-    <Units vNext={vNext} />
+    <Nations isGlobe={isGlobe} />
+    <Cities />
+    <MarkersLayer />
+    <Units />
     <GlobeEffects active={isGlobe} />
     <RegionPopup />
     <CountryInfoPanel />

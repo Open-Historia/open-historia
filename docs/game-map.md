@@ -145,7 +145,7 @@ Two constants (`World.jsx:44`) give the image-source corners:
 |---|---|---|---|---|
 | `countries-source` | vector | `PMTILES_PROTOCOL_URLS.countries`, `maxzoom 8` | `!customFlag` | `countries-fill`, `countries-outline` |
 | `regions-source` | vector | `PMTILES_PROTOCOL_URLS.regions`, `maxzoom 8` | **never gated** | `regions-fill`, `regions-disputed`, `regions-outline` |
-| `custom-regions-source` | geojson | `enrichedCustomRegionData`, `tolerance 0` | inert unless `customActive` | `custom-regions-fill-far`, `custom-regions-hairline-far`, `custom-regions-disputed-far`, `custom-regions-fill`, `custom-regions-disputed`, `custom-regions-outline` |
+| `custom-regions-source` | geojson | the authored regions URL itself (`regionsGeojsonUrl`, `promoteId: id`, `tolerance 0.6`); live ownership reaches it through feature-state | mounted whenever `customFlag` | `custom-regions-fill-far`, `custom-regions-fill`, `custom-regions-local-outline` |
 | `country-curved-label-source` | geojson | `activeCurvedLabelData` | — | `country-curved-labels` |
 | `country-point-label-source` | geojson | `activePointLabelData` | — | `country-labels` |
 
@@ -173,11 +173,10 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 | `regions-fill` | `stockRegionsFillPaint` | `match GID_1 → ownerColorCss(owner)` for every non-drawn, non-edited region; opacity `TILE_FILL_FADE` (0 unless `customActive`) |
 | `regions-outline` | `regionsOutlinePaint` | black hairline; width `interp 3→0.2, 8→0.6, 12→1.0`; opacity fades in `5.5→0, 6.5→0.6, 8→0.7` (only when the tile fills do — below that the seed hairlines carry it); excludes `editedStockIds` |
 | `custom-regions-fill-far` | `["get","_fillColor"]` | seed-GeoJSON fill for GADM regions, `maxzoom 7`, opacity `FAR_FILL_FADE` |
-| `custom-regions-hairline-far` | — | seed hairlines that sit exactly on the far fills, hand off at z6.5 |
 | `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
-| `custom-regions-outline` | — | black outline for authored geometry, opacity `3→0, 4→0.35, 8→0.6` |
+| `custom-regions-local-outline` | — | the province grid: faint from z4.2, ramping to a proper grid by z14 (`customActive && worldKnown`) |
 
-`_fillColor` is **pre-baked into each GeoJSON feature** by `enrichedCustomRegionData` (`Nations.jsx:852`) so the GL paint expression is the constant `["get","_fillColor"]` — a match expression that never recompiles when ownership changes. The colour per feature is: override colour (`regionOwnershipOverrides[id]`) → owner colour (`ownerColorCss(props.owner)`) → `NEUTRAL_LAND_COLOR = rgb(88,98,110)`.
+`_fillColor` is carried by the dissolved polity surfaces (`enrichedPolitySurfaceData`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
 
 ---
 
@@ -215,8 +214,7 @@ Because the image id **encodes its own colours**, the `styleimagemissing` handle
 
 Claimants come from `world.regionClaimants[id]` first (how the modern-world scenario declares disputes, since its geometry is an immutable seed), else the region feature's own `claimants` prop (editor maps). `enrichedCustomRegionData` bakes a `_stripes` property (the image id) onto disputed features; layers select on `["has","_stripes"]` and paint with `fill-pattern` instead of the solid fill:
 
-- `custom-regions-disputed-far` — seed geometry, `FAR_FILL_FADE`.
-- `custom-regions-disputed` — authored geometry, constant `0.72`.
+- `custom-regions-disputed-vnext` — the worker's `disputedData` (every claimant-carrying region with its live owner and claimants), striped at `0.90` whenever `customActive && worldKnown`.
 - `regions-disputed` — the tile twin for GADM disputed regions (uses `disputedTileStops`, opacity `TILE_FILL_FADE`), excluding `editedStockIds`.
 
 `DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx:338`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
@@ -363,8 +361,8 @@ world.json ──(useWorldState, 5s)──► customRegions, regionOwnershipOver
    │                                 regionClaimants, polityOverrides, markers,
    │                                 labelFont/Color, basemap, background, units
    │
-   ├─► Nations.jsx ──► enrichedCustomRegionData (_fillColor/_stripes baked in)
-   │                   ownerLabelData (per-owner, follows conquests)
+   ├─► Nations.jsx ──► polity boundary worker (dissolved surfaces, frontiers, disputed data)
+   │                   live polity labels (buildPolityLabelCollections; follow conquests)
    │                   stockRegionsFillPaint (GID_1 → owner colour)
    │
    ├─► useCustomBackground ──► buildWorldStyle (image/vector/placeholder/ESRI)

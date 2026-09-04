@@ -12,6 +12,16 @@ const MIN_DISPLAY_HOLE_AREA = 0.005;
 // simplified seeds are what make the sweep throw "unable to complete output
 // ring" on a big polity (Russia, on the Fault Lines map).
 const SNAP = 2e5;
+// Drift seams — neighbours whose independently simplified borders sit a few
+// thousandths of a degree apart — are NOT welded before the union, on purpose.
+// A pre-union weld (projecting the drifted vertices onto the neighbour's line,
+// 0.0025° tolerance, the boundary derivation's) was measured in September
+// 2026 on the Modern Day map: it moved 56,823 vertices, merged 27 of 103,922
+// surface pieces (the rest are islands), and the moved vertices broke the sweep
+// for one polity, which then fell back to raw pieces. Overlapping drift already
+// merges in the union and the sliver holes it leaves are removed below, so
+// the label fitting, which merges hairline-separated slices itself, sees one
+// body either way.
 // Polygons are unioned a few dozen at a time, as a tree. One union over a
 // polity's thousands of polygons holds every edge of the sweep at once, and
 // when it fails the old fallback re-ran the union once per polygon - O(n²),
