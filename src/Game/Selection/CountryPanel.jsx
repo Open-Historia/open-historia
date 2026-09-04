@@ -2,10 +2,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
-import { getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { readEventsState, readWorldState } from "../../runtime/gameState.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
+import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { generateCountryStats } from "../AI/gameplay.js";
 
 // Bridge: the region popup's info button opens this panel from outside React.
@@ -61,6 +64,8 @@ const eventInvolvesCountry = (event, code, name) => {
     const impacts = event?.impacts ?? {};
     if ((impacts.polityChanges ?? []).some((change) => change?.code === code)) return true;
     if ((impacts.regionTransfers ?? []).some((transfer) => transfer?.toCode === code || transfer?.fromCode === code)) return true;
+    if ((impacts.regionControlOps ?? []).some((op) =>
+        [op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode].some((value) => value === code || value === name))) return true;
     if ((impacts.createdChats ?? []).some((chat) => (chat?.countries ?? []).some((country) => country?.code === code || country?.name === name))) return true;
     const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
     return Boolean(name) && haystack.includes(String(name).toLowerCase());
@@ -72,10 +77,17 @@ const CountryInfoPanel = () => {
     const [aliases, setAliases] = useState([]);
     const [tags, setTags] = useState([]);
     const [regions, setRegions] = useState([]);
+    const [controlledForeignRegions, setControlledForeignRegions] = useState([]);
+    const [occupiedSovereignRegions, setOccupiedSovereignRegions] = useState([]);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
     const [report, setReport] = useState(null); // null | "loading" | text | {error}
     const [flagFailed, setFlagFailed] = useState(false);
+    const [worldState, setWorldState] = useState(null);
+    const [flagCatalog, setFlagCatalog] = useState({});
+    const [polityKey, setPolityKey] = useState("");
+    const [displayName, setDisplayName] = useState("");
+    const [flagPickerOpen, setFlagPickerOpen] = useState(false);
 
     _openPanel = (next) => {
         setCountry(next);
@@ -83,6 +95,9 @@ const CountryInfoPanel = () => {
         setFilterIndex(0);
         setReport(null);
         setFlagFailed(false);
+        setFlagPickerOpen(false);
+        setPolityKey("");
+        setDisplayName(next?.name || "");
     };
 
     useEffect(() => {
@@ -91,44 +106,93 @@ const CountryInfoPanel = () => {
 
         (async () => {
             try {
-                const [allEvents, world, catalog, baseTags] = await Promise.all([
+                const [allEvents, world, catalog, baseTags, flags] = await Promise.all([
                     readEventsState({ force: true }).catch(() => []),
                     readWorldState({ force: true }),
                     loadRegionCatalog().catch(() => []),
                     getNationTags().catch(() => ({})),
+                    getNationFlags({ force: true }).catch(() => ({})),
                 ]);
                 if (cancelled) return;
 
-                setEvents((allEvents ?? []).filter((event) => eventInvolvesCountry(event, country.code, country.name)));
-                setAliases(world.polityOverrides?.[country.code]?.aliases ?? []);
-                // The author's starting tags unless the AI has since rewritten them.
-                setTags(resolveCountryTags(baseTags, world, country.code));
+                const identity = resolvePolityIdentity(
+                    country.polityKey || country.name || country.code,
+                    world,
+                    { allowUnknown: false, requireActive: false, allowCoreMatch: true, allowStockBase: true },
+                );
+                const stableKey = identity.resolved || country.polityKey || country.name || country.code;
+                const polity = world.polityOverrides?.[stableKey];
+                const currentName = polity?.name || country.name || stableKey;
 
-                const overrides = world.regionOwnershipOverrides ?? {};
-                const owned = [];
+                setWorldState(world);
+                setFlagCatalog(flags || {});
+                setPolityKey(stableKey);
+                setDisplayName(currentName);
+                setEvents((allEvents ?? []).filter((event) => eventInvolvesCountry(event, stableKey, currentName)));
+                setAliases(polity?.aliases ?? []);
+                // The author's starting tags unless the AI has since rewritten them.
+                setTags(resolveCountryTags(baseTags, world, stableKey));
+
+                const ownership = world.regionOwnershipOverrides ?? {};
+                const sovereignty = world.regionSovereigntyOverrides ?? {};
+                const sovereign = [];
+                const controlledForeign = [];
+                const occupiedSovereign = [];
                 const seen = new Set();
-                for (const region of catalog) {
-                    const effective = overrides[region.id] ?? region.countryCode;
-                    if (effective === country.code) {
-                        owned.push(region.name);
-                        seen.add(region.id);
-                    }
+
+                const classify = (regionId, regionName, baseOwner = "") => {
+                    const controller = ownership[regionId] ?? baseOwner;
+                    const legalOwner = sovereignty[regionId] ?? controller;
+                    if (legalOwner === stableKey) sovereign.push(regionName);
+                    if (controller === stableKey && legalOwner && legalOwner !== stableKey) controlledForeign.push(regionName);
+                    if (legalOwner === stableKey && controller && controller !== stableKey) occupiedSovereign.push(regionName);
+                    seen.add(regionId);
+                };
+
+                for (const region of catalog) classify(region.id, region.name, region.countryCode);
+
+                // overrides can reference custom/legacy regions missing from the catalog.
+                // don't make them disappear from the panel just because the lookup is incomplete.
+                const extraIds = new Set([...Object.keys(ownership), ...Object.keys(sovereignty)]);
+                for (const regionId of extraIds) {
+                    if (!seen.has(regionId)) classify(regionId, regionId, "");
                 }
-                // Overridden regions the catalog doesn't know still count.
-                for (const [regionId, code] of Object.entries(overrides)) {
-                    if (code === country.code && !seen.has(regionId)) owned.push(regionId);
-                }
-                setRegions(owned);
+
+                setRegions([...new Set(sovereign)]);
+                setControlledForeignRegions([...new Set(controlledForeign)]);
+                setOccupiedSovereignRegions([...new Set(occupiedSovereign)]);
             } catch {
                 if (!cancelled) {
                     setEvents([]);
                     setRegions([]);
+                    setControlledForeignRegions([]);
+                    setOccupiedSovereignRegions([]);
                 }
             }
         })();
 
         return () => {
             cancelled = true;
+        };
+    }, [country]);
+
+    useEffect(() => {
+        if (!country) return;
+        let cancelled = false;
+        const refresh = () => {
+            getNationFlags({ force: true })
+                .then((flags) => {
+                    if (!cancelled) {
+                        setFlagCatalog(flags || {});
+                        setFlagFailed(false);
+                    }
+                })
+                .catch(() => {});
+        };
+        window.addEventListener("oh:flags-updated", refresh);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:flags-updated", refresh);
         };
     }, [country]);
 
@@ -144,11 +208,17 @@ const CountryInfoPanel = () => {
 
     if (!country) return null;
 
+    const currentFlag = resolvePolityFlag({
+        polity: { polityKey, name: displayName || country.name, code: country.code },
+        world: worldState,
+        flags: flagCatalog,
+    });
+
     const runAdvisorReport = async () => {
         if (report === "loading") return;
         setReport("loading");
         try {
-            const text = await generateCountryStats({ code: country.code, name: country.name });
+            const text = await generateCountryStats({ code: polityKey || country.code, name: displayName || country.name });
             setReport(text || "No information available.");
         } catch (error) {
             setReport({ error: error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." });
@@ -156,7 +226,11 @@ const CountryInfoPanel = () => {
     };
 
     const openDiplomacy = () => {
-        requestDiplomaticChat({ name: country.name, code: country.code });
+        requestDiplomaticChat({
+            name: displayName || country.name,
+            code: country.code,
+            polityKey: polityKey || country.polityKey || "",
+        });
         setCountry(null);
     };
 
@@ -177,14 +251,17 @@ const CountryInfoPanel = () => {
         >
         {/* Header */}
         <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", padding: "1rem 1.1rem 0.8rem" }}>
-        {country.flagUrl && !flagFailed ? (
-            <img src={country.flagUrl} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "cover" }} />
-        ) : country.flagEmoji ? (
-            <span style={{ fontSize: "1.3rem" }}>{country.flagEmoji}</span>
-        ) : null}
+        {currentFlag.imageUrl && !flagFailed ? (
+            <button type="button" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" }}>
+                <img src={currentFlag.imageUrl} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "cover", boxShadow: "0 0 0 1px rgba(255,255,255,0.15)" }} />
+            </button>
+        ) : (
+            <button type="button" onClick={() => setFlagPickerOpen(true)} title="Set flag" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, height: "1.35rem", width: "2.1rem", cursor: "pointer" }} />
+        )}
         <span style={{ flex: 1, fontSize: "1.15rem", fontWeight: 800, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {country.name}
+        {displayName || country.name}
         </span>
+        <button type="button" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.68rem", fontWeight: 700, padding: "0.3rem 0.45rem" }}>Flag</button>
         <button
         type="button"
         onClick={() => setCountry(null)}
@@ -268,7 +345,7 @@ const CountryInfoPanel = () => {
         )}
         </div>
         <div>
-        <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.35rem" }}>Regions Owned ({regions.length})</div>
+        <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.35rem" }}>Sovereign Regions ({regions.length})</div>
         {regions.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.78rem" }}>None</div>
         ) : (
@@ -281,6 +358,37 @@ const CountryInfoPanel = () => {
         )}
         </div>
         </div>
+
+        {(controlledForeignRegions.length > 0 || occupiedSovereignRegions.length > 0) && (
+            <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", marginTop: "0.45rem" }}>
+            <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Controlled, Not Sovereign ({controlledForeignRegions.length})</div>
+            {controlledForeignRegions.length === 0 ? (
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
+            ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                {controlledForeignRegions.slice(0, 40).map((regionName) => (
+                    <span key={regionName} style={pillStyle}>{regionName}</span>
+                ))}
+                {controlledForeignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{controlledForeignRegions.length - 40} more</span>}
+                </div>
+            )}
+            </div>
+            <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Under Foreign Control ({occupiedSovereignRegions.length})</div>
+            {occupiedSovereignRegions.length === 0 ? (
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
+            ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                {occupiedSovereignRegions.slice(0, 40).map((regionName) => (
+                    <span key={regionName} style={pillStyle}>{regionName}</span>
+                ))}
+                {occupiedSovereignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{occupiedSovereignRegions.length - 40} more</span>}
+                </div>
+            )}
+            </div>
+            </div>
+        )}
 
         {report !== null && (
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, marginTop: "0.6rem", padding: "0.7rem 0.8rem" }}>
@@ -307,6 +415,18 @@ const CountryInfoPanel = () => {
         Open Diplomacy
         </button>
         </div>
+        {worldState && (
+            <GameFlagPicker
+                isOpen={flagPickerOpen}
+                polity={{ polityKey, name: displayName || country.name, code: country.code }}
+                world={worldState}
+                onClose={() => setFlagPickerOpen(false)}
+                onApplied={(nextFlags) => {
+                    setFlagCatalog(nextFlags || {});
+                    setFlagFailed(false);
+                }}
+            />
+        )}
         </div>,
         document.body,
     );

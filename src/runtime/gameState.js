@@ -1,5 +1,5 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { JSON_URLS, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { dedupeEventLog } from "./eventDedup.js";
@@ -1249,6 +1249,38 @@ export const buildActionDisplayText = (action) => {
   return normalized.kind === "chat" && normalized.chatStarter
     ? `${normalized.title}: ${normalized.chatStarter}`
     : normalized.text;
+};
+
+// A read-only VIEW of the world, shared between callers.
+//
+// readWorldState() below returns a fresh working object on purpose: many writers
+// mutate what they read before writeWorldState(), and sharing one object between
+// them would let uncommitted mutations leak. UI and other read-only pipelines
+// need no such ownership boundary, and re-normalizing the whole campaign on every
+// panel click or unit sync was a measurable source of garbage-collection stalls
+// on large saves. The view is rebuilt only when the underlying JSON changes.
+let worldViewRaw = null;
+let worldViewNormalized = null;
+
+export const readWorldStateView = async ({ force = false } = {}) => {
+  const raw = await readJson(JSON_URLS.world, {
+    defaultValue: WORLD_DEFAULTS,
+    force,
+    clone: false,
+  });
+
+  if (!force && raw === worldViewRaw && worldViewNormalized) {
+    return worldViewNormalized;
+  }
+
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const normalized = normalizeWorldState(raw);
+  const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+  reportPerfOperation("normalize world read-only view", elapsed, { warnAt: 40 });
+
+  worldViewRaw = raw;
+  worldViewNormalized = normalized;
+  return normalized;
 };
 
 export const readWorldState = async ({ force = false } = {}) =>

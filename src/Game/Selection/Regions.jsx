@@ -3,14 +3,18 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
-import { flagImageUrlFromGid, flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { getWorldStateSnapshot } from "../Map/useWorldState.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 
 let _setSelection = null;
 let _currentSelection = null;
 let _dismiss = null;
+let _selectionRequestSerial = 0;
 // Cheats' click-to-annex/edit tools grab the next map click(s) instead of the
 // normal region popup. The interceptor returns true to consume the click.
 let _clickInterceptor = null;
@@ -19,19 +23,94 @@ export const setRegionClickInterceptor = (fn) => {
     _clickInterceptor = typeof fn === "function" ? fn : null;
 };
 
-// Passive tap on every region click (the Stats tab watches which country the
-// player is inspecting). Never consumes the click — popups still open.
+// Passive tap on every normal region click (the Stats tab watches which country
+// the player is inspecting). Never consumes the click — popups still open.
 let _clickObserver = null;
 
 export const setRegionClickObserver = (fn) => {
     _clickObserver = typeof fn === "function" ? fn : null;
 };
 
-export const onRegionSelected = (props) => {
-    try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
-    if (_clickInterceptor && _clickInterceptor(props)) return;
+const cleanSelectionValue = (value) => String(value ?? "").trim();
 
-    const { COUNTRY, NAME_1, GID_0, gid0, owner, lngLat } = props;
+const currentRegionId = (props) =>
+    cleanSelectionValue(
+        props?.GID_1 ??
+        props?.gid_1 ??
+        props?.id ??
+        "",
+    );
+
+// Normalize selection identity at the source boundary.
+//
+// Base-map vector tiles keep their original country metadata forever, even after
+// conquest, annexation, occupation, editor changes, or other live ownership
+// mutations. Every downstream region-click consumer should therefore see the
+// current canonical controller from world.regionOwnershipOverrides when one is
+// present. The original geographic GID_0 is retained in `gid0` as provenance.
+//
+// This replaces the old DevTools Region Owner Fix with a native, universal path:
+// no country names, ISO assumptions, React-fiber surgery, or Stats-specific patch.
+const resolveLiveSelectionProps = async (props) => {
+    if (!props || typeof props !== "object") return props;
+
+    const regionId = currentRegionId(props);
+    if (!regionId) return props;
+
+    let world = getWorldStateSnapshot();
+    if (!world) {
+        try {
+            // Cold-start fallback only. Normal clicks use the map's live singleton
+            // world snapshot and never fetch/parse the whole campaign.
+            world = await readWorldState({ force: false });
+        } catch {
+            return props;
+        }
+    }
+
+    const overrides =
+        world?.regionOwnershipOverrides &&
+        typeof world.regionOwnershipOverrides === "object"
+            ? world.regionOwnershipOverrides
+            : {};
+
+    if (!Object.prototype.hasOwnProperty.call(overrides, regionId)) {
+        return props;
+    }
+
+    const rawController = cleanSelectionValue(overrides[regionId]);
+    const resolvedController = rawController
+        ? resolvePolityIdentity(rawController, world, {
+            allowUnknown: true,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        }).resolved || rawController
+        : "";
+
+    const baseGid0 = cleanSelectionValue(
+        props.gid0 ??
+        props.GID_0 ??
+        "",
+    );
+
+    return {
+        ...props,
+        // Current controller/owner is authoritative for every normal consumer.
+        COUNTRY: resolvedController,
+        GID_0: resolvedController,
+        owner: resolvedController,
+        // Keep the baked geographic/base identity separately for provenance.
+        gid0: baseGid0,
+    };
+};
+
+const commitRegionSelection = (props) => {
+    if (!props || typeof props !== "object") return;
+
+    try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
+
+    const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
     const isSame =
@@ -44,16 +123,37 @@ export const onRegionSelected = (props) => {
     } else if (_currentSelection !== null) {
         _dismiss?.();
     } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, gid0, owner, lngLat });
+        _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
     }
 };
 
+export const onRegionSelected = (props) => {
+    // Cheat/editor click interceptors operate on the raw click synchronously and
+    // remain authoritative. A consumed click is not a normal inspection click.
+    if (_clickInterceptor && _clickInterceptor(props)) return;
+
+    const serial = ++_selectionRequestSerial;
+
+    resolveLiveSelectionProps(props)
+        .then((liveProps) => {
+            // Ignore an older async owner lookup if the user clicked elsewhere.
+            if (serial !== _selectionRequestSerial) return;
+            commitRegionSelection(liveProps);
+        })
+        .catch(() => {
+            if (serial !== _selectionRequestSerial) return;
+            commitRegionSelection(props);
+        });
+};
+
 export const onOceanClicked = () => {
+    _selectionRequestSerial++;
     if (_currentSelection) _dismiss?.();
 };
 
 // Dismiss the region popup when another selection (e.g. a unit) takes over.
 export const dismissRegionPopup = () => {
+    _selectionRequestSerial++;
     if (_currentSelection) _dismiss?.();
 };
 
@@ -63,25 +163,7 @@ const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
     emoji,
 });
 
-// Flag image (with an emoji fallback) for a selected region's GID_0 country code.
-const resolveFlagInfo = (gid0) => {
-    const imageUrl = flagImageUrlFromGid(gid0);
-    if (!imageUrl) return null;
-    return { imageUrl, emoji: flagEmojiFromGid(gid0) };
-};
-
-// Era-aware flag: a scenario polity's own flag URL wins; otherwise the owner code
-// resolves as an ISO country flag (correct for modern owners). Custom era polities
-// with neither simply have no flag — the popup then says "No flag available".
-const resolveEraFlagInfo = (ownerCode, polity, customFlags) => {
-    // A flag the map-maker uploaded wins: it is the only one anyone chose on purpose.
-    // It lives in the scenario's flags.json rather than on the polity, because
-    // world.json is re-read every 5s and a few hundred flags would ride every poll.
-    const own = ownerCode && customFlags?.[ownerCode];
-    if (own) return { imageUrl: own, emoji: null };
-    if (polity?.flag) return { imageUrl: polity.flag, emoji: null };
-    return resolveFlagInfo(ownerCode);
-};
+// Flags are resolved through the shared stable-lineage flag service below.
 
 const IconBtn = ({ children, title, onClick }) => {
     const [hovered, setHovered] = React.useState(false);
@@ -141,6 +223,14 @@ const RegionPopup = () => {
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
+    const [worldState, setWorldState] = useState(null);
+    // sparse control metadata. ownership is the de-facto controller; sovereignty is
+    // only stored when it differs, because duplicating every normal border is dumb.
+    const [territoryState, setTerritoryState] = useState({
+        regionClaimants: {},
+        regionOwnershipOverrides: {},
+        regionSovereigntyOverrides: {},
+    });
     // Author-set flags from the scenario's flags.json (owner code -> data URL).
     // Memoized in assets.js, so this is one fetch per scenario, not per selection.
     const [customFlags, setCustomFlags] = useState({});
@@ -151,11 +241,28 @@ const RegionPopup = () => {
     useEffect(() => {
         if (!selection) return;
         let cancelled = false;
-        readWorldState({ force: true })
-            .then((world) => {
-                if (!cancelled) setPolities(world?.polityOverrides ?? {});
-            })
-            .catch(() => {});
+        const applyWorld = (world) => {
+            if (cancelled || !world) return;
+            setWorldState(world);
+            setPolities(world?.polityOverrides ?? {});
+            setTerritoryState({
+                regionClaimants: world?.regionClaimants ?? {},
+                regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
+                regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+            });
+        };
+
+        const snapshot = getWorldStateSnapshot();
+        if (snapshot) {
+            applyWorld(snapshot);
+        } else {
+            readWorldState({ force: false })
+                .then(applyWorld)
+                .catch(() => {});
+        }
+
+        // flags.json is invalidated + announced by the asset writer. Reuse the
+        // memoized catalog instead of forcing another network fetch on each click.
         getNationFlags()
             .then((flags) => {
                 if (!cancelled) setCustomFlags(flags || {});
@@ -165,7 +272,44 @@ const RegionPopup = () => {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selection?.GID_0, selection?.NAME_1]);
+    }, [selection?.GID_0, selection?.GID_1, selection?.NAME_1]);
+
+    useEffect(() => {
+        if (!selection || typeof window === "undefined") return undefined;
+        const onWorldUpdated = (event) => {
+            const world = event?.detail?.world;
+            if (!world || typeof world !== "object") return;
+            setWorldState(world);
+            setPolities(world?.polityOverrides ?? {});
+            setTerritoryState({
+                regionClaimants: world?.regionClaimants ?? {},
+                regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
+                regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+            });
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
+    }, [selection]);
+
+    useEffect(() => {
+        if (!selection) return;
+        let cancelled = false;
+        const refresh = () => {
+            getNationFlags()
+                .then((flags) => {
+                    if (!cancelled) {
+                        setCustomFlags(flags || {});
+                        setFlagImageFailed(false);
+                    }
+                })
+                .catch(() => {});
+        };
+        window.addEventListener("oh:flags-updated", refresh);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:flags-updated", refresh);
+        };
+    }, [selection]);
 
     _setSelection = (value) => {
         _currentSelection = value;
@@ -176,45 +320,58 @@ const RegionPopup = () => {
         if (value !== null) setAnimKey((key) => key + 1);
     };
 
-    // Era-aware display name for the selected owner (polity name > overrides > modern).
-    // Who holds this region NOW. GID_0 is the country baked into the PMTiles and
-    // never changes, so keying the panel on it left a captured region showing its
-    // previous owner's name, flag and stat sheet — and opening diplomacy with the
-    // nation that just lost it. The click handler already resolves the live owner
-    // (Nations.jsx: props.owner, else the ownership lookup); this just uses it.
-    // Falls back to GID_0 so an unclaimed region reads exactly as it did before.
-    const selectionOwner = (sel) => String(sel?.owner ?? "").trim() || sel?.GID_0 || "";
-
-    const resolveSelectionName = (sel) => {
-        const owner = selectionOwner(sel);
-        return polities[owner]?.name
-            || resolveCountryDisplayName(sel?.COUNTRY, owner)
-            || owner;
+    const controllerForSelection = (sel) => {
+        const regionId = sel?.GID_1 || "";
+        return regionId
+            ? territoryState.regionOwnershipOverrides?.[regionId] ?? sel?.GID_0 ?? sel?.owner ?? ""
+            : sel?.GID_0 ?? sel?.owner ?? "";
     };
 
-    // Open a diplomatic chat with the selected country (via the chat panel bridge).
+    const resolveSelectionIdentity = (sel) => {
+        const controller = controllerForSelection(sel);
+        const identity = resolvePolityIdentity(controller || sel?.GID_0 || sel?.COUNTRY, worldState, {
+            allowUnknown: false,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        const polityKey = identity.resolved || controller || sel?.GID_0 || "";
+        const record = worldState?.polityOverrides?.[polityKey];
+        // Current polity identity and stock geographic identity are separate.
+        // A custom map may have no tile-baked GID_0 at all; the Workshop/importer
+        // can still preserve the polity's standard-country bridge in record.code.
+        // Prefer that stable record metadata, then the resolver's own code, then
+        // baked geographic provenance, and only finally the legacy GID_0 field.
+        const stockCode = cleanSelectionValue(
+            record?.code ||
+            identity?.code ||
+            sel?.gid0 ||
+            // Backward-compatible repair for already-imported custom maps whose
+            // polity records predate importer code preservation.
+            countryGidFromIdentity(record?.name || polityKey || controller) ||
+            sel?.GID_0 ||
+            "",
+        );
+        return {
+            polityKey,
+            code: stockCode,
+            name: record?.name || polityKey || resolveCountryDisplayName(sel?.COUNTRY, stockCode || sel?.GID_0),
+        };
+    };
+
+    // Open a diplomatic chat with the CURRENT controller, not the baked geography.
     const handleOpenChat = () => {
         if (!_currentSelection) return;
-        requestDiplomaticChat({
-            name: resolveSelectionName(_currentSelection),
-            code: selectionOwner(_currentSelection),
-        });
+        requestDiplomaticChat(resolveSelectionIdentity(_currentSelection));
         _dismiss?.();
     };
 
-    // Open the full country panel (related events, aliases, owned regions,
-    // advisor report, diplomacy) for the selected owner.
+    // Open the full country panel for the CURRENT controller. The panel resolves
+    // its own live flag, so this bridge never has to carry stale visual metadata.
     const handleToggleStats = () => {
         const sel = _currentSelection;
         if (!sel) return;
-        const owner = selectionOwner(sel);
-        const flagInfo = resolveEraFlagInfo(owner, polities[owner], customFlags);
-        openCountryPanel({
-            code: owner,
-            name: resolveSelectionName(sel),
-            flagUrl: flagInfo?.imageUrl || null,
-            flagEmoji: flagInfo?.emoji || null,
-        });
+        openCountryPanel(resolveSelectionIdentity(sel));
         _dismiss?.();
     };
 
@@ -239,31 +396,18 @@ const RegionPopup = () => {
 
         setFlagImageFailed(false);
 
-        // Era-correct flag only: the polity's own flag, else the owner's ISO flag.
-        // Deliberately NO modern-country fallback — an era polity without a flag
-        // shows "No flag available" rather than an anachronistic modern flag.
-        const owner = selectionOwner(selection);
-        const flagInfo = resolveEraFlagInfo(owner, polities[owner], customFlags);
+        const identity = resolveSelectionIdentity(selection);
+        const flagInfo = resolvePolityFlag({
+            polity: identity,
+            world: worldState,
+            flags: customFlags,
+        });
         setFlagState(
-            flagInfo
-                ? createFlagState("ready", flagInfo.imageUrl, flagInfo.emoji)
+            flagInfo?.imageUrl
+                ? createFlagState("ready", flagInfo.imageUrl, null)
                 : createFlagState("error"),
         );
-    }, [selection?.COUNTRY, selection?.GID_0, selection?.owner, polities]);
-
-    useEffect(() => {
-        if (!map) return;
-
-        const handleMapClick = (e) => {
-            const features = map.queryRenderedFeatures(e.point);
-            if ((!features || features.length === 0) && _currentSelection) {
-                _dismiss?.();
-            }
-        };
-
-        map.on("click", handleMapClick);
-        return () => map.off("click", handleMapClick);
-    }, [map]);
+    }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
     useEffect(() => {
         if (!map || !selection) {
@@ -320,17 +464,50 @@ const RegionPopup = () => {
     if (!selection || !screenPos) return null;
 
     const { COUNTRY, NAME_1 } = selection;
-    // Custom regions with an empty owner are deliberately unclaimed land.
-    const isUnclaimed = selection.owner === "";
-    // Era name first: the scenario's polity name for the owner ("Holy Roman
-    // Empire", not "Germany"), then scenario name overrides, then the modern name.
-    const displayCountry = isUnclaimed
-        ? "Unclaimed Territory"
-        : polities[selection.GID_0]?.name
-            || resolveCountryDisplayName(COUNTRY, selection.GID_0);
-    const POPUP_WIDTH = 210;
+    const regionId = selection.GID_1 || "";
+    const controllerCode = regionId
+        ? territoryState.regionOwnershipOverrides?.[regionId] ?? selection.GID_0 ?? selection.owner ?? ""
+        : selection.GID_0 ?? selection.owner ?? "";
+    const sovereignCode = regionId
+        ? territoryState.regionSovereigntyOverrides?.[regionId] ?? controllerCode
+        : controllerCode;
+    const rawClaimants = regionId ? territoryState.regionClaimants?.[regionId] : null;
+    const claimants = [...new Set(
+        (Array.isArray(rawClaimants)
+            ? rawClaimants
+            : rawClaimants && typeof rawClaimants === "object"
+                ? Object.keys(rawClaimants).filter((key) => rawClaimants[key])
+                : [])
+            .map((value) => String(value ?? "").trim())
+            .filter((value) => value && value !== controllerCode),
+    )];
+    const isUnclaimed = controllerCode === "";
+    const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
+    const isContested = claimants.length > 0;
+    const controlStatus = isOccupied && isContested
+        ? "Occupied / contested"
+        : isOccupied
+            ? "Occupied"
+            : isContested
+                ? "Contested"
+                : isUnclaimed
+                    ? "Unclaimed"
+                    : "Administered";
+    const displayPolity = (code) => {
+        if (!code) return "Unclaimed Territory";
+        const identity = resolvePolityIdentity(code, worldState, {
+            allowUnknown: true,
+            requireActive: false,
+            allowCoreMatch: true,
+            allowStockBase: true,
+        });
+        const key = identity.resolved || code;
+        return worldState?.polityOverrides?.[key]?.name || key || "Unclaimed Territory";
+    };
+    // header stays on the current administrator/controller. legal title goes below.
+    const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
+    const POPUP_WIDTH = 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
-    const showFlagEmoji = Boolean(!showFlagImage && flagState.emoji);
 
     return createPortal(
         <div
@@ -377,15 +554,12 @@ const RegionPopup = () => {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: showFlagEmoji ? "white" : "rgba(255,255,255,0.2)",
-                fontSize: showFlagEmoji ? "3rem" : "11px",
-                letterSpacing: showFlagEmoji ? 0 : "0.05em",
-                textShadow: showFlagEmoji ? "0 4px 18px rgba(0,0,0,0.35)" : "none",
+                color: "rgba(255,255,255,0.2)",
+                fontSize: "11px",
+                letterSpacing: "0.05em",
             }}
             >
-            {showFlagEmoji
-            ? flagState.emoji
-            : flagState.status === "loading" && selection?.GID_0
+            {flagState.status === "loading" && selection?.GID_0
             ? "Loading..."
             : "No flag available"}
             </div>
@@ -450,6 +624,28 @@ const RegionPopup = () => {
         <IconBtn title="Region info">{"\u24D8"}</IconBtn>
         </div>
         </div>
+
+        {!isUnclaimed && (isOccupied || isContested) && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
+            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
+            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+            <span style={{ color: "rgba(255,255,255,0.42)" }}>Status</span>
+            <span style={{ color: isOccupied ? "#fbbf24" : "rgba(255,255,255,0.84)", fontWeight: 700 }}>{controlStatus}</span>
+            {claimants.length > 0 && (
+                <>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Claimants</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                {claimants.map(displayPolity).join(", ")}
+                </span>
+                </>
+            )}
+            </div>
+            </>
+        )}
 
         </div>
         </div>

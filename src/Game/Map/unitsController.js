@@ -13,6 +13,7 @@
 
 import {
   readWorldState,
+  readWorldStateView,
   writeWorldState,
   readGameData,
   readActionsState,
@@ -27,9 +28,11 @@ let playerCode = "";
 let round = 1;
 let gameDate = "";
 let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
-let interactionMode = { kind: "idle" }; // idle | deploy | move | attack
-let pollTimer = null;
-let busy = false; // suppress poll overwrite mid-commit
+let interactionMode = { kind: "idle" }; // idle | deploy | admin-place | move | attack
+let syncRefCount = 0;
+let syncInstalled = false;
+let bootstrapPromise = null;
+let busy = false; // suppress external adoption mid-commit
 
 const listeners = new Set();
 const emit = () => {
@@ -68,33 +71,136 @@ export const setInteractionMode = (next) => {
 };
 export const clearInteractionMode = () => setInteractionMode({ kind: "idle" });
 
-const refresh = async () => {
-  if (busy) return;
-  try {
-    const [world, game] = await Promise.all([
-      readWorldState({ force: true }),
-      readGameData({ force: true }),
-    ]);
-    units = world.units ?? [];
-    playerCode = game.country ?? "";
-    round = game.round ?? 1;
-    gameDate = game.gameDate || game.startDate || "";
-    allowedUnitTypes = Array.isArray(world.allowedUnitTypes) && world.allowedUnitTypes.length
+const sameUnits = (a, b) => {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index] || {};
+    const right = b[index] || {};
+    if (
+      left.id !== right.id ||
+      left.type !== right.type ||
+      left.ownerCode !== right.ownerCode ||
+      left.name !== right.name ||
+      left.strength !== right.strength ||
+      left.status !== right.status ||
+      left.lng !== right.lng ||
+      left.lat !== right.lat ||
+      left.orderId !== right.orderId ||
+      left.updatedAt !== right.updatedAt
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const sameAllowedUnitTypes = (a, b) => {
+  if (a === b) return true;
+  if (a == null || b == null) return a == null && b == null;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+};
+
+const adoptWorld = (world, { notify = true } = {}) => {
+  if (!world || typeof world !== "object" || busy) return false;
+
+  const nextUnits = Array.isArray(world.units) ? world.units : [];
+  const nextAllowed =
+    Array.isArray(world.allowedUnitTypes) && world.allowedUnitTypes.length
       ? world.allowedUnitTypes
       : null;
-    emit();
-  } catch (error) {
-    console.error("Failed to refresh units:", error);
-  }
+
+  const unitsChanged = !sameUnits(units, nextUnits);
+  const typesChanged = !sameAllowedUnitTypes(allowedUnitTypes, nextAllowed);
+
+  if (unitsChanged) units = nextUnits;
+  if (typesChanged) allowedUnitTypes = nextAllowed;
+
+  if (notify && (unitsChanged || typesChanged)) emit();
+  return unitsChanged || typesChanged;
+};
+
+const adoptGame = (game, { notify = true } = {}) => {
+  if (!game || typeof game !== "object" || busy) return false;
+
+  const nextPlayerCode = game.country ?? "";
+  const nextRound = game.round ?? 1;
+  const nextGameDate = game.gameDate || game.startDate || "";
+
+  const changed =
+    nextPlayerCode !== playerCode ||
+    nextRound !== round ||
+    nextGameDate !== gameDate;
+
+  playerCode = nextPlayerCode;
+  round = nextRound;
+  gameDate = nextGameDate;
+
+  if (notify && changed) emit();
+  return changed;
+};
+
+const bootstrap = async () => {
+  if (bootstrapPromise) return bootstrapPromise;
+
+  bootstrapPromise = Promise.all([
+    // Read-only normalized view is cached/stable and does NOT force a network
+    // round-trip or build a fresh mutable world every five seconds.
+    readWorldStateView({ force: false }),
+    readGameData({ force: false }),
+  ])
+    .then(([world, game]) => {
+      const unitsChanged = adoptWorld(world, { notify: false });
+      const gameChanged = adoptGame(game, { notify: false });
+      if (unitsChanged || gameChanged) emit();
+    })
+    .catch((error) => {
+      console.error("Failed to bootstrap units:", error);
+    })
+    .finally(() => {
+      bootstrapPromise = null;
+    });
+
+  return bootstrapPromise;
+};
+
+const onWorldUpdated = (event) => {
+  adoptWorld(event?.detail?.world);
+};
+
+const onGameUpdated = (event) => {
+  adoptGame(event?.detail?.game);
+};
+
+const installUnitSync = () => {
+  if (syncInstalled || typeof window === "undefined") return;
+  syncInstalled = true;
+  window.addEventListener("oh:world-updated", onWorldUpdated);
+  window.addEventListener("oh:game-updated", onGameUpdated);
+};
+
+const uninstallUnitSync = () => {
+  if (!syncInstalled || typeof window === "undefined") return;
+  syncInstalled = false;
+  window.removeEventListener("oh:world-updated", onWorldUpdated);
+  window.removeEventListener("oh:game-updated", onGameUpdated);
 };
 
 export const startUnitsSync = () => {
-  if (pollTimer) return () => {};
-  refresh();
-  pollTimer = setInterval(refresh, 5000);
+  syncRefCount += 1;
+  installUnitSync();
+  void bootstrap();
+
+  let stopped = false;
   return () => {
-    clearInterval(pollTimer);
-    pollTimer = null;
+    if (stopped) return;
+    stopped = true;
+    syncRefCount = Math.max(0, syncRefCount - 1);
+    if (syncRefCount === 0) uninstallUnitSync();
   };
 };
 
@@ -114,6 +220,57 @@ const commit = async (mutator) => {
   } finally {
     busy = false;
   }
+};
+
+// Authoritative editor seam used by Cheats 2.0 / Force Manager. Unlike normal
+// player move/deploy/attack functions below, this does NOT queue an Action and
+// does not apply movement leashes or AI adjudication. The explicit admin surface
+// is allowed to repair the canonical unit record directly while still sharing
+// the same normalized world.units persistence path.
+export const updateUnitAdmin = async (unitId, patch = {}) => {
+  const id = String(unitId ?? "").trim();
+  if (!id || !patch || typeof patch !== "object") return null;
+
+  await commit((list) =>
+    list.map((unit, index) => {
+      if (unit.id !== id) return unit;
+
+      const next = normalizeUnitEntry({
+        ...unit,
+        ...(Object.prototype.hasOwnProperty.call(patch, "name") ? { name: patch.name } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "type") ? { type: patch.type } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "strength") ? { strength: patch.strength } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "status") ? { status: patch.status } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "lng") ? { lng: patch.lng } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "lat") ? { lat: patch.lat } : {}),
+        ...(Object.prototype.hasOwnProperty.call(patch, "note") ? { note: patch.note } : {}),
+        id: unit.id,
+        ownerCode: unit.ownerCode,
+        source: unit.source,
+        orderId: unit.orderId,
+        createdAt: unit.createdAt,
+        updatedAt: new Date().toISOString(),
+      }, index);
+
+      return next || unit;
+    }),
+  );
+
+  return units.find((unit) => unit.id === id) ?? null;
+};
+
+// Authoritative map-placement seam for Cheats 2.0. This is deliberately NOT a
+// normal move order: no movement leash, no status mutation, no queued player
+// Action, and no AI permission step. It only changes the selected canonical
+// unit's coordinates while preserving its identity, owner, strength and status.
+export const placeUnitAdmin = async (unitId, lng, lat) => {
+  const id = String(unitId ?? "").trim();
+  const nextLng = Number(lng);
+  const nextLat = Number(lat);
+  if (!id || !Number.isFinite(nextLng) || !Number.isFinite(nextLat)) return null;
+  if (nextLng < -180 || nextLng > 180 || nextLat < -90 || nextLat > 90) return null;
+  if (!units.some((unit) => unit.id === id)) return null;
+  return updateUnitAdmin(id, { lng: nextLng, lat: nextLat });
 };
 
 // unitRevert records how to undo the order if the player deletes the queued
@@ -159,7 +316,7 @@ export const revertUnitOrder = async (revert) => {
 };
 
 export const deployUnit = async ({ type, strength, name, lng, lat }) => {
-  if (!playerCode) await refresh();
+  if (!playerCode) await bootstrap();
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
   // Built outside the commit so the queued order can reference its id.
