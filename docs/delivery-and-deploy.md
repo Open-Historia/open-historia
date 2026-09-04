@@ -67,11 +67,11 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 |---|---|---|---|---|---|
 | `app-stable` | `app-bundle.yml` | push to `main` | `Open-Historia.zip` (source + map data) | no (`--latest=false`) | One-download desktop install, stable |
 | `app-beta` | `app-bundle.yml` | push to `beta` | `Open-Historia.zip` | no (`--latest=false`) | One-download desktop install, beta |
-| `android` | `android-apk.yml` | `workflow_dispatch` / `android-v*` tag | `pax-historia.apk` | no | Stable Android app; the app self-updates from here |
+| `android` | `android-apk.yml` | `workflow_dispatch` / `android-v*` tag | `open-historia.apk` | no | Stable Android app; the app self-updates from here |
 | `android-beta` | `android-apk-beta.yml` *(off-main, §4.3)* | `workflow_dispatch`, checks out `alpha` | `pax-historia.apk` | **yes** (`--prerelease`) | Experimental in-app-server Android build; isolated from stable |
 | `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
 
-The `pax-historia.apk` asset name is contractual — it (and the Android `appId`) must never change, because the installed app's self-update polls a fixed release/asset URL.
+The APK asset name is contractual — it (and the Android `appId`) must not change, because anything holding a fixed release/asset URL keeps pointing at the old name. It WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match). The old asset is still on the `android` release and is now frozen at the 2026-09-03 build, so anything still fetching it by name will never see another update. In practice the in-app check reads `apk` out of `android/latest.json` rather than a fixed filename — and that file does not exist and is written by no workflow, so the in-app Android update is inert either way. Decide which of those two to fix before renaming it again.
 
 ---
 
@@ -103,8 +103,8 @@ Runs on **every** push to `main`/`beta` so the download never goes stale. The zi
 | Toolchain | Node 20, Temurin Java 21 |
 | Build number | `sed` stamps `${{ github.run_number }}` into `mobile/www/index.html` over `__APP_BUILD__`. The boot screen compares this against `Build: N` in the release notes to decide whether to self-update (`.github/workflows/android-apk.yml:32`) |
 | Build | `npm ci` → `npm run build` (produces `dist/`) → `node scripts/build-mobile-server.mjs` (assembles the embedded server) → in `mobile/`: `npm ci` → `npx cap sync android` → `./gradlew assembleDebug --no-daemon` |
-| Collect | copies `app-debug.apk` → `pax-historia.apk` |
-| Publish | `gh release create android … || gh release edit android`; `gh release upload android pax-historia.apk --clobber`; notes end with `Build: ${{ github.run_number }}` |
+| Collect | copies `app-debug.apk` → `open-historia.apk` |
+| Publish | `gh release create android … || gh release edit android`; `gh release upload android open-historia.apk --clobber`; notes end with `Build: ${{ github.run_number }}` |
 
 The embedded server must be assembled **before** `cap sync` copies it into the native app — that ordering is why `build-mobile-server.mjs` runs between `npm run build` and the Gradle step.
 
@@ -306,7 +306,7 @@ It reads only from `server/data`, which **is** committed — so the website buil
 |---|---|---|---|---|
 | **Desktop (stable)** | `main` | `Open-Historia.zip` on `app-stable` | `app-bundle.yml` on push | Download zip once, or run "Update Open Historia" |
 | **Desktop (beta)** | `beta` | `Open-Historia.zip` on `app-beta` | `app-bundle.yml` on push | Download the beta zip |
-| **Android (stable)** | `main` (mobile client) | `pax-historia.apk` on `android` | `android-apk.yml` (dispatch / `android-v*` tag) | App self-updates by comparing `Build: N` |
+| **Android (stable)** | `main` (mobile client) | `open-historia.apk` on `android` | `android-apk.yml` (dispatch / `android-v*` tag) | App self-updates by comparing `Build: N` |
 | **Android (beta)** | `alpha` | `pax-historia.apk` on `android-beta` | `android-apk-beta.yml` (dispatch, off-main) | Sideload from the pre-release; self-updates from `android-beta` |
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — next page load |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
@@ -327,7 +327,7 @@ Key asymmetries a newcomer should internalize:
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
-- **`pax-historia.apk` asset name and the Android `appId` must never change** — the self-updater polls fixed URLs.
+- **The Android `appId` must never change.** The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset is frozen on the release. See §4.2 before doing it again.
 - **Assemble the mobile server before `cap sync`** — `android-apk.yml` runs `build-mobile-server.mjs` between `npm run build` and Gradle.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
