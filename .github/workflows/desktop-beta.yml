@@ -33,6 +33,11 @@ on:
         description: Release tag to publish the beta installers to
         required: false
         default: desktop-beta
+      publish:
+        description: Publish to that release (clear to build the installers only)
+        required: false
+        type: boolean
+        default: true
   push:
     tags:
       - "desktop-beta-v*"
@@ -144,12 +149,17 @@ jobs:
             release/*.deb
           if-no-files-found: error
 
-      # Clearing the tag field on a dispatch run builds the installers and stops.
-      # They are still uploaded as run artifacts above, so this is how you get a
-      # build to try without offering it to anyone. Same escape hatch, and the same
-      # condition, as the stable workflow.
+      # Unticking `publish` builds the installers and stops. They are still uploaded
+      # as run artifacts above, so this is how you get a build to try without
+      # offering it to anyone.
+      #
+      # A separate boolean rather than the stable workflow's `inputs.tag != ''`,
+      # which does not work: an omitted or empty value falls back to the input's
+      # DEFAULT, so inputs.tag is never empty and that condition is always true.
+      # Measured, not assumed - run 33929212744 was dispatched with `-f tag=` and
+      # published anyway, with TAG=desktop-beta in its log.
       - name: Attach to the beta release
-        if: github.event_name == 'push' || inputs.tag != ''
+        if: github.event_name == 'push' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           # A FIXED tag, never the branch and never the tag that was pushed — and
