@@ -40,6 +40,7 @@ Each task is identified by a **task key**. `GAMEPLAY_SCHEMAS` maps the key to it
 | `catalystSummary` | `CATALYST_SUMMARY_SCHEMA` | `submit_catalyst_summary` | resolved catalyst → event |
 | `gameMaster` | `GAME_MASTER_SCHEMA` | `submit_game_master` | `applyGameMasterCommand` |
 | `countryStatSheet` | `COUNTRY_STAT_SHEET_SCHEMA` | `submit_country_stat_sheet` | national stat sheet |
+| `unitDirector` | `UNIT_DIRECTOR_SCHEMA` | `submit_unit_director` | unit operations for the turn's military events (sanitized by `nativeUnitDirector.js`) |
 | `idleDiplomacy` | `IDLE_DIPLOMACY_SCHEMA` | `submit_idle_diplomacy` | idle inbox drip |
 | `pregameHistory` | `PREGAME_HISTORY_SCHEMA` | `submit_pregame_history` | pre-game backstory |
 
