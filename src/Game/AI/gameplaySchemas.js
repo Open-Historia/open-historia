@@ -1516,6 +1516,211 @@ export const decodeGameMasterTransportPayload = (value) => {
   }
 };
 
+// The curator's answer: one conservative judgment per candidate event plus a
+// reading of recent history. Native gates in nativeTimelineCurator.js decide
+// what the judgments may actually remove.
+const curatorJudgmentSchema = {
+  type: "object",
+  description: "One conservative judgment of a newly generated timeline event.",
+  properties: {
+    index: {
+      type: "integer",
+      description: "Zero-based index of the candidate event.",
+      minimum: 0,
+    },
+
+    verdict: {
+      type: "string",
+      description: "Semantic classification of the candidate.",
+      enum: ["KEEP", "REDUNDANT", "UNSUPPORTED_REVERSAL"],
+    },
+
+    confidence: {
+      type: "number",
+      description: "Confidence in the judgment from 0 to 1.",
+      minimum: 0,
+      maximum: 1,
+    },
+
+    materialStateChange: textSchema(
+      "Short description of the concrete state or fact established by the event.",
+    ),
+
+    matchedPriorIndexes: {
+      type: "array",
+      description: "Indexes of specific prior canonical events supporting the judgment.",
+      items: {
+        type: "integer",
+        minimum: 0,
+      },
+    },
+
+    materiallyNewDimensions: stringArraySchema(
+      "Materially new dimensions introduced by this event.",
+    ),
+
+    recurrenceMatters: {
+      type: "boolean",
+      description: "Whether repetition itself creates meaningful pressure or consequence.",
+    },
+
+    newTriggerAfterPriorPosture: textSchema(
+      "New trigger explaining an apparent reversal, or 'none'.",
+    ),
+
+    worthwhile: {
+      type: "boolean",
+      description: "Whether this event deserves space in the persistent timeline.",
+    },
+
+    substantive: {
+      type: "boolean",
+      description: "Whether the event establishes a concrete fact or result.",
+    },
+
+    personalityTexture: {
+      type: "boolean",
+      description: "Whether the event adds useful human, social, or cultural texture.",
+    },
+
+    storyline: textSchema(
+      "Short stable label for the broad recurring storyline.",
+    ),
+
+    qualitativeAdvance: {
+      type: "boolean",
+      description: "Whether the storyline changes in kind rather than merely degree or paperwork.",
+    },
+
+    incrementalProcess: {
+      type: "boolean",
+      description: "Whether this is mainly another routine step inside an established process.",
+    },
+
+    processFramePresent: {
+      type: "boolean",
+      description: "Whether the event is principally framed as a meeting, review, inspection, consultation, or similar process.",
+    },
+
+    observableOutcomeEvidence: textSchema(
+      "Exact short clause from the candidate proving a completed observable outcome, or empty.",
+    ),
+
+    pureProcessFiller: {
+      type: "boolean",
+      description: "Whether the event is process without a completed observable outcome.",
+    },
+
+    reason: textSchema(
+      "Short explanation of the judgment.",
+    ),
+  },
+
+  required: [
+    "index",
+    "verdict",
+    "confidence",
+    "materialStateChange",
+    "matchedPriorIndexes",
+    "materiallyNewDimensions",
+    "recurrenceMatters",
+    "newTriggerAfterPriorPosture",
+    "worthwhile",
+    "substantive",
+    "personalityTexture",
+    "storyline",
+    "qualitativeAdvance",
+    "incrementalProcess",
+    "processFramePresent",
+    "observableOutcomeEvidence",
+    "pureProcessFiller",
+    "reason",
+  ],
+
+  additionalProperties: false,
+};
+
+const curatorSaturationSchema = {
+  type: "object",
+  description: "Recent saturation state for one broad storyline.",
+  properties: {
+    storyline: nonEmptyTextSchema(
+      "Stable storyline label.",
+    ),
+
+    count: {
+      type: "integer",
+      minimum: 0,
+      description: "Number of relevant recent canonical events.",
+    },
+
+    priorIndexes: {
+      type: "array",
+      items: {
+        type: "integer",
+        minimum: 0,
+      },
+    },
+
+    saturation: {
+      type: "string",
+      enum: ["low", "busy", "saturated"],
+    },
+
+    description: textSchema(
+      "Short explanation of the saturation assessment.",
+    ),
+  },
+
+  required: [
+    "storyline",
+    "count",
+    "priorIndexes",
+    "saturation",
+    "description",
+  ],
+
+  additionalProperties: false,
+};
+
+export const TIMELINE_CURATOR_SCHEMA = {
+  type: "object",
+  description:
+    "Conservative semantic analysis of newly generated timeline events.",
+
+  properties: {
+    judgments: {
+      type: "array",
+      description: "One judgment for every supplied candidate event.",
+      items: curatorJudgmentSchema,
+    },
+
+    recentHistoryMechanical: {
+      type: "boolean",
+      description: "Whether recent history is dominated by mechanical or administrative progression.",
+    },
+
+    storylineSaturation: {
+      type: "array",
+      description: "Broad recurring storylines detected in recent canonical history.",
+      items: curatorSaturationSchema,
+    },
+
+    underrepresentedDomains: stringArraySchema(
+      "Broad historical domains currently underrepresented in recent events.",
+    ),
+  },
+
+  required: [
+    "judgments",
+    "recentHistoryMechanical",
+    "storylineSaturation",
+    "underrepresentedDomains",
+  ],
+
+  additionalProperties: false,
+};
+
 // The unit director's answer: unit operations to attach to the military events
 // the jump already wrote, keyed by the supplied event index. Native code
 // sanitizes every op before it reaches an event.
@@ -1946,6 +2151,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   catalystSummary: CATALYST_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
+  timelineCurator: TIMELINE_CURATOR_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -2020,6 +2226,12 @@ export const GAME_MASTER_TOOL = makeTool(
   GAME_MASTER_TRANSPORT_SCHEMA,
 );
 
+export const TIMELINE_CURATOR_TOOL = makeTool(
+  "submit_timeline_curator",
+  "Submit conservative semantic judgments for newly generated timeline events.",
+  TIMELINE_CURATOR_SCHEMA,
+);
+
 export const UNIT_DIRECTOR_TOOL = makeTool(
   "submit_unit_director",
   "Submit conservative persistent-unit operations for the supplied military events.",
@@ -2065,6 +2277,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   catalystSummary: CATALYST_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
+  timelineCurator: TIMELINE_CURATOR_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,
