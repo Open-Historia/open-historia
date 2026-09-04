@@ -10,7 +10,10 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { NO_RESPONSE_BODY_NOTE, loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
+import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -548,6 +551,9 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
+        // Only ever non-empty on a fallback turn (see gameplay.js) — the "Copy
+        // debugging message" button's reason for existing.
+        rawResponse: entry.rawResponse || "",
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
         source: entry.source || "ai",
@@ -861,9 +867,12 @@ const TimelineSkipPanel = ({
     error,
     isLoading,
     isOpen,
+    modeSuggestion,
+    onAcceptModeSuggestion,
     onAutoJump,
     onCancel,
     onClose,
+    onDeclineModeSuggestion,
     onJump,
     onUndo,
     topOffset,
@@ -1097,6 +1106,71 @@ const TimelineSkipPanel = ({
             </div>
         )}
 
+        {/* The ladder has twice found the same lower method working for this
+            endpoint. Offered, never applied silently: the app did the discovery,
+            the player makes the decision — and declining is remembered so this
+            asks once rather than after every turn. */}
+        {modeSuggestion && (
+            <div
+            style={{
+                background: "rgba(30,58,138,0.28)",
+                border: "1px solid rgba(96,165,250,0.32)",
+                borderRadius: "16px",
+                color: "#bfdbfe",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>
+            <strong>Turns could be faster.</strong> Your AI model can&apos;t use the
+            method the game tries first, so every turn wastes time working that
+            out. The game can skip straight to what works — on a long turn that
+            can save several minutes. Nothing else changes.
+            <div style={{ color: "rgba(191,219,254,0.62)", fontSize: "0.72rem", marginTop: "0.4rem" }}>
+            You can undo this any time under Settings → How the AI answers.
+            </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                onClick={onAcceptModeSuggestion}
+                style={{
+                    background: "rgba(96,165,250,0.2)",
+                    border: "1px solid rgba(96,165,250,0.42)",
+                    borderRadius: "12px",
+                    color: "#bfdbfe",
+                    cursor: "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Yes, speed up turns
+                </button>
+                <button
+                type="button"
+                onClick={onDeclineModeSuggestion}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                No thanks
+                </button>
+            </div>
+            </div>
+        )}
+
         {error && (
             <div
             style={{
@@ -1118,6 +1192,7 @@ const TimelineSkipPanel = ({
 
 const TimelineHistoryPanel = ({
     isOpen,
+    onCopyDebugMessage,
     onRevealNextEvent,
     onRevealAll,
     lookups,
@@ -1134,6 +1209,16 @@ const TimelineHistoryPanel = ({
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
     const lastVisibleEventRef = React.useRef(null);
+    // idle | copying | copied | failed — resets to idle shortly after a result
+    // so the button doesn't get stuck reading "Copied!" forever.
+    const [copyState, setCopyState] = useState("idle");
+    const handleCopyClick = async () => {
+        if (copyState === "copying" || typeof onCopyDebugMessage !== "function") return;
+        setCopyState("copying");
+        const succeeded = await onCopyDebugMessage();
+        setCopyState(succeeded ? "copied" : "failed");
+        setTimeout(() => setCopyState("idle"), 2000);
+    };
 
     useEffect(() => {
         if (!isOpen || !lastVisibleEventRef.current) {
@@ -1169,6 +1254,32 @@ const TimelineHistoryPanel = ({
             }}
             >
             {warning}
+            {typeof onCopyDebugMessage === "function" && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.6rem" }}>
+                <button
+                type="button"
+                onClick={handleCopyClick}
+                title="Copies everything needed to debug this — what was attempted, game/provider context, and the raw model response — so it can be pasted straight into a bug report, no DevTools needed."
+                style={{
+                    alignItems: "center",
+                    background: copyState === "copied" ? "rgba(34,197,94,0.16)" : "rgba(251,191,36,0.1)",
+                    border: `1px solid ${copyState === "copied" ? "rgba(74,222,128,0.4)" : "rgba(251,191,36,0.3)"}`,
+                    borderRadius: "8px",
+                    color: copyState === "copied" ? "#86efac" : "#fde68a",
+                    cursor: copyState === "copying" ? "default" : "pointer",
+                    display: "flex",
+                    fontFamily: "sans-serif",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    gap: "0.35rem",
+                    padding: "0.4rem 0.7rem",
+                    transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                }}
+                >
+                {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy — try again" : copyState === "copying" ? "Copying…" : "📋 Copy debugging message"}
+                </button>
+                </div>
+            )}
             </div>
         )}
         {!record ? (
@@ -1240,6 +1351,10 @@ const DateWidget = ({
     const [regionBounds, setRegionBounds] = useState(new Map());
     const [regionLookup, setRegionLookup] = useState(new Map());
     const [localOpenPanel, setLocalOpenPanel] = useState(null);
+    // A structured-output method the ladder has found this endpoint honours,
+    // offered to the player between turns (AI/structuredMode.js); null when
+    // there is nothing to offer or they have already answered.
+    const [modeSuggestion, setModeSuggestion] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
@@ -1466,11 +1581,27 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsLoading(false);
+            // Between turns, never during one. If the ladder has learned
+            // something consistent about this endpoint, offer it now.
+            setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
     const cancelJump = () => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    };
+
+    const acceptModeSuggestion = () => {
+        if (!modeSuggestion) return;
+        acceptStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode, modeSuggestion.provider);
+        setModeSuggestion(null);
+    };
+
+    const declineModeSuggestion = () => {
+        if (!modeSuggestion) return;
+        // Remembered for the session, so it asks once rather than every turn.
+        declineStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode);
+        setModeSuggestion(null);
     };
 
     // How many turns can be undone (a restore point is captured at the start of
@@ -1566,6 +1697,73 @@ const DateWidget = ({
             playerCountry: playerCountry || playerCountryCode || "",
         });
     }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
+    // "Copy debugging message" (TimelineHistoryPanel, next to the fallback
+    // warning): everything a report needs in one paste — what was attempted,
+    // the game/provider context, and the raw model response — so a fallback
+    // can be diagnosed with no DevTools, no log-hunting, one click and one
+    // paste. Built lazily on click, not kept in state, since it's read-only
+    // derived data that only ever matters if the button is actually pressed.
+    const buildFallbackDebugMessage = () => {
+        const record = latestTurnRecord;
+        if (!record) return "";
+        const provider = getStoredProvider();
+        const model = getProviderField(provider, "model") || "(default)";
+        const actionsList = record.plannedActions.length
+        ? record.plannedActions.map((action) =>
+            `- ${action.title}${action.text && action.text !== action.title ? `: ${action.text}` : ""}`).join("\n")
+        : "(none queued)";
+        // The events THIS fallback turn produced are generic canned text (no
+        // diagnostic value) — exclude them and show what actually led up to it.
+        const recordEventIds = new Set(record.events.map((event) => event.id));
+        const priorEvents = events.filter((event) => !recordEventIds.has(event.id)).slice(-3);
+        const recentEvents = priorEvents.length
+        ? priorEvents.map((event) => `- ${event.date || "undated"}: ${event.title}`).join("\n")
+        : "(none)";
+
+        return [
+            "OPEN HISTORIA — AI TURN FALLBACK DEBUG REPORT",
+            `Generated: ${new Date().toISOString()}`,
+            "",
+            "-- What happened --",
+            `Mode: ${record.mode}`,
+            `Requested range: ${record.fromDate || "unknown"} -> ${record.toDate || "unknown"}`,
+            `Round: ${record.round}`,
+            `Failure reason: ${record.fallbackReason || "(unknown)"}`,
+            "",
+            "-- Game context --",
+            `Player polity: ${playerCountry || gameData?.country || "unknown"}`,
+            `Difficulty: ${gameData?.difficulty || "standard"}`,
+            `AI provider: ${provider}`,
+            `Model: ${model}`,
+            "",
+            "-- Player's queued actions this round --",
+            actionsList,
+            "",
+            "-- Most recent prior events --",
+            recentEvents,
+            "",
+            // A transport failure has no response to show, so do not label the
+            // note that explains that as one — it sent readers hunting for a
+            // parsing bug when the real cause was the provider config.
+            record.rawResponse === NO_RESPONSE_BODY_NOTE
+                ? "-- Model response --"
+                : "-- Raw model response that failed to parse --",
+            // Every fallback now fills this in — with the raw text when there was
+            // one, or with a note saying no response body arrived (gameplay.js).
+            // So an empty field can only be a turn recorded before that, and this
+            // line must not claim to know which failure it was.
+            record.rawResponse || "(not captured — recorded by an older build that only saved the failure reason; re-run the turn to capture the response, or the note explaining that none arrived)",
+        ].join("\n");
+    };
+
+    // Through the shared helper, not navigator.clipboard directly: that API needs a
+    // secure context, and a browser reaching this game over plain http on the LAN
+    // (Settings → Network) does not have one.
+    const handleCopyDebugMessage = async () => {
+        const message = buildFallbackDebugMessage();
+        if (!message) return false;
+        return copyToClipboard(message);
+    };
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     const parsedGameDate = rawGameDate ? dayjs(rawGameDate) : null;
     const hasValidGameDate = Boolean(parsedGameDate && parsedGameDate.isValid());
@@ -1699,9 +1897,12 @@ const DateWidget = ({
         error={error}
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
+        modeSuggestion={modeSuggestion}
+        onAcceptModeSuggestion={acceptModeSuggestion}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
+        onDeclineModeSuggestion={declineModeSuggestion}
         onJump={(days) => runJump(days, "jump")}
         onUndo={runUndo}
         topOffset={topOffset}
@@ -1709,6 +1910,7 @@ const DateWidget = ({
         />
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
+        onCopyDebugMessage={handleCopyDebugMessage}
         onRevealNextEvent={revealNextEvent}
         onRevealAll={revealAllEvents}
         lookups={lookups}

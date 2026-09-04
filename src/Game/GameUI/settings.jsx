@@ -9,6 +9,13 @@ import {
     setReasoningEnabled,
 } from "../AI/providerConfig.js";
 import {
+    STRUCTURED_MODES,
+    STRUCTURED_MODE_HINTS,
+    STRUCTURED_MODE_INTRO,
+    STRUCTURED_MODE_LABELS,
+    normalizeStructuredMode,
+} from "../AI/structuredMode.js";
+import {
     getLanguageOptions,
     getStoredChatLanguage,
     getStoredLanguage,
@@ -18,6 +25,7 @@ import {
 import {
     MAP_SETTING_KEYS,
     getMapSetting,
+    getMapSettingDefaultOn,
     setMapSetting,
 } from "../../runtime/mapSettings.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -383,6 +391,41 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
+// How to ask this provider for structured data. "Auto" tries the strongest
+// method and steps down when a gateway ignores it, which is right for almost
+// everyone — but that discovery costs a full generation per rung, and on a slow
+// endpoint that accepts tool calling without honouring it, re-learning it on
+// every call has been measured at half a turn. Setting it explicitly skips
+// straight to what works.
+//
+// Never a lock: whatever is chosen, the ladder can still step down from it, so a
+// setting made months ago cannot strand a campaign when a provider changes.
+const StructuredModeSelect = ({ onChange, value }) => {
+    const mode = normalizeStructuredMode(value);
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>How the AI answers</label>
+        <select
+        data-no-translate
+        value={mode}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        {["auto", ...STRUCTURED_MODES].map((option) => (
+            <option key={option} value={option} style={{ color: "black" }}>
+            {STRUCTURED_MODE_LABELS[option]}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {/* The general point first, so it reads the same whatever is selected,
+            then what THIS choice means. */}
+        {mode === "auto" ? STRUCTURED_MODE_INTRO : STRUCTURED_MODE_HINTS[mode]}
+        </div>
+        </div>
+    );
+};
+
 const SettingsInput = ({
     label,
     value,
@@ -510,6 +553,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <StructuredModeSelect
+            value={settings.openaiStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("openaiStructuredMode", value)}
+            />
             </>
         )}
 
@@ -578,6 +625,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
             />
+            <StructuredModeSelect
+            value={settings.openaiCompatibleStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("openaiCompatibleStructuredMode", value)}
+            />
             <Toggle
             label="Strict tool schema"
             enabled={settings.openaiCompatibleToolStrict === "1"}
@@ -590,7 +641,8 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             Sends strict:true with the tool call so a self-hosted backend constrains
             generation to the schema (SGLang/xgrammar, vLLM). Stops malformed or
             mistyped tool arguments. Leave off for OpenAI and Azure: they reject a
-            schema that does not list every property as required.
+            schema that does not list every property as required. Only affects the
+            tool rung of the structured-output ladder above.
             </div>
             </>
         )}
@@ -626,6 +678,10 @@ const ProviderSettingsPanel = ({ provider, settings, onSettingChange }) => {
             onChange={(value) => onSettingChange("anthropicCompatibleCustomParams", value)}
             placeholder='{"top_p": 0.9}'
             helperText="Optional. Merged into the request body — e.g. to limit reasoning budget/effort. Invalid JSON is ignored."
+            />
+            <StructuredModeSelect
+            value={settings.anthropicCompatibleStructuredMode ?? "auto"}
+            onChange={(value) => onSettingChange("anthropicCompatibleStructuredMode", value)}
             />
             </>
         )}
@@ -1115,7 +1171,9 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+        // Not getMapSetting: this one ships ON, and an absent key must read as
+        // on rather than off (see mapSettings.js).
+        limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
@@ -1226,7 +1284,7 @@ const SettingsMenu = ({
         onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)}
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
-        On: time skips give the model 5 minutes, then fall back to canned events. Off (default): generation waits as long as the model needs. Cancel works either way.
+        On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
         </div>
         </div>
 
