@@ -51,6 +51,8 @@ import {
 import { dedupeGeneratedEvents } from "../../runtime/eventDedup.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
+import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
+import { getLibraryState } from "../../runtime/library.js";
 
 const CHAT_HINT_PATTERNS = [
   /\bchat\b/i,
@@ -767,6 +769,18 @@ const mergePolityCatalog = (countryCatalog, world) => {
 // clobbered (or worse, interleave with the rollback snapshot). Every simulation
 // entry point wraps itself in beginSimulation/endSimulation; the drip checks
 // the counter before starting AND before writing, and simply skips its turn.
+// Which campaign is in front of the player right now. A turn stamps this when
+// it reads its state and checks it again before writing, because the runtime
+// endpoints follow the active campaign and a switch mid-turn would otherwise
+// land the whole turn on the campaign that was switched to (campaignGuard.js).
+const activeCampaignId = () => {
+  try {
+    return String(getLibraryState()?.activeGameId ?? "").trim();
+  } catch {
+    return "";
+  }
+};
+
 let activeSimulations = 0;
 const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
@@ -1535,6 +1549,7 @@ const applySimulationResult = async ({
   baseEvents,
   baseGame,
   baseWorld,
+  campaignId = "",
   result,
 }) => {
   const generatedEvents = normalizeArray(result.events)
@@ -1731,6 +1746,11 @@ const applySimulationResult = async ({
   } catch {
     chatsToWrite = nextChats;
   }
+
+  // Last moment before anything is persisted. Everything above is pure, so a
+  // turn generated for a campaign the player has since left is simply lost here
+  // rather than written over whichever campaign they opened instead.
+  assertCampaignUnchanged(campaignId, activeCampaignId());
 
   await Promise.all([
     writeActionsState(nextActions),
@@ -2200,6 +2220,8 @@ export const advanceActiveCatalyst = async (choiceText) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
+  // Stamped at the read, not at the write minutes later.
+  const campaignId = activeCampaignId();
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
   const catalyst = world.activeCatalyst;
@@ -2297,6 +2319,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
   });
 
   return applySimulationResult({
+    campaignId,
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -2351,6 +2374,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
+  // Stamped at the read, not at the write minutes later.
+  const campaignId = activeCampaignId();
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
@@ -2428,6 +2453,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   };
 
   return applySimulationResult({
+    campaignId,
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -2448,6 +2474,8 @@ export const applyGameMasterCommand = async (requestText) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
+  // Stamped at the read, not at the write minutes later.
+  const campaignId = activeCampaignId();
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
   const { generation, payload } = await runJsonTask("gameMaster", {
@@ -2481,6 +2509,7 @@ export const applyGameMasterCommand = async (requestText) => {
   }
 
   return applySimulationResult({
+    campaignId,
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
