@@ -98,7 +98,7 @@ Design intent captured in comments: the advisor drawer (10040) sits above every 
 
 | Button | Component | Opens | Notes |
 |---|---|---|---|
-| 💬 Chat | `Chat` (`chat.jsx:886`) | `ChatPanel` (bottom-left, z 9998) | Unread badge: polls stored chats every 15 s, counts open chats that gained messages since last opened |
+| 💬 Chat | `Chat` (`chat.jsx:886`) | `ChatPanel` (bottom-left, z 9998) | Unread badge plus incoming-message notifications: one event-driven watcher (runtime JSON writes, `oh:diplomacy-chats-updated`, tab visibility, a 30 s safety interval) keeps a per-chat cursor (`oh:chat-notification-cursors-v2`), toasts a foreign message that lands while its thread is not on screen (top-right, 12 s, click opens the thread), plays a two-note chime (`oh:chat-notification-sound-v1`, 🔊 toggle), keeps a 🔔 notification center bottom-left until the panel opens, and can raise desktop notifications once permitted; `window.__OH_DIPLO_NOTIFICATIONS__` (`status`, `test`, `testExistingChat`, `testSound`, `enableDesktop`, `clear`) exercises it |
 | ✦ Actions | `Actions` (`actions.jsx:700`) | `ActionsPanel` | See [§7](#7-actions-panel--srcgamegameuiactionsjsx) |
 
 Both launchers use `hasOpened` latches so the panel body isn't mounted until first opened.
@@ -110,8 +110,9 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 | Data | `chats` from `readChatsState`/`writeChatsState`; player country + date polled from `JSON_URLS.game` every 5 s | `src/runtime/gameState.js` |
 | Country list | `loadCountryNames()` (PMTiles-derived), filtered to exclude the player | `src/runtime/assets.js` |
 | Live sync | While open, polls stored chats every 5 s and merges additions (jump invitations, idle drip) without clobbering the active conversation | — |
-| Send | `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction }`; multi-country chats rotate speakers via `chooseNextDiplomaticSpeaker` | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js` |
+| Send | `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }` (the leader appends a hidden `DIPLOMATIC_MEMORY:` line, stored on the reply as `memorySummary` and fed back as system-side context — `runtime/diplomaticEnvelope.js`); multi-country chats rotate speakers via `chooseNextDiplomaticSpeaker`, at most 3 NPC replies per player message | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js` |
 | Group turn UI | `phase` = `player`/`pending`/`leader`; "Let X speak →" vs "Speak" buttons offer each queued country | `ConversationView` |
+| Conversation view | A date separator opens every new game day; the last 12 messages render first with a "Show earlier" button; stacked flags on list rows | `ConversationView`, `ChatListItem` |
 | External trigger | `requestDiplomaticChat(country)` bridge (`chat.jsx:697`) lets the map region popup open/reuse a 1-on-1 chat | Map selection layer |
 | Reactions | Leader reactions attach an emoji to the player's last message; hover tooltip is a portal at z 99999 | — |
 
