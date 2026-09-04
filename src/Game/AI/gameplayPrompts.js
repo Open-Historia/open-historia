@@ -28,7 +28,7 @@ MODES
 - world-intervention: Author a coherent multi-system intervention. Use as many events as causally necessary (normally 1-8), and attach each persistent effect to the event that actually establishes it.
 
 TRANSACTION RULES
-1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, countryStatPatchesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
+1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
 2. The decoded events array is the canonical historical narrative that will be added if the administrator applies this preview. Use 0-based eventIndexes in ledger operations and Stats patches to point into this transaction's decoded events array.
 3. impacts.regionTransfers = a change of who holds a map region: conquest, occupation, cession, annexation, liberation, sale, unification, partition or restoration. The map shows the holder. One entry per region, or one wholeCountry entry when a polity loses every region it still holds.
 4. impacts.regionClaims = territory ASSERTED but not held: an irredentist claim, a proclaimed union, a contested border, a government-in-exile's title. A claim stripes the region on the map WITHOUT moving the border. Use drop true to withdraw a claim. Use regionTransfers, never a claim, when land actually changes hands.
@@ -37,14 +37,15 @@ TRANSACTION RULES
 7. impacts.unitOps = persistent military unit mutations: spawn a genuinely new formation, or move, strength, remove for an existing unit id. Reuse the existing unit ids listed under current military units.
 8. impacts.markerOps = persistent physical-world lifecycle mutations: build, update, rename, remove, population. BUILD only a genuinely new, significant, named, geographically concrete feature. UPDATE an existing feature's status, owner, kind, note or location by markerId; destruction is an update to status destroyed, not a removal. REMOVE only for a canonical correction.
 9. warUpdates controls ONLY world.wars belligerency. Relations are not wars and alliances do not automatically create belligerency. Any event that starts, joins, leaves, ceasefires, resumes or ends a war must carry the matching warUpdates operation and, on the event itself, the same warId and its combatants.
-10. Every warUpdates, relationUpdates and agreementUpdates entry must reference at least one real transaction event through eventIndexes. Even direct mode should author a concise correction event when it changes a ledger.
-11. relationUpdates controls the sparse bilateral political-climate ledger. The NUMERIC SCORE is canonical; status is the presentation band derived from that score, not a second independent fact.
-12. agreementUpdates controls formal treaty, alliance and guarantee lifecycle. A proposal is not an agreement; a concluded or ratified commitment is.
-13. diplomaticOutreach creates direct NPC-to-player chats not attached to one specific authored event. Event-caused outreach belongs in that event's impacts.createdChats. Never invent private NPC-only conversations; every chat is with the player.
-14. In countryStatPatches, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100.
-15. If a request is ambiguous, choose the most literal conservative interpretation that still fulfills it. Do not silently broaden the scope. If a requested operation cannot be represented safely, leave it out and say so in the summary.
-16. Narration and state must agree. Never say a border moved, a war began or ended, a treaty was signed, a unit moved, a government changed, or a physical feature was built or destroyed unless the matching structured operation is present.
-17. This is PREVIEW GENERATION. Nothing is being applied yet. Describe what WOULD change, not what has already been persisted by this call.
+10. storylineUpdates controls the persistent world.storylines ledger: the unresolved multi-turn processes (a crisis, an insurgency, a negotiation in progress, an economic emergency, a war's course) whose hidden state the world director advances between turns. Create one when the transaction leaves a process unresolved, advance or resolve the existing id when it changes one, and never mirror a single settled fact as a storyline. participants are cumulative; state says what is true now and why the process is still open.
+11. Every storylineUpdates, warUpdates, relationUpdates and agreementUpdates entry must reference at least one real transaction event through eventIndexes. Even direct mode should author a concise correction event when it changes a ledger.
+12. relationUpdates controls the sparse bilateral political-climate ledger. The NUMERIC SCORE is canonical; status is the presentation band derived from that score, not a second independent fact.
+13. agreementUpdates controls formal treaty, alliance and guarantee lifecycle. A proposal is not an agreement; a concluded or ratified commitment is.
+14. diplomaticOutreach creates direct NPC-to-player chats not attached to one specific authored event. Event-caused outreach belongs in that event's impacts.createdChats. Never invent private NPC-only conversations; every chat is with the player.
+15. In countryStatPatches, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100.
+16. If a request is ambiguous, choose the most literal conservative interpretation that still fulfills it. Do not silently broaden the scope. If a requested operation cannot be represented safely, leave it out and say so in the summary.
+17. Narration and state must agree. Never say a border moved, a war began or ended, a treaty was signed, a unit moved, a government changed, or a physical feature was built or destroyed unless the matching structured operation is present.
+18. This is PREVIEW GENERATION. Nothing is being applied yet. Describe what WOULD change, not what has already been persisted by this call.
 
 PROVIDER TRANSPORT FIELD SHAPES
 The six *Json fields are STRINGS whose contents must be valid JSON arrays. Keep JSON keys exactly as shown. Omit optional object fields when irrelevant, but never invent new keys.
@@ -62,6 +63,9 @@ eventsJson element:
 countryStatPatchesJson element:
 {"country":"Full Polity Name","patch":{"population":{"total":1},"economy":{"gdp":1}},"eventIndexes":[],"reason":""}
 Only include requested patch subfields. Supported patch families: capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown.
+
+storylineUpdatesJson element:
+{"id":"storyline-stable-id","status":"active|dormant|resolved","pressure":0,"momentum":0,"startedDate":"","kind":"crisis","title":"","participants":["Full Polity Name"],"eventIndexes":[0],"state":""}
 
 warUpdatesJson element:
 {"id":"stable-war-id","op":"start|join-a|join-b|leave|ceasefire|resume|end","actors":[],"opponents":[],"eventIndexes":[0],"note":""}
@@ -84,6 +88,9 @@ Current world snapshot:
 
 Canonical war ledger:
 \${canonicalWarContext}
+
+Canonical world storylines:
+\${canonicalStorylineContext}
 
 Canonical diplomatic ledgers:
 \${canonicalDiplomaticContext}

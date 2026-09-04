@@ -134,6 +134,10 @@ export const WORLD_DEFAULTS = {
   // save's older treaty/alliance events, so that only ever happens once.
   diplomaticLedgerVersion: 0,
   wars: [],
+  // Persistent storylines: the hidden state of the world's ongoing processes
+  // (AI/nativeWorldDirector.js), advanced by compact storylineUpdates lines on
+  // a jump payload exactly like the ledgers above.
+  storylines: [],
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
@@ -261,6 +265,8 @@ const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "ca
 const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
 const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
 const MAX_WORLD_WARS = 64;
+const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
+const MAX_WORLD_STORYLINES = 96;
 const MAX_WORLD_RELATIONS = 256;
 const MAX_WORLD_AGREEMENTS = 128;
 
@@ -943,6 +949,7 @@ export const normalizeGameMasterAudit = (entries) =>
         summary: normalizeTextLike(entry.summary),
         round: Number.isFinite(Number(entry.round)) ? Math.max(0, Math.trunc(Number(entry.round))) : 0,
         eventIds: normalizeActionParticipants(entry.eventIds),
+        storylineIds: normalizeActionParticipants(entry.storylineIds),
         warIds: normalizeActionParticipants(entry.warIds),
         relationIds: normalizeActionParticipants(entry.relationIds),
         agreementIds: normalizeActionParticipants(entry.agreementIds),
@@ -2681,6 +2688,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
       kind: "world",
       notable: false,
       playerRelated: false,
+      storylineIds: [],
       warId: "",
       combatants: [],
       source: "scenario",
@@ -2710,6 +2718,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
     kind: normalizeOptionalString(entry.kind) || "world",
     notable: Boolean(entry.notable),
     playerRelated: Boolean(entry.playerRelated),
+    // Persistent storylines this event advances (AI/nativeWorldDirector.js).
+    storylineIds: [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(0, 6),
     // Canonical war metadata: the world.wars id an event fights in, declares,
     // joins or ends, and for actual combat the polities on the field from both
     // sides (AI/nativeWarLedger.js validates them against the ledger).
@@ -2813,6 +2823,79 @@ const normalizeConsolidatedHistory = (value) => normalizeArray(value)
 // not know is a field the next round trip loses. Polity names inside them share
 // the owner namespace, so a relation between "Germany" and "the German Empire"
 // resolves to one pair.
+const clampWorldStorylinePercent = (value, fallback = 0) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+};
+
+const normalizeWorldStoryline = (entry, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+
+  const title = normalizeOptionalString(entry.title || entry.name);
+  if (!title) return null;
+
+  const id = normalizeOptionalString(entry.id) || `storyline-${index}`;
+  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
+  const status = WORLD_STORYLINE_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  const uniqueStrings = (value, limit) =>
+    [...new Set(normalizeActionParticipants(value))].slice(0, limit);
+
+  return {
+    id,
+    kind: normalizeOptionalString(entry.kind) || "world",
+    title,
+    participants: uniqueStrings(entry.participants, 12),
+    status,
+    pressure: clampWorldStorylinePercent(entry.pressure),
+    momentum: clampWorldStorylinePercent(entry.momentum),
+    startedDate: canonicalizeDateString(entry.startedDate),
+    accountedThroughDate: canonicalizeDateString(
+      entry.accountedThroughDate || entry.lastUpdatedDate || entry.startedDate,
+    ),
+    lastUpdatedDate: canonicalizeDateString(
+      entry.lastUpdatedDate || entry.accountedThroughDate || entry.startedDate,
+    ),
+    lastVisibleEventDate: canonicalizeDateString(entry.lastVisibleEventDate),
+    nextReviewDate:
+      status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
+    state: normalizeTextLike(entry.state || entry.summary || entry.description),
+    drivers: uniqueStrings(entry.drivers, 8),
+    constraints: uniqueStrings(entry.constraints, 8),
+    sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
+    createdRound:
+      Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0
+        ? Math.trunc(Number(entry.createdRound))
+        : 0,
+    updatedRound:
+      Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0
+        ? Math.trunc(Number(entry.updatedRound))
+        : 0,
+  };
+};
+
+const normalizeWorldStorylines = (value) => {
+  const deduped = new Map();
+
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldStoryline(entry, index);
+    if (!normalized) return;
+    // Last occurrence wins so a write can intentionally replace an earlier copy.
+    deduped.set(normalized.id, normalized);
+  });
+
+  const statusRank = { active: 0, dormant: 1, resolved: 2 };
+  return [...deduped.values()]
+    .sort((a, b) =>
+      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+      String(b.lastUpdatedDate || b.accountedThroughDate || "").localeCompare(
+        String(a.lastUpdatedDate || a.accountedThroughDate || ""),
+      ) ||
+      a.id.localeCompare(b.id),
+    )
+    .slice(0, MAX_WORLD_STORYLINES);
+};
+
 const normalizeWorldWar = (entry, index = 0) => {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
 
@@ -3178,6 +3261,7 @@ export const normalizeWorldState = (world) => {
       ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
       : 0,
     wars: normalizeWorldWars(nextWorld.wars),
+    storylines: normalizeWorldStorylines(nextWorld.storylines),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units,

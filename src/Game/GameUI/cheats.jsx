@@ -2332,6 +2332,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("territory", impactCounts.territory)}
                             {countChip("polities", impactCounts.polities)}
                             {countChip("stats", statPatches.length)}
+                            {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
                             {countChip("markers", impactCounts.markers)}
                             {countChip("wars", warUpdates.length)}

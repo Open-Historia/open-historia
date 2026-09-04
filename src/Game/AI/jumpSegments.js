@@ -117,6 +117,14 @@ export const buildSegmentBriefing = (priorEvents) => {
 // A single-segment jump returns EXACTLY the wording it always had: a jump that
 // does not need splitting must not be told anything about segments, and the
 // prompt it sends should be byte-identical to the one before this existed.
+// The storyline contract rides with every jump instruction. The record format
+// and the doctrine come from the world director's directive (gameplay.js);
+// this is the reminder that the records must actually come back.
+export const STORYLINE_INSTRUCTION =
+  "Persistent storylines are autonomous causal processes: advance the ones the Native World Director selected, "
+  + "let a deferred one re-enter only through a genuinely material development of its own actors, and return compact "
+  + "storylineUpdates for every due process and every new unresolved process, with semantic state through this stop date.";
+
 export const buildSegmentInstruction = ({
   mode = "jump",
   segmentIndex = 0,
@@ -133,11 +141,12 @@ export const buildSegmentInstruction = ({
   const autoMessage =
     "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
     "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
-    "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period.";
+    "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period. "
+    + STORYLINE_INSTRUCTION;
   const jumpMessage =
     `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
     `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
-    `spread across the skipped period.`;
+    `spread across the skipped period. ${STORYLINE_INSTRUCTION}`;
 
   if (segmentCount <= 1) return mode === "auto" ? autoMessage : jumpMessage;
 
@@ -151,6 +160,8 @@ export const buildSegmentInstruction = ({
     + `${segmentTargetDate}, and set "stopDate" to ${segmentTargetDate}. The "events" array must contain `
     + `between ${minEvents} and ${maxEvents} events (this segment covers ${segmentDurationLabel}), with their `
     + "dates spread across that span. Return JSON only.",
+    "",
+    STORYLINE_INSTRUCTION,
   ];
 
   if (segmentIndex > 0) {
@@ -204,7 +215,8 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const segments = asArray(payloads).filter(Boolean);
   const events = [];
   const diplomaticOutreach = [];
-  // Ledger records (warUpdates / relationUpdates / agreementUpdates). By the
+  // Ledger records (warUpdates / relationUpdates / agreementUpdates /
+  // storylineUpdates). By the
   // time a segment is accepted its records are bound to that segment's own
   // event ids (gameplay.js validateSegmentLedgers), so they simply concatenate;
   // a record still in its raw line form is split into lines, which the ledger
@@ -212,6 +224,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];
+  const storylineUpdates = [];
   const summaries = [];
   let catalyst = null;
   let clearActions = true;
@@ -223,6 +236,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     warUpdates.push(...asLedgerRecords(payload.warUpdates));
     relationUpdates.push(...asLedgerRecords(payload.relationUpdates));
     agreementUpdates.push(...asLedgerRecords(payload.agreementUpdates));
+    storylineUpdates.push(...asLedgerRecords(payload.storylineUpdates));
     const summary = normalizeString(payload.summary);
     if (summary) summaries.push(summary);
     if (payload.catalyst) catalyst = payload.catalyst;
@@ -239,6 +253,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     events,
     relationUpdates,
     stopDate: stopDate || normalizeString(targetDate),
+    storylineUpdates,
     warUpdates,
     summary: summaries.join("\n\n"),
   };

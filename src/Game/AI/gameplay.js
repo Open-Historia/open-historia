@@ -4,6 +4,26 @@ import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
+import {
+  applyWorldStorylineUpdates,
+  assessRecentWorldConsequenceLiveness,
+  bindNewStorylineEvents,
+  bindSelectedStorylineEvents,
+  buildWorldInitiativeContext,
+  decodeWorldStorylineUpdates,
+  findWorldStorylineAntiStasisIssues,
+  normalizeWorldStorylineEventLinks,
+  stripQuietDeferredStorylineUpdates,
+  validateWorldEventConsequencePayload,
+  validateWorldStorylinePayload,
+} from "./nativeWorldDirector.js";
+import {
+  createWorldEventScopeClassifier,
+  deriveWorldExplorationAudit,
+  screenGeneratedWorldEvents,
+  stripWorldSweepAudit,
+  validateWorldExplorationAudit,
+} from "./nativeWorldIntegrity.js";
 import { isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
@@ -118,7 +138,7 @@ import {
   normalizeCountryStatsTracking,
   expandTerritorialMacroEstimates,
 } from "../../runtime/countryStats.js";
-import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage } from "../../runtime/turnPerf.js";
+import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
@@ -516,12 +536,14 @@ CANONICAL ENVELOPE
 Use canonicalUpdates only. Every item uses the same flat required fields; fill the fields a kind does not use with "", [] or 0.
 Kinds:
 - relation: polities=[A,B], score (absolute, -100..100), detail (summary).
+- storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
 - war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
 - agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
 Never output relation status or event indexes/ids; the engine owns those.
 
 ROUND-ZERO AUDIT
 - Every war still live at Round 1 must be represented.
+- Every unresolved non-war process that shapes Day-1 decisions (a crisis, an insurgency, a negotiation in progress, an economic emergency) should be a storyline; never spend a slot mirroring a live war.
 - Every materially important active formal agreement explicit in the source must be represented.
 - Persist the sparse bilateral relations needed to explain how the central actors make decisions on Day 1; do not leave central actors blank when the source establishes allies, patrons, rivals or enemies.
 - Keep wars, relations and agreements distinct. Preserve causal inertia where its causes remain intact; never schedule future outcomes.
@@ -562,6 +584,7 @@ const canonicalUpdateKind = (value) => {
 const expandCanonicalUpdateEnvelope = (candidate) => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
 
+  const storylineUpdates = [];
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];
@@ -573,7 +596,21 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
     const polities = normalizeArray(raw.polities).map(normalizeString).filter(Boolean);
     const opponents = normalizeArray(raw.opponents).map(normalizeString).filter(Boolean);
 
-    if (family === "war") {
+    if (family === "storyline") {
+      storylineUpdates.push({
+        id: normalizeString(raw.id),
+        status: operation,
+        pressure: Number(raw.pressure),
+        momentum: Number(raw.momentum),
+        startedDate: normalizeString(raw.date),
+        kind: normalizeString(raw.category).toLowerCase(),
+        title: normalizeString(raw.title),
+        participants: polities,
+        eventIndexes: [],
+        eventIds: [],
+        state: normalizeString(raw.detail),
+      });
+    } else if (family === "war") {
       warUpdates.push({
         id: normalizeString(raw.id),
         op: operation,
@@ -607,7 +644,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
     }
   }
 
-  const expanded = { ...candidate, warUpdates, relationUpdates, agreementUpdates };
+  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates };
   delete expanded.canonicalUpdates;
   return expanded;
 };
@@ -674,8 +711,155 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0 }) 
   return "";
 };
 
+// One segment's storyline records, after its ledgers. The director's semantic
+// binder attaches a strong unique match to its selected storyline, quiet echoes
+// of deferred storylines are stripped, serious visible history must bite into a
+// canonical owner, and the records are checked against the storyline ledger as
+// the earlier segments left it. A stale selected storyline, or one whose update
+// was omitted, is repaired LOCALLY after acceptance (repairAntiStasisStorylines)
+// so one overdue process never discards a segment's other events.
+const validateSegmentStorylines = (candidate, {
+  world,
+  analysis,
+  strict,
+  finalAttempt,
+  originDate,
+  targetDate,
+  gameCountry,
+}) => {
+  normalizeWorldStorylineEventLinks(candidate, { world });
+  const selectedBinding = bindSelectedStorylineEvents(candidate, {
+    selectedStorylines: analysis?.attentionStorylines,
+    world,
+  });
+  if (selectedBinding.bound) {
+    console.info(
+      `[OH world director] attached ${selectedBinding.bound} event(s) to their uniquely matching selected storyline(s).`,
+    );
+    // The binding is objective history; propagate it into the records before
+    // anything judges a storyline by its visibility dates.
+    normalizeWorldStorylineEventLinks(candidate, { world });
+  }
+  const deferredSalvage = stripQuietDeferredStorylineUpdates(candidate, analysis?.deferredStorylines);
+  if (deferredSalvage.strippedIds.length) {
+    console.warn(
+      `[OH world director] stripped ${deferredSalvage.strippedIds.length} quiet or non-material deferred storyline update(s): ` +
+      `${deferredSalvage.strippedIds.join(", ")}. The segment's other events and records stand.`,
+    );
+  }
+  const consequenceError = validateWorldEventConsequencePayload(candidate, {
+    selectedStorylines: analysis?.attentionStorylines,
+    strict,
+  });
+  if (consequenceError) return `[world consequence] ${consequenceError}`;
+  const storylineError = validateWorldStorylinePayload(candidate, {
+    existingStorylines: world?.storylines,
+    selectedStorylines: analysis?.attentionStorylines,
+    deferredStorylines: analysis?.deferredStorylines,
+    originDate,
+    stopDate: normalizeString(candidate?.stopDate) || targetDate,
+    world,
+    enforceAntiStasis: false,
+    enforceSelectedCoverage: false,
+  });
+  if (storylineError) return storylineError;
+  return validateWorldExplorationAudit(candidate, analysis, { finalAttempt, world, gameCountry });
+};
+
+// Native integrity screening of an accepted segment BEFORE it joins the round:
+// an event that is objectively impossible in this world (a non-belligerent's
+// wartime economy) or an obvious no-delta restatement never feeds the next
+// segment or the curator, and a ledger or storyline record bound only to a
+// dropped event goes with it. The exploration audit of what survived is kept
+// per segment for the post-curation breadth repair. The segment's temporary
+// event ids are already bound into its ledger records (validateSegmentLedgers),
+// so storyline ids are attached to the events in place, never by re-labelling.
+const screenSegmentPayload = (payload, {
+  analysis,
+  priorEvents,
+  world,
+  game,
+  state,
+  originDate,
+  targetDate,
+  horizonDays,
+  eventCeiling,
+  generationSource,
+}) => {
+  const audit = deriveWorldExplorationAudit(payload, analysis, {
+    world,
+    gameCountry: game?.country,
+  });
+  state.breadthRepairContexts.push({
+    analysis,
+    explorationAudit: {
+      quietSlotIds: audit.quietSlotIds,
+      nonQuietCount: audit.nonQuietCount,
+      slotCount: audit.slotCount,
+    },
+    originDate,
+    targetDate,
+    horizonDays,
+    eventCeiling,
+    generationSource,
+  });
+
+  const decodedStorylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+  const taggedEvents = attachStorylineIdsByIndexes(payload?.events, decodedStorylineUpdates);
+  const screened = screenGeneratedWorldEvents({
+    events: taggedEvents,
+    priorEvents,
+    world,
+    game,
+    analysis,
+  });
+  if (screened.dropped?.length) {
+    console.warn(
+      `[OH world integrity] dropped ${screened.dropped.length} segment event(s) before the round: ` +
+      screened.dropped.map((entry) => `"${entry?.title || entry?.id}" (${entry?.route})`).join(", "),
+    );
+  }
+  payload.events = screened.events;
+  payload.warUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.warUpdates, taggedEvents, screened.events);
+  payload.relationUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.relationUpdates, taggedEvents, screened.events);
+  payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
+  payload.storylineUpdates = filterStorylineUpdatesAfterIntegrityScreen({
+    updates: decodedStorylineUpdates,
+    allEvents: taggedEvents,
+    existingStorylines: world?.storylines,
+    dropped: screened.dropped,
+  });
+  payload.summary = stripWorldSweepAudit(payload?.summary);
+};
+
+// The one exploration audit the post-curation breadth repair works from: the
+// segment whose slate was left quietest, widened to the whole jump. Only a jump
+// of roughly a month qualifies (WORLD_BREADTH_REPAIR_MIN/MAX_DAYS).
+const selectBreadthRepairContext = (state, context) => {
+  const { mode, originDate, targetDate, safeDays, plannedActionCount } = context;
+  if (mode !== "jump" || safeDays < WORLD_BREADTH_REPAIR_MIN_DAYS || safeDays > WORLD_BREADTH_REPAIR_MAX_DAYS) {
+    return null;
+  }
+  const ranked = normalizeArray(state.breadthRepairContexts)
+    .map((entry) => ({
+      entry,
+      quietCount: quietWorldBreadthSlots(entry?.analysis, entry?.explorationAudit).length,
+    }))
+    .sort((a, b) => b.quietCount - a.quietCount);
+  const chosen = ranked[0]?.entry;
+  if (!chosen) return null;
+  return {
+    ...chosen,
+    originDate,
+    targetDate,
+    horizonDays: safeDays,
+    eventCeiling: segmentEventRange(safeDays, plannedActionCount)[1],
+    generationSource: normalizeString(state.generation?.source) || "ai",
+  };
+};
+
 // The world a later segment is validated against and shown: the base world plus
-// the war and diplomacy records of the segments already in hand. No impacts are
+// the war, diplomacy and storyline records of the segments already in hand. No impacts are
 // applied here - the round's events are applied once, at the end.
 const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) => {
   const events = normalizeArray(payload?.events);
@@ -686,10 +870,19 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     stopDate,
     round,
   });
-  return applyDiplomaticUpdates({
+  const diplomaticMerge = applyDiplomaticUpdates({
     world: warMerge.world,
     relationUpdates: normalizeArray(payload?.relationUpdates),
     agreementUpdates: normalizeArray(payload?.agreementUpdates),
+    events,
+    stopDate,
+    round,
+  });
+  // Storylines too, so the next segment's world director sees a crisis born
+  // mid-round and lets it compete for attention before the round ends.
+  return applyWorldStorylineUpdates({
+    world: diplomaticMerge.world,
+    updates: normalizeArray(payload?.storylineUpdates),
     events,
     stopDate,
     round,
@@ -934,6 +1127,24 @@ const perfNow = () =>
     ? performance.now()
     : Date.now();
 
+const buildGameMasterStorylineContext = (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const storylines = normalizeArray(world.storylines)
+    .filter((entry) => entry && typeof entry === "object" && normalizeString(entry.id))
+    .slice(0, 24);
+  if (!storylines.length) return "No persistent world storylines are currently recorded.";
+  return storylines.map((entry) => {
+    const participants = normalizeArray(entry.participants).map(normalizeString).filter(Boolean);
+    return [
+      `- ${normalizeString(entry.id)} | ${normalizeString(entry.status) || "active"} | ` +
+        `pressure ${Math.max(0, Math.min(100, Math.round(Number(entry.pressure) || 0)))}/100 | ` +
+        `momentum ${Math.max(0, Math.min(100, Math.round(Number(entry.momentum) || 0)))}/100`,
+      `  ${normalizeString(entry.title) || "Untitled process"}${participants.length ? ` | participants: ${participants.join(", ")}` : ""}`,
+      `  state: ${normalizeString(entry.state) || "No current semantic state recorded."}`,
+    ].join("\n");
+  }).join("\n");
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const startedAt = perfNow();
   const taskKey = normalizeString(options?.taskKey);
@@ -987,6 +1198,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       focusActors,
       maxActors: 8,
     }).text;
+  }
+  if (wants("canonicalStorylineContext")) {
+    variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
   if (wants("playerPolityReputationContext")) {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
@@ -1251,6 +1465,15 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
 [What the Sender Knows]
 You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
 So use the wider picture to choose the sender and the moment — never to give them knowledge they could not have. A polity must not reference, allude to, or react to something said in a conversation it was not part of, and must not echo another leader's turn of phrase. If a private exchange elsewhere is the only reason a message would make sense, that is a message this polity cannot send: pick a different sender, or return chat as null.`;
+  }
+
+  // The native world director's live analysis for this segment: focused and
+  // deferred storylines, the exploration slate, the era's conflict posture and
+  // the storyline record contract. Built per segment (runJumpSegments) and
+  // appended here so a campaign's frozen prompt pack gets it too.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const worldInitiativeContext = normalizeString(variables?.worldInitiativeContext);
+    systemPrompt = `${systemPrompt}\n\n[Native World Director — authoritative live causal context]\n${worldInitiativeContext || "No native World Director context was available; reason from current campaign state without importing a memorized future calendar."}\n\nThe Native World Director context above is the SINGLE live owner of world-attention, historical-candidate/causal-inertia, causal-timing, branch-recompute, exploration, and persistent-storyline doctrine. It supersedes overlapping or older frozen prompt wording on those topics. Follow the separate Player Agency and Canonical War State rules for human authorization and actual belligerency.`;
   }
 
   // Durable diplomatic memory becomes causal pressure on the turn: agreed
@@ -3354,58 +3577,127 @@ const applySimulationResult = async ({
   const priorEvents = normalizeEvents(baseEvents);
   const dedupedEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
 
+  // One curator analysis for the round's candidates and for the breadth
+  // repair's supplemental ones.
+  const curatorAnalyzeBatch = ({ candidates, priorHistory }) =>
+    runJsonTask("timelineCurator", {
+      fallback: () => ({
+        judgments: candidates.map((event, index) => ({
+          index,
+          verdict: "KEEP",
+          confidence: 0,
+          materialStateChange: "Semantic curator unavailable; event preserved by fail-open fallback.",
+          matchedPriorIndexes: [],
+          materiallyNewDimensions: ["unknown"],
+          recurrenceMatters: false,
+          newTriggerAfterPriorPosture: "none",
+          worthwhile: true,
+          substantive: true,
+          personalityTexture: false,
+          storyline: normalizeString(event?.title) || `event-${index}`,
+          qualitativeAdvance: true,
+          incrementalProcess: false,
+          processFramePresent: false,
+          observableOutcomeEvidence: "",
+          pureProcessFiller: false,
+          reason: "Curator AI failed; fail-open KEEP.",
+        })),
+        recentHistoryMechanical: false,
+        storylineSaturation: [],
+        underrepresentedDomains: [],
+      }),
+      signal: projects?.signal,
+      userMessage:
+        "Analyze every supplied native timeline candidate with the required curator tool. Return exactly one judgment for every candidate index.",
+      variables: {
+        curatorPriorHistory: JSON.stringify(priorHistory, null, 2),
+        curatorCandidates: JSON.stringify(candidates, null, 2),
+      },
+    });
+
   // The curator decides whether an event exists BEFORE impacts, chats, history
   // and persistence see it: the model judges each candidate against recent
   // canon, and deterministic gates (hard mechanical consequences, retrieved
   // prior matches, saturation) decide what those judgments may remove. The
   // default is KEEP, and any failure of the analysis keeps everything.
-  const curatedEvents = await curateGeneratedEvents({
+  let curatedEvents = await curateGeneratedEvents({
     events: dedupedEvents,
     priorEvents,
     game: baseGame,
     world: baseWorld,
     actions: baseActions,
     mode: result.mode,
-    analyzeBatch: ({ candidates, priorHistory }) =>
-      runJsonTask("timelineCurator", {
-        fallback: () => ({
-          judgments: candidates.map((event, index) => ({
-            index,
-            verdict: "KEEP",
-            confidence: 0,
-            materialStateChange: "Semantic curator unavailable; event preserved by fail-open fallback.",
-            matchedPriorIndexes: [],
-            materiallyNewDimensions: ["unknown"],
-            recurrenceMatters: false,
-            newTriggerAfterPriorPosture: "none",
-            worthwhile: true,
-            substantive: true,
-            personalityTexture: false,
-            storyline: normalizeString(event?.title) || `event-${index}`,
-            qualitativeAdvance: true,
-            incrementalProcess: false,
-            processFramePresent: false,
-            observableOutcomeEvidence: "",
-            pureProcessFiller: false,
-            reason: "Curator AI failed; fail-open KEEP.",
-          })),
-          recentHistoryMechanical: false,
-          storylineSaturation: [],
-          underrepresentedDomains: [],
-        }),
-        signal: projects?.signal,
-        userMessage:
-          "Analyze every supplied native timeline candidate with the required curator tool. Return exactly one judgment for every candidate index.",
-        variables: {
-          curatorPriorHistory: JSON.stringify(priorHistory, null, 2),
-          curatorCandidates: JSON.stringify(candidates, null, 2),
-        },
-      }),
+    analyzeBatch: curatorAnalyzeBatch,
   });
+  // Breadth is measured by what SURVIVES curation. A month-scale jump left with
+  // only a few worthwhile events, or a busy window without consequential
+  // outcomes, gets one bounded second search of the exploration lanes still
+  // visibly neglected; every supplemental event passes the same integrity
+  // screen and the same curator. Not a quota: a quiet world may return none.
+  const breadthRepair = await maybeRepairWorldBreadthAfterCuration({
+    survivingEvents: curatedEvents,
+    mainEvents: dedupedEvents,
+    bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
+    context: result?.breadthRepairContext,
+    mode: result.mode,
+    signal: projects?.signal,
+  });
+  if (breadthRepair?.events?.length) {
+    // New storyline ids ride on their own repair events before any filtering,
+    // so a surviving event carries its continuity exactly like a main event.
+    const repairTaggedEvents = attachDecodedStorylineIds(
+      breadthRepair.events,
+      breadthRepair.storylineUpdates,
+      "world-breadth-repair",
+    );
+    const repairNormalizedEvents = repairTaggedEvents
+      .map((entry, index) => normalizeGeneratedEvent({
+        ...entry,
+        source: entry?.source || "ai",
+      }, dedupedEvents.length + index))
+      .filter(Boolean);
+    const repairFreshEvents = dedupeGeneratedEvents([...priorEvents, ...dedupedEvents], repairNormalizedEvents);
+    const repairScreened = screenGeneratedWorldEvents({
+      events: repairFreshEvents,
+      priorEvents: [...priorEvents, ...curatedEvents],
+      world: baseWorld,
+      game: baseGame,
+      analysis: breadthRepair.analysis,
+    });
+    const repairCuratedEvents = await curateGeneratedEvents({
+      events: repairScreened.events,
+      priorEvents: [...priorEvents, ...curatedEvents],
+      game: baseGame,
+      world: baseWorld,
+      actions: baseActions,
+      mode: result.mode,
+      analyzeBatch: curatorAnalyzeBatch,
+    });
+    const survivingRepairStorylineIds = new Set(
+      repairCuratedEvents
+        .flatMap((event) => normalizeArray(event?.storylineIds))
+        .map(normalizeString)
+        .filter(Boolean),
+    );
+    const repairStorylineUpdates = normalizeArray(breadthRepair.storylineUpdates)
+      .filter((update) => survivingRepairStorylineIds.has(normalizeString(update?.id)));
+    if (repairStorylineUpdates.length) {
+      result.storylineUpdates = [
+        ...decodeWorldStorylineUpdates(result.storylineUpdates),
+        ...repairStorylineUpdates,
+      ];
+    }
+    curatedEvents = [...curatedEvents, ...repairCuratedEvents];
+    console.info(
+      `[OH world composition] supplemental candidates ${breadthRepair.events.length}; ` +
+      `integrity kept ${repairScreened.events.length}; curator kept ${repairCuratedEvents.length}.`,
+    );
+  }
   // A ledger record bound to an event the curator removed goes with it.
   const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(result.warUpdates, dedupedEvents, curatedEvents);
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
+  const keptStorylineUpdates = filterBoundLedgerUpdatesToKeptEvents(result.storylineUpdates, dedupedEvents, curatedEvents);
 
   // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
   // across the whole save, so a ledger or history reference is never ambiguous.
@@ -3420,6 +3712,7 @@ const applySimulationResult = async ({
   const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
   const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
   const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
+  const storylineUpdates = remapLedgerEventIds(normalizeArray(keptStorylineUpdates), canonicalEventIdentity.idMap);
   const nextGame = normalizeGameData({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
@@ -3477,6 +3770,7 @@ const applySimulationResult = async ({
           round: nextGame.round,
           summary: normalizeString(result.summary),
           source: result.generation?.source || "ai",
+          storylineIds: [...new Set(normalizeArray(storylineUpdates).map((entry) => normalizeString(entry?.id)).filter(Boolean))],
           toDate: nextGame.gameDate,
         },
         ...normalizeWorldState(baseWorld).simulationHistory,
@@ -3635,6 +3929,15 @@ const applySimulationResult = async ({
     round: nextGame.round,
   });
   worldWithImpacts = diplomaticMerge.world;
+  // Storylines last: they read the wars and relations as this turn left them.
+  const storylineMerge = applyWorldStorylineUpdates({
+    world: worldWithImpacts,
+    updates: normalizeArray(storylineUpdates),
+    events: freshEvents,
+    stopDate: nextGame.gameDate,
+    round: nextGame.round,
+  });
+  worldWithImpacts = storylineMerge.world;
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report.
   const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld });
@@ -3644,6 +3947,9 @@ const applySimulationResult = async ({
   }
   if (warMerge.appliedIds.length || diplomaticMerge.appliedRelationIds.length || diplomaticMerge.appliedAgreementIds.length) {
     logDebugEvent("turn", `Ledgers updated: ${warMerge.appliedIds.length} war op(s), ${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`, undefined, { verbose: true });
+  }
+  if (storylineMerge.appliedIds.length) {
+    logDebugEvent("turn", `Storylines updated: ${storylineMerge.appliedIds.length}.`, { ids: storylineMerge.appliedIds }, { verbose: true });
   }
   // Built HERE rather than beside freshEvents above, because the loop that just
   // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
@@ -4073,6 +4379,1100 @@ const yieldToUiFrame = async (signal) => {
 };
 
 const statsYieldToMainThread = (signal) => yieldToUiFrame(signal);
+
+// The native world director is pure CPU analysis (no writes, no AI call) that
+// can take seconds on a large save. It runs in a module worker so the map keeps
+// its frames, with a main-thread fallback when workers are unavailable.
+let worldDirectorWorker = null;
+let worldDirectorWorkerBroken = false;
+let worldDirectorRequestId = 0;
+const worldDirectorPending = new Map();
+
+const getWorldDirectorWorker = () => {
+  if (worldDirectorWorkerBroken || typeof Worker === "undefined") return null;
+  if (worldDirectorWorker) return worldDirectorWorker;
+
+  try {
+    const worker = new Worker(
+      new URL("./worldDirectorWorker.js", import.meta.url),
+      { type: "module", name: "openhistoria-world-director" },
+    );
+
+    worker.onmessage = (event) => {
+      const id = Number(event?.data?.id);
+      const pending = worldDirectorPending.get(id);
+      if (!pending) return;
+      worldDirectorPending.delete(id);
+
+      if (event?.data?.error) pending.reject(new Error(event.data.error));
+      else pending.resolve(event?.data?.result);
+    };
+
+    worker.onerror = (event) => {
+      worldDirectorWorkerBroken = true;
+      for (const pending of worldDirectorPending.values()) {
+        pending.reject(new Error(event?.message || "Native World Director worker failed."));
+      }
+      worldDirectorPending.clear();
+      worker.terminate();
+      worldDirectorWorker = null;
+    };
+
+    worldDirectorWorker = worker;
+    return worker;
+  } catch {
+    worldDirectorWorkerBroken = true;
+    return null;
+  }
+};
+
+const buildWorldInitiativeContextBackground = async (bundle, options = {}, signal) => {
+  throwIfAborted(signal);
+  const worker = getWorldDirectorWorker();
+
+  if (!worker) {
+    await yieldToUiFrame(signal);
+    return buildWorldInitiativeContext(bundle, options);
+  }
+
+  const id = ++worldDirectorRequestId;
+
+  try {
+    return await new Promise((resolve, reject) => {
+      const abort = () => {
+        worldDirectorPending.delete(id);
+        reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new DOMException("World Director cancelled.", "AbortError"),
+        );
+      };
+
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+
+      worldDirectorPending.set(id, {
+        resolve: (value) => {
+          signal?.removeEventListener?.("abort", abort);
+          resolve(value);
+        },
+        reject: (error) => {
+          signal?.removeEventListener?.("abort", abort);
+          reject(error);
+        },
+      });
+      signal?.addEventListener?.("abort", abort, { once: true });
+      worker.postMessage({ id, bundle, options });
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+
+    worldDirectorWorkerBroken = true;
+    worldDirectorWorker?.terminate?.();
+    worldDirectorWorker = null;
+    console.warn(
+      "[OH PERF] Native World Director worker unavailable; using main-thread fallback.",
+      error,
+    );
+    await yieldToUiFrame(signal);
+    return buildWorldInitiativeContext(bundle, options);
+  }
+};
+
+
+// ---- Storyline motion repair (Continuum 07.2) -----------------------------
+// A selected storyline that the accepted segment still left objectively
+// unchanged past its anti-stasis backstop, or omitted from storylineUpdates,
+// is repaired on its own: one narrow AI call that may only return that
+// storyline's semantic movement. Unrelated events are never discarded, and a
+// failed repair just leaves the process overdue for the next turn.
+const WORLD_MOTION_REPAIR_HISTORY_LIMIT = 8;
+
+const compactStorylineRepairHistory = (bundle, storyline) => {
+  const id = normalizeString(storyline?.id);
+  const participants = normalizeArray(storyline?.participants)
+    .map(normalizeString)
+    .filter(Boolean);
+  const participantKeys = participants.map((name) => name.toLowerCase());
+
+  return normalizeEvents(bundle?.events)
+    .filter((event) => {
+      if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) return true;
+      const haystack = `${event?.title || ""} ${event?.description || ""} ${normalizeArray(event?.combatants).join(" ")}`.toLowerCase();
+      return participantKeys.some((key) => key.length >= 4 && haystack.includes(key));
+    })
+    .slice(-WORLD_MOTION_REPAIR_HISTORY_LIMIT)
+    .map((event) => {
+      const desc = normalizeString(event?.description).slice(0, 520);
+      return `${normalizeString(event?.date) || "????-??-??"} — ${normalizeString(event?.title) || "Untitled"}${desc ? `\n${desc}` : ""}`;
+    })
+    .join("\n\n");
+};
+
+const runTargetedWorldMotionRepair = async ({
+  bundle,
+  issue,
+  mainPassEvents = [],
+  existingCausalEventIndex = -1,
+  originDate,
+  targetDate,
+  signal,
+} = {}) => {
+  const prior = issue?.prior;
+  const attempted = issue?.update;
+  const storylineId = normalizeString(issue?.id || prior?.id);
+  if (!prior || !storylineId) return null;
+
+  const participants = normalizeArray(prior?.participants)
+    .map(normalizeString)
+    .filter(Boolean)
+    .slice(0, 8);
+
+  // Repair context used to dump ~4.2k chars PER participant plus 12 long event
+  // summaries. The repair only decides one storyline's semantic movement, so keep
+  // its evidence narrow. This is both cheaper and less likely to distract the model.
+  const dossiers = await Promise.all(
+    participants.map(async (name) => {
+      try {
+        const dossier = await buildTargetDossier(bundle, name);
+        return `${name}:\n${normalizeString(dossier).slice(0, 1600) || "No additional dossier available."}`;
+      } catch {
+        return `${name}: no additional dossier available.`;
+      }
+    }),
+  );
+
+  const recentHistory =
+    compactStorylineRepairHistory(bundle, prior) ||
+    "No directly matched recent canonical events were found.";
+
+  const existingCausalEvent =
+    Number.isInteger(existingCausalEventIndex) &&
+    existingCausalEventIndex >= 0 &&
+    existingCausalEventIndex < normalizeArray(mainPassEvents).length
+      ? normalizeArray(mainPassEvents)[existingCausalEventIndex]
+      : null;
+
+  const mainPassSummary = normalizeArray(mainPassEvents)
+    .slice(0, 6)
+    .map((event, index) =>
+      `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n` +
+      `${normalizeString(event?.description).slice(0, 420)}`
+    )
+    .join("\n\n") || "None.";
+
+  const playerPolity = normalizeString(bundle?.game?.country) || "the player polity";
+  const repairCause = issue?.kind === "missing-update"
+    ? "was selected for native attention, but the accepted whole-world pass omitted its required semantic update"
+    : "crossed its anti-stasis backstop after the accepted whole-world pass still left it objectively unchanged";
+
+  let systemPrompt =
+    `You are the TARGETED ENDOGENOUS MOTION REPAIR for OpenHistoria.\n\n` +
+    `Repair EXACTLY ONE already-existing persistent storyline: ${storylineId}.\n` +
+    `The normal whole-world pass remains the sole source of visible timeline events. ` +
+    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, catalysts, Stats edits, or any other ledger mutation. ` +
+    `Return exactly one semantic storyline object through the dedicated repair tool.\n\n` +
+    `This storyline ${repairCause}. Decide what is true about THIS process at ${targetDate}. ` +
+    `Do not merely paraphrase the old equilibrium. Numeric pressure/momentum changes must follow the returned state. ` +
+    `Stalemate is legal when the state materially evolves in another dimension: readiness, logistics, command, morale, domestic politics, diplomacy, strategic objectives, preparation, restraint, or de-escalation.\n\n` +
+    `Non-player actors are allowed to miscalculate, overreach, mobilize, bluff, radicalize, back down, split internally, or accept dangerous risk when current causes support it. ` +
+    `Do not optimize every actor into caution. Do not invent chaos either.\n\n` +
+    `PLAYER AGENCY: ${playerPolity} is human-controlled. Do not invent a NEW major sovereign/executive decision for ${playerPolity} unless already authorized by canon.\n\n` +
+    `OUTPUT CONTRACT: call submit_world_motion_repair exactly once. stopDate MUST be ${targetDate}. ` +
+    `storyline.id MUST be exactly ${storylineId}. Preserve the existing kind/title/startedDate unless current canon genuinely changes status. ` +
+    `Participants are cumulative; include the current canonical participant set and any genuinely new participant, never delete a prior participant by omission.\n`;
+
+  try {
+    if (participants.some((name) => name.toLowerCase() === playerPolity.toLowerCase())) {
+      const game = normalizeGameData(bundle?.game || {});
+      systemPrompt += `\n${difficultyDirective(game.difficulty, "simulation")}\n`;
+    }
+  } catch {
+    // Missing difficulty data leaves the repair neutral.
+  }
+
+  const userMessage = [
+    `INTERVAL: ${originDate} → ${targetDate}`,
+    `STAGNATION AGE AT STOP: ${Number(issue?.stagnationAgeDays) || 0} days`,
+    "",
+    "AUTHORITATIVE STORYLINE BEFORE THIS PASS:",
+    JSON.stringify(prior, null, 2),
+    "",
+    issue?.kind === "missing-update"
+      ? "WHOLE-WORLD PASS STORYLINE UPDATE: MISSING."
+      : "WHOLE-WORLD PASS ATTEMPTED UPDATE (insufficient):",
+    JSON.stringify(attempted || {}, null, 2),
+    "",
+    existingCausalEvent
+      ? "MAIN-PASS CAUSAL EVENT ALREADY GENERATED AND NATIVELY LINKED — your storyline state MUST account for this event; do NOT recreate it:"
+      : "NO MAIN-PASS CAUSAL EVENT WAS FOUND — repair hidden semantic state only; do not manufacture a visible event:",
+    existingCausalEvent
+      ? `${normalizeString(existingCausalEvent?.date)} — ${normalizeString(existingCausalEvent?.title)}\n${normalizeString(existingCausalEvent?.description)}`
+      : "None.",
+    "",
+    "PARTICIPANT DOSSIERS (BOUNDED):",
+    dossiers.join("\n\n"),
+    "",
+    "RECENT CANONICAL HISTORY RELEVANT TO THIS PROCESS:",
+    recentHistory,
+    "",
+    "OTHER MAIN-PASS EVENTS THIS INTERVAL — CONTEXT ONLY:",
+    mainPassSummary,
+  ].join("\n");
+
+  try {
+    if (signal?.aborted) {
+      throw signal.reason || new DOMException("Timeline jump cancelled.", "AbortError");
+    }
+
+    const timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0;
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
+
+    logContextDiagnostics({
+      attempt: 1,
+      history: [{ role: "user", parts: [{ text: userMessage }] }],
+      promptTemplate: systemPrompt,
+      stage: "structured-request",
+      systemPrompt,
+      taskKey: "worldMotionRepair",
+      userMessage,
+      variables: { storylineId, originDate, targetDate },
+    });
+
+    const aiStartedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+
+    let response;
+    try {
+      response = await callAI(systemPrompt, [
+        { role: "user", parts: [{ text: userMessage }] },
+      ], {
+        deadline,
+        reasoningEnabled: false,
+        signal,
+        tool: getGameplayTool("worldMotionRepair"),
+      });
+    } catch (error) {
+      const failedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      recordTurnPerfAiAttempt({
+        taskKey: "worldMotionRepair",
+        attempt: 1,
+        ms: Math.max(0, failedAt - aiStartedAt),
+        error: normalizeString(error?.message || error),
+      });
+      throw error;
+    }
+
+    const aiEndedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    recordTurnPerfAiAttempt({
+      taskKey: "worldMotionRepair",
+      attempt: 1,
+      ms: Math.max(0, aiEndedAt - aiStartedAt),
+    });
+
+    const rawText =
+      typeof response === "string" ? response : normalizeString(response?.rawText);
+    const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+
+    const schemaValidation = validateGameplayPayload("worldMotionRepair", parsed);
+    if (!schemaValidation.valid) {
+      throw new Error(schemaValidation.error);
+    }
+
+    if (normalizeString(parsed?.stopDate) !== targetDate) {
+      throw new Error(`repair stopDate must be exactly ${targetDate}`);
+    }
+
+    const rawUpdate = parsed?.storyline;
+    if (normalizeString(rawUpdate?.id) !== storylineId) {
+      throw new Error(`repair storyline id must be exactly ${storylineId}`);
+    }
+
+    const validationEvent = existingCausalEvent
+      ? {
+          ...existingCausalEvent,
+          storylineIds: [...new Set([
+            ...normalizeArray(existingCausalEvent?.storylineIds).map(normalizeString).filter(Boolean),
+            storylineId,
+          ])],
+        }
+      : null;
+
+    const localUpdate = {
+      ...rawUpdate,
+      eventIndexes: validationEvent ? [0] : [],
+    };
+
+    const validationCandidate = {
+      events: validationEvent ? [validationEvent] : [],
+      storylineUpdates: [localUpdate],
+      warUpdates: [],
+      relationUpdates: [],
+      agreementUpdates: [],
+      stopDate: targetDate,
+    };
+
+    const storylineError = validateWorldStorylinePayload(validationCandidate, {
+      existingStorylines: [prior],
+      selectedStorylines: [prior],
+      deferredStorylines: [],
+      originDate,
+      stopDate: targetDate,
+      enforceAntiStasis: true,
+      world: bundle?.world,
+    });
+    if (storylineError) throw new Error(storylineError);
+
+    return {
+      event: null,
+      existingCausalEventIndex:
+        validationEvent && Number.isInteger(existingCausalEventIndex)
+          ? existingCausalEventIndex
+          : -1,
+      update: {
+        ...rawUpdate,
+        eventIndexes: [],
+      },
+      summary: normalizeString(parsed?.summary),
+    };
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Timeline jump cancelled.", "AbortError");
+    }
+    console.warn(
+      `[OH World Motion Repair] ${storylineId} failed: ` +
+      `${normalizeString(error?.message || error) || "unknown error"}. ` +
+      "Keeping the valid main world pass; this storyline remains overdue for the next turn.",
+    );
+    return null;
+  }
+};
+
+const repairAntiStasisStorylines = async ({
+  payload,
+  bundle,
+  analysis,
+  originDate,
+  targetDate,
+  passMaxEvents,
+  signal,
+} = {}) => {
+  const issues = findWorldStorylineAntiStasisIssues(payload, {
+    existingStorylines: bundle?.world?.storylines,
+    selectedStorylines: analysis?.attentionStorylines,
+    originDate,
+    stopDate: normalizeString(payload?.stopDate) || targetDate,
+    world: bundle?.world,
+  });
+  if (!issues.length) return { repaired: 0, failed: 0, issues: [] };
+
+  let events = normalizeArray(payload?.events);
+  let updates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+  let repaired = 0;
+  let failed = 0;
+
+  console.warn(
+    `[OH World Motion Repair] ${issues.length} selected storyline repair issue(s): ` +
+    issues.map((issue) =>
+      issue?.kind === "missing-update"
+        ? `${issue.id} (missing semantic update)`
+        : `${issue.id} (${issue.stagnationAgeDays}d anti-stasis)`
+    ).join(", "),
+  );
+
+  for (const issue of issues) {
+    const issueId = normalizeString(issue?.id);
+    const existingCausalEventIndex = (() => {
+      let best = -1;
+      events.forEach((event, index) => {
+        if (normalizeArray(event?.storylineIds).map(normalizeString).includes(issueId)) {
+          best = index;
+        }
+      });
+      return best;
+    })();
+
+    const repair = await runTargetedWorldMotionRepair({
+      bundle,
+      issue,
+      mainPassEvents: events,
+      existingCausalEventIndex,
+      originDate,
+      targetDate,
+      signal,
+    });
+
+    // Remove the insufficient copy-forward either way. If repair fails this keeps
+    // the canonical storyline's old accounted/review dates intact, so it remains
+    // immediately overdue next turn instead of being silently pushed forward.
+    updates = updates.filter((entry) => normalizeString(entry?.id) !== normalizeString(issue.id));
+
+    if (!repair) {
+      failed += 1;
+      continue;
+    }
+
+    if (repair.event) events = [...events, repair.event];
+
+    const repairedEventIndexes =
+      Number.isInteger(repair.existingCausalEventIndex) &&
+      repair.existingCausalEventIndex >= 0 &&
+      repair.existingCausalEventIndex < events.length
+        ? [repair.existingCausalEventIndex]
+        : [];
+
+    updates.push({
+      ...repair.update,
+      eventIndexes: repairedEventIndexes,
+    });
+    repaired += 1;
+
+    console.info(
+      `[OH World Motion Repair] repaired ${issue.id}: ` +
+      `${repairedEventIndexes.length ? "semantic state bound to existing main-pass event" : "hidden objective evolution"}.`,
+    );
+  }
+
+  payload.events = events;
+  // Internal transport may be object records after schema validation; the native
+  // decoder explicitly supports this form and preserves exact event-index offsets.
+  payload.storylineUpdates = updates;
+
+  return { repaired, failed, issues };
+};
+
+// ---- Post-curation breadth repair (Continuum 08.3.1) -----------------------
+// The jump owns player consequences, focused storylines, wars and the obvious
+// causal developments. After curation, a month-scale jump left with only a few
+// worthwhile events is still suspiciously shallow: breadth is recomputed from
+// what SURVIVED, and one bounded second search runs over the exploration lanes
+// still quiet. Not a quota: every supplemental event passes the integrity
+// screen and the curator, and a quiet world may return none.
+const WORLD_BREADTH_REPAIR_MIN_DAYS = 21;
+const WORLD_BREADTH_REPAIR_MAX_DAYS = 40;
+const WORLD_BREADTH_REPAIR_TRIGGER_MAX_SURVIVORS = 3;
+const WORLD_BREADTH_REPAIR_MIN_EXPLORATION_SLOTS = 6;
+const WORLD_BREADTH_REPAIR_MIN_QUIET_SLOTS = 2;
+const WORLD_BREADTH_REPAIR_EVENT_LIMIT = 5;
+const WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS = 6;
+const WORLD_BREADTH_REPAIR_HISTORY_LIMIT = 12;
+const quietWorldBreadthSlots = (analysis, explorationAudit) => {
+  const quietIds = new Set(
+    normalizeArray(explorationAudit?.quietSlotIds)
+      .map(Number)
+      .filter(Number.isInteger),
+  );
+  if (!quietIds.size) return [];
+  return normalizeArray(analysis?.explorationSlate)
+    .filter((slot) => quietIds.has(Number(slot?.id)));
+};
+
+const postCuratorWorldBreadthSlots = ({ analysis, survivingEvents, bundle } = {}) => {
+  // Visible breadth must be measured from visible survivors. A raw candidate that
+  // Integrity/Curator rejected, or a hidden storyline/ledger update, must not make
+  // an exploration lane look visually occupied. This was the main reason 08.2 could
+  // re-check only 2/8 slots after the user actually received one worthwhile event.
+  const audit = deriveWorldExplorationAudit(
+    {
+      events: normalizeArray(survivingEvents),
+      storylineUpdates: [],
+      diplomaticOutreach: [],
+      warUpdates: [],
+      relationUpdates: [],
+      agreementUpdates: [],
+    },
+    analysis,
+    {
+      world: bundle?.world || {},
+      gameCountry: bundle?.game?.country,
+    },
+  );
+
+  const quiet = quietWorldBreadthSlots(analysis, audit);
+  if (quiet.length <= WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS) {
+    return { audit, slots: quiet };
+  }
+
+  // R3.5: when many lanes are quiet, the bounded second search should not fall
+  // straight back into the player's neighborhood just because those actor rows
+  // carry high relevance scores. Reserve roughly half of the re-check capacity for
+  // WIDER-WORLD lanes, with the explicit crisis-discovery lane first when quiet.
+  // This is still an evaluation budget, not an output quota.
+  const rankSlot = (a, b) => {
+    const aCrisis = a?.type === "crisis-discovery" ? 1 : 0;
+    const bCrisis = b?.type === "crisis-discovery" ? 1 : 0;
+    return (bCrisis - aCrisis) ||
+      ((Number(b?.relevance) || 0) - (Number(a?.relevance) || 0)) ||
+      (Number(a?.id) || 0) - (Number(b?.id) || 0);
+  };
+
+  const playerSphereSlots = quiet
+    .filter((slot) => slot?.scope === "player-sphere")
+    .sort(rankSlot);
+  const widerWorldSlots = quiet
+    .filter((slot) => slot?.scope !== "player-sphere")
+    .sort(rankSlot);
+
+  const selected = [];
+  const targetWider = Math.min(
+    widerWorldSlots.length,
+    Math.ceil(WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS / 2),
+  );
+  const targetPlayer = Math.min(
+    playerSphereSlots.length,
+    WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS - targetWider,
+  );
+
+  selected.push(...widerWorldSlots.slice(0, targetWider));
+  selected.push(...playerSphereSlots.slice(0, targetPlayer));
+
+  for (const slot of [...widerWorldSlots.slice(targetWider), ...playerSphereSlots.slice(targetPlayer)]) {
+    if (selected.length >= WORLD_BREADTH_REPAIR_MAX_RECHECK_SLOTS) break;
+    if (!selected.some((entry) => Number(entry?.id) === Number(slot?.id))) selected.push(slot);
+  }
+
+  return { audit, slots: selected };
+};
+
+const compactBreadthRepairHistory = (bundle) =>
+  normalizeEvents(bundle?.events)
+    .slice(-WORLD_BREADTH_REPAIR_HISTORY_LIMIT)
+    .map((event) => {
+      const desc = normalizeString(event?.description).slice(0, 520);
+      return `${normalizeString(event?.date) || "????-??-??"} — ${normalizeString(event?.title) || "Untitled"}${desc ? `\n${desc}` : ""}`;
+    })
+    .join("\n\n");
+
+const runWorldBreadthRepair = async ({
+  bundle,
+  analysis,
+  quietSlots,
+  mainEvents,
+  visibleEvents = mainEvents,
+  originDate,
+  targetDate,
+  horizonDays,
+  eventAllowance,
+  survivorCount = 0,
+  consequenceSignal = null,
+  signal,
+} = {}) => {
+  const maxEvents = Math.max(0, Math.min(
+    WORLD_BREADTH_REPAIR_EVENT_LIMIT,
+    Number(eventAllowance) || 0,
+  ));
+  if (!quietSlots.length || maxEvents <= 0) return null;
+
+  const existingPassEvents = normalizeArray(mainEvents);
+  const existingPassSummary = existingPassEvents
+    .slice(0, 6)
+    .map((event, index) => `${index + 1}. ${normalizeString(event?.date)} — ${normalizeString(event?.title)}\n${normalizeString(event?.description).slice(0, 450)}`)
+    .join("\n\n") || "None.";
+
+  const classifyVisibleScope = createWorldEventScopeClassifier(analysis, {
+    world: bundle?.world || {},
+    gameCountry: bundle?.game?.country,
+  });
+  const visibleScopeCounts = normalizeArray(visibleEvents).reduce(
+    (counts, event) => {
+      const scope = classifyVisibleScope(event);
+      counts[scope] = (counts[scope] || 0) + 1;
+      return counts;
+    },
+    { "player-sphere": 0, "wider-world": 0, unknown: 0 },
+  );
+  const underrepresentedVisibleScope =
+    visibleScopeCounts["player-sphere"] + 1 < visibleScopeCounts["wider-world"]
+      ? "PLAYER-SPHERE"
+      : visibleScopeCounts["wider-world"] + 1 < visibleScopeCounts["player-sphere"]
+        ? "WIDER-WORLD"
+        : "BALANCED/NEAR-BALANCED";
+
+  const actorNames = [...new Set(
+    quietSlots
+      .filter((slot) =>
+        slot?.type === "actor-domain" ||
+        (slot?.type === "crisis-discovery" && normalizeString(slot?.targetActor || slot?.actor))
+      )
+      .map((slot) => normalizeString(slot?.targetActor || slot?.actor))
+      .filter((name) => name && !/latent instability|regional system|wider world system/i.test(name)),
+  )].slice(0, 5);
+
+  const dossiers = await Promise.all(
+    actorNames.map(async (name) => {
+      try {
+        const text = await buildTargetDossier(bundle, name);
+        return `${name}:\n${normalizeString(text).slice(0, 1600) || "No additional dossier available."}`;
+      } catch {
+        return `${name}: no additional dossier available.`;
+      }
+    }),
+  );
+
+  const playerPolity = normalizeString(bundle?.game?.country) || "the player polity";
+  const canonicalWarContext = buildCanonicalWarContext(bundle?.world);
+  const diplomaticContext = buildBoundedDiplomaticContext(bundle?.world || {}, {
+    playerPolity,
+    focusActors: actorNames,
+    selectedStorylines: [],
+    maxActors: 8,
+  });
+  const recentHistory = compactBreadthRepairHistory(bundle) || "No recent canonical events are available.";
+  const currentStorylineTitles = normalizeArray(bundle?.world?.storylines)
+    .filter((storyline) => normalizeString(storyline?.status).toLowerCase() !== "resolved")
+    .slice(0, 24)
+    .map((storyline) => `${normalizeString(storyline?.id)} — ${normalizeString(storyline?.title)}`)
+    .join("\n") || "None.";
+
+  const slotLines = quietSlots.map((slot) => {
+    const guard = normalizeArray(slot?.deferredTopics).length
+      ? ` Deferred process(es) to avoid routine restatement of: ${normalizeArray(slot.deferredTopics).join("; ")}.`
+      : "";
+    const basis = normalizeString(slot?.basis)
+      ? ` Current native basis: ${normalizeString(slot.basis)}.`
+      : " No specific present-tense pressure was identified; inspect latent causes conservatively.";
+    const scope = slot?.scope === "player-sphere" ? "PLAYER-SPHERE" : "WIDER-WORLD";
+    const crisisTag = slot?.type === "crisis-discovery" ? " | CRISIS-DISCOVERY" : "";
+    const trajectoryTag = Number(slot?.trajectoryValue) > 0
+      ? ` | native trajectory ${Number(slot.trajectoryValue)}/5`
+      : "";
+    const channels = normalizeArray(slot?.consequenceChannels).length
+      ? ` Potential consequence channels if threshold is genuinely crossed: ${normalizeArray(slot.consequenceChannels).join(", ")}.`
+      : "";
+    return `${slot.id}. [${scope}${crisisTag}${trajectoryTag}] ${normalizeString(slot?.actor)} — inspect ${normalizeString(slot?.domain)}.${basis}${channels}${guard}`;
+  });
+
+  let systemPrompt = `You are the NORMAL-MONTH WORLD COMPOSITION PASS for OpenHistoria, an alternate-history strategy simulation.\n\n` +
+    `The primary whole-world pass for ${originDate} → ${targetDate} (${Math.round(Number(horizonDays) || 0)} days) was valid, but after Integrity and semantic Curator only ${Math.max(0, Number(survivorCount) || 0)} worthwhile visible event(s) remain. You are NOT replacing those events, NOT retrying the whole world, and NOT satisfying an event quota. Search the supplied exploration lanes that remain visibly neglected AFTER curation.\n\n` +
+    `Evaluate EVERY supplied lane before finalizing. Do not stop after finding the first or second acceptable event if other supplied lanes also contain independent, concrete developments. Return ZERO events if all lanes are genuinely quiet; otherwise return each independently worthwhile outcome you actually find, up to the local ceiling. The purpose is broader discovery, not calendar padding. Small but concrete history is legitimate: domestic politics, industry, science/technology, social movements, institutions, public life, culture, personalities, accidents/disasters, economic decisions, regional developments, and informal diplomacy can all matter without being world-shattering.\n\n` +
+    `ATTENTION BALANCE: PLAYER-SPHERE and WIDER-WORLD are scheduler scopes, not event quotas. The native slate is constructed around a 5/5 attention balance. The currently surviving visible set is ${visibleScopeCounts["player-sphere"]} PLAYER-SPHERE / ${visibleScopeCounts["wider-world"]} WIDER-WORLD / ${visibleScopeCounts.unknown} unclassified. Underrepresented visible scope: ${underrepresentedVisibleScope}. Give both serious search effort. When similarly worthwhile candidates compete for a scarce visible slot, prefer the underrepresented visible scope; do not fill the month with several same-texture player-neighborhood consultations or several disconnected global ministry cards merely to hit a ratio.\n\n` +
+    `TRAJECTORY PRIORITY: Compare independently grounded candidates by what they open up next, not merely by how easy they are to summarize. Native trajectory value is a 0-5 selection hint: 0 isolated reporting/process; 1 low-branch administrative motion; 2 settled/material ordinary outcome; 3 capability or political change with meaningful next actions; 4 unstable process with several materially different branches; 5 threshold/breakpoint process. This is NOT a drama quota. Never fabricate a 4/5. But when event space is scarce, a grounded trajectory-4/5 development should normally outrank another trajectory-0/1 ministry report, routine framework, or successful implementation milestone.\n\n` +
+    `CRISIS DISCOVERY: If a CRISIS-DISCOVERY lane is supplied, it is a PROTECTED evaluation lane, not an event quota. Evaluate it independently before finalizing even if other slots already yielded acceptable cards. When native current evidence names a target actor/trigger, test THAT concrete pressure first rather than replacing it with a random dramatic country. Crisis does NOT mean war: constitutional breakdown, succession struggle, separatism/federal rupture, mass unrest, coup risk, banking/debt panic, alliance fracture, resource shock, border/security standoff or sanctions spiral can all have major consequences without shooting. If nothing crosses a threshold, return quiet AND do not substitute a low-trajectory administrative card as though it satisfied the crisis lane. If a crisis genuinely begins, its establishing event must be concrete and create a NEW storyline whose state identifies the trigger, unresolved stakes, and at least two plausible consequence channels. Under a shared event ceiling, an earned new crisis outranks a trajectory-0/1 administrative card.\n\n` +
+    `OUTCOME-FIRST DISCIPLINE: Prefer completed facts and observable results over process. A meeting, review, study, procurement discussion, inspection, exercise, doctrine/planning session, or preliminary inquiry is normally NOT a visible event merely because officials performed it. Return it only when this interval produces a concrete adopted decision, funded order, fielded capability, command change, casualty/accident, deployment, completed project, demonstrated finding, prototype, licensed process, production step, or another observable consequence. Do not inflate process into significance.\n\n` +
+    `${consequenceSignal?.level === "low" ? `CONSEQUENCE-AWARE SEARCH BIAS: The rolling visible timeline is busy but unusually low in material threshold outcomes (${Math.max(0, Number(consequenceSignal?.consequentialCount) || 0)}/${Math.max(0, Number(consequenceSignal?.eventCount) || 0)} over ~${Math.max(1, Number(consequenceSignal?.lookbackDays) || 90)} days). While evaluating THESE SAME neglected lanes, first ask whether any already-grounded pressure has matured into a real threshold outcome — a vote/result, resignation/appointment, strike/settlement, completed capability, decisive commercial/financial action, crisis escalation/de-escalation, or other development that materially changes what actors can do next. This is search ordering, NOT a requirement for drama. If no grounded threshold has matured, return ordinary concrete history or nothing rather than fabricating one.\n\n` : ""}` +
+    `PHYSICAL-WORLD CONSEQUENCE AUDIT: For EACH event you decide is independently timeline-worthy, silently ask whether that event establishes a significant named geographically concrete physical facility/place that will persist beyond the event. If YES, that same event MUST carry an impacts.markerOps build with real coordinates and a lifecycle status that matches the event (planned, under_construction, or active; do not call a groundbreaking project active). Examples include a major new factory/arsenal, naval yard or port facility, logistics hub, laboratory, fortification, headquarters/base or airfield. Do not create markers for routine activity, generic offices, unnamed workshops, ordinary maintenance or mere continuation. This is NOT a marker quota and is NEVER a reason to invent an event. This narrow breadth-repair pass is not given the full current-feature ledger, so do not guess updates to existing markers; leave existing-feature lifecycle changes to the primary simulation unless an exact stable marker id is explicitly supplied in the evidence.\n\n` +
+    `BELLIGERENCY / CAUSALITY DISCIPLINE: Treat the CURRENT CANONICAL WARS section below as authoritative. Do not describe a non-belligerent polity as having a wartime economy, wartime rationing, wartime production, war shortages, mobilization, or home-front controls merely because wars exist elsewhere. For a non-belligerent, such pressure is valid only when THIS campaign supplies an independent cause such as explicit preparedness/contingency policy or genuine foreign-war spillover (for example disrupted trade/imports/shipping, sanctions, refugees, or border disruption). If that cause is absent, find a different grounded development or return nothing.\n\n` +
+    `ERA / WAR CALIBRATION: ${analysis?.conflictRiskPosture?.label || "campaign-state conflict risk unknown"}. ${analysis?.conflictRiskPosture?.guidance || "Use current causal evidence rather than assuming either peace or war."} The calendar year is only one contextual prior. A modern date never makes war impossible; an early-20th-century date never makes war automatic. This breadth pass itself cannot declare war, but it may discover the concrete crisis pressure that could later lead there.\n\n` +
+    `BAD SEARCH RESULTS: “the general staff reviews artillery procurement” with no adopted outcome; “an institute studies substitutes because of wartime shortages” for a polity that is not at war. BETTER: an order is actually adopted/funded, a capability enters production/service, or research reaches a concrete demonstrated result grounded in the campaign.\n\n` +
+    `Do NOT repeat or paraphrase events already generated by the main pass. Do NOT service an existing persistent storyline merely because it exists; selected/deferred processes were handled by the primary simulation and anti-stasis machinery. If a supplied quiet slot independently creates a genuinely NEW unresolved process, you may create a NEW storyline linked to that event. Do not update an existing storyline id.\n\n` +
+    `This narrow repair cannot declare/join/end a war, sign/ratify/suspend/end a formal agreement, or mutate bilateral relation ledgers. Those high-consequence ledger transitions belong to the primary whole-world pass. If a quiet-slot search points toward such a development, prefer the preceding concrete pressure/initiative only when it is independently timeline-worthy; otherwise return nothing rather than half-canonizing a treaty or war.\n\n` +
+    `PLAYER AGENCY: ${playerPolity} is human-controlled. Autonomous private/social/local actors and limited officials may create circumstances, pressure, proposals, unrest, research, scandals, local actions, or public movements inside it. Do not make a NEW major sovereign/executive choice for ${playerPolity}.\n\n` +
+    `OUTPUT CONTRACT: call the normal jump-result tool once. stopDate=${targetDate}. clearActions=false. catalyst=null. diplomaticOutreach must be empty. warUpdates, relationUpdates and agreementUpdates must be empty strings. Return at most ${maxEvents} visible event(s), but there is NO minimum and no preferred exact count. Search all supplied lanes first, then return every independently worthwhile, date-valid outcome you found up to the ceiling. storylineUpdates may contain only NEW storyline ids created by a returned event, never an existing storyline.\n`;
+
+  try {
+    const game = normalizeGameData(bundle?.game || {});
+    systemPrompt += `\n${difficultyDirective(game.difficulty, "simulation")}\n`;
+  } catch {
+    // Difficulty failure leaves the breadth repair neutral rather than blocking it.
+  }
+
+  const userMessage = [
+    `INTERVAL: ${originDate} → ${targetDate}`,
+    `LOCAL EVENT CEILING: ${maxEvents} (ceiling only; zero is valid)`,
+    `ROLLING CONSEQUENCE SIGNAL: ${consequenceSignal?.level === "low" ? "LOW — prioritize mature threshold outcomes where causally earned" : "normal"} (${Math.max(0, Number(consequenceSignal?.consequentialCount) || 0)}/${Math.max(0, Number(consequenceSignal?.eventCount) || 0)} threshold events across ~${Math.max(1, Number(consequenceSignal?.lookbackDays) || 90)}d)`,
+    `CURRENT VISIBLE SCOPE BALANCE: ${visibleScopeCounts["player-sphere"]} PLAYER-SPHERE / ${visibleScopeCounts["wider-world"]} WIDER-WORLD / ${visibleScopeCounts.unknown} unclassified; underrepresented=${underrepresentedVisibleScope}`,
+    "",
+    "POST-CURATOR NEGLECTED EXPLORATION LANES — evaluate ALL of these:",
+    slotLines.join("\n"),
+    "",
+    "EVENTS ALREADY GENERATED BY THE MAIN PASS — DO NOT DUPLICATE:",
+    existingPassSummary,
+    "",
+    "EXISTING PERSISTENT STORYLINES — DO NOT SERVICE OR UPDATE THESE IDS:",
+    currentStorylineTitles,
+    "",
+    "CURRENT CANONICAL WARS (authoritative belligerency context only; no ledger mutation in this repair):",
+    canonicalWarContext || "None recorded.",
+    "",
+    "BOUNDED DIPLOMATIC CONTEXT:",
+    diplomaticContext?.text || "No bounded diplomatic context available.",
+    "",
+    "QUIET-SLOT ACTOR DOSSIERS:",
+    dossiers.join("\n\n") || "No actor-specific dossiers were required.",
+    "",
+    "RECENT CANONICAL EVENTS — use only to avoid repetition and respect branch state:",
+    recentHistory,
+  ].join("\n");
+
+  try {
+    if (signal?.aborted) throw signal.reason || new DOMException("Timeline jump cancelled.", "AbortError");
+    const timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 180000 : 0;
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
+
+    logContextDiagnostics({
+      attempt: 1,
+      history: [{ role: "user", parts: [{ text: userMessage }] }],
+      promptTemplate: systemPrompt,
+      stage: "structured-request",
+      systemPrompt,
+      taskKey: "worldBreadthRepair",
+      userMessage,
+      variables: {
+        originDate,
+        targetDate,
+        horizonDays,
+        quietSlotIds: quietSlots.map((slot) => slot.id),
+        consequenceSignal,
+      },
+    });
+
+    const breadthAiStartedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    let response;
+    try {
+      response = await callAI(systemPrompt, [
+        { role: "user", parts: [{ text: userMessage }] },
+      ], {
+        deadline,
+        signal,
+        tool: getGameplayTool("jumpForward"),
+      });
+    } catch (error) {
+      const breadthAiFailedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      recordTurnPerfAiAttempt({
+        taskKey: "worldBreadthRepair",
+        attempt: 1,
+        ms: Math.max(0, breadthAiFailedAt - breadthAiStartedAt),
+        error: normalizeString(error?.message || error),
+      });
+      throw error;
+    }
+    const breadthAiEndedAt =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    recordTurnPerfAiAttempt({
+      taskKey: "worldBreadthRepair",
+      attempt: 1,
+      ms: Math.max(0, breadthAiEndedAt - breadthAiStartedAt),
+    });
+
+    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+    const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("breadth repair response did not contain a structured jump payload");
+    }
+
+    parsed.clearActions = false;
+    parsed.catalyst = null;
+    parsed.diplomaticOutreach = [];
+
+    const schemaValidation = validateGameplayPayload("jumpForward", parsed);
+    if (!schemaValidation.valid) throw new Error(schemaValidation.error);
+
+    if (sortTimelineEventsChronologically(parsed)) {
+      console.info(
+        `[OH timeline order R3.6] sorted ${normalizeArray(parsed?.events).length} breadth candidate(s) chronologically without a retry.`,
+      );
+    }
+
+    const repairEvents = normalizeArray(parsed.events);
+    if (repairEvents.length > maxEvents) {
+      throw new Error(`breadth repair returned ${repairEvents.length} event(s), above its local ceiling ${maxEvents}`);
+    }
+
+    if (
+      normalizeArray(parsed.warUpdates).length ||
+      normalizeArray(parsed.relationUpdates).length ||
+      normalizeArray(parsed.agreementUpdates).length
+    ) {
+      throw new Error("breadth repair attempted to mutate war/relation/agreement ledgers");
+    }
+
+    // R3.8: Crisis Discovery may correctly create a new process but forget the
+    // mechanical eventIndexes seam. Bind only a strong, unambiguous NEW-storyline
+    // match; ambiguity still fails closed below. No extra AI call is involved.
+    const newStorylineBinding = bindNewStorylineEvents(parsed, {
+      existingStorylines: bundle?.world?.storylines,
+      world: bundle?.world,
+    });
+    if (newStorylineBinding.bound) {
+      console.info(
+        `[OH World Breadth Crisis Binding R3.8] attached ${newStorylineBinding.bound} new storyline(s) to ` +
+        `their uniquely matching returned event(s).`,
+      );
+    }
+
+    const decodedStorylines = decodeWorldStorylineUpdates(parsed.storylineUpdates);
+    const existingStorylineIds = new Set(
+      normalizeArray(bundle?.world?.storylines)
+        .map((storyline) => normalizeString(storyline?.id))
+        .filter(Boolean),
+    );
+    for (const update of decodedStorylines) {
+      const id = normalizeString(update?.id);
+      if (existingStorylineIds.has(id)) {
+        throw new Error(`breadth repair attempted to update existing storyline ${id}`);
+      }
+      if (!normalizeArray(update?.eventIndexes).length) {
+        throw new Error(`new breadth storyline ${id || "<missing id>"} must link to a returned event`);
+      }
+    }
+
+    if (!repairEvents.length) {
+      if (decodedStorylines.length) {
+        throw new Error("breadth repair returned storyline updates without a visible event");
+      }
+      return {
+        events: [],
+        storylineUpdates: [],
+        quietSlots,
+      };
+    }
+
+    const dateError = validateTimelineDates({
+      candidate: parsed,
+      mode: "jump",
+      originDate,
+      targetDate,
+      requireAdvance: true,
+    });
+    if (dateError) throw new Error(dateError);
+
+    const storylineError = validateWorldStorylinePayload(parsed, {
+      existingStorylines: bundle?.world?.storylines,
+      selectedStorylines: [],
+      deferredStorylines: [],
+      originDate,
+      stopDate: normalizeString(parsed.stopDate) || targetDate,
+      enforceAntiStasis: false,
+      world: bundle?.world,
+    });
+    if (storylineError) throw new Error(storylineError);
+
+    const worldChangeError = await validateGeneratedWorldChanges(
+      parsed,
+      bundle?.world,
+      { strictTransfers: false },
+    );
+    if (worldChangeError) throw new Error(worldChangeError);
+
+    return {
+      events: repairEvents,
+      storylineUpdates: decodedStorylines,
+      quietSlots,
+    };
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException("Timeline jump cancelled.", "AbortError");
+    console.warn(
+      `[OH World Breadth Repair] failed: ${normalizeString(error?.message || error) || "unknown error"}. ` +
+      "Keeping the valid main world pass unchanged.",
+    );
+    return null;
+  }
+};
+
+const maybeRepairWorldBreadthAfterCuration = async ({
+  survivingEvents,
+  mainEvents,
+  bundle,
+  context,
+  mode = "jump",
+  signal,
+} = {}) => {
+  const analysis = context?.analysis;
+  const slate = normalizeArray(analysis?.explorationSlate);
+  const postCuratorBreadth = postCuratorWorldBreadthSlots({
+    analysis,
+    survivingEvents,
+    bundle,
+  });
+  const quietSlots = normalizeArray(postCuratorBreadth?.slots);
+  const days = Number(context?.horizonDays) || 0;
+  const survivorCount = normalizeArray(survivingEvents).length;
+  const eventCeiling = Math.max(0, Number(context?.eventCeiling) || 0);
+  const available = Math.max(0, eventCeiling - survivorCount);
+  const consequenceSignal = assessRecentWorldConsequenceLiveness({
+    events: bundle?.events,
+    additionalEvents: survivingEvents,
+    referenceDate: normalizeString(context?.targetDate),
+  });
+  const sparseTrigger = survivorCount <= WORLD_BREADTH_REPAIR_TRIGGER_MAX_SURVIVORS;
+  // Same composition pass, no extra AI layer: a busy-but-toothless rolling window
+  // may also justify searching the still-neglected lanes. Keep this bounded so a
+  // healthy 7-10 event month never receives gratuitous padding.
+  const consequenceTrigger =
+    consequenceSignal.level === "low" &&
+    survivorCount <= Math.min(6, Math.max(0, eventCeiling - 1));
+
+  const eligible =
+    mode === "jump" &&
+    normalizeString(context?.generationSource || "ai") === "ai" &&
+    days >= WORLD_BREADTH_REPAIR_MIN_DAYS &&
+    days <= WORLD_BREADTH_REPAIR_MAX_DAYS &&
+    (sparseTrigger || consequenceTrigger) &&
+    slate.length >= WORLD_BREADTH_REPAIR_MIN_EXPLORATION_SLOTS &&
+    quietSlots.length >= WORLD_BREADTH_REPAIR_MIN_QUIET_SLOTS &&
+    available > 0;
+
+  if (!eligible) {
+    return {
+      triggered: false,
+      events: [],
+      storylineUpdates: [],
+      analysis,
+      survivorCount,
+      quietSlotCount: quietSlots.length,
+      consequenceSignal,
+    };
+  }
+
+  const compositionReason = sparseTrigger
+    ? `${survivorCount} worthwhile visible event(s) survived Curator across ${Math.round(days)}d`
+    : `${survivorCount} worthwhile visible event(s) survived, but rolling consequence signal is LOW (${consequenceSignal.consequentialCount}/${consequenceSignal.eventCount} threshold events)`;
+  console.warn(
+    `[OH World Composition 08.3.1] ${compositionReason}; ` +
+    `searching ${quietSlots.length}/${slate.length} exploration lane(s) still visibly neglected after curation. ` +
+    "This is the existing composition pass with consequence-aware search ordering, not an event/drama quota.",
+  );
+
+  const repair = await runWorldBreadthRepair({
+    bundle,
+    analysis,
+    quietSlots,
+    mainEvents: normalizeArray(mainEvents),
+    visibleEvents: normalizeArray(survivingEvents),
+    originDate: normalizeString(context?.originDate),
+    targetDate: normalizeString(context?.targetDate),
+    horizonDays: days,
+    eventAllowance: available,
+    survivorCount,
+    consequenceSignal,
+    signal,
+  });
+
+  if (!repair) {
+    return {
+      triggered: true,
+      failed: true,
+      events: [],
+      storylineUpdates: [],
+      analysis,
+      survivorCount,
+      quietSlotCount: quietSlots.length,
+      consequenceSignal,
+    };
+  }
+
+  console.info(
+    `[OH World Composition 08.3.1] search completed: ${normalizeArray(repair.events).length} supplemental candidate(s) from ` +
+    `${repair.quietSlots?.length || quietSlots.length} post-Curator neglected exploration lane(s).`,
+  );
+
+  return {
+    triggered: true,
+    failed: false,
+    events: normalizeArray(repair.events),
+    storylineUpdates: normalizeArray(repair.storylineUpdates),
+    analysis,
+    survivorCount,
+    quietSlotCount: quietSlots.length,
+    consequenceSignal,
+  };
+};
+
+// Storyline ids ride on the events they establish (event.storylineIds); that
+// is how applyWorldStorylineUpdates links a record to canonical history.
+const attachStorylineIdsByIndexes = (events, decodedStorylineUpdates) => {
+  const resultEvents = normalizeArray(events).map((event) => ({
+    ...(event && typeof event === "object" ? event : {}),
+    storylineIds: normalizeArray(event?.storylineIds),
+  }));
+
+  for (const update of normalizeArray(decodedStorylineUpdates)) {
+    const storylineId = normalizeString(update?.id);
+    if (!storylineId) continue;
+    for (const eventIndex of normalizeArray(update?.eventIndexes)) {
+      if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex >= resultEvents.length) continue;
+      resultEvents[eventIndex].storylineIds = [...new Set([
+        ...normalizeArray(resultEvents[eventIndex].storylineIds).map(normalizeString).filter(Boolean),
+        storylineId,
+      ])].slice(0, 6);
+    }
+  }
+
+  return resultEvents;
+};
+
+const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = "pass") =>
+  attachStorylineIdsByIndexes(
+    normalizeArray(events).map((event, index) => ({
+      ...(event && typeof event === "object" ? event : {}),
+      // Unique internal ids prevent same-index events from different passes from
+      // collapsing into one generated-event-N during the final canonical apply.
+      id: `${passLabel}-${normalizeString(event?.id) || `event-${index + 1}`}`,
+    })),
+    decodedStorylineUpdates,
+  );
+
+const filterStorylineUpdatesAfterIntegrityScreen = ({
+  updates,
+  allEvents,
+  existingStorylines,
+  dropped,
+} = {}) => {
+  const existingIds = new Set(
+    normalizeArray(existingStorylines)
+      .map((entry) => normalizeString(entry?.id))
+      .filter(Boolean),
+  );
+
+  const fatalDroppedIds = new Set(
+    normalizeArray(dropped)
+      .filter((entry) =>
+        ["NON_BELLIGERENT_WARTIME_CAUSALITY"].includes(
+          normalizeString(entry?.route),
+        )
+      )
+      .map((entry) => normalizeString(entry?.id))
+      .filter(Boolean),
+  );
+
+  if (!fatalDroppedIds.size) return normalizeArray(updates);
+
+  const fatalIndexes = new Set();
+  normalizeArray(allEvents).forEach((event, index) => {
+    if (fatalDroppedIds.has(normalizeString(event?.id))) {
+      fatalIndexes.add(index);
+    }
+  });
+
+  return normalizeArray(updates).filter((update) => {
+    const id = normalizeString(update?.id);
+    if (!id || existingIds.has(id)) return true;
+
+    const indexes = normalizeArray(update?.eventIndexes)
+      .filter((index) => Number.isInteger(index) && index >= 0);
+
+    if (!indexes.length) return true;
+
+    // A NEW storyline whose only establishing event(s) were rejected for an
+    // objective causal impossibility must not survive invisibly and poison the
+    // next pass. Existing selected storylines are intentionally preserved so
+    // routine no-delta cards can collapse into hidden state updates.
+    return !indexes.every((index) => fatalIndexes.has(index));
+  });
+};
+
 
 let countryStatsWorker = null;
 let countryStatsWorkerBroken = false;
@@ -6891,8 +8291,30 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
       // is validated against, and what it is shown (the rest of the expensive
       // context is built once for the whole jump).
       const ledgerWorld = state.ledgerWorld || bundle.world;
+      // The native world director reads the world as the segments in hand left
+      // it (ledgers and storylines) plus the events generated so far, and
+      // returns the attention/exploration analysis this segment is validated
+      // against and the live context the model is shown. CPU only, in a worker.
+      const segmentBundle = {
+        actions: bundle.actions,
+        chats: bundle.chats,
+        events: normalizeEvents([...normalizeArray(bundle.events), ...state.generatedSoFar]),
+        game: { ...bundle.game, gameDate: state.segmentOrigin },
+        world: ledgerWorld,
+      };
+      const worldInitiative = await buildWorldInitiativeContextBackground(
+        segmentBundle,
+        { targetDate: segmentTarget },
+        signal,
+      );
+      console.info(
+        `[OH world director] segment ${segmentIndex + 1}/${segmentCount} ${state.segmentOrigin} → ${segmentTarget}; ` +
+        `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
+        `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
+      );
       const segmentVariables = {
         ...variables,
+        worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
           canonicalWarContext: buildCanonicalWarContext(ledgerWorld),
@@ -6964,9 +8386,43 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
           // The war ledger must see the sanitized impacts, so world changes go first.
           const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
           if (worldChangeError) return worldChangeError;
-          return validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex });
+          const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex });
+          if (ledgerError) return ledgerError;
+          return validateSegmentStorylines(candidate, {
+            world: ledgerWorld,
+            analysis: worldInitiative.analysis,
+            strict,
+            finalAttempt,
+            originDate: state.segmentOrigin,
+            targetDate: segmentTarget,
+            gameCountry: bundle.game.country,
+          });
         },
         variables: segmentVariables,
+      });
+
+      // The accepted segment keeps its events. A selected storyline that is
+      // objectively stale, or was omitted from storylineUpdates, gets one small
+      // targeted repair call; a failed repair leaves the process overdue.
+      await repairAntiStasisStorylines({
+        payload,
+        bundle: segmentBundle,
+        analysis: worldInitiative.analysis,
+        originDate: state.segmentOrigin,
+        targetDate: segmentTarget,
+        signal,
+      });
+      screenSegmentPayload(payload, {
+        analysis: worldInitiative.analysis,
+        priorEvents: segmentBundle.events,
+        world: ledgerWorld,
+        game: bundle.game,
+        state,
+        originDate: state.segmentOrigin,
+        targetDate: segmentTarget,
+        horizonDays: spanDays,
+        eventCeiling: maxEvents,
+        generationSource: segmentGeneration?.source || "ai",
       });
 
       state.segmentPayloads.push(payload);
@@ -7080,6 +8536,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     warUpdates: merged.warUpdates,
     relationUpdates: merged.relationUpdates,
     agreementUpdates: merged.agreementUpdates,
+    storylineUpdates: merged.storylineUpdates,
+    breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
   };
   const applyArgs = {
@@ -7181,8 +8639,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     nextSegment: 0,
     segmentOrigin: originDate,
     segmentPayloads: [],
-    // The base world plus the ledger records of the segments in hand.
+    // The base world plus the ledger and storyline records of the segments in hand.
     ledgerWorld: bundle.world,
+    // One exploration audit per segment; the quietest is re-searched after curation.
+    breadthRepairContexts: [],
   };
 
   await runJumpSegments({ context: jumpContext, onProgress, signal, state: jumpState });
@@ -7504,6 +8964,80 @@ const validateGameMasterChronology = (candidate, game) => {
   return "";
 };
 
+const GAME_MASTER_PERSISTENT_PROCESS_HINT = /\b(?:crisis|collapse|revolution|uprising|insurgency|civil\s+war|succession|regime\s+rupture|banking\s+emergency|sovereign\s+debt|mass\s+unrest|nationwide\s+strike|general\s+strike|standoff|confrontation|instability|tension|escalat(?:e|es|ed|ing|ion)|de-escalat(?:e|es|ed|ing|ion)|prolonged|ongoing)\b/i;
+
+const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game, request = "" } = {}) => {
+  // Native semantic binding owns the causal event links; model-supplied indexes are
+  // hints. This mutates only the preview candidate and therefore remains visible
+  // before Apply can ever persist it.
+  normalizeWorldStorylineEventLinks(candidate, { world });
+
+  const normalizedWorld = normalizeWorldState(world);
+  const currentDate = normalizeString(game?.gameDate || game?.startDate);
+  const validationError = validateWorldStorylinePayload(candidate, {
+    existingStorylines: normalizedWorld.storylines,
+    selectedStorylines: [],
+    deferredStorylines: [],
+    originDate: currentDate,
+    stopDate: currentDate,
+    enforceAntiStasis: false,
+    enforceSelectedCoverage: false,
+    world: normalizedWorld,
+  });
+  if (validationError) return validationError;
+
+  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  if (mode === "world-intervention" && GAME_MASTER_PERSISTENT_PROCESS_HINT.test(normalizeString(request)) && !updates.length) {
+    return "World Intervention describes an unresolved or changing multi-turn process, but $.storylineUpdates is empty. Persist that crisis/process in canonical world.storylines (or update/resolve the existing storyline) so the normal World Director inherits it on later turns.";
+  }
+
+  const currentPolities = new Map(
+    (await buildCurrentCanonicalPolityVocabulary(normalizedWorld))
+      .map((name) => normalizeString(name))
+      .filter(Boolean)
+      .map((name) => [name.toLowerCase(), name]),
+  );
+  // A world intervention may establish a new/restored polity and a persistent
+  // crisis involving it in the SAME preview. Lifecycle validation runs first, so
+  // those event-driven identities are safe to admit here even though they do not
+  // exist in the pre-transaction world yet.
+  for (const event of normalizeArray(candidate?.events)) {
+    for (const change of normalizeArray(event?.impacts?.polityChanges)) {
+      const operation = normalizeString(change?.operation).toLowerCase();
+      if (!["create", "restore", "rename", "update"].includes(operation)) continue;
+      for (const token of [change?.name, change?.code]) {
+        const name = normalizeString(token);
+        if (name) currentPolities.set(name.toLowerCase(), name);
+      }
+    }
+  }
+
+  for (let index = 0; index < updates.length; index += 1) {
+    const update = updates[index];
+    if (mode !== "direct" && normalizeArray(update?.eventIndexes).length === 0) {
+      return `$.storylineUpdates record ${index + 1} must link to at least one authored GM event in ${mode} mode.`;
+    }
+    for (let participantIndex = 0; participantIndex < normalizeArray(update?.participants).length; participantIndex += 1) {
+      const raw = normalizeString(normalizeArray(update.participants)[participantIndex]);
+      const resolution = resolvePolityIdentity(raw, normalizedWorld, {
+        allowUnknown: false,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+      });
+      const resolved = normalizeString(resolution?.resolved || raw);
+      const canonical = currentPolities.get(resolved.toLowerCase()) || currentPolities.get(raw.toLowerCase()) || "";
+      if (!canonical) {
+        return `$.storylineUpdates record ${index + 1} participant ${participantIndex + 1} could not resolve to a current or same-transaction canonical polity: "${raw}".`;
+      }
+      update.participants[participantIndex] = canonical;
+    }
+  }
+
+  candidate.storylineUpdates = updates;
+  return "";
+};
+
 const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, request = "" }) => {
   if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
   if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
@@ -7569,6 +9103,9 @@ const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, 
     agreementUpdates,
   }, { world });
   if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
+
+  const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request });
+  if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
   return "";
 };
@@ -7669,6 +9206,7 @@ const gameMasterStateFingerprint = ({ game = {}, world = {}, events = [], colors
       units: normalizedWorld.units,
       markers: normalizedWorld.markers,
       cityRenames: normalizedWorld.cityRenames,
+      storylines: normalizedWorld.storylines,
       wars: normalizedWorld.wars,
       relations: normalizedWorld.relations,
       agreements: normalizedWorld.agreements,
@@ -7682,6 +9220,7 @@ const gameMasterTransactionCandidate = (transaction) => ({
   summary: normalizeString(transaction?.summary),
   events: cloneValue(normalizeArray(transaction?.events)),
   countryStatPatches: cloneValue(normalizeArray(transaction?.countryStatPatches)),
+  storylineUpdates: cloneValue(normalizeArray(transaction?.storylineUpdates)),
   warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
   relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
   agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
@@ -7705,6 +9244,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
     }
   }
   normalizeArray(transaction?.countryStatPatches).forEach((entry, index) => labels.push(`stats:${index}:${normalizeString(entry?.country)}`));
+  normalizeArray(transaction?.storylineUpdates).forEach((entry, index) => labels.push(`storyline:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
   normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
@@ -7804,13 +9344,17 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
     });
 
     const transactionId = createGameMasterTransactionId();
-    const events = normalizeArray(payload?.events)
-      .map((entry, index) => normalizeGeneratedEvent({
-        ...entry,
-        id: `event-manual-${transactionId}-${index + 1}`,
-        source: "game-master",
-      }, index))
-      .filter(Boolean);
+    const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+    const events = attachStorylineIdsByIndexes(
+      normalizeArray(payload?.events)
+        .map((entry, index) => normalizeGeneratedEvent({
+          ...entry,
+          id: `event-manual-${transactionId}-${index + 1}`,
+          source: "game-master",
+        }, index))
+        .filter(Boolean),
+      storylineUpdates,
+    );
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
@@ -7830,6 +9374,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         summary: normalizeString(payload?.summary),
         events,
         countryStatPatches,
+        storylineUpdates,
         warUpdates,
         relationUpdates,
         agreementUpdates,
@@ -7965,6 +9510,18 @@ export const applyGameMasterPreview = async (preview) => {
     }
     nextWorld = diplomaticMerge.world;
 
+    const storylineMerge = applyWorldStorylineUpdates({
+      world: nextWorld,
+      updates: normalizeArray(transaction.storylineUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (storylineMerge.appliedIds.length !== normalizeArray(transaction.storylineUpdates).length) {
+      throw new Error("A canonical storyline operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = storylineMerge.world;
+
     const generatedChats = [];
     for (const event of events) {
       for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
@@ -8004,6 +9561,7 @@ export const applyGameMasterPreview = async (preview) => {
       nextEvents,
     );
     const eventIds = events.map((event) => normalizeString(event?.id)).filter(Boolean);
+    const storylineIds = [...new Set(storylineMerge.appliedIds.map(normalizeString).filter(Boolean))];
     const warIds = [...new Set(warMerge.appliedIds.map(normalizeString).filter(Boolean))];
     const relationIds = [...new Set(diplomaticMerge.appliedRelationIds.map(normalizeString).filter(Boolean))];
     const agreementIds = [...new Set(diplomaticMerge.appliedAgreementIds.map(normalizeString).filter(Boolean))];
@@ -8032,6 +9590,7 @@ export const applyGameMasterPreview = async (preview) => {
       acceptedOperations: gameMasterAcceptedOperationLabels(transaction),
       rejectedOperations: [],
       eventIds,
+      storylineIds,
       warIds,
       relationIds,
       agreementIds,
@@ -8087,6 +9646,7 @@ export const applyGameMasterPreview = async (preview) => {
       round: bundle.game.round || 0,
       summary,
       eventIds,
+      storylineIds,
       warIds,
       relationIds,
       agreementIds,
@@ -8478,6 +10038,14 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
     return `${path} uses the non-current or unresolved polity "${raw}". Round-One ledger records may use ONLY current canonical polities from the save; do not invent an umbrella or legacy actor - decompose it into the applicable current polity or polities. Current polity vocabulary: ${sample}.`;
   };
 
+  const storylineUpdates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  for (let i = 0; i < storylineUpdates.length; i += 1) {
+    const participants = normalizeArray(storylineUpdates[i]?.participants);
+    for (let j = 0; j < participants.length; j += 1) {
+      const error = checkToken(participants[j], `$.canonicalUpdates storyline record ${i + 1} participant ${j + 1}`);
+      if (error) return error;
+    }
+  }
   const warUpdates = decodeWarUpdates(candidate?.warUpdates);
   for (let i = 0; i < warUpdates.length; i += 1) {
     for (const [field, tokens] of [["actors", normalizeArray(warUpdates[i]?.actors)], ["opponents", normalizeArray(warUpdates[i]?.opponents)]]) {
@@ -8505,6 +10073,121 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
   return "";
 };
 
+// A live canonical war and its scheduler-facing war storyline are intentionally
+// separate ledgers, but the existence/id of the war storyline is mechanical once
+// belligerency is authoritative. Round Zero therefore must not waste an AI output
+// slot asking the model to duplicate the same fact with an exact derived id.
+//
+// Preserve an explicit semantic war storyline when the model supplied one for the
+// same participant set (so its pressure/momentum/state judgement is retained), but
+// canonicalize its id/status/kind. If none exists, synthesize only the minimal
+// scheduler mirror from the already-validated war + its causal historical event.
+// This is NOT a new system or new historical judgement; it is an adapter between
+// the existing world.wars and world.storylines ledgers.
+const ensurePregameWarStorylineMirrors = (
+  candidate,
+  {
+    warProbe = { wars: [] },
+    warUpdates = [],
+    startDate = "",
+  } = {},
+) => {
+  const events = normalizeArray(candidate?.events);
+  let storylines = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+
+  const participantKey = (participants) =>
+    [...new Set(
+      normalizeArray(participants)
+        .map(normalizeString)
+        .filter(Boolean)
+        .map((name) => name.toLowerCase()),
+    )]
+      .sort()
+      .join(" | ");
+
+  const liveWars = normalizeArray(warProbe?.wars)
+    .filter((war) => ["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase()));
+
+  for (const war of liveWars) {
+    const warId = normalizeString(war?.id);
+    if (!warId) continue;
+
+    const relatedUpdate = normalizeArray(warUpdates)
+      .find((update) => normalizeString(update?.id) === warId);
+    if (!relatedUpdate) continue;
+
+    const participants = [...new Set([
+      ...normalizeArray(war?.sideA).map(normalizeString),
+      ...normalizeArray(war?.sideB).map(normalizeString),
+    ].filter(Boolean))];
+    const expectedId = `storyline-${warId}`;
+    const expectedParticipantsKey = participantKey(participants);
+
+    const causalIndexes = normalizeArray(relatedUpdate?.eventIndexes)
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < events.length);
+    const causalEvent = causalIndexes.length ? events[causalIndexes[0]] : null;
+
+    const exactIndex = storylines.findIndex(
+      (entry) => normalizeString(entry?.id) === expectedId,
+    );
+    const semanticIndex = exactIndex >= 0
+      ? exactIndex
+      : storylines.findIndex((entry) =>
+          normalizeString(entry?.kind).toLowerCase() === "war" &&
+          participantKey(entry?.participants) === expectedParticipantsKey
+        );
+
+    const warStatus = normalizeString(war?.status).toLowerCase();
+    const defaultPressure = warStatus === "ceasefire" ? 60 : 85;
+    const defaultMomentum = warStatus === "ceasefire" ? 15 : 30;
+    const fallbackTitle =
+      normalizeString(causalEvent?.title) ||
+      normalizeString(relatedUpdate?.note) ||
+      expectedId;
+    const fallbackState =
+      normalizeString(relatedUpdate?.note) ||
+      normalizeString(causalEvent?.description) ||
+      fallbackTitle;
+    const fallbackStartedDate =
+      normalizeString(causalEvent?.date) ||
+      normalizeString(startDate);
+
+    const prior = semanticIndex >= 0 ? storylines[semanticIndex] : null;
+    const canonicalMirror = {
+      ...(prior || {}),
+      id: expectedId,
+      status: "active",
+      pressure: Number.isFinite(Number(prior?.pressure))
+        ? Number(prior.pressure)
+        : defaultPressure,
+      momentum: Number.isFinite(Number(prior?.momentum))
+        ? Number(prior.momentum)
+        : defaultMomentum,
+      startedDate: normalizeString(prior?.startedDate) || fallbackStartedDate,
+      kind: "war",
+      title: normalizeString(prior?.title) || fallbackTitle,
+      participants,
+      eventIndexes: causalIndexes,
+      eventIds: [],
+      state: normalizeString(prior?.state) || fallbackState,
+    };
+
+    // Remove duplicate semantic mirrors for the same exact participant set, then
+    // insert the one canonical scheduler record.
+    storylines = storylines.filter((entry, index) => {
+      if (index === semanticIndex) return false;
+      if (normalizeString(entry?.id) === expectedId) return false;
+      return !(
+        normalizeString(entry?.kind).toLowerCase() === "war" &&
+        participantKey(entry?.participants) === expectedParticipantsKey
+      );
+    });
+    storylines.push(canonicalMirror);
+  }
+
+  candidate.storylineUpdates = storylines;
+};
+
 // Validates only the canonical state that must survive INTO round one; it does
 // not demand that every old battle or treaty in the backstory be replayed as a
 // mutation. The ledgers' own decoders and appliers stay the sole owners of the
@@ -8528,6 +10211,8 @@ const validatePregameCanonicalBootstrap = (
       .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
     candidate.agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates)
       .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
+    candidate.storylineUpdates = decodeWorldStorylineUpdates(candidate?.storylineUpdates)
+      .map((update) => ({ ...update, eventIndexes: [] }));
   }
 
   const events = normalizeArray(candidate?.events);
@@ -8559,6 +10244,11 @@ const validatePregameCanonicalBootstrap = (
     }
   }
 
+  // Belligerency is authoritative by now: every surviving Round-One war is
+  // mirrored into the storyline ledger mechanically (storyline-<warId>) rather
+  // than spending a schema slot on the same fact.
+  ensurePregameWarStorylineMirrors(candidate, { warProbe, warUpdates, startDate });
+
   const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
   for (let index = 0; index < agreementUpdates.length; index += 1) {
     if (normalizeString(agreementUpdates[index]?.op).toLowerCase() !== "start") {
@@ -8570,10 +10260,49 @@ const validatePregameCanonicalBootstrap = (
   // event cards are evidence, not a requirement that every baseline relation or
   // standing treaty have one attributable card. The director binds a causal
   // event when one is clear and otherwise keeps the baseline fact.
-  return validateDiplomaticLedgerPayload(candidate, {
+  const diplomaticError = validateDiplomaticLedgerPayload(candidate, {
     world,
     allowNativeBinding: true,
     allowUnboundBaseline: true,
+  });
+  if (diplomaticError) return diplomaticError;
+
+  // Storylines: only unresolved processes alive at Round One, begun on or
+  // before the start date, with every live war's mirror present, and the
+  // records valid against the world's (normally empty) storyline ledger.
+  normalizeWorldStorylineEventLinks(candidate, { world });
+  const storylineUpdates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  for (let index = 0; index < storylineUpdates.length; index += 1) {
+    const storyline = storylineUpdates[index];
+    if (normalizeString(storyline?.status).toLowerCase() === "resolved") {
+      return `$.canonicalUpdates storyline record ${index + 1} is resolved. The bootstrap persists only unresolved processes still alive at Round One.`;
+    }
+    const startedDate = normalizeString(storyline?.startedDate);
+    if (startedDate && parseIsoDate(startDate) && (!parseIsoDate(startedDate) || startedDate > startDate)) {
+      return `$.canonicalUpdates storyline record ${index + 1} date must be on or before the Round-One date ${startDate}.`;
+    }
+  }
+  const storylineById = new Map(
+    storylineUpdates
+      .map((entry) => [normalizeString(entry?.id), entry])
+      .filter(([id]) => Boolean(id)),
+  );
+  for (const warId of new Set(warUpdates.map((update) => normalizeString(update?.id)).filter(Boolean))) {
+    const war = normalizeArray(warProbe.wars).find((entry) => normalizeString(entry?.id) === warId);
+    if (!war || !["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) continue;
+    const storyline = storylineById.get(`storyline-${warId}`);
+    if (!storyline || normalizeString(storyline?.status).toLowerCase() !== "active" || normalizeString(storyline?.kind).toLowerCase() !== "war") {
+      return `Round-Zero war-storyline mirror failed for canonical conflict ${warId}.`;
+    }
+  }
+  return validateWorldStorylinePayload(candidate, {
+    existingStorylines: world?.storylines,
+    selectedStorylines: [],
+    deferredStorylines: [],
+    originDate: startDate,
+    stopDate: startDate,
+    world,
+    enforceAntiStasis: false,
   });
 };
 
@@ -8609,7 +10338,7 @@ export const maybeGeneratePregameHistory = async () => {
     };
     const { payload } = await runJsonTask("pregameHistory", {
       userMessage: `Write the pre-game historical timeline AND the canonical Round-One bootstrap for ${startDate} as JSON only. ` +
-        "Put every war, bilateral relation and formal agreement already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
+        "Put every war, bilateral relation, formal agreement and unresolved non-war storyline already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
         "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A relation or standing agreement does NOT need its own event card merely to exist; include historical events because they are important timeline anchors, not as bookkeeping padding.",
       validatePayload: (candidate, { finalAttempt } = {}) =>
         validatePregameCanonicalBootstrap(candidate, {
@@ -8643,13 +10372,17 @@ export const maybeGeneratePregameHistory = async () => {
     // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
     // backstory events and merge them into the world the game starts on. The
     // version stamp tells the legacy migration there is nothing left to seed.
-    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), generatedEvents);
-    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), generatedEvents);
-    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), generatedEvents);
+    // Storyline ids are attached to the backstory events first, so every Day-1
+    // process starts with real sourceEventIds and a last visible date.
+    const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+    const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
+    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
+    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), bootstrapEvents);
+    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), bootstrapEvents);
     const warMerge = applyWarUpdates({
       world: currentWorld,
       updates: warUpdates,
-      events: generatedEvents,
+      events: bootstrapEvents,
       stopDate: startDate,
       round: 1,
     });
@@ -8657,17 +10390,24 @@ export const maybeGeneratePregameHistory = async () => {
       world: warMerge.world,
       relationUpdates,
       agreementUpdates,
-      events: generatedEvents,
+      events: bootstrapEvents,
       stopDate: startDate,
       round: 1,
       allowUnboundBaseline: true,
     });
+    const storylineMerge = applyWorldStorylineUpdates({
+      world: diplomaticMerge.world,
+      updates: storylineUpdates,
+      events: bootstrapEvents,
+      stopDate: startDate,
+      round: 1,
+    });
     const bootstrapWorld = {
-      ...diplomaticMerge.world,
+      ...storylineMerge.world,
       diplomaticLedgerVersion: Math.max(Number(diplomaticMerge.world.diplomaticLedgerVersion) || 0, DIPLOMATIC_LEDGER_VERSION),
     };
     console.info(
-      `[ai] pregame bootstrap: ${generatedEvents.length} event(s), ${warMerge.appliedIds.length} war op(s), ` +
+      `[ai] pregame bootstrap: ${bootstrapEvents.length} event(s), ${storylineMerge.appliedIds.length} storyline(s), ${warMerge.appliedIds.length} war op(s), ` +
       `${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`,
     );
 
@@ -8676,22 +10416,23 @@ export const maybeGeneratePregameHistory = async () => {
       {
         catalyst: null,
         date: startDate,
-        eventIds: generatedEvents.map((event) => event.id),
+        eventIds: bootstrapEvents.map((event) => event.id),
         fallbackReason: "",
-        fromDate: normalizeString(generatedEvents[0]?.date) || startDate,
+        fromDate: normalizeString(bootstrapEvents[0]?.date) || startDate,
         mode: "pregame",
         plannedActions: [],
         round: 1,
         summary,
         source: "ai",
+        storylineIds: [...storylineMerge.appliedIds],
         toDate: startDate,
       },
     ];
     await Promise.all([
-      writeEventsState(generatedEvents),
+      writeEventsState(bootstrapEvents),
       writeWorldState(bootstrapWorld),
     ]);
-    return generatedEvents;
+    return bootstrapEvents;
   } catch (error) {
     // The next open retries; logged because this now seeds the ledgers too.
     console.warn("[ai] pregame bootstrap failed; the next open retries.", error);

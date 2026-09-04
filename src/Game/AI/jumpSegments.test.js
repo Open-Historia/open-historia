@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentBriefing,
+  STORYLINE_INSTRUCTION,
   buildSegmentInstruction,
   eventCountRangeForDays,
   formatDurationLabel,
@@ -85,7 +86,7 @@ test("formatDurationLabel collapses even spans", () => {
 // Instructions
 
 // A jump that does not need splitting must send the prompt it always sent.
-test("a single-segment jump is worded exactly as before", () => {
+test("a single-segment jump keeps its wording, plus the storyline contract", () => {
   const message = buildSegmentInstruction({
     mode: "jump",
     segmentCount: 1,
@@ -97,7 +98,8 @@ test("a single-segment jump is worded exactly as before", () => {
   assert.equal(
     message,
     'Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must '
-    + "contain between 29 and 37 events (this jump covers 9 months), with their dates spread across the skipped period.",
+    + "contain between 29 and 37 events (this jump covers 9 months), with their dates spread across the skipped period. "
+    + STORYLINE_INSTRUCTION,
   );
   assert.ok(!/segment/i.test(message));
 });
