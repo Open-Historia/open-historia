@@ -8,6 +8,7 @@ import {
     saveRecentModel,
     setProviderField,
 } from "./providerConfig.js";
+import { splitSystemPromptForCache } from "./promptLayout.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -1340,6 +1341,22 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
 const ANTHROPIC_MAX_OUTPUT = 64000;
 const anthropicModelMax = new Map(); // model -> learned output ceiling
 
+// Prompt-cache boundary (promptLayout.js): the system prompt goes out as two
+// content blocks — the game-lifetime prefix pinned with an ephemeral
+// cache_control breakpoint, and the per-turn tail uncached. Within an
+// auto-jump chain or a retry the prefix is byte-identical, so every
+// consecutive call reads it from the cache at a fraction of the input price.
+// One breakpoint is enough (the API allows four); a prompt with no usable
+// boundary goes out as the plain string it always was.
+function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd) {
+    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
+    if (!split) return systemPrompt;
+    return [
+        { type: "text", text: split.prefix, cache_control: { type: "ephemeral" } },
+        { type: "text", text: split.tail },
+    ];
+}
+
 async function callAnthropic(systemPrompt, history, {
     deadline,
     maxTokens,
@@ -1349,6 +1366,7 @@ async function callAnthropic(systemPrompt, history, {
     retries = 3,
     retryDelay = 15000,
     signal,
+    staticPrefixEnd,
     taskKey,
     tool,
 } = {}) {
@@ -1403,7 +1421,7 @@ async function callAnthropic(systemPrompt, history, {
         const streamThisRequest = !streamingDisabled;
         const body = {
             model,
-            system: systemPrompt,
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
@@ -1539,6 +1557,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     retries = 3,
     retryDelay = 15000,
     signal,
+    staticPrefixEnd,
     taskKey,
     tool,
 } = {}) {
@@ -1620,7 +1639,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         const streamThisRequest = !streamingDisabled;
         const body = {
             model,
-            system: requestSystemPrompt,
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
@@ -2441,5 +2460,143 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
     } catch (err) {
         logDebugEvent("diplomacy", `${speakingAs} failed to answer the advisor-drafted message after ${elapsedSeconds(startedAt)}.`, err);
         throw err;
+    }
+}
+
+// --- Batch API (ported from the abdulrahman-2005 fork) -----------------------
+// A task the player is not waiting on can ride a provider's asynchronous batch
+// endpoint at about half the price. Capability is a per-provider fact, never a
+// requirement: only the native Anthropic Messages API exposes a browser-callable
+// batch endpoint (a JSON request, no file upload), so everything else — the
+// OpenAI-style APIs (Files API), Gemini (File API), local and self-hosted
+// gateways — takes the normal synchronous call. A submission that fails for any
+// reason also falls back; batching must never break a task. Opt-in from
+// Settings → Batch background AI tasks; gameplay.js checks that switch.
+export const providerSupportsBatch = (provider = getStoredProvider()) => provider === "anthropic";
+
+const anthropicBatchHeaders = (apiKey) => ({
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+});
+
+// The provider's batch id is what retrieval polls; the custom id names our
+// request inside it. In memory, like the registry in gameplay.js.
+const pendingBatchIds = new Map(); // customId -> provider batch id
+
+// Resolves to { customId } when the batch was accepted, null when batching is
+// unavailable or the submission was refused — the caller then runs the task
+// synchronously.
+export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool }) {
+    if (!providerSupportsBatch()) return null;
+    const settings = getProviderSettings("anthropic");
+    const apiKey = settings.apiKey.trim();
+    if (!apiKey) return null;
+
+    let model;
+    try {
+        model = await resolveModel("anthropic", {
+            fallbackModel: ANTHROPIC_DEFAULT_MODEL,
+            providerLabel: "Anthropic",
+            taskKey,
+        });
+    } catch {
+        return null;
+    }
+
+    // The synchronous tool call's parameters minus the interactive knobs
+    // (streaming, thinking, the learned-ceiling retry) that need a round trip.
+    const params = {
+        model,
+        max_tokens: Math.max(anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT, 1024),
+        messages: toAnthropicMessages(history),
+        system: systemPrompt,
+        ...(tool ? {
+            tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
+            tool_choice: { type: "tool", name: tool.name },
+        } : {}),
+    };
+
+    try {
+        const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages/batches`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...anthropicBatchHeaders(apiKey) },
+            body: JSON.stringify({ requests: [{ custom_id: customId, params }] }),
+        });
+        if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            logDebugEvent("ai-call", `Batch submission for "${taskKey}" refused (${response.status}): ${extractErrorMessage(payload, "unknown error")}`);
+            return null;
+        }
+        const batch = await response.json();
+        const batchId = String(batch?.id ?? "").trim();
+        if (!batchId) return null;
+        pendingBatchIds.set(customId, batchId);
+        logDebugEvent("ai-call", `Batch submission for "${taskKey}" accepted as ${batchId}.`);
+        return { customId, batchId };
+    } catch (error) {
+        logDebugEvent("ai-call", `Batch submission for "${taskKey}" failed: ${error?.message || error}`);
+        return null;
+    }
+}
+
+// One batch request's outcome: { status: "pending" | "done" | "failed",
+// payload, rawText, usage }. payload is the tool input (or null when the model
+// answered in text — the caller parses rawText); validation and application
+// stay with the caller.
+export async function retrieveAIBatch(customId) {
+    const batchId = pendingBatchIds.get(customId);
+    const settings = getProviderSettings("anthropic");
+    const apiKey = settings.apiKey.trim();
+    if (!batchId || !apiKey) return { status: "failed", payload: null, rawText: "" };
+    const headers = anthropicBatchHeaders(apiKey);
+
+    let batch;
+    try {
+        const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages/batches/${encodeURIComponent(batchId)}`, { headers });
+        if (response.status === 404) {
+            pendingBatchIds.delete(customId);
+            return { status: "failed", payload: null, rawText: "" };
+        }
+        if (!response.ok) {
+            if (response.status === 429 || response.status >= 500) return { status: "pending", payload: null, rawText: "" };
+            pendingBatchIds.delete(customId);
+            return { status: "failed", payload: null, rawText: "" };
+        }
+        batch = await response.json();
+    } catch {
+        return { status: "pending", payload: null, rawText: "" }; // network hiccup: next poll
+    }
+
+    if (batch?.processing_status !== "ended") return { status: "pending", payload: null, rawText: "" };
+    pendingBatchIds.delete(customId);
+
+    try {
+        const resultsResponse = await fetch(batch.results_url, { headers });
+        if (!resultsResponse.ok) return { status: "failed", payload: null, rawText: "" };
+        const jsonl = await resultsResponse.text();
+        for (const line of jsonl.split("\n")) {
+            if (!line.trim()) continue;
+            let row;
+            try { row = JSON.parse(line); } catch { continue; }
+            if (row?.custom_id !== customId) continue;
+            const result = row?.result;
+            if (result?.type !== "succeeded") {
+                logDebugEvent("ai-call", `Batch request ${customId} ended with "${result?.type ?? "unknown"}".`);
+                return { status: "failed", payload: null, rawText: "", usage: result?.message?.usage ?? null };
+            }
+            const toolUse = (result?.message?.content ?? []).find((block) => block?.type === "tool_use");
+            const rawText = extractAnthropicText(result?.message);
+            return {
+                status: "done",
+                payload: toolUse?.input && typeof toolUse.input === "object" ? toolUse.input : null,
+                rawText,
+                usage: result?.message?.usage ?? null,
+            };
+        }
+        return { status: "failed", payload: null, rawText: "" };
+    } catch (error) {
+        logDebugEvent("ai-call", `Batch results for ${customId} could not be read: ${error?.message || error}`);
+        return { status: "failed", payload: null, rawText: "" };
     }
 }

@@ -1453,6 +1453,7 @@ const SettingsMenu = ({
         limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
         // Same again: ships ON.
         chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
+        batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
         // Not getMapSetting: this one belongs to the save, not the browser
         // profile (see mapSettings.js). resolveBetaUnits falls back to the
         // localStorage key for a save that has never chosen.
@@ -1607,6 +1608,15 @@ const SettingsMenu = ({
         />
         <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
         On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
+        </div>
+        <Toggle
+        label="Batch background AI tasks"
+        enabled={mapSettings.batchBackgroundTasks}
+        onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)}
+        />
+        <div style={{ marginTop: "-0.7rem", marginBottom: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+        Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later,
+        applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
         </div>
         <Toggle
         label="Generate long time skips in segments"
