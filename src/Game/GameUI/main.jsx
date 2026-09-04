@@ -2,8 +2,9 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
-import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
+import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
+import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
@@ -37,18 +38,19 @@ const readAdvisorWidth = () => {
 };
 const baseStyle = {
   position: "fixed",
-  backgroundColor: "rgba(17, 24, 39, 0.9)",
-  backdropFilter: "blur(4px)",
+  backgroundColor: "var(--oh-hud-bg)",
+  backdropFilter: "var(--oh-hud-blur)",
   zIndex: 9999,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   color: "white",
   fontFamily: "sans-serif",
-  borderRadius: "12px",
-  border: "1px solid rgba(255,255,255,0.1)",
-  boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+  borderRadius: "14px",
+  border: "1px solid var(--oh-hud-border)",
+  boxShadow: "var(--oh-hud-shadow-soft)",
 };
+
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
 );
@@ -124,14 +126,33 @@ const WebGLWarningPopup = () => (
   </div>
 );
 
+// Continuance's advisor glyph, drawn like the other HUD icons.
+const AdvisorDockIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
+    <path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3" />
+  </svg>
+);
+
 const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
-  <button onClick={onToggle} style={{
-    ...baseStyle,
-    bottom: "0.5rem", right: rightShift,
-    height: "4rem", width: "4rem",
-    cursor: "pointer", fontSize: "1.5rem",
-    transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-  }}>🧭</button>
+  <button
+    type="button"
+    title="Advisor"
+    aria-label="Advisor"
+    onClick={onToggle}
+    style={{
+      ...baseStyle,
+      bottom: "0.5rem", right: rightShift,
+      height: "4rem", width: "4rem",
+      cursor: "pointer", fontSize: "1.5rem",
+      background: isAdvisorOpen
+        ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
+        : "linear-gradient(180deg, rgba(39,55,75,0.58), rgba(8,16,28,0.48))",
+      transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease",
+    }}
+  >
+    <AdvisorDockIcon />
+  </button>
 );
 
 const Main = ({
@@ -161,7 +182,9 @@ const Main = ({
 
   const [apiProvider, setApiProvider] = useState(() => getStoredProvider());
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettingsFormState());
-  const { games, loaded } = useLibraryState();
+  const { activeGame, games, loaded, runtimeScenario } = useLibraryState();
+  // The game menu names the campaign the way the library does.
+  const activeCountryName = useCountryDisplayName(activeGame?.country || "");
   // No games -> nothing to simulate (the main menu covers the empty world).
   const hasNoGames = loaded && (games?.length ?? 0) === 0;
 
@@ -382,6 +405,16 @@ const Main = ({
           discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
           githubUrl="https://github.com/Open-Historia/open-historia"
+          reportBugUrl="https://github.com/Open-Historia/open-historia/issues/new"
+          context={{
+            gameName: activeGame?.name || "",
+            scenarioName: runtimeScenario?.name || "",
+            countryName: activeCountryName || activeGame?.country || "",
+            date: activeGame?.currentDate || "",
+          }}
+          onClose={() => setIsSettingsOpen(false)}
+          onOpenGameManagement={() => openLibraryTab("games")}
+          onOpenEvents={() => setActiveBottomPanel("history")}
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);

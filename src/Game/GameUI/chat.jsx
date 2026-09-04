@@ -2858,11 +2858,32 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             <>
             {notificationPortal}
             {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} requestedDraft={pendingDraft} requestedChatId={pendingChatId} onConsumeRequestedChat={() => setPendingChatId("")} onConsumeRequest={() => { setPendingCountry(null); setPendingDraft(""); }} isGenerating={isGenerating} />}
-            <button title={isGenerating ? "Chat — diplomacy in progress" : "Chat"} style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
+            <button type="button" title={isGenerating ? "Chat — diplomacy in progress" : "Chat"} style={{
+                alignItems: "center",
+                background: isOpen
+                ? "rgba(59,130,246,0.16)"
+                : hovered
+                ? "rgba(255,255,255,0.075)"
+                : "rgba(255,255,255,0.035)",
+                border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "10px",
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                fontFamily: "inherit",
+                fontSize: "1.2rem",
+                height: "3.3rem",
+                justifyContent: "center",
+                outline: "none",
+                transform: hovered ? "translateY(-1px)" : "translateY(0)",
+                transition: "all 0.12s ease",
+                width: "3.3rem",
+            }}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
             onClick={() => setChatOpen(o => !o)}>
             <span style={{ position: "relative", display: "inline-flex" }}>
-                💬
+                <DiplomacyDockIcon />
                 {!isOpen && (isGenerating ? (
                     // "Someone is typing" — a country may be drafting an approach.
                     // Replaces the numeric badge (rather than sitting beside it) so
@@ -2884,12 +2905,21 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
+// Continuance's diplomacy glyph — the launcher icons are one stroke family.
+const DiplomacyDockIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
+        <path d="M8 9h8" />
+        <path d="M8 13h5" />
+    </svg>
+);
+
 const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     const [hoveredProjects, setHoveredProjects] = useState(false);
     return (
-        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "12.8rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
+        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "12.8rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
         <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
         <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
         <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />

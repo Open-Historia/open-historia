@@ -790,23 +790,17 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
         style={{
             alignItems: "center",
             background: isOpen
-            ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
+            ? "rgba(59,130,246,0.16)"
             : hovered
-            ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-            : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
-            border: hovered
-            ? "1px solid rgba(255,255,255,0.2)"
-            : isOpen
-            ? "1px solid rgba(139,92,246,0.5)"
-            : "1px solid rgba(255,255,255,0.1)",
+            ? "rgba(255,255,255,0.075)"
+            : "rgba(255,255,255,0.035)",
+            border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
             borderRadius: "10px",
-            boxShadow: hovered
-            ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
-            : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
             color: "white",
             cursor: "pointer",
             display: "flex",
-            fontFamily: "sans-serif",
+            fontFamily: "inherit",
             fontSize: "1.2rem",
             height: "3.3rem",
             justifyContent: "center",

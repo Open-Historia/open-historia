@@ -1323,6 +1323,16 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
 
 // The launcher, with the same hasOpened latch the Chat and Actions buttons use so
 // the panel body is never mounted until it is first opened.
+// The board glyph, in the same stroke family as the other launcher icons.
+const ProjectsDockIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="4" y="3" width="16" height="18" rx="2" />
+    <path d="M8 8h8" />
+    <path d="M8 12h8" />
+    <path d="M8 16h5" />
+  </svg>
+);
+
 const Projects = ({ hovered, isOpen, mapRef, onOpenAdvisor, onToggle, setHovered }) => {
   const [hasOpened, setHasOpened] = useState(false);
 
@@ -1346,23 +1356,17 @@ const Projects = ({ hovered, isOpen, mapRef, onOpenAdvisor, onToggle, setHovered
         style={{
           alignItems: "center",
           background: isOpen
-            ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
-            : hovered
-              ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-              : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
-          border: hovered
-            ? "1px solid rgba(255,255,255,0.2)"
-            : isOpen
-              ? "1px solid rgba(139,92,246,0.5)"
-              : "1px solid rgba(255,255,255,0.1)",
+          ? "rgba(59,130,246,0.16)"
+          : hovered
+          ? "rgba(255,255,255,0.075)"
+          : "rgba(255,255,255,0.035)",
+          border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
           borderRadius: "10px",
-          boxShadow: hovered
-            ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.4)"
-            : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.35)",
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
           color: "white",
           cursor: "pointer",
           display: "flex",
-          fontFamily: "sans-serif",
+          fontFamily: "inherit",
           fontSize: "1.2rem",
           height: "3.3rem",
           justifyContent: "center",
@@ -1375,7 +1379,7 @@ const Projects = ({ hovered, isOpen, mapRef, onOpenAdvisor, onToggle, setHovered
         onMouseLeave={() => setHovered(false)}
         onClick={onToggle}
       >
-        🎯
+        <ProjectsDockIcon />
       </button>
     </>
   );

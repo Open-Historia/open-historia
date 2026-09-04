@@ -148,11 +148,11 @@ const ChevronDownIcon = () => (
 );
 
 const panelSurface = {
-    backgroundColor: "rgba(17, 24, 39, 0.95)",
-    backdropFilter: "blur(8px)",
-    border: "1px solid rgba(255,255,255,0.1)",
-    borderRadius: "16px",
-    boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
+    backgroundColor: "var(--oh-hud-bg-strong)",
+    backdropFilter: "var(--oh-hud-blur)",
+    border: "1px solid var(--oh-hud-border)",
+    borderRadius: "18px",
+    boxShadow: "var(--oh-hud-shadow)",
     color: "white",
     fontFamily: "sans-serif",
     overflow: "hidden",
@@ -163,11 +163,11 @@ const panelSurface = {
 
 const widgetSurface = {
     alignItems: "center",
-    backdropFilter: "blur(4px)",
-    backgroundColor: "rgba(17, 24, 39, 0.95)",
-    border: "1px solid rgba(255,255,255,0.1)",
-    borderRadius: "12px",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
+    backdropFilter: "var(--oh-hud-blur)",
+    backgroundColor: "var(--oh-hud-bg-strong)",
+    border: "1px solid var(--oh-hud-border)",
+    borderRadius: "14px",
+    boxShadow: "var(--oh-hud-shadow-soft)",
     color: "white",
     display: "flex",
     fontFamily: "sans-serif",
