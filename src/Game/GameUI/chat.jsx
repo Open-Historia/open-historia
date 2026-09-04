@@ -11,6 +11,7 @@ import {
 } from "../../runtime/spycraft.js";
 import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
+import { Projects } from "./projects";
 import {
     JSON_URLS,
     getNationColors,
@@ -20,7 +21,8 @@ import {
 } from "../../runtime/assets.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
-import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readInterceptsState, readWorldState, writeWorldState, applyProjectOpsToWorld } from "../../runtime/gameState.js";
+import { spyOperationOps } from "../../runtime/projects.js";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -993,7 +995,21 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         // the first deployment, so every report ever stored has one to be sealed
         // under.
         const fresh = await readWorldState({ force: true });
-        await writeWorldState({ ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() });
+        const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
+        // Open (or close) the covert operation on the Projects board in the same
+        // write, so deploying an agent shows up there immediately instead of on
+        // the next jump. The turn does the same sync for the agents espionage
+        // itself moves — both call spyOperationOps, so they cannot disagree.
+        const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });
+        const toWrite = ops.length
+            ? applyProjectOpsToWorld({
+                date: gameDate,
+                ops,
+                playerCountry,
+                world: committed,
+            }).world
+            : committed;
+        await writeWorldState(toWrite);
         await refresh();
     };
 
@@ -1444,13 +1460,15 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
-const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel }) => {
+const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
+    const [hoveredProjects, setHoveredProjects] = useState(false);
     return (
-        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "8.75rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
+        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "12.8rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
         <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
         <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
+        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
         </div>
     );
 });
