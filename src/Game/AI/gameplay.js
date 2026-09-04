@@ -1,7 +1,7 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
-import { normalizePromptPack } from "./gameplayPrompts.js";
+import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   buildSegmentInstruction,
@@ -13,7 +13,7 @@ import {
 } from "./jumpSegments.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
-import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
+import { decodeGameMasterTransportPayload, getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   describeDoubtedForPrompt,
@@ -972,6 +972,14 @@ export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty respons
 const taskIdleTimeoutMs = () =>
   (getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
+// Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
+// diplomacy reading, catalysts their own, everything else the simulation one.
+const difficultyScopeForTask = (taskKey) => {
+  if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) return "diplomacy";
+  if (String(taskKey || "").startsWith("catalyst")) return "catalyst";
+  return "simulation";
+};
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
@@ -981,7 +989,10 @@ const runJsonTask = async (taskKey, {
 }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
-  let systemPrompt = renderTemplate(prompts.tasks[taskKey], {
+  // The GM operational contract is native behaviour: a campaign's frozen
+  // gameMaster prompt would silently roll the transaction semantics back.
+  const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
+  let systemPrompt = renderTemplate(promptTemplate, {
     ...variables,
     ...helperValues,
   });
@@ -989,7 +1000,7 @@ const runJsonTask = async (taskKey, {
   // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
   try {
     const game = await readGameData();
-    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty)}`;
+    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScopeForTask(taskKey))}`;
   } catch {
     // Without game data the task still runs at its default temperament.
   }
@@ -1168,6 +1179,21 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
 [What the Sender Knows]
 You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
 So use the wider picture to choose the sender and the moment — never to give them knowledge they could not have. A polity must not reference, allude to, or react to something said in a conversation it was not part of, and must not echo another leader's turn of phrase. If a private exchange elsewhere is the only reason a message would make sense, that is a message this polity cannot send: pick a different sender, or return chat as null.`;
+  }
+
+  // Event Editor NPC reaction: a one-shot evaluation of one authored event. The
+  // administrator explicitly allowed it; silence stays a valid answer.
+  if (taskKey === "idleDiplomacy") {
+    const eventReaction = normalizeString(variables?.eventDiplomaticReactionContext);
+    if (eventReaction) {
+      systemPrompt = `${systemPrompt}\n\n[Event-triggered reaction — one-shot]\nA human administrator explicitly allowed NPCs to react to the canonical event below. Evaluate THIS event in the current diplomatic world. Silence remains valid and must be chosen when nobody would plausibly contact the player. But do not confuse "minor" with "unworthy of human contact": a friendly ally may simply congratulate the player, express sympathy, show interest, or make a brief good-natured remark even when no treaty, warning, or mechanical consequence is needed. Keep any opener natural and proportionate. Return at most one initiating chat for this one-shot evaluation, and no unit movement.\n\n${eventReaction}`;
+    }
+  }
+
+  // GM territorial semantics on this build: the map shows who HOLDS a region
+  // (regionTransfers), and claims stripe a region without moving the border.
+  if (taskKey === "gameMaster") {
+    systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA capture, occupation, liberation, cession, annexation or restoration changes who holds the region and must be a regionTransfers entry on the event that establishes it. An asserted right to land not held — an irredentist claim, a proclaimed union, a government-in-exile's title — is a regionClaims entry and never moves the border. Use full polity names everywhere. Every ledger operation (warUpdates, relationUpdates, agreementUpdates) must point at a real event of this transaction through eventIndexes, and an event that starts, joins, leaves, pauses, resumes or ends a war carries the same warId and its combatants.`;
   }
 
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
@@ -1404,6 +1430,15 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // The GM answers through a shallow transport (JSON array text per
+      // subsystem); decode it here so schema validation sees the structured
+      // transaction and a broken array is reported like any other invalid payload.
+      let transportDecodeError = "";
+      if (taskKey === "gameMaster" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const decoded = decodeGameMasterTransportPayload(parsed);
+        transportDecodeError = normalizeString(decoded?.error);
+        parsed = decoded?.payload;
+      }
       // A single mistyped optional field must not discard the whole turn to the
       // canned fallback: the model sometimes returns `catalyst` as a prose string
       // instead of the object|null the jump schema requires. Coerce any non-object
@@ -1546,6 +1581,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
           valid: false,
           error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError].filter(Boolean).join(" "),
         };
+      }
+      if (transportDecodeError) {
+        validation = { valid: false, error: transportDecodeError };
       }
       // The flat envelope validates against the schema; everything after this
       // point (the task validator, the caller) reads the three ledger transports.
@@ -2605,7 +2643,9 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
     + `If this is genuinely a new effort, open it with {"op":"create","name":"...","summary":"..."} instead.`;
 };
 
-export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false } = {}) => {
+// captureGuard: the reluctance check below is for turn narration; an administrative
+// GM correction may legitimately mention an annexation without moving a border.
+export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false, captureGuard = true } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
@@ -2633,7 +2673,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
   // and the final attempt always passes through salvage, so it can never cost a
   // finished turn. Only for event-shaped payloads: a $.impacts container has no
   // narration to check.
-  if (strict && Array.isArray(candidate?.events)) {
+  if (strict && captureGuard && Array.isArray(candidate?.events)) {
     const totalTransfers = containers.reduce(
       (sum, { impacts }) => sum + normalizeArray(impacts?.regionTransfers).length,
       0,
@@ -6845,61 +6885,1156 @@ export const retryPendingJumpSegment = async ({ onProgress, signal } = {}) => {
 export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
   simulateTimelineJump({ days, mode: "auto", signal });
 
-export const applyGameMasterCommand = async (requestText) => {
-  beginSimulation();
-  try {
-  const bundle = await readGameStateBundle({ force: true });
-  const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-  const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
-  const { generation, payload } = await runJsonTask("gameMaster", {
-    fallback: () => ({
-      impacts: {
-        polityChanges: [],
-        regionTransfers: [],
-      },
-      summary: "No deterministic GM fallback changes were inferred from the request.",
-    }),
-    userMessage: "Apply the GM request as JSON only.",
-    validatePayload: (candidate, { finalAttempt } = {}) =>
-      validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: !finalAttempt }),
-    variables,
-  });
+// ---- GM Console: previewable, revalidated, audited transactions ------------
+// The AI plans a structured transaction; native code validates it against the
+// live world, shows every operation to the administrator, and only Apply
+// persists exactly that preview. Direct prose execution no longer exists.
+const GAME_MASTER_MODE_SET = new Set(["direct", "exact-event", "world-intervention"]);
 
-  const gmEvent = normalizeGeneratedEvent({
-    date: bundle.game.gameDate,
-    description: normalizeString(payload?.summary),
-    impacts: payload?.impacts,
-    importance: "major",
-    kind: "game-master",
-    notable: true,
-    playerRelated: true,
-    title: "Game master intervention",
-    source: generation.source,
-  });
+const relationPairKeyForHistory = (a, b) => [normalizeString(a), normalizeString(b)]
+  .filter(Boolean)
+  .sort((left, right) => left.localeCompare(right))
+  .join("|");
 
-  if (!gmEvent) {
-    throw new Error("The game master request did not produce a valid change set.");
+const gmPatchHasContent = (patch) => {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  return Object.entries(patch).some(([, value]) => {
+    if (value == null) return false;
+    if (typeof value === "object" && !Array.isArray(value)) return Object.keys(value).length > 0;
+    return true;
+  });
+};
+
+const gameMasterPolityKey = (value) => normalizeString(value).toLowerCase();
+
+const gameMasterCanonicalPolityKey = (token, world) => {
+  const raw = normalizeString(token);
+  if (!raw) return "";
+  const resolution = resolvePolityIdentity(raw, normalizeWorldState(world), {
+    allowUnknown: false,
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return gameMasterPolityKey(normalizeString(resolution?.resolved) || toCountryName(raw) || raw);
+};
+
+const validateGameMasterStatPatches = (patches, world, events) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const eventCount = normalizeArray(events).length;
+
+  for (let index = 0; index < normalizeArray(patches).length; index += 1) {
+    const entry = patches[index];
+    const requested = normalizeString(entry?.country);
+    const resolution = resolvePolityIdentity(requested, normalizedWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    const canonical = normalizeString(resolution?.resolved);
+    if (!canonical) {
+      return `$.countryStatPatches[${index}].country could not resolve existing polity "${requested}".`;
+    }
+    if (!gmPatchHasContent(entry?.patch)) {
+      return `$.countryStatPatches[${index}].patch must contain at least one requested Stats field.`;
+    }
+
+    for (const eventIndex of normalizeArray(entry?.eventIndexes)) {
+      if (!Number.isInteger(Number(eventIndex)) || Number(eventIndex) < 0 || Number(eventIndex) >= eventCount) {
+        return `$.countryStatPatches[${index}].eventIndexes contains an index outside this transaction's events array.`;
+      }
+    }
+
+    const breakdown = entry?.patch?.gdpBreakdown;
+    if (breakdown && typeof breakdown === "object") {
+      const total = Number(breakdown.agriculture) + Number(breakdown.industry) + Number(breakdown.services);
+      if (!Number.isFinite(total) || Math.abs(total - 100) > 0.001) {
+        return `$.countryStatPatches[${index}].patch.gdpBreakdown must total exactly 100.`;
+      }
+    }
+
+    const aggregateRebaseRequested =
+      Number.isFinite(Number(entry?.patch?.population?.total)) ||
+      Number.isFinite(Number(entry?.patch?.economy?.gdp));
+    const sheet = normalizedWorld?.countryStats?.[canonical];
+    const hasComponentBaseline = Array.isArray(sheet?.territorialComponents) && sheet.territorialComponents.length > 0;
+    if (aggregateRebaseRequested && !hasComponentBaseline) {
+      return `$.countryStatPatches[${index}] requests a population/GDP re-baseline for ${canonical}, but that polity has no component-backed canonical Stats baseline yet. Open its Stats sheet first, or patch only descriptive fields, indices, stability or macro rates.`;
+    }
   }
 
-  return applySimulationResult({
-    baseActions: bundle.actions,
-    baseChats: bundle.chats,
-    baseColors,
-    baseEvents: bundle.events,
-    baseGame: bundle.game,
-    baseWorld: bundle.world,
-    result: {
-      catalyst: null,
-      clearActions: false,
-      events: [gmEvent],
-      mode: "game-master",
-      stopDate: bundle.game.gameDate,
-      summary: gmEvent.description,
-      generation,
-    },
+  return "";
+};
+
+const normalizeGameMasterStatPatches = (patches, world) => {
+  const normalizedWorld = normalizeWorldState(world);
+  return normalizeArray(patches).map((entry) => {
+    const resolution = resolvePolityIdentity(entry?.country, normalizedWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    return {
+      ...entry,
+      country: normalizeString(resolution?.resolved) || normalizeString(entry?.country),
+      eventIndexes: normalizeArray(entry?.eventIndexes)
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0),
+    };
   });
+};
+
+// Bind obvious war metadata from the transaction's own linked warUpdates before
+// canonical validation. The AI occasionally emits a correct START/JOIN record
+// linked to event 0 but forgets to repeat that war id on the event. That
+// relationship is deterministic, so preview normalization may repair it without
+// another AI call or any world mutation. For a START event the opposing sides
+// also provide an unambiguous combatants fallback. Ambiguous multi-war links are
+// left untouched so the canonical validator still fails closed.
+const normalizeGameMasterWarEventBindings = (candidate) => {
+  const events = normalizeArray(candidate?.events);
+  const updates = decodeWarUpdates(candidate?.warUpdates);
+  if (!events.length || !updates.length) return candidate;
+
+  const eventIndexById = new Map(
+    events
+      .map((event, index) => [normalizeString(event?.id), index])
+      .filter(([id]) => Boolean(id)),
+  );
+  const updatesByEventIndex = new Map();
+
+  const link = (index, update) => {
+    if (!Number.isInteger(index) || index < 0 || index >= events.length) return;
+    if (!updatesByEventIndex.has(index)) updatesByEventIndex.set(index, []);
+    updatesByEventIndex.get(index).push(update);
+  };
+
+  for (const update of updates) {
+    for (const index of normalizeArray(update?.eventIndexes)) {
+      link(Number(index), update);
+    }
+    for (const eventId of normalizeArray(update?.eventIds)) {
+      const index = eventIndexById.get(normalizeString(eventId));
+      if (Number.isInteger(index)) link(index, update);
+    }
+  }
+
+  for (const [eventIndex, linkedUpdates] of updatesByEventIndex.entries()) {
+    const event = events[eventIndex];
+    if (!event || typeof event !== "object") continue;
+
+    const warIds = [...new Set(
+      linkedUpdates
+        .map((update) => normalizeString(update?.id))
+        .filter(Boolean),
+    )];
+
+    if (!normalizeString(event.warId) && warIds.length === 1) {
+      event.warId = warIds[0];
+    }
+
+    const eventWarId = normalizeString(event.warId);
+    if (!eventWarId || normalizeArray(event.combatants).length >= 2) continue;
+
+    const startUpdate = linkedUpdates.find((update) =>
+      normalizeString(update?.id) === eventWarId &&
+      normalizeString(update?.op).toLowerCase() === "start"
+    );
+    if (!startUpdate) continue;
+
+    const combatants = [...new Set([
+      ...normalizeArray(startUpdate.actors),
+      ...normalizeArray(startUpdate.opponents),
+    ]
+      .map((value) => normalizeString(value))
+      .filter(Boolean))]
+      .slice(0, 8);
+
+    if (combatants.length >= 2) event.combatants = combatants;
+  }
+
+  return candidate;
+};
+
+const normalizeGameMasterIsoDate = (value) => {
+  const raw = normalizeString(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+  const parsed = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10) === raw ? raw : "";
+};
+
+const GAME_MASTER_REQUEST_MONTHS = Object.freeze({
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+});
+
+const gameMasterRequestDateFromParts = (yearValue, monthValue, dayValue) => {
+  const year = Number(yearValue);
+  const day = Number(dayValue);
+  const monthToken = normalizeString(monthValue).toLowerCase();
+  const month = Number.isFinite(Number(monthValue))
+    ? Number(monthValue)
+    : GAME_MASTER_REQUEST_MONTHS[monthToken];
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return "";
+  return normalizeGameMasterIsoDate(
+    `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+  );
+};
+
+export const extractExplicitGameMasterRequestDates = (requestText) => {
+  const request = normalizeString(requestText);
+  if (!request) return [];
+  const dates = new Set();
+  const add = (value) => {
+    const normalized = normalizeGameMasterIsoDate(value);
+    if (normalized) dates.add(normalized);
+  };
+
+  for (const match of request.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
+    add(`${match[1]}-${match[2]}-${match[3]}`);
+  }
+
+  const monthPattern = "January|February|March|April|May|June|July|August|September|Sept|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
+  const dayFirst = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthPattern})\\s*,?\\s+(\\d{4})\\b`, "gi");
+  for (const match of request.matchAll(dayFirst)) {
+    add(gameMasterRequestDateFromParts(match[3], match[2], match[1]));
+  }
+
+  const monthFirst = new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(\\d{4})\\b`, "gi");
+  for (const match of request.matchAll(monthFirst)) {
+    add(gameMasterRequestDateFromParts(match[3], match[1], match[2]));
+  }
+
+  return [...dates].sort();
+};
+
+const validateGameMasterRequestedExactDate = (candidate, { mode, request }) => {
+  if (mode !== "exact-event") return "";
+  const requestedDates = extractExplicitGameMasterRequestDates(request);
+  // Only enforce when the administrator supplied one unambiguous explicit date.
+  // Requests that mention several historical dates need semantic interpretation.
+  if (requestedDates.length !== 1) return "";
+
+  const expectedDate = requestedDates[0];
+  const eventDate = normalizeGameMasterIsoDate(normalizeArray(candidate?.events)[0]?.date);
+  if (eventDate === expectedDate) return "";
+
+  return `The administrator explicitly requested the Exact Event date ${expectedDate}, but $.events[0].date is ${eventDate || "blank/invalid"}. Exact Event preview must preserve the requested date.`;
+};
+
+const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
+  const event = normalizeArray(candidate?.events)[eventIndex];
+  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
+  for (const field of [
+    "regionTransfers",
+    "regionClaims",
+    "polityChanges",
+    "createdChats",
+    "unitOps",
+    "markerOps",
+    "projectOps",
+  ]) {
+    if (normalizeArray(impacts[field]).length > 0) return true;
+  }
+
+  const linked = (entries) => normalizeArray(entries).some((entry) =>
+    normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex));
+
+  return linked(candidate?.countryStatPatches)
+    || linked(candidate?.warUpdates)
+    || linked(candidate?.relationUpdates)
+    || linked(candidate?.agreementUpdates);
+};
+
+const validateGameMasterChronology = (candidate, game) => {
+  const currentDate = normalizeGameMasterIsoDate(game?.gameDate || game?.startDate);
+  if (!currentDate) return "";
+
+  const events = normalizeArray(candidate?.events);
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const eventDate = normalizeGameMasterIsoDate(events[eventIndex]?.date);
+    if (!eventDate || eventDate <= currentDate) continue;
+    if (!gameMasterEventHasCanonicalEffects(candidate, eventIndex)) continue;
+
+    return `$.events[${eventIndex}] is dated ${eventDate}, after the current game date ${currentDate}, but it establishes canonical state changes. GM Apply never advances time, so date it on or before ${currentDate} or drop its structured effects.`;
+  }
+
+  return "";
+};
+
+const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, request = "" }) => {
+  if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
+  if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
+
+  // Preview normalization only: this mutates the in-memory candidate the
+  // administrator is about to inspect; no save/world writes happen here.
+  normalizeGameMasterWarEventBindings(candidate);
+
+  if (normalizeString(candidate.mode) !== mode) {
+    return `$.mode must echo the selected GM mode "${mode}".`;
+  }
+
+  const events = normalizeArray(candidate.events);
+  if (mode === "exact-event" && events.length !== 1) {
+    return `Exact Event mode requires exactly one event; received ${events.length}.`;
+  }
+  if (mode === "world-intervention" && events.length === 0) {
+    return "World Intervention mode requires at least one authored event so the intervention has canonical historical context.";
+  }
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!normalizeString(event?.date)) return `$.events[${index}].date must not be blank.`;
+    if (!normalizeString(event?.title)) return `$.events[${index}].title must not be blank.`;
+    if (!normalizeString(event?.description)) return `$.events[${index}].description must not be blank.`;
+  }
+
+  const requestedDateError = validateGameMasterRequestedExactDate(candidate, { mode, request });
+  if (requestedDateError) return requestedDateError;
+
+  const chronologyError = validateGameMasterChronology(candidate, game);
+  if (chronologyError) return chronologyError;
+
+  // Resolve/validate map, unit, marker and chat operations now, while this is
+  // still a preview. This may conservatively resolve a grounded place label to
+  // an exact map region, but it never writes world state.
+  const worldChangeError = await validateGeneratedWorldChanges(candidate, world, { strictTransfers: true, captureGuard: false });
+  if (worldChangeError) return worldChangeError;
+
+  const statError = validateGameMasterStatPatches(candidate.countryStatPatches, world, candidate.events);
+  if (statError) return statError;
+
+  const normalizedEvents = normalizeArray(candidate.events)
+    .map((entry, index) => normalizeGeneratedEvent({
+      ...entry,
+      source: entry?.source || "game-master-preview",
+    }, index))
+    .filter(Boolean);
+
+  const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), normalizedEvents);
+  const warError = validateCanonicalWarEvents({
+    events: normalizedEvents,
+    updates: warUpdates,
+    world,
+  });
+  if (warError) return `[canonical war-state] ${warError}`;
+
+  const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), normalizedEvents);
+  const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), normalizedEvents);
+  const diplomaticError = validateDiplomaticLedgerPayload({
+    events: normalizedEvents,
+    relationUpdates,
+    agreementUpdates,
+  }, { world });
+  if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
+
+  return "";
+};
+
+// GM Apply must never report success merely because the common mutation seam
+// returned an object. Verify every previewed territorial consequence against the
+// in-memory post-apply world before ANY persistence happens.
+const verifyGameMasterTerritoryPostconditions = (events, world) => {
+  const normalizedWorld = normalizeWorldState(world);
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(events).length; eventIndex += 1) {
+    const event = normalizeArray(events)[eventIndex];
+    const impacts = event?.impacts || {};
+
+    for (let transferIndex = 0; transferIndex < normalizeArray(impacts.regionTransfers).length; transferIndex += 1) {
+      const transfer = normalizeArray(impacts.regionTransfers)[transferIndex];
+      // A whole-country transfer names the losing polity, not one region; its
+      // regions were rewritten individually by the impact seam.
+      if (transfer?.wholeCountry) continue;
+      const regionId = normalizeString(transfer?.regionId);
+      const expected = gameMasterCanonicalPolityKey(transfer?.toCode, normalizedWorld);
+      const actual = gameMasterCanonicalPolityKey(
+        normalizedWorld.regionOwnershipOverrides?.[regionId],
+        normalizedWorld,
+      );
+      if (!regionId || !expected || actual !== expected) {
+        return `territorial operation ${eventIndex}:${transferIndex} did not take effect for ${regionId || "unknown region"} (expected ${normalizeString(transfer?.toCode) || "target"}, found ${normalizeString(normalizedWorld.regionOwnershipOverrides?.[regionId]) || "no override"}).`;
+      }
+    }
+
+    for (let claimIndex = 0; claimIndex < normalizeArray(impacts.regionClaims).length; claimIndex += 1) {
+      const claim = normalizeArray(impacts.regionClaims)[claimIndex];
+      const regionId = normalizeString(claim?.regionId);
+      const expected = gameMasterCanonicalPolityKey(claim?.claimantCode || claim?.claimant, normalizedWorld);
+      if (!regionId || !expected) {
+        return `claim operation ${eventIndex}:${claimIndex} has no canonical region id or claimant after preview validation.`;
+      }
+      const claimants = normalizeArray(normalizedWorld.regionClaimants?.[regionId])
+        .map((value) => gameMasterCanonicalPolityKey(value, normalizedWorld))
+        .filter(Boolean);
+      const present = claimants.includes(expected);
+      if (claim?.drop ? present : !present) {
+        return `claim operation ${eventIndex}:${claimIndex} did not take effect for ${regionId} (${claim?.drop ? "claim still present" : "claim missing"} for ${normalizeString(claim?.claimantCode || claim?.claimant)}).`;
+      }
+    }
+  }
+
+  return "";
+};
+
+const hashGameMasterText = (value) => {
+  let hash = 2166136261;
+  const text = String(value ?? "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const createGameMasterTransactionId = () => {
+  const random = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+    : Math.random().toString(36).slice(2, 14);
+  return `gm-${Date.now().toString(36)}-${random || "transaction"}`;
+};
+
+// Fingerprint only canonical state the GM planner is allowed to mutate/read while
+// authoring a transaction. If any of it changes between Preview and Apply, the
+// transaction fails closed and the administrator must regenerate instead of having
+// native code silently reinterpret an old preview against a new world.
+const gameMasterStateFingerprint = ({ game = {}, world = {}, events = [], colors = {} } = {}) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const relevant = {
+    game: {
+      country: normalizeString(game?.country),
+      gameDate: normalizeString(game?.gameDate),
+      round: Number(game?.round) || 0,
+      startDate: normalizeString(game?.startDate),
+    },
+    colors,
+    events: normalizeEvents(events).map((event) => ({
+      id: event.id,
+      date: event.date,
+      title: event.title,
+      description: event.description,
+      impacts: event.impacts,
+      warId: event.warId,
+      combatants: event.combatants,
+    })),
+    world: {
+      polityOverrides: normalizedWorld.polityOverrides,
+      regionOwnershipOverrides: normalizedWorld.regionOwnershipOverrides,
+      regionClaimants: normalizedWorld.regionClaimants,
+      countryStats: normalizedWorld.countryStats,
+      countryTags: normalizedWorld.countryTags,
+      internationalReputation: normalizedWorld.internationalReputation,
+      units: normalizedWorld.units,
+      markers: normalizedWorld.markers,
+      cityRenames: normalizedWorld.cityRenames,
+      wars: normalizedWorld.wars,
+      relations: normalizedWorld.relations,
+      agreements: normalizedWorld.agreements,
+    },
+  };
+  return hashGameMasterText(JSON.stringify(relevant));
+};
+
+const gameMasterTransactionCandidate = (transaction) => ({
+  mode: normalizeString(transaction?.mode),
+  summary: normalizeString(transaction?.summary),
+  events: cloneValue(normalizeArray(transaction?.events)),
+  countryStatPatches: cloneValue(normalizeArray(transaction?.countryStatPatches)),
+  warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
+  relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
+  agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
+  diplomaticOutreach: cloneValue(normalizeArray(transaction?.diplomaticOutreach)),
+});
+
+const gameMasterAcceptedOperationLabels = (transaction) => {
+  const labels = [];
+  for (const [eventIndex, event] of normalizeArray(transaction?.events).entries()) {
+    labels.push(`event:${eventIndex}:${normalizeString(event?.id)}`);
+    const impacts = event?.impacts || {};
+    for (const [field, prefix] of [
+      ["regionTransfers", "territory"],
+      ["regionClaims", "claim"],
+      ["polityChanges", "polity"],
+      ["unitOps", "unit"],
+      ["markerOps", "marker"],
+      ["createdChats", "event-chat"],
+    ]) {
+      normalizeArray(impacts[field]).forEach((_, index) => labels.push(`${prefix}:${eventIndex}:${index}`));
+    }
+  }
+  normalizeArray(transaction?.countryStatPatches).forEach((entry, index) => labels.push(`stats:${index}:${normalizeString(entry?.country)}`));
+  normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
+  normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.diplomaticOutreach).forEach((_, index) => labels.push(`outreach:${index}`));
+  return labels.filter(Boolean).slice(0, 128);
+};
+
+const gameMasterHistoryEntry = ({ transaction, game, eventIds, summary, transactionId }) => {
+  const dates = normalizeArray(transaction?.events).map((event) => normalizeString(event?.date)).filter(Boolean).sort();
+  const fallbackDate = normalizeString(game?.gameDate || game?.startDate);
+  const fromDate = dates[0] || fallbackDate;
+  const toDate = dates.at(-1) || fallbackDate;
+  return {
+    catalyst: null,
+    date: toDate,
+    eventIds,
+    fallbackReason: "",
+    fromDate,
+    mode: "game-master",
+    plannedActions: [],
+    round: Math.max(0, Math.trunc(Number(game?.round) || 0)),
+    source: "gm-console",
+    summary: normalizeString(summary) || "GM Console transaction applied.",
+    toDate,
+    transactionId,
+  };
+};
+
+const insertGameMasterHistoryEntry = (historyInput, entry) => {
+  const history = [...normalizeArray(historyInput)];
+  const entryDate = normalizeString(entry?.toDate || entry?.date || entry?.fromDate);
+  let insertAt = history.findIndex((item) => {
+    const itemDate = normalizeString(item?.toDate || item?.date || item?.fromDate);
+    return entryDate && itemDate && entryDate > itemDate;
+  });
+  if (insertAt < 0) insertAt = history.length;
+  history.splice(insertAt, 0, entry);
+  return history;
+};
+
+// GM-authored timeline records are only UI/history links; the canonical event ledger
+// remains the source of truth. If an Event Editor deletion removed the linked event,
+// discard the now-orphaned GM history record so the Events panel cannot get stuck on
+// an empty, stale record (for example an old future-dated GM test event).
+const pruneOrphanedGameMasterHistory = (historyInput, eventsInput) => {
+  const knownEventIds = new Set(
+    normalizeArray(eventsInput)
+      .map((event) => normalizeString(event?.id))
+      .filter(Boolean),
+  );
+
+  return normalizeArray(historyInput)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      const source = normalizeString(entry?.source).toLowerCase();
+      const mode = normalizeString(entry?.mode).toLowerCase();
+      if (source !== "gm-console" && mode !== "game-master") return entry;
+
+      const before = normalizeArray(entry?.eventIds).map(normalizeString).filter(Boolean);
+      const after = before.filter((eventId) => knownEventIds.has(eventId));
+      if (after.length === 0) return null;
+      if (after.length === before.length) return entry;
+      return { ...entry, eventIds: after };
+    })
+    .filter(Boolean);
+};
+
+// Generate and validate a GM transaction WITHOUT persisting it. Preview receives
+// stable transaction/event ids now so Apply persists exactly the object the
+// administrator inspected; Apply never asks the AI to reinterpret it.
+export const previewGameMasterCommand = async (requestText, { mode = "world-intervention" } = {}) => {
+  const request = normalizeString(requestText);
+  const selectedMode = normalizeString(mode).toLowerCase();
+  if (!request) throw new Error("Enter a GM request first.");
+  if (!GAME_MASTER_MODE_SET.has(selectedMode)) throw new Error(`Unsupported GM mode "${selectedMode}".`);
+
+  beginSimulation();
+  try {
+    const [bundle, colors] = await Promise.all([
+      readGameStateBundle({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const variables = {
+      ...(await buildTemplateVariables(bundle, { taskKey: "gameMaster", gameMasterRequest: request })),
+      gameMasterMode: selectedMode,
+    };
+
+    const { generation, payload } = await runJsonTask("gameMaster", {
+      userMessage: `Generate a ${selectedMode} GM transaction preview for the administrator request. Do not apply anything.`,
+      validatePayload: (candidate) => validateGameMasterPreviewPayload(candidate, {
+        mode: selectedMode,
+        world: bundle.world,
+        game: bundle.game,
+        request,
+      }),
+      variables,
+    });
+
+    const transactionId = createGameMasterTransactionId();
+    const events = normalizeArray(payload?.events)
+      .map((entry, index) => normalizeGeneratedEvent({
+        ...entry,
+        id: `event-manual-${transactionId}-${index + 1}`,
+        source: "game-master",
+      }, index))
+      .filter(Boolean);
+    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
+    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
+    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
+    const countryStatPatches = normalizeGameMasterStatPatches(payload?.countryStatPatches, bundle.world);
+
+    return {
+      id: transactionId,
+      mode: selectedMode,
+      request,
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      baseFingerprint: gameMasterStateFingerprint({ game: bundle.game, world: bundle.world, events: bundle.events, colors }),
+      summary: normalizeString(payload?.summary),
+      transaction: {
+        id: transactionId,
+        mode: selectedMode,
+        summary: normalizeString(payload?.summary),
+        events,
+        countryStatPatches,
+        warUpdates,
+        relationUpdates,
+        agreementUpdates,
+        diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
+      },
+      generation,
+      previewOnly: true,
+    };
   } finally {
     endSimulation();
+  }
+};
+
+// Apply the EXACT already-previewed transaction. There is no AI call, no turn
+// simulation, no date advance and no round increment. The preview is revalidated
+// against a freshly-read canonical world immediately before any write.
+export const applyGameMasterPreview = async (preview) => {
+  const transactionId = normalizeString(preview?.id || preview?.transaction?.id);
+  const mode = normalizeString(preview?.mode || preview?.transaction?.mode).toLowerCase();
+  const request = normalizeString(preview?.request);
+  if (!transactionId || !preview?.transaction || typeof preview.transaction !== "object") {
+    throw new Error("This GM preview is missing its transaction identity. Generate a fresh preview.");
+  }
+  if (!GAME_MASTER_MODE_SET.has(mode)) throw new Error(`Unsupported GM mode "${mode}".`);
+  if (!normalizeString(preview?.baseFingerprint)) {
+    throw new Error("This preview carries no safety fingerprint. Generate a fresh preview before applying.");
+  }
+
+  beginSimulation();
+  try {
+    const [bundle, colors] = await Promise.all([
+      readGameStateBundle({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const liveWorld = normalizeWorldState(bundle.world);
+
+    if (normalizeArray(liveWorld.gmAudit).some((entry) => normalizeString(entry?.transactionId) === transactionId)) {
+      throw new Error(`GM transaction ${transactionId} has already been applied.`);
+    }
+
+    const liveFingerprint = gameMasterStateFingerprint({ game: bundle.game, world: liveWorld, events: bundle.events, colors });
+    if (liveFingerprint !== normalizeString(preview.baseFingerprint)) {
+      throw new Error("Canonical state changed after this preview was generated. Nothing was applied; regenerate the preview against the current world.");
+    }
+
+    const transaction = cloneValue(preview.transaction);
+    const candidate = gameMasterTransactionCandidate(transaction);
+    const candidateBeforeValidation = JSON.stringify(candidate);
+    const validationError = await validateGameMasterPreviewPayload(candidate, {
+      mode,
+      world: liveWorld,
+      game: bundle.game,
+      request: preview.request,
+    });
+    if (validationError) throw new Error(`GM transaction is no longer valid: ${validationError}`);
+    if (JSON.stringify(candidate) !== candidateBeforeValidation) {
+      throw new Error("Current canonical validation would reinterpret this preview. Nothing was applied; regenerate it so the changed operation is visible before approval.");
+    }
+
+    const events = normalizeArray(transaction.events).map((event) => cloneValue(event));
+    const priorEvents = normalizeEvents(bundle.events);
+    const freshEvents = dedupeGeneratedEvents(priorEvents, events);
+    if (freshEvents.length !== events.length) {
+      throw new Error("One or more authored GM events duplicate existing canonical history. Nothing was applied; regenerate or make the event wording/date explicit.");
+    }
+    const existingIds = new Set(priorEvents.map((event) => normalizeString(event?.id)).filter(Boolean));
+    const duplicateId = events.find((event) => existingIds.has(normalizeString(event?.id)));
+    if (duplicateId) throw new Error(`Authored GM event id ${duplicateId.id} already exists. Nothing was applied; regenerate the preview.`);
+
+    const impactMerge = applyEventImpactsToWorld({
+      colors,
+      events,
+      round: bundle.game.round || 0,
+      world: liveWorld,
+    });
+    let nextWorld = impactMerge.world;
+    const nextColors = impactMerge.colors;
+
+    const territoryPostconditionError = verifyGameMasterTerritoryPostconditions(events, nextWorld);
+    if (territoryPostconditionError) {
+      throw new Error(
+        `A previewed territorial operation failed during the in-memory Apply: ${territoryPostconditionError} Nothing was persisted.`,
+      );
+    }
+
+    const statCountries = [];
+    for (const entry of normalizeArray(transaction.countryStatPatches)) {
+      const country = normalizeString(entry?.country);
+      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch));
+      if (!nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
+      statCountries.push(country);
+      const reputation = Number(nextSheet?.indices?.internationalReputation);
+      if (Number.isFinite(reputation)) {
+        nextWorld.internationalReputation = {
+          ...(nextWorld.internationalReputation || {}),
+          [country]: Math.max(0, Math.min(100, Math.round(reputation))),
+        };
+      }
+    }
+
+    if (statCountries.length) {
+      nextWorld = captureCountryStatsHistory(nextWorld, {
+        date: bundle.game.gameDate || bundle.game.startDate || "",
+        round: bundle.game.round || 0,
+      });
+    }
+
+    const warMerge = applyWarUpdates({
+      world: nextWorld,
+      updates: normalizeArray(transaction.warUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (warMerge.appliedIds.length !== normalizeArray(transaction.warUpdates).length) {
+      throw new Error("A canonical war operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = warMerge.world;
+
+    const diplomaticMerge = applyDiplomaticUpdates({
+      world: nextWorld,
+      relationUpdates: normalizeArray(transaction.relationUpdates),
+      agreementUpdates: normalizeArray(transaction.agreementUpdates),
+      events,
+      stopDate: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+    });
+    if (diplomaticMerge.appliedRelationIds.length !== normalizeArray(transaction.relationUpdates).length) {
+      throw new Error("A canonical relation operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    if (diplomaticMerge.appliedAgreementIds.length !== normalizeArray(transaction.agreementUpdates).length) {
+      throw new Error("A canonical agreement operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    nextWorld = diplomaticMerge.world;
+
+    const generatedChats = [];
+    for (const event of events) {
+      for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
+        const nextChat = await buildGeneratedChat(createdChat, event.id, nextWorld, {
+          fallbackTitle: event.title,
+          playerName: bundle.game.country,
+        });
+        if (!nextChat) throw new Error(`A diplomatic chat linked to event "${event.title}" could not be built. Nothing was persisted.`);
+        generatedChats.unshift(nextChat);
+      }
+    }
+    for (const chatLike of normalizeArray(transaction.diplomaticOutreach)) {
+      const nextChat = await buildGeneratedChat({ ...chatLike, source: "gm-outreach" }, "", nextWorld, {
+        playerName: bundle.game.country,
+      });
+      if (!nextChat) throw new Error("A GM diplomatic outreach operation could not be built. Nothing was persisted.");
+      generatedChats.unshift(nextChat);
+    }
+
+    // A note to a polity the player already talks to lands in that thread; only
+    // a genuinely new participant set opens a fresh chat (the same fold every
+    // generated chat goes through).
+    let chatsToWrite = null;
+    if (generatedChats.length) {
+      const liveChats = normalizeChats(await readChatsState({ force: true }));
+      chatsToWrite = foldGeneratedChatsIntoStorage(liveChats, generatedChats, {
+        stampTime: bundle.game.gameDate || bundle.game.startDate || "",
+      });
+    }
+
+    const nextEvents = [...priorEvents, ...events];
+    // Repair orphaned GM timeline links before inserting this transaction. This is
+    // intentionally limited to GM-owned history records and never touches ordinary
+    // turn history.
+    nextWorld.simulationHistory = pruneOrphanedGameMasterHistory(
+      nextWorld.simulationHistory,
+      nextEvents,
+    );
+    const eventIds = events.map((event) => normalizeString(event?.id)).filter(Boolean);
+    const warIds = [...new Set(warMerge.appliedIds.map(normalizeString).filter(Boolean))];
+    const relationIds = [...new Set(diplomaticMerge.appliedRelationIds.map(normalizeString).filter(Boolean))];
+    const agreementIds = [...new Set(diplomaticMerge.appliedAgreementIds.map(normalizeString).filter(Boolean))];
+    const chatIds = generatedChats.map((chat) => normalizeString(chat?.id)).filter(Boolean);
+    const summary = normalizeString(transaction.summary || preview.summary);
+
+    if (eventIds.length) {
+      nextWorld.simulationHistory = insertGameMasterHistoryEntry(
+        nextWorld.simulationHistory,
+        gameMasterHistoryEntry({ transaction, game: bundle.game, eventIds, summary, transactionId }),
+      );
+    }
+
+    const auditRecord = {
+      id: `audit-${transactionId}`,
+      transactionId,
+      appliedAt: new Date().toISOString(),
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      mode,
+      request,
+      summary,
+      source: "gm-console",
+      status: "applied",
+      transaction: cloneValue(transaction),
+      acceptedOperations: gameMasterAcceptedOperationLabels(transaction),
+      rejectedOperations: [],
+      eventIds,
+      warIds,
+      relationIds,
+      agreementIds,
+      chatIds,
+      statCountries: [...new Set(statCountries.filter(Boolean))],
+    };
+    nextWorld.gmAudit = [auditRecord, ...normalizeArray(nextWorld.gmAudit)].slice(0, 64);
+
+    // Canonical persistence only. Deliberately omit actions/game writes, rollback
+    // snapshots and oh:turn-complete: a GM edit is administrative authority, not a turn.
+    // Avoid rewriting unrelated assets when this transaction did not touch them.
+    const touchedEvents = events.length > 0;
+    const touchedChats = generatedChats.length > 0;
+    const touchedColors = JSON.stringify(nextColors) !== JSON.stringify(colors);
+    const writes = [writeWorldState(nextWorld)];
+    if (touchedEvents) writes.push(writeEventsState(nextEvents));
+    if (touchedChats) writes.push(writeChatsState(chatsToWrite));
+    if (touchedColors) writes.push(writeJson(JSON_URLS.colors, nextColors, { pretty: true }));
+
+    try {
+      await Promise.all(writes);
+    } catch (error) {
+      // Storage is file-based rather than transactional. Restore every asset this GM
+      // transaction may have touched so a single failed write does not leave half an
+      // intervention in canon. Best-effort rollback errors are logged separately.
+      const rollbackWrites = [writeWorldState(bundle.world)];
+      if (touchedEvents) rollbackWrites.push(writeEventsState(bundle.events));
+      if (touchedChats) rollbackWrites.push(writeChatsState(bundle.chats));
+      if (touchedColors) rollbackWrites.push(writeJson(JSON_URLS.colors, colors, { pretty: true }));
+      const rollbackResults = await Promise.allSettled(rollbackWrites);
+      const rollbackFailed = rollbackResults.some((result) => result.status === "rejected");
+      if (rollbackFailed) console.error("[GM] persistence rollback was incomplete.", rollbackResults);
+      throw new Error(
+        rollbackFailed
+          ? `GM persistence failed and rollback was incomplete: ${error?.message || error}`
+          : `GM persistence failed; the pre-apply state was restored: ${error?.message || error}`,
+      );
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:gm-transaction-applied", { detail: { transactionId } }));
+      if (events.some((event) => normalizeArray(event?.impacts?.markerOps).length > 0)) {
+        window.dispatchEvent(new Event("oh:cities-updated"));
+      }
+    }
+
+    return {
+      applied: true,
+      transactionId,
+      auditId: auditRecord.id,
+      mode,
+      date: bundle.game.gameDate || bundle.game.startDate || "",
+      round: bundle.game.round || 0,
+      summary,
+      eventIds,
+      warIds,
+      relationIds,
+      agreementIds,
+      chatIds,
+      statCountries: auditRecord.statCountries,
+    };
+  } finally {
+    endSimulation();
+  }
+};
+
+// Kept for stale callers, but direct prose execution remains forbidden. The UI must
+// always generate and expose a preview before any canonical write can happen.
+export const applyGameMasterCommand = async () => {
+  throw new Error("Direct GM execution is disabled. Generate a preview and apply that exact transaction through the GM Console.");
+};
+
+// ---- Event Editor diplomatic reaction queue ---------------------------------
+// A manually-authored event can optionally invite ONE autonomous NPC reaction.
+// The editor commits the event immediately, then stores a real-time grace deadline
+// in world.pendingEventOutreach. This worker evaluates only when the deadline is
+// due, re-reads the exact event before AND after the model call, and routes any
+// resulting message through the same chat fold as normal gameplay.
+const eventReactionKey = (event) => [
+  normalizeString(event?.id),
+  normalizeString(event?.createdAt),
+].join("");
+
+const eventReactionQueueKey = (entry) => [
+  normalizeString(entry?.sourceEventId),
+  normalizeString(entry?.sourceEventCreatedAt),
+].join("");
+
+const eventReactionPromptText = (event, playerName) => {
+  const quote = event?.quote?.text
+    ? `\nQuote: “${normalizeString(event.quote.text)}”${event.quote.speaker ? ` — ${normalizeString(event.quote.speaker)}` : ""}`
+    : "";
+  return [
+    `PLAYER POLITY: ${normalizeString(playerName) || "Unknown"}`,
+    `EVENT DATE: ${normalizeString(event?.date) || "Undated"}`,
+    `EVENT TITLE: ${normalizeString(event?.title) || "Untitled"}`,
+    `EVENT KIND: ${normalizeString(event?.kind) || "world"}`,
+    `EVENT IMPORTANCE: ${normalizeString(event?.importance) || "minor"}`,
+    `PLAYER-RELATED FLAG: ${event?.playerRelated ? "yes" : "no"}`,
+    `EVENT DESCRIPTION: ${normalizeString(event?.description) || "No description."}${quote}`,
+  ].join("\n");
+};
+
+const eventReactionDueMs = (entry) => {
+  const ms = Date.parse(normalizeString(entry?.deliverAfter));
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const chatParticipantNamesKey = (chat) => normalizeArray(chat?.countries)
+  .map((country) => normalizeString(country?.name || country?.code || country).toLowerCase())
+  .filter(Boolean)
+  .sort()
+  .join("|");
+
+let eventReactionInFlight = false;
+
+export const processPendingEventOutreach = async ({ debug = false } = {}) => {
+  if (eventReactionInFlight) return debug ? { processed: 0, reason: "already-in-flight", retryAfterMs: 1000 } : null;
+  if (isSimulationBusy()) return debug ? { processed: 0, reason: "simulation-busy", retryAfterMs: 5000 } : null;
+
+  eventReactionInFlight = true;
+  try {
+    const bundle = await readGameStateBundle({ force: true });
+    const now = Date.now();
+    const queue = normalizeArray(bundle.world?.pendingEventOutreach)
+      .slice()
+      .sort((a, b) => eventReactionDueMs(a) - eventReactionDueMs(b));
+    const due = queue.find((entry) => eventReactionDueMs(entry) <= now);
+
+    if (!due) {
+      const nextDue = queue.length ? eventReactionDueMs(queue[0]) : 0;
+      return debug ? {
+        processed: 0,
+        reason: queue.length ? "not-due" : "empty",
+        nextDueAt: nextDue ? new Date(nextDue).toISOString() : "",
+      } : null;
+    }
+
+    const dueKey = eventReactionQueueKey(due);
+    const dueQueueId = normalizeString(due?.id);
+    const findCurrentEvent = (events) => normalizeArray(events).find((event) => eventReactionKey(event) === dueKey);
+    let event = findCurrentEvent(bundle.events);
+
+    const removeQueueEntry = async (worldInput, { events = null, reactionResult = "", chatId = "" } = {}) => {
+      const nextWorld = {
+        ...worldInput,
+        pendingEventOutreach: normalizeArray(worldInput?.pendingEventOutreach)
+          .filter((entry) => normalizeString(entry?.id) !== dueQueueId),
+      };
+      await writeWorldState(nextWorld);
+
+      if (event && events && reactionResult) {
+        const updatedEvents = normalizeArray(events).map((candidate) =>
+          eventReactionKey(candidate) === dueKey
+            ? {
+                ...candidate,
+                npcReaction: {
+                  ...(candidate?.npcReaction || {}),
+                  enabled: Boolean(candidate?.npcReaction?.enabled),
+                  evaluatedAt: new Date().toISOString(),
+                  result: reactionResult,
+                  ...(chatId ? { chatId } : {}),
+                },
+              }
+            : candidate
+        );
+        await writeEventsState(updatedEvents);
+      }
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-evaluated", {
+          detail: { sourceEventId: due.sourceEventId, result: reactionResult || "cancelled", chatId },
+        }));
+      }
+    };
+
+    if (!event || !event?.npcReaction?.enabled) {
+      await removeQueueEntry(bundle.world);
+      return debug ? { processed: 1, reason: event ? "reaction-disabled" : "event-missing" } : null;
+    }
+
+    const eventSignature = (entry) => JSON.stringify({
+      date: entry.date,
+      title: entry.title,
+      description: entry.description,
+      quote: entry.quote || null,
+      kind: entry.kind,
+      importance: entry.importance,
+      playerRelated: Boolean(entry.playerRelated),
+    });
+    const beforeSignature = eventSignature(event);
+
+    const openChats = normalizeChats(bundle.chats);
+    const conversationContext = [
+      "",
+      "These are the conversations already open with the player, oldest message first:",
+      "",
+      renderOpenChatsForPrompt(openChats),
+      "",
+      "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing message.",
+    ].join("\n");
+
+    const variables = {
+      ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy" })),
+      idleChatAllowed: "yes",
+      eventDiplomaticReactionContext: eventReactionPromptText(event, bundle.game?.country),
+    };
+
+    let payload;
+    try {
+      ({ payload } = await runJsonTask("idleDiplomacy", {
+        userMessage:
+          "Evaluate the supplied canonical event once. Decide whether one AI-controlled polity or a genuinely joint small group would naturally send the player a diplomatic note about it right now, or whether silence is the natural outcome. Return unitOps as an empty array and no sighting."
+          + conversationContext
+          + "\n\nReturn JSON only.",
+        validatePayload: async (candidate, { finalAttempt } = {}) => {
+          if (candidate?.chat == null) return "";
+          const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
+          if (countries.length === 0) {
+            return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
+          }
+          return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
+        },
+        variables,
+      }));
+    } catch (error) {
+      // Keep the request pending, but back off instead of hot-looping a dead provider.
+      const latestWorld = await readWorldState({ force: true });
+      const latestQueue = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? {
+              ...entry,
+              attempts: Number(entry?.attempts || 0) + 1,
+              deliverAfter: new Date(Date.now() + 30000).toISOString(),
+              lastError: normalizeString(error?.message),
+            }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: latestQueue });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      }
+      return debug ? { processed: 0, reason: "ai-error", retryAfterMs: 30000, message: normalizeString(error?.message) } : null;
+    }
+
+    // The grace window extends through generation in practice: if the admin edits,
+    // disables, or deletes the event while the model is thinking, do NOT send a stale
+    // message. Re-evaluate the latest edit instead, or cancel if the event vanished.
+    const [latestWorld, latestEvents] = await Promise.all([
+      readWorldState({ force: true }),
+      readEventsState({ force: true }),
+    ]);
+    const queueStillPending = normalizeArray(latestWorld.pendingEventOutreach)
+      .some((entry) => normalizeString(entry?.id) === dueQueueId);
+    const latestEvent = findCurrentEvent(latestEvents);
+
+    if (!queueStillPending || !latestEvent || !latestEvent?.npcReaction?.enabled) {
+      if (queueStillPending) await removeQueueEntry(latestWorld);
+      return debug ? { processed: 1, reason: "cancelled-during-generation" } : null;
+    }
+
+    if (eventSignature(latestEvent) !== beforeSignature) {
+      const rescheduled = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? { ...entry, deliverAfter: new Date(Date.now() + 1000).toISOString(), lastError: "" }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: rescheduled });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      }
+      return debug ? { processed: 0, reason: "event-changed-requeue", retryAfterMs: 1000 } : null;
+    }
+
+    event = latestEvent;
+
+    if (!payload?.chat) {
+      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "model-chose-silence" } : null;
+    }
+
+    if (isSimulationBusy()) {
+      const deferred = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId
+          ? { ...entry, deliverAfter: new Date(Date.now() + 5000).toISOString() }
+          : entry
+      );
+      await writeWorldState({ ...latestWorld, pendingEventOutreach: deferred });
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
+      return debug ? { processed: 0, reason: "simulation-started-during-generation", retryAfterMs: 5000 } : null;
+    }
+
+    const built = await buildGeneratedChat(
+      { ...payload.chat, source: "event-reaction" },
+      event.id,
+      latestWorld,
+      { fallbackTitle: event.title, playerName: bundle.game?.country },
+    );
+
+    if (!built) {
+      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "generated-chat-invalid-treated-as-silence" } : null;
+    }
+
+    const messageDate = normalizeString(event.date) || normalizeString(bundle.game?.gameDate);
+    const currentChats = normalizeChats(await readChatsState({ force: true }));
+    const nextChats = foldGeneratedChatsIntoStorage(currentChats, [built], { stampTime: messageDate });
+    await writeChatsState(nextChats);
+
+    const builtParticipantKey = chatParticipantNamesKey(built);
+    const mergedChat = builtParticipantKey
+      ? nextChats.find((chat) =>
+          normalizeString(chat?.status).toLowerCase() !== "closed" &&
+          chatParticipantNamesKey(chat) === builtParticipantKey)
+      : null;
+    const actualChatId = normalizeString(mergedChat?.id || built.id);
+
+    await removeQueueEntry(latestWorld, {
+      events: latestEvents,
+      reactionResult: "sent",
+      chatId: actualChatId,
+    });
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:diplomacy-chats-updated", {
+        detail: { source: "event-reaction", linkedEventId: event.id, chatId: actualChatId },
+      }));
+    }
+
+    return built;
+  } finally {
+    eventReactionInFlight = false;
   }
 };
 

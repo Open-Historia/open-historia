@@ -315,16 +315,17 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 
 | Tool id | Does | Writes / calls |
 |---|---|---|
-| `master-ai` | Free-text world command | `applyGameMasterCommand(text)` (`src/Game/AI/gameplay.js`) — records a game-master event |
+| `master-ai` | **GM Console**: a natural-language request in one of three modes (direct correction, exact event, world intervention) is planned by the AI into a structured transaction, shown operation by operation, and only then applied | `previewGameMasterCommand(text, { mode })` → `applyGameMasterPreview(preview)` (`src/Game/AI/gameplay.js`). Apply revalidates the preview against a fresh world, fails closed if canonical state changed since the preview (fingerprint), writes through the event-impact seam plus the war/diplomatic ledgers and the Stats seam, links the events into the Events panel, and records `world.gmAudit`. Direct prose execution (`applyGameMasterCommand`) is disabled. |
+| `events` | **Event Editor**: search, create ("exact events"), edit and delete canonical events with quotations and metadata; an exact event may allow one NPC diplomatic reaction after a 12-second undo window | `writeEventsState`; manual events are linked into `world.simulationHistory`; reactions queue in `world.pendingEventOutreach` and are evaluated by `processPendingEventOutreach` (scheduled from the chat panel) |
 | `roll-back-turn` | Restore to the start of an earlier turn (discards later turns) | reads `JSON_URLS.snapshots`; writes game/world/events/actions/chat/colors |
 | `your-country` | Switch which country you play | `writeGameData({…country})` |
-| `difficulty` | Set difficulty | `writeGameData({…difficulty})` (`DIFFICULTY_LEVELS`) |
+| `difficulty` | Set difficulty (Difficulty 2.0: per-scope directives for simulation, diplomacy and catalysts) | `writeGameData({…difficulty})` (`DIFFICULTY_LEVELS`, `src/runtime/difficulty.js`) |
 | `annex-country` | Click a country → fold all its regions into a target | resolves current owner via overrides + `loadRegionCatalog`; writes `regionOwnershipOverrides` |
 | `annex-regions` | Click individual regions → transfer to a target | per-region `regionOwnershipOverrides` write |
-| `edit-country` / `add-country` | Rename/recolor or create a polity (name **is** the identifier) | `polityOverrides` + `colors.json` |
-| `regions` | Click a region → edit name/owner | owner via overrides; name only on custom-geometry maps (`regionsGeojson`) |
-| `edit-feature` / `add-feature` / `clear-features` | Edit/add/clear cities & landmarks | `citiesGeojson`; adding the first custom feature flips `customCities: true` |
-| `events` | Edit/delete recorded events | `writeEventsState` |
+| `edit-country` / `add-country` | **Country Editor** (identity, colour, tags, reputation, the persistent stat sheet) or create a polity (name **is** the identifier) | `polityOverrides` + `colors.json`; stats through `applyCountryStatPatchToWorld` |
+| `regions` | **Region Inspector**: click a region → holder, claimants, provenance; transfer it or add/withdraw claims; rename on custom-geometry maps | `applyEventImpactsToWorld` with `regionTransfers` / `regionClaims` (the same seam events use); name via `regionsGeojson` |
+| `edit-feature` / `add-feature` / `clear-features` | **Map Feature Editor**: runtime features (`world.markers`, with lifecycle status, owner, kind, location) and scenario cities | marker ops through `applyEventImpactsToWorld`; `citiesGeojson`; adding the first custom city flips `customCities: true` |
+| `logs` | Diagnostics log (desktop server log) | reads `/api/log` |
 
 Ownership/name resolution is done in **one namespace** (country display name) — the file's comments call out the recurring bug where a GADM code (`RUS`) and a name (`Russia`) never compared equal. All map changes repaint within ~5 s (the map's own poll).
 

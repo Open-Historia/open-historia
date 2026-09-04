@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
+import { GAME_MASTER_SCHEMA, GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
 
 // The ops are their own task payload now: the board moved out of the jump into
 // a separate call (PROJECTS_SCHEMA), so this validates the envelope that
@@ -140,9 +140,11 @@ test("the board no longer costs the jump anything", () => {
   // someone re-embedded projectSchema or put the board back in the jump.
   assert.ok(jumpChars < 26000, `the jump schema grew back to ${jumpChars} chars`);
 
-  // ...and the game master, which has no second pass to hand the board to, keeps it.
+  // ...and the game master, which has no second pass to hand the board to, keeps
+  // it on its authored events (the provider sees a shallow transport; the
+  // internal transaction schema is what the decoded payload is validated against).
   assert.equal(
-    "projectOps" in GAMEPLAY_TOOLS.gameMaster.schema.properties.impacts.properties,
+    "projectOps" in GAME_MASTER_SCHEMA.properties.events.items.properties.impacts.properties,
     true,
     "the game master lost its board access",
   );

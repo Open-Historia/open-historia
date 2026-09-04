@@ -48,6 +48,10 @@ export const WORLD_DEFAULTS = {
   // Random per-game key the intercepts are sealed with. Minted the first time a
   // spy exists; 64 hex chars.
   spySeal: "",
+  // Bounded audit trail of applied GM Console transactions. Administrative
+  // history, not a second world model: canonical state stays in the ledgers
+  // below; the record keeps the exact previewed transaction for debugging.
+  gmAudit: [],
   // Persisted per-country stat sheets (code -> the full sheet), seeded on first view
   // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
   // stop regenerating/drifting every date change.
@@ -81,6 +85,10 @@ export const WORLD_DEFAULTS = {
   // and rendered as map markers beside the stock cities. Stored here so they
   // share every existing read/write/poll/normalize path, exactly like units.
   markers: [],
+  // Real-time grace-period queue for optional Event Editor -> NPC diplomatic
+  // reactions. Pending evaluations only, never chats: the conversation itself
+  // is created later through the normal chat merge seam.
+  pendingEventOutreach: [],
   // Bumped by every idle world pulse (see gameplay.js). It is the third component
   // of a patrolling unit's position seed, which is what lets a fleet on station
   // visibly reposition between pulses even though no game time has passed. Listed
@@ -835,6 +843,116 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
 // A structure built during play: any named point on the map — city, military
 // base, bunker, missile silo, embassy, port. `kind` is deliberately free-form
 // (lowercased for stable styling/grouping); unknown kinds are first-class.
+// Persistent physical features carry a lifecycle: a feature is planned, built,
+// damaged, abandoned or destroyed without losing its identity, and a rename
+// keeps the old name as an alias so later events can still find it.
+export const MARKER_STATUSES = [
+  "planned",
+  "under_construction",
+  "active",
+  "damaged",
+  "inactive",
+  "abandoned",
+  "destroyed",
+];
+const MARKER_STATUS_SET = new Set(MARKER_STATUSES);
+const MAX_MARKER_ALIASES = 12;
+const MAX_MARKER_SOURCE_EVENT_IDS = 24;
+const MAX_GM_AUDIT = 64;
+
+const hasOwn = (value, key) => Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+
+const normalizeMarkerNameList = (values, { exclude = "", limit = MAX_MARKER_ALIASES } = {}) => {
+  const excluded = normalizeOptionalString(exclude).toLowerCase();
+  const seen = new Set();
+  const output = [];
+  for (const raw of normalizeArray(values)) {
+    const value = normalizeOptionalString(raw);
+    const key = value.toLowerCase();
+    if (!value || key === excluded || seen.has(key)) continue;
+    seen.add(key);
+    output.push(value);
+    if (output.length >= limit) break;
+  }
+  return output;
+};
+
+const normalizeMarkerSourceEventIds = (values) => {
+  const seen = new Set();
+  const output = [];
+  for (const raw of normalizeArray(values)) {
+    const value = normalizeOptionalString(raw);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    output.push(value);
+  }
+  return output.slice(-MAX_MARKER_SOURCE_EVENT_IDS);
+};
+
+// Pending Event Editor diplomatic evaluations. The grace deadline is real-world
+// time because its only purpose is an "undo send" window for the administrator;
+// the resulting diplomatic message is stamped with the event's in-game date.
+export const normalizePendingEventOutreach = (entries) =>
+  normalizeArray(entries)
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object") return null;
+      const sourceEventId = normalizeOptionalString(entry.sourceEventId);
+      const sourceEventCreatedAt = normalizeOptionalString(entry.sourceEventCreatedAt);
+      const deliverAfter = normalizeOptionalString(entry.deliverAfter);
+      if (!sourceEventId || !deliverAfter) return null;
+      const attempts = Number.isFinite(Number(entry.attempts))
+        ? Math.max(0, Math.trunc(Number(entry.attempts)))
+        : 0;
+      return {
+        id: normalizeOptionalString(entry.id) || generateId(`event-outreach-${index}`),
+        sourceEventId,
+        sourceEventCreatedAt,
+        queuedAt: normalizeOptionalString(entry.queuedAt) || new Date().toISOString(),
+        deliverAfter,
+        attempts,
+        lastError: normalizeOptionalString(entry.lastError),
+      };
+    })
+    .filter(Boolean)
+    .slice(-80);
+
+// Bounded canonical audit trail for applied GM transactions. The record keeps
+// the exact previewed transaction so later debugging can answer "what did the
+// administrator actually authorize?" without the audit itself becoming
+// authoritative world state.
+export const normalizeGameMasterAudit = (entries) =>
+  normalizeArray(entries)
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const id = normalizeOptionalString(entry.id) || generateId(`gm-audit-${index}`);
+      const transactionId = normalizeOptionalString(entry.transactionId || entry.id);
+      if (!transactionId) return null;
+      return {
+        ...cloneValue(entry),
+        id,
+        transactionId,
+        appliedAt: normalizeOptionalString(entry.appliedAt),
+        date: normalizeOptionalString(entry.date),
+        mode: normalizeOptionalString(entry.mode),
+        request: normalizeTextLike(entry.request),
+        summary: normalizeTextLike(entry.summary),
+        round: Number.isFinite(Number(entry.round)) ? Math.max(0, Math.trunc(Number(entry.round))) : 0,
+        eventIds: normalizeActionParticipants(entry.eventIds),
+        warIds: normalizeActionParticipants(entry.warIds),
+        relationIds: normalizeActionParticipants(entry.relationIds),
+        agreementIds: normalizeActionParticipants(entry.agreementIds),
+        chatIds: normalizeActionParticipants(entry.chatIds),
+        statCountries: normalizeActionParticipants(entry.statCountries),
+        acceptedOperations: normalizeArray(entry.acceptedOperations).map(normalizeTextLike).filter(Boolean).slice(0, 128),
+        rejectedOperations: normalizeArray(entry.rejectedOperations).map(normalizeTextLike).filter(Boolean).slice(0, 128),
+        status: normalizeOptionalString(entry.status) || "applied",
+        source: normalizeOptionalString(entry.source) || "gm-console",
+        transaction: entry.transaction && typeof entry.transaction === "object" ? cloneValue(entry.transaction) : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_GM_AUDIT);
+
 export const normalizeMarkerEntry = (entry, index = 0) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -847,6 +965,11 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     return null;
   }
 
+  const timestamp = new Date().toISOString();
+  const createdAt = normalizeOptionalString(entry.createdAt) || timestamp;
+  const status = normalizeOptionalString(entry.status).toLowerCase();
+  const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
+
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
     name,
@@ -855,8 +978,13 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     lng,
     lat,
     note: normalizeOptionalString(entry.note || entry.description),
-    foundedAt: normalizeOptionalString(entry.foundedAt || entry.date),
-    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
+    status: MARKER_STATUS_SET.has(status) ? status : "active",
+    aliases: normalizeMarkerNameList(entry.aliases, { exclude: name }),
+    foundedAt,
+    createdAt,
+    updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
+    updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
+    sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
   };
 };
 
@@ -865,7 +993,48 @@ export const normalizeMarkers = (markers) =>
     .map((entry, index) => normalizeMarkerEntry(entry, index))
     .filter(Boolean);
 
-// One AI-authored mutation to the built-structure list: build | remove.
+const normalizeMarkerPatch = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+  const patch = {};
+
+  if (hasOwn(entry, "kind") || hasOwn(entry, "type")) {
+    const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
+    if (kind) patch.kind = kind;
+  }
+  if (hasOwn(entry, "ownerCode") || hasOwn(entry, "owner") || hasOwn(entry, "code")) {
+    patch.ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode ?? entry.owner ?? entry.code));
+  }
+  if (hasOwn(entry, "status")) {
+    const status = normalizeOptionalString(entry.status).toLowerCase();
+    if (MARKER_STATUS_SET.has(status)) patch.status = status;
+  }
+  if (hasOwn(entry, "note") || hasOwn(entry, "description")) {
+    patch.note = normalizeOptionalString(entry.note ?? entry.description);
+  }
+  // The Map Feature Editor may repair the establishment date without deleting
+  // and rebuilding the object. Normal AI lifecycle updates do not emit foundedAt,
+  // so historical continuity stays stable unless an editor deliberately sets it.
+  if (hasOwn(entry, "foundedAt") || hasOwn(entry, "date")) {
+    patch.foundedAt = normalizeOptionalString(entry.foundedAt ?? entry.date);
+  }
+
+  const hasLng = hasOwn(entry, "lng") || hasOwn(entry, "lon") || hasOwn(entry, "longitude");
+  const hasLat = hasOwn(entry, "lat") || hasOwn(entry, "latitude");
+  if (hasLng && hasLat) {
+    const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+    const lat = finiteOrNull(entry.lat ?? entry.latitude);
+    if (lng !== null && lat !== null && !(lng === 0 && lat === 0)) {
+      patch.lng = lng;
+      patch.lat = lat;
+    }
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+};
+
+// One AI-authored mutation to persistent physical world features. Destruction is
+// lifecycle state, not deletion: legacy `destroy` becomes update/destroyed.
+// `remove` is reserved for true canonical cleanup or an administrative deletion.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -879,7 +1048,24 @@ const normalizeMarkerOp = (entry) => {
     return { op: "build", marker };
   }
 
-  if (op === "remove" || op === "destroy") {
+  if (op === "update" || op === "modify" || op === "destroy") {
+    const markerId = normalizeOptionalString(entry.markerId || entry.id);
+    const name = normalizeOptionalString(entry.name);
+    if (!markerId && !name) return null;
+    // normalizeEventImpacts stores normalized update fields under `changes`;
+    // applyMarkerOps may later normalize that already-normalized op again. Accept
+    // both shapes so update survives the full event -> world application pipeline.
+    const patchSource = entry.changes && typeof entry.changes === "object" && !Array.isArray(entry.changes)
+      ? entry.changes
+      : entry;
+    const changes = op === "destroy"
+      ? { ...(normalizeMarkerPatch(patchSource) || {}), status: "destroyed" }
+      : normalizeMarkerPatch(patchSource);
+    if (!changes) return null;
+    return { op: "update", markerId, name, changes };
+  }
+
+  if (op === "remove") {
     const markerId = normalizeOptionalString(entry.markerId || entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!markerId && !name) return null;
@@ -913,28 +1099,78 @@ const normalizeMarkerOp = (entry) => {
   return null;
 };
 
-// Apply a batch of marker ops (pure). Rebuilding under an existing name
-// replaces it rather than stacking duplicates; removal matches id first, then
-// exact name — the AI usually knows the name, rarely the id.
-export const applyMarkerOps = (markers, ops) => {
+const markerNameMatches = (marker, name) => {
+  const wanted = normalizeOptionalString(name).toLowerCase();
+  if (!wanted) return false;
+  if (normalizeOptionalString(marker?.name).toLowerCase() === wanted) return true;
+  return normalizeArray(marker?.aliases).some((alias) => normalizeOptionalString(alias).toLowerCase() === wanted);
+};
+
+const markerMatchesOp = (marker, op) =>
+  op?.markerId ? marker?.id === op.markerId : markerNameMatches(marker, op?.name);
+
+const touchMarker = (marker, context = {}) => {
+  const eventId = normalizeOptionalString(context.eventId);
+  const gameDate = normalizeOptionalString(context.gameDate);
+  const timestamp = normalizeOptionalString(context.updatedAt) || new Date().toISOString();
+  const sourceEventIds = normalizeMarkerSourceEventIds([
+    ...normalizeArray(marker.sourceEventIds),
+    ...(eventId ? [eventId] : []),
+  ]);
+  return {
+    ...marker,
+    updatedAt: timestamp,
+    updatedDate: gameDate || marker.updatedDate || marker.foundedAt || "",
+    sourceEventIds,
+  };
+};
+
+// Apply a batch of marker ops (pure) while preserving object identity. A
+// duplicate build of an existing current/alias name never respawns or resurrects
+// the object; it only records that the event touched the existing feature.
+// Removal matches id first, then exact name or alias — the AI usually knows the
+// name, rarely the id.
+export const applyMarkerOps = (markers, ops, context = {}) => {
   let next = normalizeMarkers(markers);
-  for (const op of normalizeArray(ops)) {
+  for (const rawOp of normalizeArray(ops)) {
+    const op = normalizeMarkerOp(rawOp);
+    if (!op) continue;
+
     if (op.op === "build") {
-      next = [
-        ...next.filter((marker) => marker.name.toLowerCase() !== op.marker.name.toLowerCase()),
-        op.marker,
-      ];
-    } else if (op.op === "remove") {
-      next = next.filter((marker) =>
-        op.markerId ? marker.id !== op.markerId : marker.name.toLowerCase() !== op.name.toLowerCase());
-    } else if (op.op === "rename") {
-      next = next.map((marker) =>
-        (op.markerId ? marker.id === op.markerId : marker.name.toLowerCase() === (op.name || "").toLowerCase())
-          ? { ...marker, name: op.newName }
-          : marker);
+      const existingIndex = next.findIndex((marker) => markerNameMatches(marker, op.marker.name));
+      if (existingIndex >= 0) {
+        next = next.map((marker, index) => index === existingIndex ? touchMarker(marker, context) : marker);
+        continue;
+      }
+      next = [...next, touchMarker(op.marker, context)];
+      continue;
+    }
+
+    if (op.op === "update") {
+      next = next.map((marker) => {
+        if (!markerMatchesOp(marker, op)) return marker;
+        return touchMarker({ ...marker, ...op.changes }, context);
+      });
+      continue;
+    }
+
+    if (op.op === "remove") {
+      next = next.filter((marker) => !markerMatchesOp(marker, op));
+      continue;
+    }
+
+    if (op.op === "rename") {
+      next = next.map((marker) => {
+        if (!markerMatchesOp(marker, op)) return marker;
+        const aliases = normalizeMarkerNameList(
+          [...normalizeArray(marker.aliases), marker.name],
+          { exclude: op.newName },
+        );
+        return touchMarker({ ...marker, name: op.newName, aliases }, context);
+      });
     }
   }
-  return next;
+  return normalizeMarkers(next);
 };
 
 // Projects & Operations: the long-running efforts board (world.projects[]).
@@ -2861,6 +3097,7 @@ export const normalizeWorldState = (world) => {
     intelligence,
     spies,
     spySeal,
+    gmAudit: normalizeGameMasterAudit(nextWorld.gmAudit),
     labelFont: normalizeOptionalString(nextWorld.labelFont),
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),
@@ -2904,6 +3141,7 @@ export const normalizeWorldState = (world) => {
       })
       .filter(Boolean),
     markers: normalizeMarkers(nextWorld.markers),
+    pendingEventOutreach: normalizePendingEventOutreach(nextWorld.pendingEventOutreach),
     // Explicit (not via the ...WORLD_DEFAULTS spread) so these new fields survive every
     // write path — the documented new-world-field trap.
     //
@@ -3515,10 +3753,18 @@ export const applyEventImpactsToWorld = ({
 
     if (event.impacts.markerOps?.length) {
       const before = normalizeMarkers(nextWorld.markers);
-      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps.map((op) =>
-        (op.op === "build" && op.marker?.ownerCode
-          ? { ...op, marker: { ...op.marker, ownerCode: resolveOwner(op.marker.ownerCode) } }
-          : op)));
+      nextWorld.markers = applyMarkerOps(nextWorld.markers, event.impacts.markerOps.map((op) => {
+        if (op.op === "build" && op.marker?.ownerCode) {
+          return { ...op, marker: { ...op.marker, ownerCode: resolveOwner(op.marker.ownerCode) } };
+        }
+        if (op.op === "update" && op.changes?.ownerCode) {
+          return { ...op, changes: { ...op.changes, ownerCode: resolveOwner(op.changes.ownerCode) } };
+        }
+        return op;
+      }), {
+        eventId: event.id,
+        gameDate: event.date || "",
+      });
       // A rename that matched no existing structure is a STOCK-map city rename (stock
       // cities live in PMTiles, not world.markers) — record it as an override layer so
       // the label layer can show the new name (see Cities.jsx / cityRenames).
