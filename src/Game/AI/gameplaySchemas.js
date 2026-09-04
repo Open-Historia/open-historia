@@ -89,7 +89,7 @@ const createdChatSchema = {
 
 const regionTransferSchema = {
   type: "object",
-  description: "A transfer of one map region to a new polity owner.",
+  description: "A LEGAL sovereignty transfer of one map region to a new polity. Temporary wartime occupation belongs in regionControlOps. " + "A transfer of one map region to a new polity owner.",
   properties: {
     regionId: textSchema(
       "Exact map region identifier when known; otherwise the region's plain name "
@@ -198,12 +198,88 @@ const statsUpdateSchema = {
   additionalProperties: false,
 };
 
+const regionControlOpSchema = {
+  description:
+    "A de-facto territorial control mutation. This is NOT legal sovereignty: use contest for an active disputed front, "
+    + "control for wartime capture/occupation/retaking, and clear_contest when a ceasefire/withdrawal/settlement ends an active contest.",
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["contest"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded city/historical-area wording from the event for bounded native resolution.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: nonEmptyTextSchema("Current controller/defending polity's FULL name; used to bound geography resolution."),
+        actorCode: nonEmptyTextSchema("Challenging/attacking polity's FULL name."),
+        note: textSchema("Brief reason the region is actively contested."),
+      },
+      required: ["op", "regionId", "fromCode", "actorCode"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["control"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded city/historical-area wording from the event for bounded native resolution.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: nonEmptyTextSchema("Previous de-facto controller's FULL polity name."),
+        toCode: nonEmptyTextSchema("New de-facto controller's FULL polity name."),
+        note: textSchema("Brief reason control changed."),
+        wholeCountry: {
+          type: "boolean",
+          description: "True only for a total military occupation/collapse where the new controller takes every region the previous controller still holds.",
+        },
+      },
+      required: ["op", "regionId", "fromCode", "toCode"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["clear_contest"] },
+        regionId: nonEmptyTextSchema(
+          "Exact map region id/name when known; otherwise the exact grounded place wording from the event.",
+        ),
+        regionName: textSchema("Human-readable region/place wording, when useful."),
+        fromCode: textSchema("Current controller's FULL polity name, strongly preferred to bound geography resolution."),
+        claimantCode: textSchema("Specific claimant/contender to remove. Omit only when clearAll=true."),
+        clearAll: { type: "boolean", description: "Clear all claimants only when a final settlement explicitly resolves the territorial dispute; ordinary ceasefires should remove a specific claimantCode." },
+        note: textSchema("Brief reason the contest ended."),
+      },
+      required: ["op", "regionId"],
+      additionalProperties: false,
+    },
+  ],
+};
+
 const polityChangeSchema = {
   type: "object",
-  description: "A creation, rename, recolor, or metadata change for a polity.",
+  description:
+    "One explicit polity lifecycle or metadata operation. Ordinary updates MUST target an existing polity; "
+    + "new identities are authorized only by create/restore, so a stale or sloppy name cannot silently mint a country.",
   properties: {
-    code: textSchema("Polity's exact FULL country name (\"Spain\"), never a country code."),
-    name: textSchema("New polity name, only when it changes."),
+    operation: {
+      type: "string",
+      description:
+        "What this entry actually does. update = metadata/stats only on an existing polity; "
+        + "create = establish a genuinely new current polity, including an independence/breakaway actor; "
+        + "rename = reconstitute an existing polity under a new full display/current name while keeping its stable campaign identity; "
+        + "restore = bring back a dormant/dissolved historical polity as a current actor; "
+        + "dissolve = explicitly end a polity's current existence after its territory is separately settled.",
+      enum: ["update", "create", "rename", "restore", "dissolve"],
+    },
+    code: textSchema(
+      "Exact FULL polity name, never a country code. For update/rename/dissolve this identifies the CURRENT/source polity. "
+      + "For create/restore this is the exact polity identity being established."
+    ),
+    name: textSchema(
+      "For rename, the NEW full polity name and it must be nonblank. For create/restore it may repeat the established name. "
+      + "For update omit it unless the display/current name itself intentionally changes without a lifecycle rename."
+    ),
     color: textSchema("New six-digit hexadecimal color, only when it changes."),
     aliases: stringArraySchema("Alternative polity names."),
     // The prompt asks for this and gameState normalizes/clamps/writes it, but it
@@ -231,7 +307,7 @@ const polityChangeSchema = {
     note: textSchema("Brief reason for the change."),
     stats: statsUpdateSchema,
   },
-  required: ["code"],
+  required: ["operation", "code"],
   additionalProperties: false,
 };
 
@@ -791,6 +867,12 @@ const impactsSchema = {
         + "one entry per affected region, or the map will not match the story.",
       items: regionTransferSchema,
     },
+    regionControlOps: {
+      type: "array",
+      description:
+        "DE-FACTO territorial control and active front disputes: wartime contest, capture/occupation/retaking, and clearing a contest, without pretending legal sovereignty changed. A settled dispute that merely stripes a region is a regionClaims entry; a border that legally moves is a regionTransfers entry.",
+      items: regionControlOpSchema,
+    },
     unitOps: {
       type: "array",
       description: "Military unit operations.",
@@ -996,6 +1078,100 @@ export const JUMP_FORWARD_SCHEMA = {
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// The bounded semantic geography pass: place wording that exact matching could
+// not resolve, mapped onto the losing side's real regions, or UNRESOLVED.
+const geographyResolutionSchema = {
+  type: "object",
+  description:
+    "One conservative mapping from an unresolved human place/area label to the current map's real region ids. "
+    + "This is geography only: it never decides conquest, ownership, sovereignty, or whether the transfer should happen.",
+  properties: {
+    index: {
+      type: "integer",
+      minimum: 0,
+      description: "Index of the supplied unresolved geography item.",
+    },
+    status: {
+      type: "string",
+      enum: ["RESOLVED", "UNRESOLVED"],
+      description: "RESOLVED only when the supplied candidate region list supports a high-confidence geographic mapping.",
+    },
+    relation: {
+      type: "string",
+      enum: [
+        "REGION_ALIAS",
+        "CITY_CONTAINING_REGION",
+        "HISTORICAL_AREA",
+        "TRANSLATED_AREA",
+        "UNRESOLVED",
+      ],
+      description:
+        "Why the source label maps to the selected region ids. REGION_ALIAS and CITY_CONTAINING_REGION normally select one id; "
+        + "HISTORICAL_AREA or TRANSLATED_AREA may select several when the named area genuinely spans several supplied regions.",
+    },
+    regionIds: {
+      type: "array",
+      description:
+        "Exact region ids copied ONLY from the supplied candidateRegions list. Empty when status is UNRESOLVED.",
+      items: { type: "string" },
+    },
+    confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Confidence that the source label and selected region ids refer to the same geography.",
+    },
+    reason: textSchema("Brief geography-only reason. Do not discuss who should own or control the territory."),
+  },
+  required: ["index", "status", "relation", "regionIds", "confidence", "reason"],
+  additionalProperties: false,
+};
+
+export const GEOGRAPHY_RESOLVER_SCHEMA = {
+  type: "object",
+  description:
+    "Conservative geography-only resolution for regionTransfers that failed exact map-name matching.",
+  properties: {
+    resolutions: {
+      type: "array",
+      description: "Exactly one resolution for each supplied unresolved item index.",
+      items: geographyResolutionSchema,
+    },
+  },
+  required: ["resolutions"],
+  additionalProperties: false,
+};
+
+// The native territory director's answer: de-facto control operations to attach
+// to the turn's events. It may never invent a legal transfer.
+export const TERRITORY_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation territorial-front repair pass. It may add de-facto regionControlOps but may not invent legal sovereignty changes.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "De-facto control operations to attach to supplied event indexes.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          regionControlOps: {
+            type: "array",
+            items: regionControlOpSchema,
+          },
+          reason: textSchema("Short reason these control-state changes are required for map continuity."),
+        },
+        required: ["eventIndex", "regionControlOps"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of territorial-front state reconciliation."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
 
 // Persistent storylines (nativeWorldDirector.js). On a jump they travel as
 // compact text lines like the other ledgers; this object form is the
@@ -2257,6 +2433,8 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   unitDirector: UNIT_DIRECTOR_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
+  territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
+  geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -2349,6 +2527,18 @@ export const WORLD_MOTION_REPAIR_TOOL = makeTool(
   WORLD_MOTION_REPAIR_SCHEMA,
 );
 
+export const TERRITORY_DIRECTOR_TOOL = makeTool(
+  "submit_territory_director",
+  "Submit conservative de-facto territorial control operations for the supplied events.",
+  TERRITORY_DIRECTOR_SCHEMA,
+);
+
+export const GEOGRAPHY_RESOLVER_TOOL = makeTool(
+  "submit_geography_resolution",
+  "Resolve unresolved human place or historical-area labels to exact supplied map region ids without deciding territorial outcomes.",
+  GEOGRAPHY_RESOLVER_SCHEMA,
+);
+
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
   "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
@@ -2390,6 +2580,8 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   unitDirector: UNIT_DIRECTOR_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
+  territoryDirector: TERRITORY_DIRECTOR_TOOL,
+  geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,

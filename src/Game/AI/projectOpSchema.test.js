@@ -136,9 +136,10 @@ test("the board no longer costs the jump anything", () => {
   // The board moved to its own call, so a jump must not describe it at all.
   assert.equal("projectOps" in impacts, false, "projectOps is back in the jump contract");
 
-  // 63,161 originally; 31,678 after the anyOf collapse. A regression here means
+  // 63,161 originally; 31,678 after the anyOf collapse; ~29,500 once the de-facto
+  // control layer (regionControlOps, polity lifecycle) joined the contract. A regression here means
   // someone re-embedded projectSchema or put the board back in the jump.
-  assert.ok(jumpChars < 26000, `the jump schema grew back to ${jumpChars} chars`);
+  assert.ok(jumpChars < 32000, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

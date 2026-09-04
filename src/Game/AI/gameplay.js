@@ -3,6 +3,7 @@ import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
+import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
 import {
   applyWorldStorylineUpdates,
@@ -1127,6 +1128,38 @@ const perfNow = () =>
     ? performance.now()
     : Date.now();
 
+const buildTerritorialControlContext = async (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const byId = new Map(catalog.map((region) => [region.id, region]));
+  const ids = new Set([
+    ...Object.keys(world.regionOwnershipOverrides || {}),
+    ...Object.keys(world.regionSovereigntyOverrides || {}),
+    ...Object.keys(world.regionClaimants || {}),
+  ]);
+
+  const rows = [];
+  for (const regionId of ids) {
+    const region = byId.get(regionId);
+    const baseOwner = normalizeString(region?.country || toCountryName(region?.countryCode) || "");
+    const controller = normalizeString(world.regionOwnershipOverrides?.[regionId]) || baseOwner;
+    const sovereign = normalizeString(world.regionSovereigntyOverrides?.[regionId]) || controller || baseOwner;
+    const claimants = normalizeArray(world.regionClaimants?.[regionId]).map(normalizeString).filter(Boolean);
+
+    if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
+
+    rows.push(
+      `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
+      `controller ${controller || "unknown"}` +
+      (claimants.length ? `; active claimants/contenders ${claimants.join(", ")}` : ""),
+    );
+  }
+
+  return rows.length > 0
+    ? rows.slice(0, 80).join("\n") + (rows.length > 80 ? `\n(+${rows.length - 80} more non-normal territorial states omitted)` : "")
+    : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+};
+
 const buildGameMasterStorylineContext = (worldLike) => {
   const world = normalizeWorldState(worldLike);
   const storylines = normalizeArray(world.storylines)
@@ -1198,6 +1231,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       focusActors,
       maxActors: 8,
     }).text;
+  }
+  if (wants("territorialControlContext")) {
+    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world);
   }
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
@@ -1306,7 +1342,7 @@ const runJsonTask = async (taskKey, {
     // campaigns carry frozen prompts, so a defaultPrompts.json rule never
     // reaches them. This also disarms an over-cautious reading of the agency
     // rule above ("don't act for the player") as "don't move the map".
-    systemPrompt = `${systemPrompt}\n\n[Map Truth]\nTerritorial narration and the map must never disagree. If an event's title or description says territory was captured, seized, occupied, annexed, ceded, liberated, retaken, or otherwise changed hands, that SAME event MUST carry impacts.regionTransfers entries covering every region it names or implies — a capture claim with no regionTransfers is invalid output that breaks the map. When you do not know a region's exact id, put its plain name in regionId and the engine will resolve it; emit one entry per affected region. Resolving ${playerName}'s own ordered military operations into their territorial outcomes is REQUIRED and is never a player-agency violation: the agency rule restricts unprompted decisions, not the map consequences of offensives the player actually ordered. In an active war, sustained successful offensives normally transfer regions every jump. If nothing genuinely changed hands this period, keep capture language out of the event text.`;
+    systemPrompt = `${systemPrompt}\n\n[Map Truth — Control is not Sovereignty]\nTerritorial narration and the map must never disagree, but wartime control and legal sovereignty are DIFFERENT things. A battle capture, occupation, liberation or retaking uses impacts.regionControlOps (usually op=control; op=contest while the region is actively disputed). A treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement uses impacts.regionTransfers because legal sovereignty changed. Do NOT turn every front-line advance into a permanent legal border. When you do not know the exact region id, preserve the grounded place wording in regionId and set fromCode so the native geography resolver can map it conservatively. Resolving ${playerName}'s own ordered military operations into their real control consequences is REQUIRED and is never a player-agency violation. If nothing actually changed control or sovereignty this period, keep capture/cession language out of the event text.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
     // No restating: the model is shown the recent timeline as context and, left
     // unchecked, re-narrates events it already reported — each restatement gets a
     // fresh id, so the same event stacks up and shows turn after turn. A content-key
@@ -1356,7 +1392,7 @@ const runJsonTask = async (taskKey, {
   // moves though the event narrates a capture. Force region names, and teach the
   // take-the-whole-region (default) vs capture-only-the-city (markerOps) distinction.
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n[Region and City Capture]\nOn this map, territory is owned by REGIONS, and impacts.regionTransfers MUST name a region exactly as it appears in the [Game Map Description] above — never a city, town, port, or landmark. Cities such as Toulouse or Narbonne are only markers that sit INSIDE a region; a regionTransfer whose regionId is a city name matches no region and is silently discarded, so the border never moves even though the event says it did. To capture a place and the ground around it, transfer the REGION that contains it, and set fromCode to that region\u2019s current owner.\nTaking a region takes everything inside it, cities included — that is the normal case, so a city changing hands usually means transferring its whole region. To capture ONLY a city while its region stays with its current owner (a besieged holdout, an occupied port, an enclave), do NOT name it in regionTransfers; instead emit an impacts.markerOps build for it — {\"op\":\"build\",\"marker\":{\"name\":\"<city>\",\"kind\":\"city\",\"ownerCode\":\"<new holder>\",\"lng\":<lng>,\"lat\":<lat>}} — using that city\u2019s coordinates from [City Coordinates]. That places the city under the new owner without moving the region border.\nWhen a polity is conquered, annexed, partitioned, or unified OUTRIGHT — every region it still holds changing hands at once — you do not need one entry per region. Emit a SINGLE regionTransfer with "wholeCountry": true, put the losing polity's name in regionId instead of a region name, and set toCode to whoever takes it; the engine expands that into every region that polity currently owns. Use this ONLY for a total takeover of everything it holds. Any partial gain — a province, a border strip, a few regions — stays as ordinary per-region transfers, which remain the normal case.`;
+    systemPrompt = `${systemPrompt}\n\n[Region and City Capture]\nTerritory is stored by MAP REGIONS. Prefer an exact region id/name from [Game Map Description]. If an event is grounded in a city, fortress, port, translated name, exonym, or historical area and you genuinely do not know the map region name, DO NOT invent one: put that exact grounded place/area wording in regionId (and regionName if useful) and ALWAYS set fromCode to the current controller/losing polity. The native geography resolver can conservatively map that wording only against that side's real regions; if it cannot do so safely, the operation is rejected instead of moving the wrong province.\nA regionControlOps control changes the WHOLE resolved map region's de-facto controller but leaves legal sovereignty intact. A regionTransfers entry changes the WHOLE resolved map region's LEGAL sovereign and normally hands administration over too unless a third-party occupier still physically controls it. If only a city changes hands while the surrounding region does not (a holdout, occupied port, enclave), do not change the region; use the point/marker representation instead.\nFor a total wartime occupation/collapse, regionControlOps control may use wholeCountry=true. For a total legal annexation/unification/partition settlement, regionTransfers may use wholeCountry=true. Never use either wholeCountry shortcut for a partial campaign.`;
   }
 
   // Polities are identified by their full country name EVERYWHERE. A model that
@@ -1612,10 +1648,11 @@ So use the wider picture to choose the sender and the moment — never to give t
     systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit when the event says that formation advances, withdraws, redeploys, mobilizes toward a front, or otherwise changes position, and set its posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting. A conscription law, mobilization order, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n3. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again.\n4. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n5. Do not invent military activity for diplomatic, political or economic events. It is valid to return no ops for an event.\n6. Never change territory. The territory layer is separate.\n7. Use only supplied existing unit ids. Keep movement local and plausible for the era.\n\nReturn exactly the required tool payload.`;
   }
 
-  // GM territorial semantics on this build: the map shows who HOLDS a region
-  // (regionTransfers), and claims stripe a region without moving the border.
+  // GM territorial semantics: regionTransfers move LEGAL sovereignty, regionControlOps
+  // move de-facto control, claims stripe a region without moving anything; and
+  // every narrated place must have its own operation.
   if (taskKey === "gameMaster") {
-    systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA capture, occupation, liberation, cession, annexation or restoration changes who holds the region and must be a regionTransfers entry on the event that establishes it. An asserted right to land not held — an irredentist claim, a proclaimed union, a government-in-exile's title — is a regionClaims entry and never moves the border. Use full polity names everywhere. Every ledger operation (warUpdates, relationUpdates, agreementUpdates) must point at a real event of this transaction through eventIndexes, and an event that starts, joins, leaves, pauses, resumes or ends a war carries the same warId and its combatants.`;
+    systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
   }
 
   if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
@@ -2777,93 +2814,432 @@ const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "
   return result;
 };
 
-const resolveRegionTransfers = async (containers, world) => {
-  const catalog = await loadRegionCatalog().catch(() => []);
+// The semantic pass answers one resolution per item; a RESOLVED answer must
+// carry ids, and no index may be answered twice.
+const validateGeographyResolution = (candidate) => {
+  const seen = new Set();
+  for (let index = 0; index < normalizeArray(candidate?.resolutions).length; index += 1) {
+    const resolution = candidate.resolutions[index];
+    const itemIndex = Number(resolution?.index);
+    if (seen.has(itemIndex)) return `$.resolutions contains duplicate index ${itemIndex}.`;
+    seen.add(itemIndex);
+    if (normalizeString(resolution?.status).toUpperCase() === "RESOLVED" && normalizeArray(resolution?.regionIds).length === 0) {
+      return `$.resolutions[${index}].regionIds must contain at least one id when status is RESOLVED.`;
+    }
+  }
+  return "";
+};
+
+const GEOGRAPHY_RESOLVER_BATCH_SIZE = 6;
+const GEOGRAPHY_RESOLVER_MAX_CANDIDATES = 140;
+const GEOGRAPHY_RESOLVER_MAX_AREA_REGIONS = 12;
+const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
+
+const resolveRegionTransfers = async (containers, world, {
+  ownershipMode = "sovereignty",
+  enforceNarratedCityCoverage = false,
+} = {}) => {
+  // Phase 8B.2.10: resolve against the geography that is ACTUALLY rendered for
+  // this scenario. loadRegionCatalog() is intentionally broad and may contain
+  // stock GADM rows alongside custom/historical scenario rows; letting those two
+  // corpora compete is what made friendly names such as "Masovia" capable of
+  // pointing at a real-but-wrong province.
+  //
+  // The current regionsGeojson is the map truth. Use it as the primary corpus
+  // whenever it exists, retaining stock catalog data only as a compatibility
+  // fallback for maps that do not expose rendered region features.
+  const [mergedCatalog, renderedRegionsGeojson] = await Promise.all([
+    loadRegionCatalog().catch(() => []),
+    readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true }).catch(() => null),
+  ]);
+
+  const renderedFeatures = normalizeArray(renderedRegionsGeojson?.features);
+  const renderedCatalog = renderedFeatures
+    .map((feature) => {
+      const props = feature?.properties ?? {};
+      const id = normalizeString(
+        props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id,
+      );
+      const name = normalizeString(
+        props.name ?? props.NAME_1 ?? props.Name ?? props.regionName,
+      );
+      if (!id || !name) return null;
+
+      const countryCode = normalizeString(
+        props.gid0 ?? props.GID_0 ?? props.gid_0 ?? props.countryCode,
+      );
+      const country = normalizeString(
+        props.owner ??
+        props.COUNTRY ??
+        props.Country ??
+        props.country ??
+        toCountryName(countryCode) ??
+        "",
+      );
+
+      return {
+        id,
+        name,
+        country,
+        countryCode,
+        geometry: feature?.geometry ?? null,
+        aliases: [
+          props.sourceBaseRegionName,
+          props.sourceBaseRegionId,
+          props.NAME_1,
+          props.VARNAME_1,
+        ].map(normalizeString).filter(Boolean),
+      };
+    })
+    .filter(Boolean);
+
+  const catalog = renderedCatalog.length > 0 ? renderedCatalog : mergedCatalog;
+
   // Without a catalog we cannot tell a good id from a bad one, and dropping real
-  // transfers would be worse than the phantom keys — leave the payload alone.
+  // transfers would be worse than phantom keys — leave the payload alone.
   if (catalog.length === 0) return [];
 
   const byId = new Map();
   const byName = new Map();
+  const byAliasId = new Map();
+
+  const addNameAlias = (token, region) => {
+    const key = regionKey(token);
+    if (!key) return;
+    const bucket = byName.get(key);
+    if (bucket) {
+      if (!bucket.some((entry) => entry.id === region.id)) bucket.push(region);
+    } else {
+      byName.set(key, [region]);
+    }
+  };
+
+  const addIdAlias = (token, region) => {
+    const key = normalizeString(token);
+    if (!key || key === region.id) return;
+    const bucket = byAliasId.get(key);
+    if (bucket) {
+      if (!bucket.some((entry) => entry.id === region.id)) bucket.push(region);
+    } else {
+      byAliasId.set(key, [region]);
+    }
+  };
+
   for (const region of catalog) {
     byId.set(region.id, region);
-    const key = regionKey(region.name);
-    if (!key) continue;
-    const bucket = byName.get(key);
-    if (bucket) bucket.push(region);
-    else byName.set(key, [region]);
+    addNameAlias(region.name, region);
+    for (const alias of normalizeArray(region.aliases)) {
+      addNameAlias(alias, region);
+      addIdAlias(alias, region);
+    }
   }
+
   const worldState = normalizeWorldState(world);
-  const owners = worldState.regionOwnershipOverrides;
-  // Owner comparisons are case- and diacritic-insensitive, and the model may
-  // name a polity by its era DISPLAY name or an alias ("Second Polish
-  // Republic") while ownership is keyed by the owner token ("Poland") —
-  // canonicalize through the polity registry before comparing. The same alias
-  // map the world state is written through (ownerNames.js), so what counts as
-  // "the same polity" cannot drift between resolving a transfer and storing it.
-  const ownerAliases = buildOwnerAliasMap(worldState.polityOverrides);
-  const canonicalOwnerKey = (token) => regionKey(canonicalOwnerName(token, ownerAliases));
+  const controlOwners = worldState.regionOwnershipOverrides;
+  const sovereigntyOwners = worldState.regionSovereigntyOverrides || {};
+
+  // save-aware owner matching. the old resolver only understood explicit aliases,
+  // which meant "Bulgaria" could have ZERO candidate regions while the actual map
+  // was owned by "Kingdom of Bulgaria". that is precisely the phantom-country mess
+  // polityIdentity.js exists to stop.
+  const ownerAlias = new Map();
+  for (const [token, entry] of Object.entries(worldState.polityOverrides ?? {})) {
+    const canonical = regionKey(token);
+    if (!canonical) continue;
+    ownerAlias.set(canonical, canonical);
+    const displayName = regionKey(entry?.name);
+    if (displayName) ownerAlias.set(displayName, canonical);
+    for (const alias of entry?.aliases ?? []) {
+      const aliasKey = regionKey(alias);
+      if (aliasKey) ownerAlias.set(aliasKey, canonical);
+    }
+  }
+
+  const resolveOwnerName = (token) => {
+    const raw = toCountryName(normalizeString(token));
+    if (!raw) return "";
+    const resolution = resolvePolityIdentity(raw, worldState, {
+      allowUnknown: false,
+      requireActive: false,
+      allowCoreMatch: true,
+      allowStockBase: true,
+    });
+    return resolution.resolved || raw;
+  };
+
+  const canonicalOwnerKey = (token) => {
+    const key = regionKey(resolveOwnerName(token));
+    return ownerAlias.get(key) ?? key;
+  };
+
   const ownerKeyOf = (regionId) => {
-    // A legacy save can still hold a code here; canonicalise so it keys as the same
-    // owner as everything else rather than as a second, phantom power.
-    const override = toCountryName(normalizeString(owners[regionId]));
-    if (override) return canonicalOwnerKey(override);
-    // No override yet (e.g. the FIRST invasion of a war): the region is still held by
-    // its base owner, which the catalog carries. Fall back to it — otherwise
-    // regionsOwnedBy() is empty for any not-yet-overridden owner, so disambiguation,
-    // the containment near-miss, AND buildTransferFeedback's candidate list all fail
-    // exactly when the model most needs them (the transfer that STARTS a conflict).
+    if (ownershipMode === "sovereignty") {
+      const sovereign = toCountryName(normalizeString(sovereigntyOwners[regionId]));
+      if (sovereign) return canonicalOwnerKey(sovereign);
+    }
+
+    const controller = toCountryName(normalizeString(controlOwners[regionId]));
+    if (controller) return canonicalOwnerKey(controller);
+
+    // First mutation of a stock region has no runtime override yet. The scenario
+    // catalog is therefore the fallback legal owner/controller.
     const region = byId.get(regionId);
     return canonicalOwnerKey(region?.country || toCountryName(region?.countryCode) || "");
   };
+
   const regionsOwnedBy = (ownerToken) => {
     const key = canonicalOwnerKey(ownerToken);
     if (!key) return [];
     return catalog.filter((region) => ownerKeyOf(region.id) === key);
   };
-  // Every owner key in this resolver is a full country NAME (ownerKeyOf canonicalises
-  // codes on the way through), so a country can be matched directly.
-  // Whole-country transfer: one entry that hands over EVERY region a polity still
-  // holds (total conquest, annexation, unification, partition). Regions the winner
-  // already owns are skipped so a self-transfer can't blank an owner.
+
+  // Phase 8B.2.9: city-grounded territory operations must follow the ACTUAL
+  // rendered scenario geometry, not a historically plausible region label. A
+  // 1915 event may say "Warsaw and Masovia", while this scenario's Warsaw marker
+  // is physically inside the map region "Mazowieckie" and a different region is
+  // literally named "Masovia". Exact-name matching alone therefore can be wrong.
+  //
+  // Custom/era scenarios already carry both authoritative city points and region
+  // polygons. Use those assets deterministically before accepting a friendly
+  // region-name match. This keeps the geography decision in map truth rather than
+  // asking the model to guess which similar historical label the scenario author
+  // meant. Pure stock maps keep the existing resolver path.
+  const pointInRing = ([x, y], ring) => {
+    if (!Array.isArray(ring) || ring.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const a = ring[i];
+      const b = ring[j];
+      const xi = Number(a?.[0]);
+      const yi = Number(a?.[1]);
+      const xj = Number(b?.[0]);
+      const yj = Number(b?.[1]);
+      if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+      const crosses = ((yi > y) !== (yj > y)) &&
+        (x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  };
+
+  const pointInPolygonCoordinates = (point, polygon) => {
+    if (!Array.isArray(polygon) || polygon.length === 0) return false;
+    if (!pointInRing(point, polygon[0])) return false;
+    // Holes negate the outer-ring hit.
+    for (let index = 1; index < polygon.length; index += 1) {
+      if (pointInRing(point, polygon[index])) return false;
+    }
+    return true;
+  };
+
+  const pointInGeometry = (point, geometry) => {
+    if (!Array.isArray(point) || point.length < 2 || !geometry) return false;
+    if (geometry.type === "Polygon") {
+      return pointInPolygonCoordinates(point, geometry.coordinates);
+    }
+    if (geometry.type === "MultiPolygon") {
+      return normalizeArray(geometry.coordinates)
+        .some((polygon) => pointInPolygonCoordinates(point, polygon));
+    }
+    return false;
+  };
+
+  let cityAnchorContext = null;
+  if (worldState.customCities) {
+    try {
+      const citiesGeojson = await readJson(
+        JSON_URLS.citiesGeojson,
+        { defaultValue: null, force: true },
+      ).catch(() => null);
+
+      const regionGeometryById = new Map();
+      for (const region of catalog) {
+        if (region?.id && region?.geometry) regionGeometryById.set(region.id, region.geometry);
+      }
+
+      // Compatibility fallback for a map whose primary catalog came from
+      // loadRegionCatalog() rather than rendered features.
+      if (regionGeometryById.size === 0) {
+        for (const feature of renderedFeatures) {
+          const props = feature?.properties ?? {};
+          const id = normalizeString(
+            props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id,
+          );
+          if (id && feature?.geometry) regionGeometryById.set(id, feature.geometry);
+        }
+      }
+
+      const cities = normalizeArray(citiesGeojson?.features)
+        .map((feature) => {
+          const props = feature?.properties ?? {};
+          const coordinates = feature?.geometry?.type === "Point"
+            ? feature.geometry.coordinates
+            : null;
+          const name = normalizeString(props.city || props.name);
+          const aliases = new Set([name]);
+          const renamed = normalizeString(worldState.cityRenames?.[name.toLowerCase()]);
+          if (renamed) aliases.add(renamed);
+          return {
+            aliases: [...aliases].filter(Boolean),
+            coordinates,
+            name,
+          };
+        })
+        .filter((city) => city.name && Array.isArray(city.coordinates) && city.coordinates.length >= 2);
+
+      if (cities.length && regionGeometryById.size) {
+        cityAnchorContext = { cities, regionGeometryById };
+      }
+    } catch (error) {
+      console.warn("[geo resolver] custom city/region anchor data unavailable; using normal geography resolver.", error);
+    }
+  }
+
+  const mentionedCitiesIn = (text) => {
+    if (!cityAnchorContext) return [];
+    const haystack = ` ${regionKey(text)} `;
+    if (!haystack.trim()) return [];
+    const matches = [];
+    for (const city of cityAnchorContext.cities) {
+      const matched = city.aliases.some((alias) => {
+        const key = regionKey(alias);
+        return key.length >= 3 && haystack.includes(` ${key} `);
+      });
+      if (matched) matches.push(city);
+    }
+    return matches;
+  };
+
+  const containingRegionIdsForCity = (city, candidates) => {
+    if (!cityAnchorContext || !city || !Array.isArray(candidates) || candidates.length === 0) return [];
+    const hits = [];
+    for (const region of candidates) {
+      const geometry = cityAnchorContext.regionGeometryById.get(region.id);
+      if (geometry && pointInGeometry(city.coordinates, geometry)) hits.push(region.id);
+    }
+    return [...new Set(hits)];
+  };
+
+  const cityAnchoredRegionId = (transfer, candidates) => {
+    if (!cityAnchorContext || !Array.isArray(candidates) || candidates.length === 0) return "";
+
+    // Phase 8B.2.11: city anchoring is intentionally LOCAL to this operation.
+    // Never fall through to the whole event description here: one event commonly
+    // names several simultaneous captures, and using event-wide prose allowed the
+    // Warsaw marker to hijack a perfectly exact "Piotrków" operation.
+    const contexts = [
+      normalizeString(transfer?.note),
+      `${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`,
+    ];
+
+    let anchors = [];
+    for (const context of contexts) {
+      anchors = mentionedCitiesIn(context);
+      if (anchors.length) break;
+    }
+    if (anchors.length === 0) return "";
+
+    const containing = new Set();
+    for (const city of anchors) {
+      const hits = containingRegionIdsForCity(city, candidates);
+      // A city point must identify exactly one losing-side region. Boundary points,
+      // overlapping bad geometry, or missing geometry fail safe instead of guessing.
+      if (hits.length !== 1) continue;
+      containing.add(hits[0]);
+    }
+
+    return containing.size === 1 ? [...containing][0] : "";
+  };
+
+  // If the event prose explicitly says control is being established/expanded/
+  // consolidated in a named city, that city's rendered region must be present in
+  // the structured control ops. This catches the exact partial-coverage failure
+  // where prose says "Płock, Częstochowa and Warsaw" but the transaction only
+  // carries operations for the first two.
+  const NARRATED_CONTROL_TARGET_CUE = /\b(?:captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n\w*|liberat\w*|retak\w*|recaptur\w*|takes?\s+(?:de[- ]?facto\s+)?control|assumes?\s+(?:de[- ]?facto\s+)?control|establish(?:es|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|expand(?:s|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|extend(?:s|ed|ing)?(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control|consolidat(?:e|es|ed|ing)(?:\s+[a-z0-9'’-]+){0,4}\s+(?:de[- ]?facto\s+)?control)\b/i;
+
+  const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const cityClaimedAsControlTarget = (text, city) => {
+    const haystack = regionKey(text);
+    if (!haystack) return false;
+
+    for (const alias of city.aliases) {
+      const key = regionKey(alias);
+      if (key.length < 3) continue;
+      const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(key)}(?=$|[^a-z0-9])`, "g");
+      for (const match of haystack.matchAll(pattern)) {
+        const cityIndex = Number(match.index || 0) + normalizeString(match[1]).length;
+        const before = haystack.slice(Math.max(0, cityIndex - 220), cityIndex);
+        const clause = before.split(/[.!?;\n]/).pop() || before;
+        if (NARRATED_CONTROL_TARGET_CUE.test(clause)) return true;
+      }
+    }
+
+    return false;
+  };
+
   const expandWholeCountry = (transfer) => {
-    const target = toCountryName(normalizeString(transfer?.regionId) || normalizeString(transfer?.regionName));
+    const target = resolveOwnerName(
+      normalizeString(transfer?.regionId) ||
+      normalizeString(transfer?.regionName),
+    );
     const key = canonicalOwnerKey(target);
     if (!key) return [];
-    const toKey = canonicalOwnerKey(toCountryName(transfer?.toCode));
+
+    const toKey = canonicalOwnerKey(transfer?.toCode);
     const owned = catalog.filter((region) => {
       const owner = ownerKeyOf(region.id);
       return owner === key && owner !== toKey;
     });
+
     return owned.map((region) => ({
       ...transfer,
-      fromCode: toCountryName(normalizeString(transfer?.fromCode)) || target,
+      fromCode: resolveOwnerName(transfer?.fromCode) || target,
       regionId: region.id,
       regionName: region.name,
       wholeCountry: undefined,
     }));
   };
 
-  const resolve = (transfer) => {
-    // A model that did emit a real id keeps working.
-    if (byId.has(normalizeString(transfer?.regionId))) return normalizeString(transfer.regionId);
+  const deterministicResolve = (transfer, event) => {
+    const requestedId = normalizeString(transfer?.regionId);
+    if (byId.has(requestedId)) {
+      return requestedId;
+    }
+
     const fromKey = canonicalOwnerKey(transfer?.fromCode);
-    // Otherwise the name may be in either field: the prompt puts it in regionId,
-    // the schema also offers regionName.
+
+    const aliasedIds = byAliasId.get(requestedId) ?? [];
+    if (aliasedIds.length === 1) return aliasedIds[0].id;
+    if (aliasedIds.length > 1 && fromKey) {
+      const owned = aliasedIds.filter((region) => ownerKeyOf(region.id) === fromKey);
+      if (owned.length === 1) return owned[0].id;
+    }
+    const ownedCandidates = fromKey ? regionsOwnedBy(transfer?.fromCode) : [];
+
+    // A city explicitly named INSIDE THIS OPERATION may disambiguate a historical
+    // or friendly label (e.g. regionId "Masovia" + note "Warsaw"). Crucially this
+    // no longer reads the event-wide prose, so another city in the same event
+    // cannot hijack an exact rendered region such as Piotrków.
+    const anchored = cityAnchoredRegionId(transfer, ownedCandidates);
+    if (anchored) return anchored;
+
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
       const query = regionKey(candidate);
       if (!query) continue;
+
       const matches = byName.get(query) ?? [];
       if (matches.length === 1) return matches[0].id;
-      // Region names repeat across countries ("Santa Cruz", "Georgia"). Prefer the
-      // one the transfer says it is taking territory from; a guess would flip a
-      // border on the wrong continent, which is worse than changing nothing.
+
       if (matches.length > 1 && fromKey) {
         const owned = matches.filter((region) => ownerKeyOf(region.id) === fromKey);
         if (owned.length === 1) return owned[0].id;
       }
-      // Near-miss within the losing side's own regions: containment either way
-      // ("Ostpreussen" for "Ostpreussen-Sud") is safe when it is unique there.
+
+      // This is intentionally the LAST deterministic fuzzy-ish rule. Substring
+      // matching inside the losing side is safe only when exactly one map region
+      // survives. Anything harder belongs to the bounded semantic geography pass.
       if (fromKey && query.length >= 4) {
         const contains = regionsOwnedBy(transfer.fromCode).filter((region) => {
           const name = regionKey(region.name);
@@ -2872,23 +3248,38 @@ const resolveRegionTransfers = async (containers, world) => {
         if (contains.length === 1) return contains[0].id;
       }
     }
+
     return "";
   };
 
-  // How many regions an UNFLAGGED transfer may move by being reinterpreted as a
-  // polity name. A real whole-country handover is dozens of regions and should say
-  // so with wholeCountry:true; a handful is the plausible size of a region/polity
-  // name collision, which is the case this fallback exists for.
-  const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
+  const pushUniqueTransfer = (target, transfer) => {
+    const id = normalizeString(transfer?.regionId);
+    const toCode = regionKey(transfer?.toCode);
+    if (!id || !toCode) return;
+
+    const duplicate = target.some(
+      (entry) =>
+        normalizeString(entry?.regionId) === id &&
+        regionKey(entry?.toCode) === toCode,
+    );
+
+    if (!duplicate) target.push(transfer);
+  };
 
   const unresolved = [];
-  for (const { impacts, path } of containers) {
+  const semanticPending = [];
+  const deterministicDestinations = new Map();
+
+  for (const [containerIndex, container] of containers.entries()) {
+    const { impacts, path, event } = container;
     const transfers = normalizeArray(impacts?.regionTransfers);
     if (transfers.length === 0) continue;
+
     const resolved = [];
-    for (const transfer of transfers) {
-      // An explicit whole-country transfer expands FIRST: "annex Belgium" must move
-      // every Belgian region even though a region may share the country's name.
+    const destinationByRegion = new Map();
+    deterministicDestinations.set(path, destinationByRegion);
+
+    for (const [transferIndex, transfer] of transfers.entries()) {
       if (transfer?.wholeCountry === true) {
         const expanded = expandWholeCountry(transfer);
         if (expanded.length) {
@@ -2897,59 +3288,345 @@ const resolveRegionTransfers = async (containers, world) => {
               `"${normalizeString(transfer?.regionId)}" -> ${normalizeString(transfer?.toCode)}: ` +
               `${expanded.length} region(s).`,
           );
-          resolved.push(...expanded);
+          for (const item of expanded) {
+            pushUniqueTransfer(resolved, item);
+            destinationByRegion.set(item.regionId, regionKey(item.toCode));
+          }
           continue;
         }
       }
-      const regionId = resolve(transfer);
+
+      const regionId = deterministicResolve(transfer, event);
       if (regionId) {
-        transfer.regionId = regionId;
-        resolved.push(transfer);
+        const row = byId.get(regionId);
+        const normalized = {
+          ...transfer,
+          regionId,
+          // Preview/apply must expose the ACTUAL canonical map region we resolved,
+          // not keep an AI-authored historical/friendly label that can hide a bad
+          // mapping (e.g. prose says one place while regionId points elsewhere).
+          regionName: row?.name || normalizeString(transfer?.regionName) || regionId,
+        };
+        pushUniqueTransfer(resolved, normalized);
+        destinationByRegion.set(regionId, regionKey(transfer?.toCode));
         continue;
       }
-      // Not a region the map knows — it MAY be a POLITY the model meant wholesale
-      // ("Austria-Hungary is partitioned"). But the prompt also tells the model to
-      // put a plain REGION name in regionId whenever it does not know the id, so an
-      // unmatched name is the ROUTINE case here, not an exceptional one. Expanding
-      // every one of them meant a single fuzzy name could hand over an entire
-      // nation's territory in a turn whose events never mentioned it — reported as
-      // "captured one region and it reverted all of Ukraine".
-      //
-      // An explicit wholeCountry:true still expands without limit (handled above);
-      // that is the model saying it means a whole nation. Without the flag, accept
-      // an expansion only while it is small enough to be a genuine name collision.
-      // Anything larger goes to the retry, which names the exact region that failed
-      // to match — and if the retry runs out, dropping one transfer is a far smaller
-      // failure than silently moving a country.
+
+      // If a polity name was used as shorthand for a total takeover, preserve the
+      // old compatibility behavior. Explicit wholeCountry remains strongly preferred.
       const expanded = expandWholeCountry(transfer);
       if (expanded.length && expanded.length <= IMPLICIT_WHOLE_COUNTRY_LIMIT) {
         console.info(
-          `[ai] ${path}.regionTransfers treated "${normalizeString(transfer?.regionId)}" as a whole ` +
+          `[ai] ${path}.regionTransfers treated "${normalizeString(transfer?.regionId)}" as a small whole ` +
             `country -> ${normalizeString(transfer?.toCode)}: ${expanded.length} region(s).`,
         );
-        resolved.push(...expanded);
+        for (const item of expanded) {
+          pushUniqueTransfer(resolved, item);
+          destinationByRegion.set(item.regionId, regionKey(item.toCode));
+        }
         continue;
       }
-      if (expanded.length) {
-        console.warn(
-          `[ai] ${path}.regionTransfers REFUSED to treat "${normalizeString(transfer?.regionId)}" as a ` +
-            `whole country -> ${normalizeString(transfer?.toCode)}: it would move ${expanded.length} ` +
-            `regions and the transfer did not set wholeCountry. Asking for an exact region id instead.`,
-        );
+      if (expanded.length > IMPLICIT_WHOLE_COUNTRY_LIMIT) {
+        unresolved.push({
+          label: normalizeString(transfer?.regionName) || normalizeString(transfer?.regionId),
+          fromCode: normalizeString(transfer?.fromCode),
+          path,
+          candidates: regionsOwnedBy(transfer?.fromCode),
+          reason: `implicit whole-country expansion would move ${expanded.length} regions; use wholeCountry:true or an exact region`,
+        });
+        continue;
       }
-      unresolved.push({
-        label: normalizeString(transfer?.regionName) || normalizeString(transfer?.regionId),
-        fromCode: normalizeString(transfer?.fromCode),
+
+      const candidates = regionsOwnedBy(transfer?.fromCode);
+      const label =
+        normalizeString(transfer?.regionName) ||
+        normalizeString(transfer?.regionId);
+
+      const record = {
+        candidates,
+        containerIndex,
+        event,
+        impacts,
+        label,
         path,
-        candidates: regionsOwnedBy(transfer?.fromCode),
+        resolved,
+        semanticIndex: semanticPending.length,
+        transfer,
+        transferIndex,
+      };
+
+      // No losing-side region set means there is nothing bounded for the semantic
+      // resolver to choose from. Do not hand it the whole planet and ask for vibes.
+      if (!label || candidates.length === 0) {
+        unresolved.push({
+          label,
+          fromCode: normalizeString(transfer?.fromCode),
+          path,
+          candidates,
+        });
+        continue;
+      }
+
+      semanticPending.push(record);
+    }
+
+    impacts.regionTransfers = resolved;
+  }
+
+  const semanticPlans = [];
+
+  for (let offset = 0; offset < semanticPending.length; offset += GEOGRAPHY_RESOLVER_BATCH_SIZE) {
+    const batch = semanticPending.slice(offset, offset + GEOGRAPHY_RESOLVER_BATCH_SIZE);
+
+    const items = batch.map((record) => ({
+      index: record.semanticIndex,
+      sourcePlace: record.label,
+      fromCode: resolveOwnerName(record.transfer?.fromCode) || normalizeString(record.transfer?.fromCode),
+      toCode: resolveOwnerName(record.transfer?.toCode) || normalizeString(record.transfer?.toCode),
+      event: {
+        date: normalizeString(record.event?.date),
+        title: normalizeString(record.event?.title),
+        description:
+          normalizeString(record.event?.description) ||
+          normalizeString(record.event?.summary),
+      },
+      candidateRegions: record.candidates
+        .slice(0, GEOGRAPHY_RESOLVER_MAX_CANDIDATES)
+        .map((region) => ({
+          id: region.id,
+          name: region.name,
+          baseCountry: region.country || "",
+        })),
+      omittedCandidateCount: Math.max(
+        0,
+        record.candidates.length - GEOGRAPHY_RESOLVER_MAX_CANDIDATES,
+      ),
+    }));
+
+    const fallback = () => ({
+      resolutions: items.map((item) => ({
+        index: item.index,
+        status: "UNRESOLVED",
+        relation: "UNRESOLVED",
+        regionIds: [],
+        confidence: 0,
+        reason: "Geography resolver unavailable; safe failure.",
+      })),
+    });
+
+    let payload = fallback();
+    let source = "fallback";
+
+    try {
+      const response = await runJsonTask("geographyResolver", {
+        fallback,
+        validatePayload: validateGeographyResolution,
+        userMessage:
+          "Resolve every supplied unresolved geography item using only its supplied candidateRegions. " +
+          "Resolve by REAL geographic meaning, not spelling similarity. Use the event title/description as disambiguating evidence: " +
+          "if the event anchors the change on a named city, choose only the candidate region that actually contains that city; the city anchor outranks a merely similar or historically related sourcePlace label. " +
+          "historical areas must map to their genuine modern/scenario equivalents, not a similarly named neighboring region. " +
+          "If you are not highly certain, return UNRESOLVED rather than guessing. Return exactly one resolution per item index.",
+        variables: {
+          geographyResolverItems: JSON.stringify(items, null, 2),
+        },
       });
+      payload = response.payload || payload;
+      source = response.generation?.source || "ai";
+    } catch (error) {
       console.warn(
-        `[ai] ${path}.regionTransfers dropped "${normalizeString(transfer?.regionId)}"` +
-          `${transfer?.regionName ? ` (${normalizeString(transfer.regionName)})` : ""} -> ` +
-          `${normalizeString(transfer?.toCode)}: no map region matches that id or name.`,
+        "[geo resolver] semantic geography pass failed; unresolved transfers will fail safe.",
+        error,
       );
     }
-    impacts.regionTransfers = resolved;
+
+    const byIndex = new Map(
+      normalizeArray(payload?.resolutions).map((resolution) => [
+        Number(resolution?.index),
+        resolution,
+      ]),
+    );
+
+    for (const record of batch) {
+      const resolution = byIndex.get(record.semanticIndex);
+      const relation = normalizeString(resolution?.relation).toUpperCase();
+      const status = normalizeString(resolution?.status).toUpperCase();
+      const confidence = Number(resolution?.confidence);
+      const allowed = new Set(record.candidates.map((region) => region.id));
+      const regionIds = [
+        ...new Set(
+          normalizeArray(resolution?.regionIds)
+            .map((id) => normalizeString(id))
+            .filter(Boolean),
+        ),
+      ];
+
+      const singleRegionRelation =
+        relation === "REGION_ALIAS" ||
+        relation === "CITY_CONTAINING_REGION";
+      const areaRelation =
+        relation === "HISTORICAL_AREA" ||
+        relation === "TRANSLATED_AREA";
+      // historical/translated areas often span several real map regions. 0.95 is
+      // already a very strong answer once every returned id is deterministically
+      // proven to belong to the losing side's bounded candidate set; demanding
+      // 0.96 was just enough to throw away correct mappings like Southern Dobruja.
+      const threshold = areaRelation ? 0.95 : 0.93;
+
+      const valid =
+        status === "RESOLVED" &&
+        Number.isFinite(confidence) &&
+        confidence >= threshold &&
+        regionIds.length > 0 &&
+        regionIds.every((id) => allowed.has(id)) &&
+        (!singleRegionRelation || regionIds.length === 1) &&
+        (!areaRelation || regionIds.length <= GEOGRAPHY_RESOLVER_MAX_AREA_REGIONS) &&
+        (singleRegionRelation || areaRelation);
+
+      if (!valid) {
+        unresolved.push({
+          label: record.label,
+          fromCode: normalizeString(record.transfer?.fromCode),
+          path: record.path,
+          candidates: record.candidates,
+        });
+
+        console.warn(
+          `[geo resolver] ${record.path}.regionTransfers[${record.transferIndex}] ` +
+            `"${record.label}" remains unresolved; no safe candidate mapping was accepted.`,
+          {
+            source,
+            status,
+            relation,
+            confidence,
+            regionIds,
+          },
+        );
+        continue;
+      }
+
+      semanticPlans.push({
+        ...record,
+        confidence,
+        relation,
+        regionIds,
+        source,
+      });
+    }
+  }
+
+  // A single event cannot semantically resolve the same region to two different
+  // recipients. This catches vague split-settlement wording such as two transfers
+  // both saying merely "Macedonia" and prevents the resolver from awarding the
+  // same province twice based on historical vibes.
+  const conflictingPlans = new Set();
+  const semanticDestinations = new Map();
+
+  for (const plan of semanticPlans) {
+    const deterministic = deterministicDestinations.get(plan.path) || new Map();
+
+    for (const regionId of plan.regionIds) {
+      const destination = regionKey(plan.transfer?.toCode);
+      const deterministicDestination = deterministic.get(regionId);
+
+      if (
+        deterministicDestination &&
+        deterministicDestination !== destination
+      ) {
+        conflictingPlans.add(plan);
+        continue;
+      }
+
+      const key = `${plan.path}|${regionId}`;
+      const existing = semanticDestinations.get(key);
+      if (existing && existing.destination !== destination) {
+        conflictingPlans.add(plan);
+        conflictingPlans.add(existing.plan);
+      } else if (!existing) {
+        semanticDestinations.set(key, {
+          destination,
+          plan,
+        });
+      }
+    }
+  }
+
+  for (const plan of semanticPlans) {
+    if (conflictingPlans.has(plan)) {
+      unresolved.push({
+        label: plan.label,
+        fromCode: normalizeString(plan.transfer?.fromCode),
+        path: plan.path,
+        candidates: plan.candidates,
+      });
+      console.warn(
+        `[geo resolver] rejected ambiguous cross-recipient mapping for "${plan.label}" in ${plan.path}; ` +
+          "the same map region was claimed by incompatible transfers in one event.",
+      );
+      continue;
+    }
+
+    for (const regionId of plan.regionIds) {
+      const row = byId.get(regionId);
+      if (!row) continue;
+      pushUniqueTransfer(plan.resolved, {
+        ...plan.transfer,
+        regionId,
+        regionName: row.name,
+        wholeCountry: undefined,
+      });
+    }
+
+    console.info(
+      `[geo resolver] "${plan.label}" -> ` +
+        `${plan.regionIds.map((id) => `${byId.get(id)?.name || id} (${id})`).join(", ")} ` +
+        `(${plan.relation.toLowerCase()}, ${plan.confidence.toFixed(2)}, ${plan.source}).`,
+    );
+  }
+
+  if (enforceNarratedCityCoverage && cityAnchorContext) {
+    for (const { impacts, path, event } of containers) {
+      const controlOps = normalizeArray(impacts?.regionTransfers)
+        .filter((entry) => normalizeString(entry?.op).toLowerCase() === "control");
+      if (controlOps.length === 0) continue;
+
+      const eventText = [
+        normalizeString(event?.title),
+        normalizeString(event?.description) || normalizeString(event?.summary),
+      ].filter(Boolean).join(". ");
+      if (!eventText) continue;
+
+      const resolvedRegionIds = new Set(
+        controlOps.map((entry) => normalizeString(entry?.regionId)).filter(Boolean),
+      );
+
+      for (const city of cityAnchorContext.cities) {
+        if (!cityClaimedAsControlTarget(eventText, city)) continue;
+
+        const hits = containingRegionIdsForCity(city, catalog);
+        if (hits.length !== 1) continue;
+        const regionId = hits[0];
+        if (resolvedRegionIds.has(regionId)) continue;
+
+        const row = byId.get(regionId);
+        unresolved.push({
+          kind: "narrated-city-coverage",
+          label: city.name,
+          cityName: city.name,
+          regionId,
+          regionName: row?.name || regionId,
+          fromCode: "",
+          path,
+          candidates: row ? [row] : [],
+        });
+
+        console.warn(
+          `[geo resolver] ${path}.regionControlOps narration claims control changes in ` +
+            `${city.name}, but no control op targets its rendered region ` +
+            `${row?.name || regionId} (${regionId}).`,
+        );
+      }
+    }
   }
 
   // Claims name regions the same way transfers do — an exact id when the model
@@ -2996,6 +3673,58 @@ const resolveRegionTransfers = async (containers, world) => {
   return unresolved;
 };
 
+// regionControlOps use the SAME geography vocabulary and bounded resolver as
+// legal transfers, but they are bounded by current DE-FACTO control instead of
+// sovereignty. Proxy them through the proven resolver rather than maintain two
+// subtly different historical-geography engines.
+const resolveRegionControlOps = async (containers, world) => {
+  const proxyContainers = containers.map((container) => {
+    const proxies = normalizeArray(container?.impacts?.regionControlOps).map((op, index) => {
+      const realToCode = normalizeString(op?.toCode);
+      const proxyToCode =
+        realToCode ||
+        normalizeString(op?.actorCode) ||
+        normalizeString(op?.claimantCode) ||
+        normalizeString(op?.fromCode) ||
+        "Unresolved polity";
+
+      return {
+        ...cloneValue(op),
+        toCode: proxyToCode,
+        __controlOpIndex: index,
+        __hadRealToCode: Boolean(realToCode),
+      };
+    });
+
+    return {
+      ...container,
+      impacts: { regionTransfers: proxies },
+    };
+  });
+
+  const unresolved = await resolveRegionTransfers(proxyContainers, world, {
+    ownershipMode: "control",
+    enforceNarratedCityCoverage: true,
+  });
+
+  for (let index = 0; index < containers.length; index += 1) {
+    const targetImpacts = containers[index]?.impacts;
+    if (!targetImpacts || typeof targetImpacts !== "object") continue;
+
+    targetImpacts.regionControlOps = normalizeArray(proxyContainers[index]?.impacts?.regionTransfers)
+      .map((entry) => {
+        const next = { ...entry };
+        delete next.__controlOpIndex;
+        const hadRealToCode = next.__hadRealToCode === true;
+        delete next.__hadRealToCode;
+        if (!hadRealToCode && next.op !== "control") delete next.toCode;
+        return next;
+      });
+  }
+
+  return unresolved;
+};
+
 // One retry's worth of corrective vocabulary: the exact regions the losing side
 // currently owns, so a model that wrote "Pomerania" can resend the same answer
 // with the real names/ids ("Pomorskie (POL.11_1)") instead of losing the map
@@ -3027,6 +3756,45 @@ const buildTransferFeedback = (unresolved) => {
   return lines.join("\n");
 };
 
+const buildControlFeedback = (unresolved) => {
+  const coverage = normalizeArray(unresolved)
+    .filter((entry) => entry?.kind === "narrated-city-coverage");
+  const ordinary = normalizeArray(unresolved)
+    .filter((entry) => entry?.kind !== "narrated-city-coverage");
+
+  const chunks = [];
+  if (ordinary.length > 0) {
+    chunks.push(
+      buildTransferFeedback(ordinary)
+        .replaceAll(".regionTransfers", ".regionControlOps")
+        .replaceAll("these regionTransfers", "these regionControlOps")
+        .replaceAll("applied transfer", "applied control operation")
+        .replaceAll("currently owned by", "currently controlled by")
+        .replaceAll("current owner", "current controller")
+        .replaceAll("drop a transfer", "drop a control operation"),
+    );
+  }
+
+  for (const entry of coverage) {
+    chunks.push(
+      `${entry.path}.regionControlOps: event narration explicitly says de-facto control changes in ` +
+        `${entry.cityName || entry.label}, which the rendered map places in ` +
+        `${entry.regionName} (${entry.regionId}), but no control operation targets that region. ` +
+        `Add the matching control operation using regionId "${entry.regionId}" and regionName ` +
+        `"${entry.regionName}" with the correct current controller/fromCode and new controller/toCode, ` +
+        `or revise the event prose so it does not claim control changed there.`,
+    );
+  }
+
+  if (coverage.length > 0) {
+    chunks.push(
+      "Resend the same transaction with every narrated city/territory control change represented by a matching regionControlOps entry. Do not silently drop a named control change merely because another nearby region was resolved successfully.",
+    );
+  }
+
+  return chunks.join("\n");
+};
+
 // Also canonicalizes region ids in place (see resolveRegionTransfers): runJsonTask
 // hands the accepted payload straight to the caller, and a payload is only accepted
 // once this returns clean, so every applied transfer has passed through here.
@@ -3050,11 +3818,12 @@ const validateChatOpener = (chatLike, path) => {
   return "";
 };
 
-// Event text that claims territory changed hands. Word-boundary anchored so
-// "preoccupied" or "occupational" never match; deliberately narrow (capture
-// verbs, not war verbs) so a defensive battle that moved no borders — a
-// legitimate zero-transfer turn — never trips the reluctance guard below.
-const CAPTURE_LANGUAGE = /\b(captur\w*|seiz\w*|annex\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|cedes?|ceded|ceding|cession|fell to|falls? to)\b/i;
+// Event text that claims control changed hands (capture verbs) or that legal
+// sovereignty moved (cession, annexation, treaty). Word-boundary anchored so
+// "preoccupied" never matches; deliberately narrow so a defensive battle that
+// moved no borders never trips the reluctance guards below.
+const CONTROL_CHANGE_LANGUAGE = /\b(captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|fell to|falls? to|takes? control|assumes? control)\b/i;
+const LEGAL_TRANSFER_LANGUAGE = /\b(annex\w*|cedes?|ceded|ceding|cession|sovereignty (?:passes|transfers?|is transferred)|treaty transfer|formal(?:ly)? transfer(?:red)?|incorporat\w*|unification|territorial award|sold|sale of territory)\b/i;
 
 // Strict/salvage discipline, the same contract clampTimelineDates follows:
 // the FIRST attempt returns corrective errors so the model can fix its own
@@ -3083,8 +3852,12 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
 export const validateGeneratedWorldChanges = async (candidate, world, { strictTransfers = false, captureGuard = true } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
-    ? candidate.events.map((event, index) => ({ impacts: event?.impacts, path: `$.events[${index}].impacts` }))
-    : [{ impacts: candidate?.impacts, path: "$.impacts" }];
+    ? candidate.events.map((event, index) => ({ event, impacts: event?.impacts, path: `$.events[${index}].impacts` }))
+    : [{
+        event: { date: "", title: "Game master intervention", description: normalizeString(candidate?.summary) },
+        impacts: candidate?.impacts,
+        path: "$.impacts",
+      }];
   // Every project an op could legitimately address: what is already on the
   // board, plus anything a create earlier in this same payload opens.
   const knownProjects = new Map();
@@ -3095,9 +3868,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
     if (normalizeString(project?.id)) knownProjects.set(normalizeString(project.id), name);
   }
 
-  const unresolvedTransfers = await resolveRegionTransfers(containers, world);
+  const unresolvedTransfers = await resolveRegionTransfers(containers, world, { ownershipMode: "sovereignty" });
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
+  }
+  const unresolvedControlOps = await resolveRegionControlOps(containers, world);
+  if (strict && unresolvedControlOps.length > 0) {
+    return buildControlFeedback(unresolvedControlOps);
   }
   // Reluctance guard (strict attempt only): events that NARRATE a capture while
   // the whole payload ships ZERO regionTransfers are the recurring field report
@@ -3113,11 +3890,22 @@ export const validateGeneratedWorldChanges = async (candidate, world, { strictTr
       (sum, { impacts }) => sum + normalizeArray(impacts?.regionTransfers).length,
       0,
     );
+    const totalControlOps = containers.reduce(
+      (sum, { impacts }) => sum + normalizeArray(impacts?.regionControlOps).length,
+      0,
+    );
+    const text = (event) => `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+    if (totalControlOps === 0) {
+      const controlEvent = candidate.events.find((event) =>
+        CONTROL_CHANGE_LANGUAGE.test(text(event)) && !LEGAL_TRANSFER_LANGUAGE.test(text(event)));
+      if (controlEvent) {
+        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the exact region id or the grounded place wording, fromCode = the current controller) or rewrite the event so that no control changed hands.`;
+      }
+    }
     if (totalTransfers === 0) {
-      const captureEvent = candidate.events.find((event) =>
-        CAPTURE_LANGUAGE.test(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`));
-      if (captureEvent) {
-        return `Your events describe territory changing hands (e.g. "${normalizeString(captureEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Territorial narration and the map must never disagree: add impacts.regionTransfers entries ({"regionId": exact id or the region's plain name, "toCode": the new owner}) to EVERY event whose text says a region was captured, seized, occupied, annexed, ceded, liberated, or retaken, covering each region it names or implies. If nothing genuinely changed hands in this period, remove the capture language from those events instead, and resend.`;
+      const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
+      if (legalEvent) {
+        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region, or wholeCountry:true for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
       }
     }
   }
@@ -8528,10 +9316,50 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     directedEvents = merged.events;
   }
 
+
+  // Second narrow pass: the surviving prose and front state become the native
+  // disputed-region machinery (regionControlOps) without pretending every
+  // occupation is international law. Its additions go through the same
+  // geography resolver as the simulator's own ops, bounded by current control;
+  // an unresolved place fails safe by disappearing rather than minting a
+  // phantom region key. A failed pass never costs the turn.
+  let territoryEvents = directedEvents;
+  try {
+    territoryEvents = await directGeneratedTerritoryOps({
+      events: directedEvents,
+      world: bundle.world,
+      analyzeBatch: async ({ candidates, territorialState }) =>
+        runJsonTask("territoryDirector", {
+          fallback: () => ({
+            eventOrders: [],
+            summary: "Territory director unavailable; existing legal/control impacts preserved.",
+          }),
+          signal,
+          userMessage:
+            "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.",
+          variables: {
+            territoryDirectorCandidates: JSON.stringify(candidates, null, 2),
+            territoryDirectorState: JSON.stringify(territorialState, null, 2),
+            territorialControlContext: await buildTerritorialControlContext(bundle.world),
+          },
+        }),
+    });
+    const containers = territoryEvents.map((event, index) => ({
+      event,
+      impacts: event?.impacts,
+      path: `$.events[${index}].impacts`,
+    }));
+    await resolveRegionControlOps(containers, bundle.world);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[OH territory director] pass failed; the simulator's territorial operations stand.", error);
+    territoryEvents = directedEvents;
+  }
+
   const result = {
     catalyst: merged.catalyst,
     clearActions: merged.clearActions,
-    events: directedEvents,
+    events: territoryEvents,
     mode,
     outreach: merged.diplomaticOutreach,
     stopDate: merged.stopDate,
@@ -9041,12 +9869,181 @@ const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game
   return "";
 };
 
+const resolveGameMasterLifecycleIdentity = (token, world) => {
+  const requested = normalizeString(token);
+  if (!requested) return "";
+  // Callers already hand us the live/normalized world. Re-normalizing it here is
+  // surprisingly expensive when this helper is used while scanning map ownership.
+  const resolution = resolvePolityIdentity(requested, world, {
+    allowUnknown: false,
+    // Do NOT ask the generic identity resolver whether a stock/base name is
+    // "active". Its stock-base compatibility path intentionally permits ordinary
+    // modern maps with no polity registry, but that is not enough evidence for GM
+    // lifecycle semantics in a historical save (1915 Poland was the bug here).
+    requireActive: false,
+    allowCoreMatch: true,
+    allowStockBase: true,
+  });
+  return normalizeString(resolution?.resolved);
+};
+
+const buildGameMasterActivePolitySet = async (world) =>
+  new Set((await buildCurrentCanonicalPolityVocabulary(world)).map(gameMasterPolityKey));
+
+// The AI authors the CURRENT regime/display name, but native code owns stable
+// polity identity and existence: a stock map name is not proof that the polity
+// currently exists (1915 Poland). A create/update aimed at a known dormant
+// lineage becomes a restore.
+const normalizeGameMasterPolityLifecycle = (candidate, world, baseActivePolities = new Set()) => {
+  const active = new Set(baseActivePolities);
+
+  for (const event of normalizeArray(candidate?.events)) {
+    const changes = event?.impacts?.polityChanges;
+    if (!Array.isArray(changes)) continue;
+
+    event.impacts.polityChanges = changes.map((change) => {
+      if (!change || typeof change !== "object" || Array.isArray(change)) return change;
+      const operation = normalizeString(change.operation).toLowerCase();
+      const code = normalizeString(change.code);
+      if (!code) return change;
+
+      const knownIdentity = resolveGameMasterLifecycleIdentity(code, world);
+      const knownKey = gameMasterPolityKey(knownIdentity || code);
+      const activeIdentity = knownKey && active.has(knownKey) ? (knownIdentity || code) : "";
+
+      let normalizedChange = change;
+
+      if (["create", "update"].includes(operation) && knownIdentity && !activeIdentity) {
+        normalizedChange = {
+          ...change,
+          operation: "restore",
+          code: knownIdentity,
+        };
+      } else if (operation === "restore" && knownIdentity) {
+        normalizedChange = {
+          ...change,
+          code: knownIdentity,
+        };
+      }
+
+      const finalOperation = normalizeString(normalizedChange?.operation).toLowerCase();
+      const finalCode =
+        resolveGameMasterLifecycleIdentity(normalizedChange?.code, world) ||
+        toCountryName(normalizeString(normalizedChange?.code)) ||
+        normalizeString(normalizedChange?.code);
+      const finalKey = gameMasterPolityKey(finalCode);
+
+      if (["create", "restore"].includes(finalOperation) && finalKey) active.add(finalKey);
+      if (finalOperation === "dissolve" && finalKey) active.delete(finalKey);
+
+      return normalizedChange;
+    });
+  }
+
+  return candidate;
+};
+
+const validateGameMasterPolityLifecycle = (candidate, world, baseActivePolities = new Set()) => {
+  const active = new Set(baseActivePolities);
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(candidate?.events).length; eventIndex += 1) {
+    const event = normalizeArray(candidate?.events)[eventIndex];
+    const changes = normalizeArray(event?.impacts?.polityChanges);
+
+    for (let changeIndex = 0; changeIndex < changes.length; changeIndex += 1) {
+      const change = changes[changeIndex];
+      const operation = normalizeString(change?.operation).toLowerCase();
+      const code = normalizeString(change?.code);
+      if (!code) continue;
+
+      const knownIdentity = resolveGameMasterLifecycleIdentity(code, world);
+      const stableIdentity = knownIdentity || toCountryName(code) || code;
+      const stableKey = gameMasterPolityKey(stableIdentity);
+      const activeIdentity = stableKey && active.has(stableKey) ? stableIdentity : "";
+
+      if (operation === "create" && activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to CREATE "${code}", but it already resolves to active polity "${activeIdentity}". Use update/rename for the existing polity instead of creating a duplicate identity.`;
+      }
+
+      if (operation === "restore" && activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to RESTORE "${code}", but "${activeIdentity}" is already active. Use update/rename if the current regime or display name is changing.`;
+      }
+
+      if (operation === "update" && !activeIdentity) {
+        return `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}] tries to UPDATE "${code}", but that polity is not currently active. Use restore for a known historical/dormant identity or create for a genuinely new polity.`;
+      }
+
+      if (["create", "restore"].includes(operation) && stableKey) active.add(stableKey);
+      if (operation === "dissolve" && stableKey) active.delete(stableKey);
+    }
+  }
+
+  return "";
+};
+
+// A newly created belligerent may not receive LEGAL sovereignty from the very
+// power it is fighting for independence in the same transaction: rebel gains
+// are control ops until a settlement or recognition.
+const validateGameMasterBreakawaySovereignty = (candidate) => {
+  const createdPolities = new Set();
+  for (const event of normalizeArray(candidate?.events)) {
+    for (const change of normalizeArray(event?.impacts?.polityChanges)) {
+      const operation = normalizeString(change?.operation).toLowerCase();
+      if (!["create", "restore"].includes(operation)) continue;
+      const code = normalizeString(change?.code);
+      const name = normalizeString(change?.name);
+      if (code) createdPolities.add(code.toLowerCase());
+      if (name) createdPolities.add(name.toLowerCase());
+    }
+  }
+  if (!createdPolities.size) return "";
+
+  const activeBreakawayPairs = [];
+  for (const update of normalizeArray(candidate?.warUpdates)) {
+    if (normalizeString(update?.op).toLowerCase() !== "start") continue;
+    const sideA = normalizeArray(update?.actors).map((value) => normalizeString(value)).filter(Boolean);
+    const sideB = normalizeArray(update?.opponents).map((value) => normalizeString(value)).filter(Boolean);
+    for (const a of sideA) {
+      for (const b of sideB) {
+        if (createdPolities.has(a.toLowerCase()) || createdPolities.has(b.toLowerCase())) {
+          activeBreakawayPairs.push([a, b]);
+        }
+      }
+    }
+  }
+  if (!activeBreakawayPairs.length) return "";
+
+  const opposingPair = (fromCode, toCode) => activeBreakawayPairs.some(([a, b]) => {
+    const from = normalizeString(fromCode).toLowerCase();
+    const to = normalizeString(toCode).toLowerCase();
+    return (a.toLowerCase() === to && b.toLowerCase() === from)
+      || (b.toLowerCase() === to && a.toLowerCase() === from);
+  });
+
+  for (let eventIndex = 0; eventIndex < normalizeArray(candidate?.events).length; eventIndex += 1) {
+    const event = normalizeArray(candidate?.events)[eventIndex];
+    const transfers = normalizeArray(event?.impacts?.regionTransfers);
+    for (let transferIndex = 0; transferIndex < transfers.length; transferIndex += 1) {
+      const transfer = transfers[transferIndex];
+      const toCode = normalizeString(transfer?.toCode);
+      const fromCode = normalizeString(transfer?.fromCode);
+      if (!createdPolities.has(toCode.toLowerCase()) || !opposingPair(fromCode, toCode)) continue;
+      return `$.events[${eventIndex}].impacts.regionTransfers[${transferIndex}] attempts to transfer LEGAL sovereignty from "${fromCode}" to newly created belligerent "${toCode}" while their independence war is starting. A unilateral declaration, uprising, revolution or secession does not itself change legal sovereignty. Keep the prior sovereign legally in place and represent the disputed territory with regionControlOps (normally contest; use control only for territory the breakaway has decisively captured/administers). Legal sovereignty can move later through explicit recognition, cession, annexation or settlement.`;
+    }
+  }
+
+  return "";
+};
+
 const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, request = "" }) => {
   if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
   if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
 
   // Preview normalization only: this mutates the in-memory candidate the
   // administrator is about to inspect; no save/world writes happen here.
+  // Present-state activity comes from the live map, not from stock names.
+  const activePolities = await buildGameMasterActivePolitySet(world);
+  normalizeGameMasterPolityLifecycle(candidate, world, activePolities);
   normalizeGameMasterWarEventBindings(candidate);
 
   if (normalizeString(candidate.mode) !== mode) {
@@ -9073,6 +10070,12 @@ const validateGameMasterPreviewPayload = async (candidate, { mode, world, game, 
 
   const chronologyError = validateGameMasterChronology(candidate, game);
   if (chronologyError) return chronologyError;
+
+  const lifecycleError = validateGameMasterPolityLifecycle(candidate, world, activePolities);
+  if (lifecycleError) return lifecycleError;
+
+  const breakawaySovereigntyError = validateGameMasterBreakawaySovereignty(candidate);
+  if (breakawaySovereigntyError) return breakawaySovereigntyError;
 
   // Resolve/validate map, unit, marker and chat operations now, while this is
   // still a preview. This may conservatively resolve a grounded place label to
@@ -9130,12 +10133,38 @@ const verifyGameMasterTerritoryPostconditions = (events, world) => {
       if (transfer?.wholeCountry) continue;
       const regionId = normalizeString(transfer?.regionId);
       const expected = gameMasterCanonicalPolityKey(transfer?.toCode, normalizedWorld);
+      // The sovereignty map is sparse: no row means the controller is the sovereign.
       const actual = gameMasterCanonicalPolityKey(
-        normalizedWorld.regionOwnershipOverrides?.[regionId],
+        normalizedWorld.regionSovereigntyOverrides?.[regionId] || normalizedWorld.regionOwnershipOverrides?.[regionId],
         normalizedWorld,
       );
       if (!regionId || !expected || actual !== expected) {
         return `territorial operation ${eventIndex}:${transferIndex} did not take effect for ${regionId || "unknown region"} (expected ${normalizeString(transfer?.toCode) || "target"}, found ${normalizeString(normalizedWorld.regionOwnershipOverrides?.[regionId]) || "no override"}).`;
+      }
+    }
+
+    for (let controlIndex = 0; controlIndex < normalizeArray(impacts.regionControlOps).length; controlIndex += 1) {
+      const control = normalizeArray(impacts.regionControlOps)[controlIndex];
+      const op = normalizeString(control?.op).toLowerCase();
+      const regionId = normalizeString(control?.regionId);
+      if (!regionId) {
+        return `de-facto control operation ${eventIndex}:${controlIndex} has no canonical region id after preview validation.`;
+      }
+      if (op === "control") {
+        const expected = gameMasterCanonicalPolityKey(control?.toCode, normalizedWorld);
+        const actual = gameMasterCanonicalPolityKey(normalizedWorld.regionOwnershipOverrides?.[regionId], normalizedWorld);
+        if (!expected || actual !== expected) {
+          return `de-facto control operation ${eventIndex}:${controlIndex} did not take effect for ${regionId} (expected ${normalizeString(control?.toCode) || "target"}).`;
+        }
+      }
+      if (op === "contest") {
+        const expected = gameMasterCanonicalPolityKey(control?.actorCode || control?.claimantCode, normalizedWorld);
+        const claimants = normalizeArray(normalizedWorld.regionClaimants?.[regionId])
+          .map((value) => gameMasterCanonicalPolityKey(value, normalizedWorld))
+          .filter(Boolean);
+        if (!expected || !claimants.includes(expected)) {
+          return `contest operation ${eventIndex}:${controlIndex} did not take effect for ${regionId} (expected claimant ${normalizeString(control?.actorCode || control?.claimantCode) || "unknown"}).`;
+        }
       }
     }
 
@@ -9202,6 +10231,7 @@ const gameMasterStateFingerprint = ({ game = {}, world = {}, events = [], colors
     world: {
       polityOverrides: normalizedWorld.polityOverrides,
       regionOwnershipOverrides: normalizedWorld.regionOwnershipOverrides,
+      regionSovereigntyOverrides: normalizedWorld.regionSovereigntyOverrides,
       regionClaimants: normalizedWorld.regionClaimants,
       countryStats: normalizedWorld.countryStats,
       countryTags: normalizedWorld.countryTags,
@@ -9238,6 +10268,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
     for (const [field, prefix] of [
       ["regionTransfers", "territory"],
       ["regionClaims", "claim"],
+      ["regionControlOps", "control"],
       ["polityChanges", "polity"],
       ["unitOps", "unit"],
       ["markerOps", "marker"],
@@ -9977,8 +11008,13 @@ const buildCurrentCanonicalPolityVocabulary = async (world) => {
     if (raw) tokens.add(raw);
   };
 
-  for (const key of Object.keys(normalizedWorld.polityOverrides || {})) collect(key);
+  for (const [key, entry] of Object.entries(normalizedWorld.polityOverrides || {})) {
+    if (normalizeString(entry?.status).toLowerCase() !== "dissolved") collect(key);
+  }
+  // Runtime overrides are authoritative regardless of map type. A legal
+  // sovereign remains a current actor even if all of its land is occupied.
   for (const owner of Object.values(normalizedWorld.regionOwnershipOverrides || {})) collect(owner);
+  for (const owner of Object.values(normalizedWorld.regionSovereigntyOverrides || {})) collect(owner);
 
   const scenarioRegions = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
   const scenarioFeatures = normalizeArray(scenarioRegions?.features);

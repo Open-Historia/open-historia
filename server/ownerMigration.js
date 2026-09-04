@@ -20,7 +20,7 @@
 // Hence an ordered resolver rather than a lookup.
 // ---------------------------------------------------------------------------
 
-export const OWNER_SCHEMA = 2;
+export const OWNER_SCHEMA = 4;
 
 const str = (v) => String(v ?? "").trim();
 
@@ -100,13 +100,34 @@ export const resolveOwnerName = (token, ctx = {}) => {
 // consistently: resolving per-asset could name the same token differently in
 // colors.json and world.json.
 export const buildOwnerRenameMap = (ctx = {}) => {
-  const { polityOverrides, ownershipOverrides, ownerCodes, features, colors, flags, tags, units, countryTags, internationalReputation, gameCountry } = ctx;
+  const {
+    polityOverrides,
+    ownershipOverrides,
+    sovereigntyOverrides,
+    regionClaimants,
+    ownerCodes,
+    features,
+    colors,
+    flags,
+    tags,
+    units,
+    countryTags,
+    internationalReputation,
+    gameCountry,
+  } = ctx;
 
   const tokens = new Set();
   const add = (v) => { const s = str(v); if (s) tokens.add(s); };
 
   Object.keys(polityOverrides ?? {}).forEach(add);
   Object.values(ownershipOverrides ?? {}).forEach(add);
+  Object.values(sovereigntyOverrides ?? {}).forEach(add);
+  for (const claimants of Object.values(regionClaimants ?? {})) {
+    if (Array.isArray(claimants)) claimants.forEach(add);
+    else if (claimants && typeof claimants === "object") {
+      Object.keys(claimants).filter((key) => claimants[key]).forEach(add);
+    }
+  }
   (Array.isArray(ownerCodes) ? ownerCodes : []).forEach(add);
   Object.keys(colors ?? {}).forEach(add);
   Object.keys(flags ?? {}).forEach(add);
@@ -120,6 +141,132 @@ export const buildOwnerRenameMap = (ctx = {}) => {
   const map = new Map();
   for (const token of tokens) map.set(token, resolveOwnerName(token, ctx));
   return map;
+};
+
+// Explicit provenance bridge: which stock GADM geography did this scenario
+// deliberately use as the BASE identity for a polity? This is not ownership. An
+// empire may control dozens of modern GADM countries and that must never make all
+// of them aliases of the empire. We only trust evidence that already says
+// "this code was named as this polity": legacy countryNameOverrides, a legacy
+// code-keyed polity record, or another owner-space key that is itself a known
+// GADM code. That keeps the migration universal and avoids Britain/France hacks.
+export const buildPolityMapRefs = (ctx = {}, renames = buildOwnerRenameMap(ctx)) => {
+  const {
+    polityOverrides,
+    countryNameOverrides,
+    registry,
+    ownerCodes,
+    colors,
+    flags,
+    tags,
+    gameCountry,
+    features,
+    ownershipOverrides,
+    inheritedMapRefs,
+    deriveMapRefsFromFeatures = true,
+  } = ctx;
+
+  const byPolity = new Map();
+  const add = (rawCode, rawTarget = rawCode) => {
+    const code = str(rawCode).toUpperCase();
+    if (!code || !registry?.[code]) return;
+    const targetToken = str(rawTarget);
+    const target = str(
+      renames.get(targetToken) ??
+      renames.get(code) ??
+      resolveOwnerName(targetToken, ctx),
+    );
+    if (!target) return;
+    const set = byPolity.get(target) || new Set();
+    set.add(code);
+    byPolity.set(target, set);
+  };
+
+  // A game inherits the scenario's already-established provenance. This is the
+  // safest evidence available because it was derived from the SCENARIO'S starting
+  // political map, not from a campaign that may now contain occupations, annexations,
+  // civil wars or other later territorial changes.
+  for (const [polity, refs] of Object.entries(inheritedMapRefs ?? {})) {
+    for (const code of Array.isArray(refs?.gadm0) ? refs.gadm0 : []) add(code, polity);
+  }
+
+  // Explicit legacy evidence. These paths are intentionally retained because old
+  // scenarios may still carry their original GADM owner code even when they do not
+  // ship custom region geometry.
+  for (const [code, label] of Object.entries(countryNameOverrides ?? {})) {
+    if (str(label)) add(code, code);
+  }
+
+  for (const key of Object.keys(polityOverrides ?? {})) add(key, key);
+  for (const key of Object.keys(colors ?? {})) add(key, key);
+  for (const key of Object.keys(flags ?? {})) add(key, key);
+  for (const key of Object.keys(tags ?? {})) add(key, key);
+  for (const key of Array.isArray(ownerCodes) ? ownerCodes : []) add(key, key);
+  add(gameCountry, gameCountry);
+
+  // Phase 5B.1 provenance recovery for records that were ALREADY name-migrated
+  // before mapRefs existed. The previous migration correctly removed the old ISO/
+  // GADM key, which means a later migration can no longer learn that e.g. the
+  // scenario's "French Republic" occupied the FRA base geography just by looking
+  // at polityOverrides/colors/flags — all of those are name-keyed now.
+  //
+  // The scenario map still contains the missing relationship. Resolve it CODE-FIRST:
+  // every base GID_0 whose regions unanimously belong to one scenario polity becomes
+  // a geographic reference for that polity. A polity may therefore have MANY refs
+  // (an empire can span several stock countries); that is fine. What we refuse is a
+  // GID_0 split between multiple actors, because that is exactly the civil-war /
+  // partition case where auto-merging identities would be dangerous.
+  //
+  // This derivation is scenario-start provenance, not live ownership. Games normally
+  // receive inheritedMapRefs from their parent scenario and set
+  // deriveMapRefsFromFeatures=false, so a later conquest can never rewrite identity.
+  if (deriveMapRefsFromFeatures && Array.isArray(features)) {
+    const ownersByCode = new Map();
+
+    const featureCode = (feature) => {
+      const props = feature?.properties ?? {};
+      const direct = str(props.GID_0 || props.gid_0 || props.GID0 || props.gid0).toUpperCase();
+      if (direct && registry?.[direct]) return direct;
+
+      // Custom region files always carry their stable region id even when the
+      // country-level GID field was stripped. GADM ids begin with the GID_0 token
+      // ("SRB.12_1" -> "SRB"), so this remains deterministic and cheap.
+      const regionId = str(props.id || props.GID_1 || props.gid_1);
+      const prefix = regionId.split('.')[0].toUpperCase();
+      return prefix && registry?.[prefix] ? prefix : '';
+    };
+
+    for (const feature of features) {
+      const code = featureCode(feature);
+      if (!code) continue;
+      const ownerToken = effectiveOwner(feature, ownershipOverrides);
+      if (!ownerToken) continue;
+      const owner = str(renames.get(ownerToken) ?? resolveOwnerName(ownerToken, ctx));
+      if (!owner) continue;
+      const owners = ownersByCode.get(code) || new Set();
+      owners.add(owner);
+      ownersByCode.set(code, owners);
+    }
+
+    for (const [code, owners] of ownersByCode.entries()) {
+      if (owners.size !== 1) continue;
+      add(code, [...owners][0]);
+    }
+  }
+
+  return Object.fromEntries(
+    [...byPolity.entries()].map(([polity, codes]) => [polity, { gadm0: [...codes].sort() }]),
+  );
+};
+
+const mergeMapRefs = (existing, derived) => {
+  const current = existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
+  const next = derived && typeof derived === "object" && !Array.isArray(derived) ? derived : {};
+  const gadm0 = [...new Set([
+    ...(Array.isArray(current.gadm0) ? current.gadm0 : []),
+    ...(Array.isArray(next.gadm0) ? next.gadm0 : []),
+  ].map((entry) => str(entry).toUpperCase()).filter(Boolean))];
+  return gadm0.length ? { ...current, ...next, gadm0 } : current;
 };
 
 // N tokens can land on one name — that IS the accepted merge (IND + Z01 + Z04 +
@@ -168,11 +315,27 @@ const renameValue = (value, renames) => {
   return renames.get(token) ?? token;
 };
 
+const renameClaimants = (value, renames) => {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((entry) => renameValue(entry, renames)).filter(Boolean))];
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, enabled] of Object.entries(value)) {
+      if (!enabled) continue;
+      const name = renameValue(key, renames);
+      if (name) out[name] = enabled;
+    }
+    return out;
+  }
+  return value;
+};
+
 // ---------------------------------------------------------------------------
 // The record migration. Every structure listed here is owner-keyed; miss one and
 // a save desyncs silently rather than failing.
 // ---------------------------------------------------------------------------
-export const migrateWorld = (world, renames, warn) => {
+export const migrateWorld = (world, renames, warn, derivedMapRefs = {}) => {
   if (!world || typeof world !== "object" || Array.isArray(world)) return world;
   const next = { ...world };
 
@@ -181,6 +344,26 @@ export const migrateWorld = (world, renames, warn) => {
       Object.entries(next.regionOwnershipOverrides).map(([regionId, owner]) => [
         regionId, // region ids are NOT owner-space — they never move
         renameValue(owner, renames),
+      ]),
+    );
+  }
+
+  // controller, legal sovereign and military/diplomatic claimants all live in owner-space.
+  // miss one here and a migrated save can look fine until the first occupation. lovely.
+  if (next.regionSovereigntyOverrides && typeof next.regionSovereigntyOverrides === "object") {
+    next.regionSovereigntyOverrides = Object.fromEntries(
+      Object.entries(next.regionSovereigntyOverrides).map(([regionId, owner]) => [
+        regionId,
+        renameValue(owner, renames),
+      ]),
+    );
+  }
+
+  if (next.regionClaimants && typeof next.regionClaimants === "object") {
+    next.regionClaimants = Object.fromEntries(
+      Object.entries(next.regionClaimants).map(([regionId, claimants]) => [
+        regionId,
+        renameClaimants(claimants, renames),
       ]),
     );
   }
@@ -217,9 +400,23 @@ export const migrateWorld = (world, renames, warn) => {
         continue;
       }
       const { code, ...rest } = polity;
-      kept[token] = { ...rest, name };
+      const refs = mergeMapRefs(rest.mapRefs, derivedMapRefs[name]);
+      kept[token] = {
+        ...rest,
+        ...(Object.keys(refs).length ? { mapRefs: refs } : {}),
+        name,
+      };
     }
     next.polityOverrides = rekeyOwnerMap(kept, renames, "polityOverrides", warn);
+
+    for (const [polityName, refs] of Object.entries(derivedMapRefs ?? {})) {
+      const current = next.polityOverrides?.[polityName];
+      if (!current || typeof current !== "object") continue;
+      next.polityOverrides[polityName] = {
+        ...current,
+        mapRefs: mergeMapRefs(current.mapRefs, refs),
+      };
+    }
   }
 
   if (Array.isArray(next.units)) {
@@ -251,6 +448,15 @@ export const migrateEvents = (events, renames) => {
         ...t,
         ...(t?.toCode ? { toCode: renameValue(t.toCode, renames) } : {}),
         ...(t?.fromCode ? { fromCode: renameValue(t.fromCode, renames) } : {}),
+      }));
+    }
+    if (Array.isArray(next.regionControlOps)) {
+      next.regionControlOps = next.regionControlOps.map((op) => ({
+        ...op,
+        ...(op?.fromCode ? { fromCode: renameValue(op.fromCode, renames) } : {}),
+        ...(op?.toCode ? { toCode: renameValue(op.toCode, renames) } : {}),
+        ...(op?.actorCode ? { actorCode: renameValue(op.actorCode, renames) } : {}),
+        ...(op?.claimantCode ? { claimantCode: renameValue(op.claimantCode, renames) } : {}),
       }));
     }
     if (Array.isArray(next.polityChanges)) {

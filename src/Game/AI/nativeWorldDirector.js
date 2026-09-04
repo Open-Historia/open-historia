@@ -294,6 +294,7 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   for (const field of [
     "regionTransfers",
     "regionClaims",
+    "regionControlOps",
     "polityChanges",
     "createdChats",
     "unitOps",
@@ -399,6 +400,7 @@ const eventConsequenceScore = (event) => {
 
   if (normalizeArray(impacts.regionTransfers).length) score += 5;
   if (normalizeArray(impacts.regionClaims).length) score += 4;
+  if (normalizeArray(impacts.regionControlOps).length) score += 4;
   if (normalizeArray(impacts.polityChanges).length) score += 4;
 
   const unitOps = normalizeArray(impacts.unitOps);
@@ -570,6 +572,7 @@ const countImpactSignals = (event) => {
   for (const key of [
     "regionTransfers",
     "regionClaims",
+    "regionControlOps",
     "polityChanges",
     "unitOps",
     "markerOps",
@@ -1442,6 +1445,12 @@ const storylineEventStructuredActors = (event) => {
     ...normalizeArray(impacts?.regionClaims).flatMap((entry) => [
       entry?.claimantCode,
       entry?.claimant,
+    ]),
+    ...normalizeArray(impacts?.regionControlOps).flatMap((entry) => [
+      entry?.fromCode,
+      entry?.toCode,
+      entry?.actorCode,
+      entry?.claimantCode,
     ]),
     ...normalizeArray(impacts?.createdChats).flatMap((chat) => [
       chat?.speaker,
