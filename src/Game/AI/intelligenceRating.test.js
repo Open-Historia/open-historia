@@ -36,9 +36,17 @@ const event = (impacts) => ({
   impacts,
 });
 
+// A polity change carries an `operation` discriminator on some branches and not
+// on others, and every version of the schema rejects unknown fields — so ask
+// this build which shape it takes rather than hard-coding one and failing for a
+// reason that has nothing to do with the rating under test.
+const OPERATION = validateGameplayPayload("jumpForward", jumpPayload([
+  { operation: "update", code: "United States of America" },
+])).valid ? { operation: "update" } : {};
+
 test("the tool schema accepts an intelligence rating on a polity change", () => {
   const result = validateGameplayPayload("jumpForward", jumpPayload([
-    { code: "United States of America", intelligence: 72, note: "New academy" },
+    { ...OPERATION, code: "United States of America", intelligence: 72, note: "New academy" },
   ]));
   assert.equal(result.valid, true, result.error);
 });
