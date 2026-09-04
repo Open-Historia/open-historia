@@ -16,6 +16,9 @@ import Toolbar from "./Toolbar.jsx";
 import BottomBar from "./BottomBar.jsx";
 import TypeManager from "./TypeManager.jsx";
 import RegionsPanel from "./RegionsPanel.jsx";
+import PolitiesPanel from "./PolitiesPanel.jsx";
+import TopologyPanel from "./TopologyPanel.jsx";
+import ProvinceImportPanel from "./ProvinceImportPanel.jsx";
 import LayersPanel from "./LayersPanel.jsx";
 import ReferencePanel from "./ReferencePanel.jsx";
 import FeatureManager from "./FeatureManager.jsx";
@@ -37,6 +40,30 @@ import FmgPanel from "./fmg/FmgPanel.jsx";
 import { generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
+const hexToRgb = (value) => {
+  const m = /^#?([a-f0-9]{6})$/i.exec(String(value || "").trim());
+  if (!m) return null;
+  const hex = m[1];
+  return [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16),
+  ];
+};
+
+const normalizePolityKeyedMap = (input, polities) => {
+  const out = input && typeof input === "object" && !Array.isArray(input) ? { ...input } : {};
+  for (const [key, record] of Object.entries(polities || {})) {
+    if (out[key] !== undefined) continue;
+    const candidates = [record?.name, ...(Array.isArray(record?.aliases) ? record.aliases : [])]
+      .map((v) => String(v || "").trim())
+      .filter(Boolean);
+    const found = candidates.find((candidate) => out[candidate] !== undefined);
+    if (found) out[key] = out[found];
+  }
+  return out;
+};
+
 const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}) => {
   const d = useMapDocument();
   const isMobile = useIsMobile();
@@ -44,11 +71,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   // loaded once it arrives, so never auto-seed the default world underneath it.
   const scenarioMode = Boolean(onApplyToScenario);
   const [api, setApi] = useState(null);
-  const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'layers' | 'features' | 'reference' | null
-  const [paintOwner, setPaintOwner] = useState(""); // owner code assigned by the paint tool
+  const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'polities' | 'topology' | 'province-import' | 'layers' | 'features' | 'reference' | null
+  const [paintOwner, setPaintOwner] = useState(""); // stable polity key assigned by the paint tool
+  const [paintOnlyOwner, setPaintOnlyOwner] = useState("*"); // "*" | "__unowned__" | stable polity key
   const [docId, setDocId] = useState(null); // server document id (null until first save)
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
-  const [applying, setApplying] = useState(false); // writing the map into the scenario
+  // Bumps on ANY region mutation, including ownership/claimant edits where the
+  // feature count does not change. Panels use this to refresh derived inventories.
+  const [regionEpoch, setRegionEpoch] = useState(0);
+  const [scenarioAction, setScenarioAction] = useState(""); // "save" | "save-exit" | "play" while writing scenario
+  const [scenarioDirty, setScenarioDirty] = useState(false);
+  const hydratedRef = useRef(false);
   const [cityPopup, setCityPopup] = useState(null); // {id, x, y, isNew} — inline city editor
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
   const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
@@ -185,6 +218,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     colorOverrides: d.colorOverrides,
     flags: d.flags,
     tags: d.tags,
+    // Scenario Workshop: explicit polity registry keyed by stable identity. This
+    // preserves landless polities and allows display-name changes without re-owning
+    // every region.
+    polities: d.polities,
     // Without this the marker never persists, so a document migrates on every open,
     // forever — and, far worse, a document saved after being migrated still reads
     // as legacy to everything downstream.
@@ -192,20 +229,30 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
-  // Write the current map into the scenario it was opened from, then hand back to
-  // the game to start playing it. onApplyToScenario is supplied by the library bar
-  // (absent in the standalone ?editor=1 mode).
-  const applyToScenario = async () => {
-    if (!api || !onApplyToScenario || applying) return;
-    setApplying(true);
+  // Persist the Workshop map into the scenario without forcing a new game.
+  // Playing is now an explicit third action instead of the only way to save.
+  const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
+    if (!api || !onApplyToScenario || scenarioAction) return false;
+    const action = play ? "play" : closeAfter ? "save-exit" : "save";
+    setScenarioAction(action);
     try {
-      const seed = buildGameSeed(d.doc, api.serializeRegions() || { type: "FeatureCollection", features: [] }, d.colors);
-      await onApplyToScenario(seed);
-      // On success the library bar unmounts this editor and opens the play flow.
+      const seed = buildGameSeed(
+        d.doc,
+        api.serializeRegions() || { type: "FeatureCollection", features: [] },
+        d.colors,
+      );
+      await onApplyToScenario(seed, { play });
+      setScenarioDirty(false);
+      if (!play && closeAfter) onClose?.();
+      return true;
     } catch (e) {
-      console.warn("[editor] apply-to-scenario failed:", e);
-      window.alert(`Could not apply the map to the scenario: ${e?.message || e}`);
-      setApplying(false);
+      console.warn("[editor] scenario save failed:", e);
+      window.alert(`Could not save the map into the scenario: ${e?.message || e}`);
+      return false;
+    } finally {
+      // Apply & Play normally unmounts us before this matters; keeping the reset
+      // makes failed/alternate hosts recover cleanly.
+      setScenarioAction("");
     }
   };
 
@@ -264,6 +311,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         colorOverrides: doc.colorOverrides || {},
         flags: doc.flags || {},
         tags: doc.tags || {},
+        polities: doc.polities || {},
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -292,6 +340,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.doc]);
+
+
+  // Standalone document autosave and scenario persistence are intentionally
+  // separate. Once a hydrated scenario is edited, remember that it still needs
+  // an explicit Save / Save & Exit / Apply & Play even if the editor document
+  // itself has already autosaved.
+  useEffect(() => {
+    if (scenarioMode && hydratedRef.current && d.saveStatus === "dirty") {
+      setScenarioDirty(true);
+    }
+  }, [scenarioMode, d.saveStatus]);
 
   // Don't let the tab close on unsaved work. The autosave debounce means up to
   // two seconds of edits exist only in memory at any moment, and on the website
@@ -335,7 +394,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   // (custom geometry when it has one, else the stock world with the scenario's
   // ownership overrides stamped on), its cities, its palette, and its author —
   // so "edit this scenario's map" edits THAT map, not a fresh default world.
-  const hydratedRef = useRef(false);
   useEffect(() => {
     if (!api || !initialMap || hydratedRef.current) return;
     hydratedRef.current = true;
@@ -352,9 +410,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // applyMapToScenario reads that null as "clear the scenario's flags.json".
     // So opening a scenario's map without its flags and pressing Apply & Play
     // deleted every author-set flag. Restore them so a round-trip is a no-op.
-    if (initialMap.flags) base.flags = { ...initialMap.flags };
+    if (initialMap.polities && typeof initialMap.polities === "object") {
+      base.polities = structuredClone(initialMap.polities);
+    }
+    if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
-    if (initialMap.tags) base.tags = { ...initialMap.tags };
+    if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),
@@ -370,8 +431,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       }))
       .filter((f) => Array.isArray(f.coord));
     d.setDoc(base);
-    if (initialMap.colors) d.mergeColors(initialMap.colors);
-    if (initialMap.regions) api.loadRegions(initialMap.regions);
+    if (initialMap.colors) d.mergeColors(normalizePolityKeyedMap(initialMap.colors, initialMap.polities));
+    // Some historical scenarios keep their authored colour only in the polity
+    // registry. Make those visible in the editor palette too.
+    if (initialMap.polities) {
+      const polityColors = {};
+      for (const [key, record] of Object.entries(initialMap.polities)) {
+        const rgb = hexToRgb(record?.color);
+        if (rgb) polityColors[key] = rgb;
+      }
+      d.mergeColors(polityColors);
+    }
+    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {});
     else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
@@ -379,6 +450,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
     setCustomBgId(null);
     d.setSaveStatus("saved");
+    setScenarioDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, initialMap]);
 
@@ -397,6 +469,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [api, d.types, d.selection, d.regionCount],
   );
+
+  const polityCount = useMemo(() => {
+    const keys = new Set(Object.keys(d.polities || {}));
+    for (const row of api?.listPolityUsage?.() || []) keys.add(row.key);
+    return keys.size;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, d.polities, d.regionCount, regionEpoch]);
+
+  const polityChoices = useMemo(() => {
+    const keys = new Set(Object.keys(d.polities || {}));
+    for (const row of api?.listPolityUsage?.() || []) keys.add(row.key);
+    if (paintOwner) keys.add(paintOwner);
+    return [...keys]
+      .filter(Boolean)
+      .map((key) => ({ key, name: String(d.polities?.[key]?.name || key) }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, d.polities, d.regionCount, regionEpoch, paintOwner]);
 
   return (
     <div
@@ -418,12 +508,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         seedKind={scenarioMode ? "deferred" : d.metadata.kind}
         defaultTypeId={d.types[0]?.id || "land"}
         paintOwner={paintOwner}
+        paintOnlyOwner={paintOnlyOwner}
         features={d.features}
         onSelectionChange={d.setSelection}
         onRegionCount={d.setRegionCount}
         onRegionsChanged={(count) => {
           d.setRegionCount(count);
           d.setSaveStatus("dirty");
+          setRegionEpoch((n) => n + 1);
         }}
         onFeatureCreate={({ pixel, ...partial }) => {
           const id = newId("feat");
@@ -480,32 +572,72 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         // toolbar. On desktop it stays a labelled horizontal row.
         <div style={{ position: "fixed", top: 12, right: 12, zIndex: 40, display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8 }}>
           {onApplyToScenario && (
-            <button
-              onClick={applyToScenario}
-              disabled={applying}
-              title={`Save this map into ${scenarioName || "the scenario"} and start playing it`}
-              style={{
-                ...panelSurface,
-                padding: isMobile ? "9px 11px" : "8px 15px",
-                cursor: applying ? "default" : "pointer",
-                color: "white",
-                fontWeight: 700,
-                fontSize: isMobile ? 16 : 13,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: isMobile ? 0 : 6,
-                background: applying ? "rgba(59,130,246,0.35)" : "rgba(59,130,246,0.85)",
-                border: "1px solid rgba(147,197,253,0.5)",
-                opacity: applying ? 0.8 : 1,
-              }}
-            >
-              {isMobile ? (applying ? "…" : "▶") : (applying ? "Applying…" : "▶ Apply & Play")}
-            </button>
+            <>
+              <button
+                onClick={() => persistScenario({ play: false, closeAfter: false })}
+                disabled={Boolean(scenarioAction)}
+                title={`Save this map into ${scenarioName || "the scenario"} and keep editing`}
+                style={{
+                  ...panelSurface,
+                  padding: isMobile ? "9px 11px" : "8px 12px",
+                  cursor: scenarioAction ? "default" : "pointer",
+                  color: "white",
+                  fontWeight: 700,
+                  fontSize: isMobile ? 15 : 13,
+                  opacity: scenarioAction ? 0.75 : 1,
+                }}
+              >
+                {isMobile ? "💾" : scenarioAction === "save" ? "Saving…" : "💾 Save"}
+              </button>
+              <button
+                onClick={() => persistScenario({ play: false, closeAfter: true })}
+                disabled={Boolean(scenarioAction)}
+                title={`Save this map into ${scenarioName || "the scenario"} and leave the Workshop`}
+                style={{
+                  ...panelSurface,
+                  padding: isMobile ? "9px 11px" : "8px 12px",
+                  cursor: scenarioAction ? "default" : "pointer",
+                  color: "white",
+                  fontWeight: 700,
+                  fontSize: isMobile ? 15 : 13,
+                  opacity: scenarioAction ? 0.75 : 1,
+                }}
+              >
+                {isMobile ? "↩" : scenarioAction === "save-exit" ? "Saving…" : "Save & Exit"}
+              </button>
+              <button
+                onClick={() => persistScenario({ play: true })}
+                disabled={Boolean(scenarioAction)}
+                title={`Save this map into ${scenarioName || "the scenario"} and start playing it`}
+                style={{
+                  ...panelSurface,
+                  padding: isMobile ? "9px 11px" : "8px 15px",
+                  cursor: scenarioAction ? "default" : "pointer",
+                  color: "white",
+                  fontWeight: 700,
+                  fontSize: isMobile ? 16 : 13,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: isMobile ? 0 : 6,
+                  background: scenarioAction ? "rgba(59,130,246,0.35)" : "rgba(59,130,246,0.85)",
+                  border: "1px solid rgba(147,197,253,0.5)",
+                  opacity: scenarioAction ? 0.8 : 1,
+                }}
+              >
+                {isMobile ? (scenarioAction === "play" ? "…" : "▶") : (scenarioAction === "play" ? "Applying…" : "▶ Apply & Play")}
+              </button>
+            </>
           )}
           {onClose && (
             <button
               onClick={async () => {
+                if (scenarioMode && scenarioDirty) {
+                  const ok = window.confirm(
+                    "This scenario has Workshop changes that have not been saved into the scenario yet. Close without applying them?",
+                  );
+                  if (!ok) return;
+                }
                 // Closing with edits still in the debounce window would drop them
                 // silently — the button looks like "go back", not "discard". Try
                 // to save first, and only ask if that fails or is still pending,
@@ -561,22 +693,101 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
             zIndex: 31,
             display: "flex",
             alignItems: "center",
+            flexWrap: "wrap",
+            justifyContent: "center",
             gap: 8,
-            padding: "6px 10px",
+            padding: "7px 10px",
             fontSize: 12,
+            maxWidth: "calc(100vw - 20px)",
           }}
         >
-          <span style={{ color: "rgba(255,255,255,0.72)" }}>Paint owner</span>
+          <span style={{ color: "rgba(255,255,255,0.72)", fontWeight: 700 }}>Paint polity</span>
           {d.colors[paintOwner] && (
             <span style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: `rgb(${d.colors[paintOwner].join(",")})` }} />
           )}
-          <input
+          <select
             value={paintOwner}
             onChange={(e) => setPaintOwner(e.target.value)}
-            placeholder="e.g. France"
-            style={{ ...inputStyle, width: 160, padding: "4px 7px" }}
-          />
-          <span style={{ color: "rgba(255,255,255,0.4)" }}>click regions · empty = unowned</span>
+            style={{ ...inputStyle, width: 220, padding: "4px 7px" }}
+            title="Stable polity key to assign while painting"
+          >
+            <option value="">Unowned / erase ownership</option>
+            {polityChoices.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
+              </option>
+            ))}
+          </select>
+
+          <span style={{ color: "rgba(255,255,255,0.48)" }}>paint over</span>
+          <select
+            value={paintOnlyOwner}
+            onChange={(e) => setPaintOnlyOwner(e.target.value)}
+            style={{ ...inputStyle, width: 190, padding: "4px 7px" }}
+            title="Restrict a paint stroke to regions that currently have this owner"
+          >
+            <option value="*">Any region</option>
+            <option value="__unowned__">Unowned regions only</option>
+            {polityChoices.map((row) => (
+              <option key={`filter-${row.key}`} value={row.key}>
+                Only {row.name}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            onClick={() => setOpenPanel("polities")}
+            style={{ ...panelSurface, padding: "4px 8px", cursor: "pointer", fontSize: 11 }}
+          >
+            Manage polities…
+          </button>
+          <span style={{ color: "rgba(255,255,255,0.46)", whiteSpace: "nowrap" }}>
+            click or drag · one stroke = one undo
+          </span>
+        </div>
+      )}
+
+      {d.activeTool === "modify" && (
+        <div
+          style={{
+            ...panelSurface,
+            position: "fixed",
+            top: 58,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 31,
+            padding: "7px 11px",
+            maxWidth: "min(760px, calc(100vw - 24px))",
+            fontSize: 11.5,
+            color: "rgba(255,255,255,0.78)",
+            textAlign: "center",
+          }}
+        >
+          <b>Manual vertex override:</b> {d.selection.length ? `${d.selection.length} selected region${d.selection.length === 1 ? "" : "s"}` : "no selection — editing all regions"} · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo
+        </div>
+      )}
+
+      {d.activeTool === "border" && (
+        <div
+          style={{
+            ...panelSurface,
+            position: "fixed",
+            top: 58,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 31,
+            padding: "7px 11px",
+            maxWidth: "min(850px, calc(100vw - 24px))",
+            fontSize: 11.5,
+            color: d.selection.length === 2 ? "rgba(255,255,255,0.84)" : "#fbbf24",
+            textAlign: "center",
+          }}
+        >
+          <b>Shared border precision:</b>{" "}
+          {d.selection.length === 2
+            ? "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo"
+            : `select exactly 2 neighbouring regions first (${d.selection.length} selected)`}
         </div>
       )}
 
@@ -585,6 +796,54 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       )}
       {openPanel === "regions" && (
         <RegionsPanel api={api} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
+      )}
+      {openPanel === "polities" && (
+        <PolitiesPanel
+          api={api}
+          polities={d.polities}
+          selection={d.selection}
+          regionEpoch={regionEpoch}
+          colors={d.colors}
+          flags={d.flags}
+          tags={d.tags}
+          upsertPolity={d.upsertPolity}
+          renamePolityDisplay={d.renamePolityDisplay}
+          removePolity={d.removePolity}
+          importPolityRoster={d.importPolityRoster}
+          setColorOverride={d.setColorOverride}
+          setTags={d.setTags}
+          onOpenFlagPicker={setFlagPickerFor}
+          onPaintPolity={(key) => {
+            setPaintOwner(key);
+            setPaintOnlyOwner("*");
+            d.setActiveTool("paint");
+            setOpenPanel(null);
+          }}
+          onClose={() => setOpenPanel(null)}
+        />
+      )}
+      {openPanel === "topology" && (
+        <TopologyPanel
+          api={api}
+          selection={d.selection}
+          regionEpoch={regionEpoch}
+          onClose={() => setOpenPanel(null)}
+        />
+      )}
+      {openPanel === "province-import" && (
+        <ProvinceImportPanel
+          api={api}
+          polities={d.polities}
+          flags={d.flags}
+          importPolityRoster={d.importPolityRoster}
+          importCityMarkers={d.importCityMarkers}
+          currentPointFeatures={d.features}
+          onApplied={() => {
+            d.setSelection([]);
+            setRegionEpoch((n) => n + 1);
+          }}
+          onClose={() => setOpenPanel(null)}
+        />
       )}
       {openPanel === "layers" && <LayersPanel api={api} onClose={() => setOpenPanel(null)} />}
       {openPanel === "reference" && (
@@ -612,6 +871,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         tags={d.tags}
         setTags={d.setTags}
         setSelection={d.setSelection}
+        polities={d.polities}
+        regionEpoch={regionEpoch}
+        onOpenPolities={() => setOpenPanel("polities")}
       />
 
       {cityPopup && (
@@ -633,12 +895,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
 
       <BottomBar
         counts={d.counts}
+        polityCount={polityCount}
         basemap={d.basemap}
         hasCustomBackground={Boolean(customBg)}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
+        scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}
         search={

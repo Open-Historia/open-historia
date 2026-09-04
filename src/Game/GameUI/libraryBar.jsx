@@ -1780,7 +1780,7 @@ const LibraryTopBar = () => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed) => {
+  const applyMapToScenario = async (scenario, seed, { play = true } = {}) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
@@ -1788,14 +1788,15 @@ const LibraryTopBar = () => {
     const currentWorld = details?.data?.world ?? {};
     const currentGame = details?.data?.game ?? {};
 
-    await saveScenario(scenarioId, {
+    const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
         ...currentWorld,
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
-        polityOverrides: {
-          ...(currentWorld.polityOverrides ?? {}),
-          ...(seed.world?.polityOverrides ?? {}),
-        },
+        // The Workshop is authoritative for the polity registry: it hydrated the
+        // full current registry (landless polities included) before editing, so
+        // merging here would resurrect deleted or renamed entries forever.
+        polityOverrides: seed.world?.polityOverrides ?? {},
+        ownerSchema: seed.world?.ownerSchema ?? currentWorld.ownerSchema,
         // Playable factions for the start-country picker.
         ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
         customRegions: true,
@@ -1818,6 +1819,11 @@ const LibraryTopBar = () => {
           currentGame.startDate || currentGame.gameDate || seed.game?.startDate || seed.game?.gameDate || "2016-01-01",
       },
     });
+
+    // The canonical scenario just written, kept in the drawer too; otherwise
+    // reopening the Workshop resurrects the old world.json and a later ordinary
+    // scenario save can write the stale basemap back.
+    setEditorDetails(savedScenarioDetails);
 
     await uploadScenarioAsset(
       scenarioId,
@@ -1875,6 +1881,10 @@ const LibraryTopBar = () => {
     } else {
       await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
     }
+
+    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
+    // flow below.
+    if (!play) return { saved: true, scenarioId };
 
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
@@ -2184,7 +2194,7 @@ const LibraryTopBar = () => {
               scenarioName={mapEditorScenario?.name}
               initialMap={mapEditorSeed}
               onApplyToScenario={
-                mapEditorScenario ? (seed) => applyMapToScenario(mapEditorScenario, seed) : undefined
+                mapEditorScenario ? (seed, options) => applyMapToScenario(mapEditorScenario, seed, options) : undefined
               }
             />
           </Suspense>
@@ -2610,6 +2620,9 @@ const LibraryTopBar = () => {
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
                 flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
                 tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
+                polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
+                  ? world.polityOverrides
+                  : {},
                 background,
                 basemap: world.basemap || null,
               });
