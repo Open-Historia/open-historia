@@ -47,7 +47,7 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, espionageBrief, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
@@ -1178,6 +1178,44 @@ const buildGameMasterStorylineContext = (worldLike) => {
   }).join("\n");
 };
 
+// The intelligence rating the AI evolves (world.intelligence), surfaced for the
+// same reason reputation is: a number the model never sees is a number it never
+// moves. Field report: a player built spy academies and researched the tech for
+// a dozen turns and the rating never budged. The plumbing was fine — schema
+// field, normalizer, applyEventImpactsToWorld, the Stats panel's own bar all
+// read and write it — but the ONLY mention of it anywhere in a jump prompt was
+// one clause in the actions menu telling the model to change it "only when
+// something changed it", with no current value to change FROM. Across a dozen
+// real saves not one event had ever set it, while reputation (which does get a
+// block like this) moved normally.
+//
+// Unrated is "ordinary", not "none": every polity runs a service whether or not
+// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE).
+const buildPlayerPolityIntelligenceText = (bundle) => {
+  const playerCode = normalizeString(bundle.game.country);
+  if (!playerCode) {
+    return "";
+  }
+  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
+  const rating = intelligenceOf(world, playerCode);
+  const band = rating >= 75 ? "formidable" : rating >= 55 ? "capable" : rating >= 35 ? "ordinary" : "weak";
+  const lines = [`${playerCode}'s intelligence service: ${rating}/100 (${band}).`];
+
+  // Only services the AI has actually rated. Every other polity is ordinary by
+  // definition, and listing two hundred identical defaults would bury the few
+  // that carry a real judgement.
+  const rated = Object.entries(world.intelligence ?? {})
+    .map(([code, value]) => [normalizeString(code), Number(value)])
+    .filter(([code, value]) => code && code !== playerCode && Number.isFinite(value))
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 8);
+  if (rated.length > 0) {
+    lines.push(`Other rated services: ${rated.map(([code, value]) => `${code} ${Math.round(value)}/100`).join(", ")}.`);
+  }
+
+  return lines.join("\n");
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const startedAt = perfNow();
   const taskKey = normalizeString(options?.taskKey);
@@ -1240,6 +1278,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   }
   if (wants("playerPolityReputationContext")) {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
+  }
+  if (wants("playerPolityIntelligenceContext")) {
+    variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle);
   }
   if (wants("unitsSummary")) {
     variables.unitsSummary =
@@ -1659,6 +1700,15 @@ So use the wider picture to choose the sender and the moment — never to give t
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
       systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
+    }
+  }
+
+  // Espionage's counterpart to the reputation block above. Without it the rating
+  // is invisible to the model and therefore frozen for the whole campaign.
+  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+    const intelligenceContext = normalizeString(variables.playerPolityIntelligenceContext);
+    if (intelligenceContext) {
+      systemPrompt = `${systemPrompt}\n\n[Intelligence Services]\n${intelligenceContext}\nThis rating is how much of other polities' private diplomacy a service can read and how well it protects its own, and it moves the same way international reputation does. When this turn's events actually change what a service is capable of, record the new ABSOLUTE value (an integer 0-100) in an "intelligence" field on that polity's impacts.polityChanges entry. Concrete investment the player has ordered and that this turn actually delivers raises it a few points at a time — a training academy opening its doors, a new bureau or directorate standing up, a funding increase taking effect, a recruitment or codebreaking programme bearing fruit; a purge, a mass defection, a network rolled up by a rival, or deep cuts lower it. An intention is not a capability: do not move it for an order that has only just been given, do not restate it when nothing changed, and do not jump it by tens of points for a single measure.`;
     }
   }
 
