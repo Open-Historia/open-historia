@@ -57,20 +57,20 @@ jobs:
           ./gradlew assembleDebug --no-daemon
 
       - name: Collect
-        run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk pax-historia.apk
+        run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk open-historia.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pax-historia-apk
-          path: pax-historia.apk
+          name: open-historia.apk
+          path: open-historia.apk
 
       - name: Publish to the rolling "android" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Open Historia for Android. Download pax-historia.apk below and open it to install (allow installs from your browser when Android asks). Nothing else to set up: the app connects to a community content node on its own, the same way openhistoria.com does, and streams the world map from it. No server on your phone, no Termux. It updates itself when a newer build is published here.
+          NOTES="Open Historia for Android. Download open-historia.apk below and open it to install (allow installs from your browser when Android asks). Nothing else to set up: the app connects to a community content node on its own, the same way openhistoria.com does, and streams the world map from it. No server on your phone, no Termux. It updates itself when a newer build is published here.
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
             || gh release edit android --notes "$NOTES"
-          gh release upload android pax-historia.apk --clobber
+          gh release upload android open-historia.apk --clobber
