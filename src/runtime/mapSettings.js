@@ -27,6 +27,18 @@ export const MAP_SETTING_KEYS = {
     // every token restarts never interrupts a model that is answering, so it is
     // safe to have on, and it is the only thing that ever ends a stall.
     limitAiGeneration: "ai_limit_generation",
+    // Long time skips are generated in SEGMENTS — several shorter model calls
+    // merged into the one round the player asked for — rather than as a single
+    // request. A nine-month skip asks for 30-odd events at once, which on a
+    // hosted provider is tens of minutes of generation in one HTTP request; the
+    // field report behind this was a gateway closing exactly that with a 502 at
+    // 301.7s, costing the player a turn with fourteen queued orders in it.
+    //
+    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
+    // an absent key here means "on", not "off". Off restores the single-request
+    // behaviour for players who would rather have one long wait than several
+    // short ones (it re-sends the prompt per segment, so it costs more tokens).
+    chunkLongJumps: "ai_chunk_long_jumps",
 };
 
 export function getMapSetting(key) {
@@ -57,6 +69,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
+    [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
 };
 
 export function setMapSetting(key, value) {

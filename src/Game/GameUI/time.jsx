@@ -10,7 +10,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
 } from "../../runtime/assets.js";
-import { NO_RESPONSE_BODY_NOTE, loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -867,14 +867,20 @@ const TimelineSkipPanel = ({
     error,
     isLoading,
     isOpen,
+    isRetryingSegment,
     modeSuggestion,
     onAcceptModeSuggestion,
     onAutoJump,
     onCancel,
     onClose,
     onDeclineModeSuggestion,
+    onDiscardSegment,
     onJump,
+    onRetrySegment,
     onUndo,
+    progressLabel,
+    segmentHeld,
+    segmentRetries,
     topOffset,
     undoCount,
 }) => {
@@ -1083,7 +1089,7 @@ const TimelineSkipPanel = ({
             }}
             >
             <SpinnerRing size={15} />
-            <span>Simulating…</span>
+            <span>{progressLabel || "Simulating…"}</span>
             {onCancel && (
                 <button
                 type="button"
@@ -1103,6 +1109,79 @@ const TimelineSkipPanel = ({
                 Cancel
                 </button>
             )}
+            </div>
+        )}
+
+        {/* A HELD jump, not a failed one: one segment of a split jump did not
+            come back, the segments before it are still in hand, and nothing has
+            been written — the game is still on its old date. Amber rather than
+            red for that reason, and Retry re-runs ONLY the segment that failed,
+            so the minutes already spent on the earlier ones are not spent
+            again. */}
+        {segmentHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>{segmentHeld}</div>
+            {/* A failed retry otherwise re-renders the identical message, so the
+                button reads as dead even though it ran. Say plainly that it was
+                tried and did not work. */}
+            {segmentRetries > 0 && !isRetryingSegment && (
+                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+                Tried {segmentRetries === 1 ? "once" : `${segmentRetries} times`} — that segment still
+                did not come back. Retrying again may help if the problem was temporary;
+                otherwise discard the turn and run it again, perhaps as a shorter skip.
+                </div>
+            )}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                disabled={isRetryingSegment}
+                onClick={onRetrySegment}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isRetryingSegment ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingSegment ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isRetryingSegment ? (progressLabel || "Retrying the segment…") : "Retry the segment"}
+                </button>
+                <button
+                type="button"
+                disabled={isRetryingSegment}
+                onClick={onDiscardSegment}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingSegment ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingSegment ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the turn
+                </button>
+            </div>
             </div>
         )}
 
@@ -1355,6 +1434,15 @@ const DateWidget = ({
     // offered to the player between turns (AI/structuredMode.js); null when
     // there is nothing to offer or they have already answered.
     const [modeSuggestion, setModeSuggestion] = useState(null);
+    // What the spinner says while a jump runs. Empty for a single-request jump —
+    // the notice falls back to its own wording — and set per segment when a long
+    // skip is generated in pieces (AI/jumpSegments.js).
+    const [jumpProgress, setJumpProgress] = useState("");
+    // A jump held on a failed segment: the notice text, how many retries have
+    // been tried, and whether one is running now.
+    const [segmentHeld, setSegmentHeld] = useState("");
+    const [segmentRetries, setSegmentRetries] = useState(0);
+    const [isRetryingSegment, setIsRetryingSegment] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
@@ -1518,6 +1606,11 @@ const DateWidget = ({
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
+        setJumpProgress("");
+        // simulateTimelineJump abandons any held jump when it starts, so a notice
+        // left on screen would offer buttons with nothing behind them.
+        setSegmentHeld("");
+        setSegmentRetries(0);
 
         // Start and finish are separate entries on purpose: a turn that never
         // finishes is the report this exists for, and the two real-world
@@ -1532,7 +1625,15 @@ const DateWidget = ({
         try {
             const result = mode === "auto"
             ? await simulateAutoJump({ days, signal: controller.signal })
-            : await simulateTimelineJump({ days, signal: controller.signal });
+            : await simulateTimelineJump({
+                days,
+                signal: controller.signal,
+                // A long skip is generated in segments (AI/jumpSegments.js) and can
+                // run for many minutes. Without this the spinner says the same
+                // thing throughout and a working turn reads as a frozen one.
+                onProgress: ({ segment, segmentCount }) =>
+                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+            });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -1574,6 +1675,15 @@ const DateWidget = ({
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
                 logDebugEvent("turn", "Turn cancelled by the player.");
+            } else if (jumpError?.segmentHeld) {
+                // Not a failed turn: a long skip is generated in segments and one
+                // of them did not come back. The finished segments are still held,
+                // unwritten, so retrying re-runs only the segment that failed
+                // rather than the whole round.
+                setError("");
+                setSegmentHeld(jumpError.message || "A segment of this jump failed.");
+                setSegmentRetries(0);
+                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s: segment ${(jumpError.segmentIndex ?? 0) + 1} of ${jumpError.segmentCount ?? 0} failed; nothing was written.`);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
@@ -1581,6 +1691,7 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsLoading(false);
+            setJumpProgress("");
             // Between turns, never during one. If the ladder has learned
             // something consistent about this endpoint, offer it now.
             setModeSuggestion(getStructuredModeSuggestion());
@@ -1589,6 +1700,63 @@ const DateWidget = ({
 
     const cancelJump = () => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    };
+
+    // Finish a held jump by re-running ONLY the segment that failed and the ones
+    // after it. The segments already generated are not regenerated: they are
+    // valid, and on a slow model each one may have cost minutes.
+    const retryHeldSegment = async () => {
+        if (isRetryingSegment) return;
+        setIsRetryingSegment(true);
+        setSegmentRetries((count) => count + 1);
+        setJumpProgress("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await retryPendingJumpSegment({
+                signal: controller.signal,
+                onProgress: ({ segment, segmentCount }) =>
+                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+            });
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            setSegmentHeld("");
+            setSegmentRetries(0);
+            logDebugEvent("turn", `Held jump finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (retryError) {
+            if (controller.signal.aborted || retryError?.name === "AbortError") {
+                // Cancelled. The turn is still held and still unwritten, so leave
+                // the notice up rather than implying it was resolved.
+                logDebugEvent("turn", "Segment retry cancelled; the turn is still held.");
+            } else if (retryError?.segmentHeld) {
+                setSegmentHeld(retryError.message);
+            } else {
+                // The segments finished but the write did not. The held jump is
+                // gone with it, so this is an ordinary turn failure from here.
+                setSegmentHeld("");
+                setError(retryError.message || "Failed to finish the held jump.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsRetryingSegment(false);
+            setJumpProgress("");
+        }
+    };
+
+    // Throw the held jump away. Nothing was ever written, so there is nothing to
+    // undo and no rollback to run — the game is still on its pre-jump date and
+    // the player simply loses the segments generated so far.
+    const discardHeldSegment = () => {
+        discardPendingJumpSegment();
+        setSegmentHeld("");
+        setSegmentRetries(0);
     };
 
     const acceptModeSuggestion = () => {
@@ -1897,14 +2065,20 @@ const DateWidget = ({
         error={error}
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
+        isRetryingSegment={isRetryingSegment}
         modeSuggestion={modeSuggestion}
         onAcceptModeSuggestion={acceptModeSuggestion}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
         onDeclineModeSuggestion={declineModeSuggestion}
+        onDiscardSegment={discardHeldSegment}
         onJump={(days) => runJump(days, "jump")}
+        onRetrySegment={retryHeldSegment}
         onUndo={runUndo}
+        progressLabel={jumpProgress}
+        segmentHeld={segmentHeld}
+        segmentRetries={segmentRetries}
         topOffset={topOffset}
         undoCount={undoCount}
         />

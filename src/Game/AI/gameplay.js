@@ -2,6 +2,16 @@
 import { callAI } from "./main.jsx";
 import { logAi } from "../../runtime/logClient.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import {
+  SEGMENTED_JUMP_MIN_DAYS,
+  buildSegmentInstruction,
+  eventCountRangeForDays,
+  formatDurationLabel,
+  mergeSegmentPayloads,
+  planJumpSegments,
+  segmentEventRange,
+} from "./jumpSegments.js";
+import { collapseRepeatedBlock } from "./promptDedupe.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -14,6 +24,7 @@ import {
   buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildPromptContext,
+  formatDateReadable,
   getUnconsolidatedEvents,
   renderTemplate,
   resolveHelperValues,
@@ -441,6 +452,18 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
   }
 
+  // The scenario briefing arrives twice on eight of the sixteen prompts: once
+  // from the task text's own placeholder and again inside the world summary.
+  // On a real campaign that is ~108k characters sent twice, about a third of a
+  // jump prompt. Collapsed here rather than in the templates because existing
+  // saves carry frozen copies, and two tasks reach the briefing ONLY through the
+  // world summary - removing it there would take it from them entirely.
+  systemPrompt = collapseRepeatedBlock(
+    systemPrompt,
+    variables?.worldBeforeRoundOne,
+    "(The pre-round-one briefing is reproduced in full earlier in this prompt.)",
+  );
+
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
@@ -850,7 +873,48 @@ const mergePolityCatalog = (countryCatalog, world) => {
 let activeSimulations = 0;
 const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
-export const isSimulationBusy = () => activeSimulations > 0;
+// A jump whose segments are part-generated: one segment failed, the ones before
+// it are still in hand, and NOTHING has been written. Held so the player is told
+// which segment failed and can retry just that segment or discard the turn (see
+// runJumpSegments).
+let pendingJumpSegment = null;
+
+export const hasPendingJumpSegment = () => pendingJumpSegment !== null;
+
+// Abandon the held jump. Nothing was written, so there is nothing to undo — the
+// player loses the segments generated so far, as if they had cancelled.
+export const discardPendingJumpSegment = () => {
+  const had = pendingJumpSegment !== null;
+  pendingJumpSegment = null;
+  if (had) logDebugEvent("turn", "Held jump discarded; nothing was written and its finished segments are gone.");
+  return had;
+};
+
+// The turn is part-generated and waiting, not lost. Flagged so the UI can tell
+// this apart from an ordinary jump failure and offer to retry the one segment
+// that failed rather than regenerating the whole round.
+const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex }) => {
+  const kept = completedSegments === 0
+    ? "No part of the round has been generated yet"
+    : `The ${completedSegments === 1 ? "segment" : `${completedSegments} segments`} before it `
+      + `${completedSegments === 1 ? "is" : "are"} still here`;
+  const error = new Error(
+    `Segment ${segmentIndex + 1} of ${segmentCount} of this jump failed, so nothing has been saved: `
+    + `${cause?.message || "the AI returned no usable answer"}. ${kept}. `
+    + "Retry that segment to carry on from where it stopped, or discard the turn — the game stays on "
+    + "its current date either way.",
+  );
+  error.segmentHeld = true;
+  error.segmentIndex = segmentIndex;
+  error.segmentCount = segmentCount;
+  error.completedSegments = completedSegments;
+  error.cause = cause;
+  return error;
+};
+
+// A held jump counts as busy: the idle pulse checks this before it writes, so it
+// cannot write into a world that is about to be replaced by the held turn.
+export const isSimulationBusy = () => activeSimulations > 0 || pendingJumpSegment !== null;
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
@@ -2436,33 +2500,216 @@ export const advanceActiveCatalyst = async (choiceText) => {
   }
 };
 
-// Event density per skip length (player-tuned): longer skips must return
-// proportionally more events, and short ones must stay brief.
-const eventCountRangeForDays = (days) => {
-  if (days < 1) return [1, 1];   // sub-day skip (e.g. 6 hours)
-  if (days <= 7) return [1, 2];
-  if (days <= 31) return [5, 7];
-  if (days <= 92) return [10, 13];
-  if (days <= 184) return [19, 27];
-  return [29, 37];
-};
+// Generate the jump one segment at a time (jumpSegments.js decides how many).
+// A single-call jump is exactly the old behaviour: one request, worded and
+// validated as it always was, falling back on its own when it fails.
+//
+// A SEGMENT that fails is different. It used to mean throwing every finished
+// segment away and substituting a canned round for the whole period — minutes
+// of real generation replaced silently. Now it is HELD: nothing is written, the
+// finished segments are kept, and the player decides whether to retry the one
+// that failed or discard the turn. Half a round of real events followed by half
+// a round of canned ones is never on the table.
+const runJumpSegments = async ({ context, onProgress, signal, state }) => {
+  const {
+    bundle,
+    dateStep,
+    mode,
+    originDate,
+    plannedActionCount,
+    plannedActionShare,
+    safeDays,
+    segmentDays,
+    targetDate,
+    variables,
+  } = context;
+  const segmentCount = segmentDays.length;
 
-// Human-readable label for the skipped span, used in the AI prompt. Collapses
-// whole-day counts into weeks/months/years where they divide evenly.
-const formatDurationLabel = (days) => {
-  if (days < 1) {
-    const hours = Math.max(1, Math.round(days * 24));
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  // A segmented jump takes as long as the segments put together, so the spinner
+  // has to say which one is running or a correct turn looks like a hung one.
+  // Wrapped because a throwing UI callback must never cost the player a turn -
+  // the same rule the streaming onChunk callbacks follow.
+  const reportProgress = (segmentIndex) => {
+    if (segmentCount <= 1 || typeof onProgress !== "function") return;
+    try {
+      onProgress({ segment: segmentIndex + 1, segmentCount });
+    } catch (error) {
+      console.warn("[ai] a jump progress callback threw; continuing.", error);
+    }
+  };
+
+  // Starts at 0 on a fresh jump, and at the failed segment on a retry.
+  let segmentIndex = state.nextSegment;
+  try {
+    for (; segmentIndex < segmentCount; segmentIndex += 1) {
+      const isFinalSegment = segmentIndex === segmentCount - 1;
+      const spanDays = segmentDays[segmentIndex];
+      // The final segment always lands exactly on the requested date, so rounding
+      // across segments can never leave the round short of where it was asked to go.
+      const segmentTarget = isFinalSegment
+        ? targetDate
+        : (addIsoDays(state.segmentOrigin, spanDays) || targetDate);
+      const [minEvents, maxEvents] = segmentCount > 1
+        ? segmentEventRange(spanDays, plannedActionShare)
+        : segmentEventRange(safeDays, plannedActionCount);
+      // targetDate reaches only these two variables (promptContext.js), so the
+      // expensive context — region catalog, city seed, territory index — is built
+      // once for the whole jump and only the dates move per segment.
+      const segmentVariables = segmentCount > 1
+        ? { ...variables, targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) }
+        : variables;
+      reportProgress(segmentIndex);
+
+      const { generation: segmentGeneration, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+        // Only a single-call jump falls back on its own. A failing SEGMENT throws
+        // instead, so the catch below can hold the turn and hand the player the
+        // choice rather than quietly deciding for them.
+        ...(segmentCount > 1
+          ? {}
+          : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
+        signal,
+        // The jump IS the game, and its deadline is runJsonTask's for every task:
+        // silence, not elapsed time, so a long segment is never mistaken for a
+        // stalled one (and a segmented jump gets that window per segment, since it
+        // is per request). Cancel works either way.
+        userMessage: buildSegmentInstruction({
+          mode,
+          segmentIndex,
+          segmentCount,
+          minEvents,
+          maxEvents,
+          durationLabel: formatDurationLabel(safeDays),
+          segmentDurationLabel: formatDurationLabel(spanDays),
+          originDate,
+          targetDate,
+          segmentTargetDate: segmentTarget,
+          priorEvents: state.generatedSoFar,
+        }),
+        validatePayload: async (candidate, { finalAttempt } = {}) => {
+          // Shape-of-story problems (event count, stray dates) are STRICT while a
+          // retry remains — the model gets the exact error and usually fixes its
+          // own answer — and SALVAGED on the final attempt: a finished generation
+          // must never lose to the canned fallback over its date stamps, an extra
+          // event, or an invented region name. finalAttempt comes from runJsonTask
+          // itself (never from counting our own invocations — a schema failure on
+          // attempt 1 skips this validator entirely, which used to make attempt 2
+          // look "first" and leak strict feedback out as the fallback reason).
+          const strict = !finalAttempt;
+          const eventCount = normalizeArray(candidate?.events).length;
+          if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+            return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
+          }
+          // Each segment is checked against ITS OWN span, so an event dated outside
+          // the segment is caught while the model can still fix it rather than at the
+          // end of the whole round.
+          const dateError = validateTimelineDates({
+            candidate,
+            mode,
+            originDate: state.segmentOrigin,
+            targetDate: segmentTarget,
+            requireAdvance: dateStep >= 1,
+          });
+          if (dateError) {
+            if (strict) return dateError;
+            clampTimelineDates(candidate, { mode, originDate: state.segmentOrigin, targetDate: segmentTarget });
+          }
+          return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
+        },
+        variables: segmentVariables,
+      });
+
+      state.segmentPayloads.push(payload);
+      state.generatedSoFar.push(...normalizeArray(payload?.events));
+      state.generation = segmentGeneration;
+      // Where the next segment picks up. An auto jump can stop short of its span on
+      // purpose, so follow the payload rather than the calendar.
+      state.segmentOrigin = normalizeString(payload?.stopDate) || segmentTarget;
+      // Committed only once the segment is safely in hand, so a retry re-runs the
+      // segment that failed and never the one before it.
+      state.nextSegment = segmentIndex + 1;
+    }
+  } catch (error) {
+    // A deliberate cancel must still cancel.
+    if (signal?.aborted || error?.name === "AbortError") throw error;
+    const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
+
+    // A single call reaching here has already exhausted its own fallback, so there
+    // is no other segment to keep and nothing to retry piecemeal: it falls back
+    // for the whole period exactly as it always did.
+    if (segmentCount <= 1) {
+      console.warn(`[ai] the jump failed (${reason}) — falling back for the whole period.`);
+      logDebugEvent("warn", "[turn] The jump failed; it falls back.", { reason });
+      state.segmentPayloads.length = 0;
+      state.segmentPayloads.push(await fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }));
+      state.nextSegment = segmentCount;
+      state.generation = {
+        source: "fallback",
+        fallbackReason: reason,
+        taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
+      };
+      return;
+    }
+
+    // Held, not lost. state.nextSegment still points at the segment that failed,
+    // so a retry resumes with exactly that one.
+    pendingJumpSegment = { context, state };
+    console.warn(`[ai] jump segment ${segmentIndex + 1}/${segmentCount} failed (${reason}) — the turn is held.`);
+    logDebugEvent("warn", "[turn] A jump segment failed; the turn is HELD and nothing was written.", {
+      completedSegments: state.segmentPayloads.length,
+      segmentCount,
+      segmentIndex,
+      reason,
+    });
+    throw segmentHeldError({
+      cause: error,
+      completedSegments: state.segmentPayloads.length,
+      segmentCount,
+      segmentIndex,
+    });
   }
-  const whole = Math.round(days);
-  const pluralize = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"}`;
-  if (whole % 365 === 0) return pluralize(whole / 365, "year");
-  if (whole % 30 === 0) return pluralize(whole / 30, "month");
-  if (whole % 7 === 0) return pluralize(whole / 7, "week");
-  return pluralize(whole, "day");
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
+// Merge the segments into the one round the player asked for and write it.
+// Shared by the first attempt and by a retry that finished the held segments, so
+// there is only ever one way a jump lands.
+const finishTimelineJump = async ({ context, state }) => {
+  const { baseColors, bundle, mode, targetDate } = context;
+  // Every segment is in hand, so there is no longer a jump to resume.
+  pendingJumpSegment = null;
+
+  // One round out of every segment. applySimulationResult advances the round
+  // exactly once, and the dedupeGeneratedEvents pass inside it already collapses
+  // repeats WITHIN the batch as well as against the existing log, so a later
+  // segment restating an earlier one cannot reach the timeline.
+  const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
+
+  const result = {
+    catalyst: merged.catalyst,
+    clearActions: merged.clearActions,
+    events: merged.events,
+    mode,
+    outreach: merged.diplomaticOutreach,
+    stopDate: merged.stopDate,
+    summary: merged.summary,
+    generation: state.generation,
+  };
+
+  return applySimulationResult({
+    baseActions: bundle.actions,
+    baseChats: bundle.chats,
+    baseColors,
+    baseEvents: bundle.events,
+    baseGame: bundle.game,
+    baseWorld: bundle.world,
+    result,
+  });
+};
+
+export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, signal } = {}) => {
+  // Starting a fresh turn abandons any jump still held on a failed segment. Its
+  // state was captured against a world snapshot this one is about to re-read, so
+  // applying it later would write a turn built on stale ground.
+  discardPendingJumpSegment();
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -2480,76 +2727,75 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     throw new Error("The requested jump exceeds the supported date range.");
   }
   const variables = await buildTemplateVariables(bundle, { targetDate });
-  const durationLabel = formatDurationLabel(safeDays);
-  let [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;
-  if (plannedActionCount > minEvents) {
-    minEvents = Math.min(plannedActionCount, 37);
-    maxEvents = Math.max(maxEvents, minEvents + 3);
-  }
-  const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
-    fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
-    signal,
-    // The jump IS the game — by default generation waits as long as the model
-    // needs (0 disables the deadline in runJsonTask), so the canned fallback is
-    // only reachable through a real error, never a slow local/reasoning model.
-    // The "Limit AI generation" toggle opts back into a 5-minute bound for
-    // players who prefer a guaranteed turn over a guaranteed answer (Cancel
-    // works either way).
-    userMessage:
-      mode === "auto"
-        ? "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
-          "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
-          "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period."
-        : `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
-          `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
-           `spread across the skipped period.`,
-    validatePayload: async (candidate, { finalAttempt } = {}) => {
-      // Shape-of-story problems (event count, stray dates) are STRICT while a
-      // retry remains — the model gets the exact error and usually fixes its
-      // own answer — and SALVAGED on the final attempt: a finished generation
-      // must never lose to the canned fallback over its date stamps, an extra
-      // event, or an invented region name. finalAttempt comes from runJsonTask
-      // itself (never from counting our own invocations — a schema failure on
-      // attempt 1 skips this validator entirely, which used to make attempt 2
-      // look "first" and leak strict feedback out as the fallback reason).
-      const strict = !finalAttempt;
-      const eventCount = normalizeArray(candidate?.events).length;
-      if (strict && mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
-        return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
-      }
-      const dateError = validateTimelineDates({ candidate, mode, originDate, targetDate, requireAdvance: dateStep >= 1 });
-      if (dateError) {
-        if (strict) return dateError;
-        clampTimelineDates(candidate, { mode, originDate, targetDate });
-      }
-      return await validateGeneratedWorldChanges(candidate, bundle.world, { strictTransfers: strict });
-    },
-    variables,
-  });
 
-  const result = {
-    catalyst: payload?.catalyst ?? null,
-    clearActions: payload?.clearActions !== false,
-    events: normalizeArray(payload?.events),
+  // Long skips are generated in SEGMENTS and merged into the one round the player
+  // asked for — see jumpSegments.js for why, and for the merge rules. Auto jumps
+  // never split: they stop at the next notable moment, so there is no span to
+  // divide up front. Short enough, or the setting off, is a single call worded and
+  // validated exactly as it always was.
+  const segmentDays = (getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps)
+    && mode !== "auto"
+    && dateStep >= SEGMENTED_JUMP_MIN_DAYS)
+    ? planJumpSegments(dateStep)
+    : [dateStep];
+  const segmentCount = segmentDays.length;
+  const plannedActionShare = Math.ceil(plannedActionCount / segmentCount);
+  if (segmentCount > 1) {
+    logDebugEvent("turn", `Timeline jump split into ${segmentCount} segments.`, {
+      dateStep,
+      segmentDays,
+      round: bundle.game.round,
+    });
+  }
+
+  // Everything constant across the jump, and everything a retry needs to pick the
+  // loop back up where it stopped: see runJumpSegments for why a failed segment
+  // is HELD rather than swapped for a canned round.
+  const jumpContext = {
+    baseColors,
+    bundle,
+    dateStep,
     mode,
-    outreach: normalizeArray(payload?.diplomaticOutreach),
-    stopDate: normalizeString(payload?.stopDate) || targetDate,
-    summary: normalizeString(payload?.summary),
-    generation,
+    originDate,
+    plannedActionCount,
+    plannedActionShare,
+    safeDays,
+    segmentDays,
+    targetDate,
+    variables,
+  };
+  const jumpState = {
+    generatedSoFar: [],
+    generation: { source: "ai", fallbackReason: "" },
+    nextSegment: 0,
+    segmentOrigin: originDate,
+    segmentPayloads: [],
   };
 
-  return applySimulationResult({
-    baseActions: bundle.actions,
-    baseChats: bundle.chats,
-    baseColors,
-    baseEvents: bundle.events,
-    baseGame: bundle.game,
-    baseWorld: bundle.world,
-    result,
-  });
+  await runJumpSegments({ context: jumpContext, onProgress, signal, state: jumpState });
+  return await finishTimelineJump({ context: jumpContext, state: jumpState });
+  } finally {
+    endSimulation();
+  }
+};
+
+// Finish a held jump by running ONLY the segments that have not been generated
+// yet. The finished ones are not regenerated — they are already valid, and on a
+// slow model each one may have cost minutes. Nothing was written when the
+// segment failed, so this is the same code path as the first attempt rather than
+// a second one to keep in step.
+export const retryPendingJumpSegment = async ({ onProgress, signal } = {}) => {
+  if (!pendingJumpSegment) throw new Error("There is no jump waiting on a failed segment.");
+  const { context, state } = pendingJumpSegment;
+  beginSimulation();
+  try {
+    // Re-holds itself on another failure, so the player can retry again or
+    // discard — exactly as they could the first time.
+    await runJumpSegments({ context, onProgress, signal, state });
+    return await finishTimelineJump({ context, state });
   } finally {
     endSimulation();
   }
