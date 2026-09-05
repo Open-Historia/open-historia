@@ -681,14 +681,14 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
   }).join("\n");
 };
 
-// `visibleTo` names the polity this transcript is rendered FOR, and this is
-// where the transcript is actually limited to the chats that polity took part
-// in (chatVisibility.js). The leader path also filters upstream, in main.jsx,
-// before the chats reach buildPromptVariables at all - this is defence in
-// depth, so a future caller that renders a transcript without doing that
-// filtering of its own still cannot leak one government's mail to another.
-// Blank means no restriction, which is what the narrator, the consolidator and
-// the advisor pass.
+// `visibleTo` names the polity this transcript is rendered FOR, and limits it
+// to the chats that polity took part in (chatVisibility.js). buildPromptContext
+// applies the same filter to every chat-derived variable at once (promptChats
+// below), and the leader path filters upstream in main.jsx before the chats
+// reach buildPromptVariables at all - this is defence in depth, so a caller
+// that renders a transcript on its own still cannot leak one government's mail
+// to another. Blank means no restriction, which is what the narrator, the
+// consolidator and the advisor pass.
 //
 // Distinct wording per case: "this polity has no correspondence" is a very
 // different fact from "nothing happened this round", and a leader told the
@@ -1711,7 +1711,10 @@ export const buildPromptContext = async (bundle, {
     );
     const unconsolidatedChats = normalizeChats(bundle.chats)
       .filter((entry) => !consolidatedChatIds.has(entry.id));
-    promptChats = sortDiplomaticChatsByRecentActivity(unconsolidatedChats);
+    // Every chat-derived variable - chat, chatHistory, chatSummary,
+    // diplomaticContinuity, chatHistoryLong - comes from this one list, so the
+    // visibility rule is applied once, here, and they cannot disagree.
+    promptChats = filterChatsVisibleTo(sortDiplomaticChatsByRecentActivity(unconsolidatedChats), chatVisibleTo);
     currentChat = normalizedChat ?? promptChats[0] ?? null;
   }
 

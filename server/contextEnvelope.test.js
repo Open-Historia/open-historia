@@ -141,6 +141,12 @@ test("chat transcripts keep the privacy wording and carry durable diplomatic mem
   const detailed = buildDetailedChatHistoryText(chats);
   assert.match(detailed, /Durable diplomatic memory/);
   assert.match(detailed, /withdraw by May 20/);
+  // The filter narrows a non-empty transcript, not only the empty wording.
+  assert.match(buildDetailedChatHistoryText(chats, { visibleTo: "Borduria" }), /withdraw by May 20/);
+  assert.equal(
+    buildDetailedChatHistoryText(chats, { visibleTo: "France" }),
+    "You have exchanged no messages with them in these rounds.",
+  );
 
   const continuity = buildDiplomaticContinuityText(chats);
   assert.match(continuity, /Standing diplomatic memory: Both sides agreed/);
