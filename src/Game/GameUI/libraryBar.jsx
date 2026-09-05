@@ -2075,7 +2075,7 @@ const LibraryTopBar = () => {
               padding: "0.42rem 0.7rem",
             }}
           >
-            <div style={{ alignItems: "center", background: "rgba(59,130,246,0.13)", border: "1px solid rgba(96,165,250,0.18)", borderRadius: "8px", color: "#bfdbfe", display: "flex", flexShrink: 0, fontSize: "0.68rem", fontWeight: 950, height: "1.9rem", justifyContent: "center", width: "1.9rem" }}>OH</div>
+            <img alt="Open Historia" src="/logo.png" style={{ borderRadius: "8px", flexShrink: 0, height: "1.9rem", width: "1.9rem" }} />
             <div style={{ minWidth: 0, lineHeight: 1.08 }}>
               <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.72rem", fontWeight: 850 }}>Open Historia</div>
               <div style={{ color: "rgba(226,226,229,0.42)", fontSize: "0.6rem", marginTop: "0.18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
@@ -2363,8 +2363,6 @@ const LibraryTopBar = () => {
         <div
           style={{
             background:
-              "radial-gradient(circle at 12% -4%, rgba(124,58,237,0.16), transparent 42%), " +
-              "radial-gradient(circle at 88% 110%, rgba(56,120,255,0.10), transparent 46%), " +
               "linear-gradient(180deg, #111113 0%, #0d0d0f 100%)",
             color: "#fff",
             display: "flex",

@@ -1973,7 +1973,7 @@ const SettingsMenu = ({
         }}
         >
             <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.75rem", margin: "-0.1rem -0.1rem 0.75rem", padding: "0 0.1rem 0.7rem" }}>
-                <div style={{ alignItems: "center", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(96,165,250,0.16)", borderRadius: "9px", color: "#bfdbfe", display: "flex", flexShrink: 0, fontSize: "0.8rem", fontWeight: 950, height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>OH</div>
+                <img alt="Open Historia" src="/logo.png" style={{ borderRadius: "8px", flexShrink: 0, height: "2.25rem", width: "2.25rem" }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.55rem" }}>
                         <span style={{ color: "#f8fafc", fontSize: "0.92rem", fontWeight: 900 }}>{context?.scenarioName || context?.gameName || "Open Historia"}</span>
