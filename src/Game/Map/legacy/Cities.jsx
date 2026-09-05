@@ -8,6 +8,26 @@ import {
     readJson,
 } from "../../../runtime/assets.js";
 import { useWorldCities } from "./useLegacyWorldSelectors.js";
+import { normalizeCustomCityFeatureCollection } from "../../../runtime/cityFeatures.js";
+
+// This copy reads `city`, `tier` and `capital === "primary"` straight off the
+// features — the shape the editor exports. Imported scenarios arrive with
+// `name`, a boolean `capital` and sometimes no `tier`; the current renderer
+// normalises those (runtime/cityFeatures.js) and this one drew blank or hidden
+// labels for them. Normalise the same way, then spell the result in this copy's
+// own vocabulary. (A deliberate deviation from the verbatim copy; see README.)
+const legacyCityCollection = (data) => ({
+    type: "FeatureCollection",
+    features: normalizeCustomCityFeatureCollection(data).features.map((feature) => ({
+        ...feature,
+        properties: {
+            ...feature.properties,
+            capital: feature.properties._ohCapital
+                ? "primary"
+                : (typeof feature.properties.capital === "string" ? feature.properties.capital : ""),
+        },
+    })),
+});
 
 ensurePmtilesProtocol();
 
@@ -221,7 +241,7 @@ const Cities = () => {
         readJson(citiesGeojsonUrl, { defaultValue: EMPTY_FEATURE_COLLECTION, force: true })
             .then((data) => {
                 if (cancelled) return;
-                setCustomData(data && Array.isArray(data.features) ? data : EMPTY_FEATURE_COLLECTION);
+                setCustomData(data && Array.isArray(data.features) ? legacyCityCollection(data) : EMPTY_FEATURE_COLLECTION);
             })
             .catch(() => {
                 if (!cancelled) setCustomData(EMPTY_FEATURE_COLLECTION);

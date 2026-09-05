@@ -37,8 +37,9 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { announceMapRerender } from "../../runtime/mapReadiness.js";
 import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
@@ -58,12 +59,6 @@ import {
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
-
-// The same list the game and scenario editors suggest, kept in step with them.
-const LABEL_FONT_SUGGESTIONS = [
-    "Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact",
-    "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS",
-];
 
 const baseStyle = {
     position: "fixed",
@@ -1621,9 +1616,13 @@ const SettingsWorkspace = ({
                 </SettingsSection>
                 <SettingsSection title="Renderer" description="Which renderer draws the map. A rendering choice only: no world state, save data or geometry differs between them.">
                     <ExperimentalPill />
-                    <Toggle label="Legacy map renderer" enabled={mapSettings.legacyMapRenderer} onToggle={() => updateMapSetting("legacyMapRenderer", MAP_SETTING_KEYS.legacyMapRenderer, !mapSettings.legacyMapRenderer)} />
+                    {/* Announced BEFORE the setting changes: World.jsx keys the map
+                        instance on the renderer, so the flip replaces the map and
+                        the game loading screen covers the redraw — the globe switch
+                        does the same (App.jsx). */}
+                    <Toggle label="Legacy map renderer" enabled={mapSettings.legacyMapRenderer} onToggle={() => { announceMapRerender(); updateMapSetting("legacyMapRenderer", MAP_SETTING_KEYS.legacyMapRenderer, !mapSettings.legacyMapRenderer); }} />
                     <div style={settingsHelper}>
-                    Off (default): Map vNext — dissolved polity surfaces, stitched frontiers and curved polity labels. On: the renderer used before it, kept verbatim, with per-region fills and its own country labels. Reload after switching.
+                    Off (default): Map vNext — dissolved polity surfaces, stitched frontiers and curved polity labels. On: the renderer used before it, with per-region fills and its own country labels. Switching redraws the map.
                     </div>
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
@@ -1908,7 +1907,17 @@ const SettingsMenu = ({
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
-    const updateLabelFont = (value) => setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
+    // The field shows the keystrokes; the setting stores them trimmed. Storing
+    // on every keystroke through setMapSettingValue's trim and echoing the
+    // stored value back used to eat a space the moment it was typed, so "Times
+    // New Roman" could not be typed at all. The draft is shown while it is the
+    // stored value plus whitespace; a change made elsewhere wins over it.
+    const [labelFontDraft, setLabelFontDraft] = useState(labelFont);
+    const labelFontShown = labelFontDraft.trim() === labelFont ? labelFontDraft : labelFont;
+    const updateLabelFont = (value) => {
+        setLabelFontDraft(value);
+        setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
+    };
 
     // Telemetry switches (telemetry.js): their own keys, both on by default.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
@@ -2010,7 +2019,7 @@ const SettingsMenu = ({
             updateMapSetting={updateMapSetting}
             basemapStyle={basemapStyle}
             updateBasemapStyle={updateBasemapStyle}
-            labelFont={labelFont}
+            labelFont={labelFontShown}
             updateLabelFont={updateLabelFont}
             updateBetaUnits={updateBetaUnits}
             telemetryOn={telemetryOn}

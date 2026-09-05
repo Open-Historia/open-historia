@@ -120,7 +120,11 @@ export const buildBasemapRenderKey = ({
   projection = "mercator",
   basemapId = DEFAULT_BASEMAP_ID,
   backgroundKind = "builtin",
-} = {}) => `${projection}:${basemapId}:${backgroundKind}`;
+  // Which renderer draws on the instance (MapScene): the two register
+  // different sources and layers under the same ids, so switching must
+  // remount rather than diff.
+  renderer = "vnext",
+} = {}) => `${projection}:${basemapId}:${backgroundKind}:${renderer}`;
 
 const basemapById = (id) => ESRI_BASEMAPS.find((b) => b.id === id)
   ?? ESRI_BASEMAPS.find((b) => b.id === DEFAULT_BASEMAP_ID);

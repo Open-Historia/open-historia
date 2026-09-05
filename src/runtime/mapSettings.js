@@ -86,6 +86,14 @@ export const MAP_SETTING_KEYS = {
     betaUnits: "beta_unit_system",
 };
 
+// Families the label-font pickers suggest — Settings → Map and the game and
+// scenario editors, one list. Suggestions only: labels rasterize from the
+// player's own fonts, so any installed family works.
+export const LABEL_FONT_SUGGESTIONS = Object.freeze([
+    "Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact",
+    "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS",
+]);
+
 export function getMapSetting(key) {
     // Guarded because these reads are reached from modules that node --test
     // imports without a DOM, and an unguarded read would turn "import this

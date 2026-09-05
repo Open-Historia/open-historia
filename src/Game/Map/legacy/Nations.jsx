@@ -21,11 +21,13 @@ import {
   resolveCountryDisplayName,
 } from "../../../runtime/assets.js";
 import { resolveRegionName } from "../../../runtime/regionNameFixes.js";
-import { ownerIdentityKey, toCountryName } from "../../../runtime/ownerNames.js";
+import { buildOwnerAliasMap, canonicalOwnerName, ownerIdentityKey, toCountryName } from "../../../runtime/ownerNames.js";
 import { loadCountryLabelCollections, loadRegionLabelGeometry } from "../../../runtime/countryLabels.js";
 import { translateLabel } from "../../../runtime/translator.js";
 import { loadRegionSeed, emptyRegionSeed } from "./regionSeed.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../../runtime/mapSettings.js";
+import { markPolitiesReady } from "../../../runtime/mapReadiness.js";
+import { loadScenarioRegionCatalog } from "../../../runtime/assets.js";
 import { useWorldState } from "../useWorldState.js";
 
 ensurePmtilesProtocol();
@@ -287,42 +289,55 @@ const ringCentroidLngLat = (ring) => {
 const CLUSTER_JOIN_DEGREES = 10; // centroids closer than this merge into one label cluster
 const MIN_CLUSTER_AREA = 1.5; // in lng/lat degrees^2 — skips tiny extra islands
 
-// Which regions physically touch, from shared border vertices. The seed
-// simplifies each region on its own, so mid-border vertices don't always match
-// between neighbours — but junction corners (tripoints) survive any
-// simplification, and most border runs still share long identical stretches.
-// Hashing EVERY vertex on a ~11m grid (1e-4°) catches both; the centroid
-// mop-up in the label builder heals whatever this still misses. Owner-agnostic
-// (geometry only) so it can be memoized per world and reused across ownership
-// changes.
+// Which regions touch. The z0 label tile simplifies every region on its own,
+// so two neighbours almost never share a vertex there: the shared-vertex test
+// this used to be found 193 of 218 countries in several pieces (Russia in 38),
+// and every piece got its own label. Bounding boxes that overlap, or come within
+// a fifth of a degree, are what "touching" means at that resolution - it keeps
+// Siberia one territory and still leaves a colony across a sea on its own.
+// (Ported from the current renderer's fix, PR #696; a deliberate deviation from
+// the verbatim copy, see README.)
+const ADJACENCY_GAP_DEGREES = 0.2;
 const buildRegionAdjacency = (regionsFC) => {
   const features = regionsFC?.features ?? [];
-  const firstSeen = new Map(); // packed vertex -> first feature index
   const neighbors = features.map(() => null);
+  const boxes = features.map((feature, index) => {
+    const geometry = feature?.geometry;
+    const polys = geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+    let west = Infinity;
+    let south = Infinity;
+    let east = -Infinity;
+    let north = -Infinity;
+    for (const poly of polys) {
+      for (const ring of poly ?? []) {
+        for (const pt of ring ?? []) {
+          if (!Array.isArray(pt)) continue;
+          west = Math.min(west, pt[0]);
+          east = Math.max(east, pt[0]);
+          south = Math.min(south, pt[1]);
+          north = Math.max(north, pt[1]);
+        }
+      }
+    }
+    return Number.isFinite(west) ? { index, west, south, east, north } : null;
+  }).filter(Boolean);
+  boxes.sort((a, b) => a.west - b.west);
   const link = (a, b) => {
     (neighbors[a] ??= new Set()).add(b);
     (neighbors[b] ??= new Set()).add(a);
   };
-  for (let index = 0; index < features.length; index += 1) {
-    const geometry = features[index]?.geometry;
-    const polys = geometry?.type === "Polygon"
-      ? [geometry.coordinates]
-      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-    for (const poly of polys) {
-      for (const ring of poly ?? []) {
-        if (!ring) continue;
-        for (let v = 0; v < ring.length; v += 1) {
-          const pt = ring[v];
-          // 1e-4° grid, packed into one number (fits 2^53).
-          const key = Math.round((pt[0] + 180) * 1e4) * 4194304 + Math.round((pt[1] + 90) * 1e4);
-          const seen = firstSeen.get(key);
-          if (seen === undefined) firstSeen.set(key, index);
-          else if (seen !== index) link(seen, index);
-        }
-      }
+  const gap = ADJACENCY_GAP_DEGREES;
+  for (let i = 0; i < boxes.length; i += 1) {
+    const a = boxes[i];
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const b = boxes[j];
+      if (b.west > a.east + gap) break;
+      if (b.south > a.north + gap || b.north < a.south - gap) continue;
+      link(a.index, b.index);
     }
   }
-  firstSeen.clear();
   return neighbors;
 };
 
@@ -395,6 +410,11 @@ const buildOwnerLabelCollection = (
   const countryNameByCode = new Map(); // gid0 -> modern country name (fallback labels)
   const ownerByIndex = new Array(allFeatures.length).fill("");
   const entryByIndex = new Array(allFeatures.length).fill(null);
+  // A polity renamed by the AI is one polity, however a region's owner spells
+  // it: "Russian Federation" folds back onto the "Russia" token here exactly as
+  // it does when the world is read, so the country gets one label, not two.
+  // (Ported from the current renderer's fix, PR #696; a deliberate deviation.)
+  const aliasMap = buildOwnerAliasMap(polityOverrides);
 
   for (let index = 0; index < allFeatures.length; index += 1) {
     const props = allFeatures[index].properties || {};
@@ -405,7 +425,7 @@ const buildOwnerLabelCollection = (
     // Captured-region override stores the AI's owner CODE ("ESP"); the seed stores the NAME
     // ("Spain"). Canonicalize so both share one cluster + label instead of the code splitting
     // off as a phantom new country.
-    const owner = toCountryName(rawOwner);
+    const owner = canonicalOwnerName(rawOwner, aliasMap);
     if (!owner) continue;
 
     let entry = precomputedMetrics ? precomputedMetrics[index] : null;
@@ -522,6 +542,9 @@ const WorldMap = ({ isGlobe = false }) => {
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
   };
+  // Settings → Map → Country label font, the same override the current renderer
+  // honours (a deliberate deviation from the verbatim copy; see README).
+  const labelFontOverride = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   // Lightweight index over the scenario's regions.geojson (owner map + authored
@@ -628,9 +651,15 @@ const WorldMap = ({ isGlobe = false }) => {
       if (authoredIds.has(id)) continue;
       const seedOwner = regionSeed.ownersById.get(id);
       if (seedOwner === "") continue; // unowned in this scenario — never labelled
-      base.push(seedOwner === undefined
-        ? feature
-        : { ...feature, properties: { ...feature.properties, owner: seedOwner } });
+      // A tile region the scenario does not list at all is not this map's land:
+      // the fill paints it neutral unless a live override names an owner
+      // (stockRegionsFillPaint). Its tile copy still carries the modern country
+      // as `owner`, and used to be labelled with it - "UNITED STATES" under a
+      // hand-drawn world's "UNITED STATES OF AMERICA", "RUSSIA" six times under
+      // "RUSSIAN FEDERATION". Blanked here, so the label builder names it only
+      // when an override does, exactly as the fill colours it. (A deliberate
+      // deviation from the verbatim copy; see README.)
+      base.push({ ...feature, properties: { ...feature.properties, owner: seedOwner ?? "" } });
     }
     return {
       type: "FeatureCollection",
@@ -987,6 +1016,32 @@ const WorldMap = ({ isGlobe = false }) => {
   );
 
 
+  // The game loading screen (GameUI/gameLoadingScreen.jsx) waits for the polity
+  // layers through runtime/mapReadiness.js, which the current renderer marks
+  // once its boundary worker has answered. This copy predates that contract, so
+  // it marks here: at once on a stock map, on a custom map once the region seed
+  // is in. The compact region catalog that Stats, the country panel and the AI
+  // turn read is primed first — the current renderer fills it from its worker;
+  // without that the first consumer parsed the whole regions.geojson on the main
+  // thread mid-play. Doing it here puts that parse under the loading screen.
+  // (A deliberate deviation from the verbatim copy; see README.)
+  useEffect(() => {
+    if (!worldKnown) return undefined;
+    if (customFlag && !regionSeed) return undefined;
+    let cancelled = false;
+    const mark = () => {
+      if (!cancelled) markPolitiesReady(regionsGeojsonUrl);
+    };
+    if (customFlag) {
+      loadScenarioRegionCatalog().catch(() => {}).finally(mark);
+    } else {
+      mark();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [customFlag, regionSeed, regionsGeojsonUrl, worldKnown]);
+
   // Load custom region data once, only when the active map declares it. Stock
   // scenarios never hit the network for this. The 55-220 MB FeatureCollection is
   // fetched/parse-indexed in a WORKER (regionSeed.js) — the main thread only
@@ -1330,8 +1385,8 @@ const WorldMap = ({ isGlobe = false }) => {
   // PLAYER's machine works, with the trailing names as fallbacks where the
   // first is not installed.
   const labelFontStack = useMemo(
-    () => [labelFont || "Impact", "Arial Black", "sans-serif"],
-    [labelFont],
+    () => [labelFontOverride || labelFont || "Impact", "Arial Black", "sans-serif"],
+    [labelFont, labelFontOverride],
   );
 
   const pointLabelLayerLayout = useMemo(() => ({
