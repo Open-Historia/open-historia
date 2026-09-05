@@ -415,3 +415,67 @@ button:active:not(:disabled) {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The game menu grows out of the menu button and shrinks back into it. The
+   card's top-left corner sits on the button, so a scale from the button's
+   size (the --oh-grow-* ratios, measured by settings.jsx) is the button
+   becoming the menu; the contents fade in once the card is most of the way. */
+@keyframes oh-menu-grow {
+  from { opacity: 0.35; transform: scale(var(--oh-grow-x, 0.14), var(--oh-grow-y, 0.17)); }
+  to { opacity: 1; transform: scale(1, 1); }
+}
+@keyframes oh-menu-shrink {
+  from { opacity: 1; transform: scale(1, 1); }
+  to { opacity: 0.2; transform: scale(var(--oh-grow-x, 0.14), var(--oh-grow-y, 0.17)); }
+}
+.oh-menu-card {
+  transform-origin: top left;
+}
+.oh-menu-grow {
+  animation: oh-menu-grow 240ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards !important;
+}
+.oh-menu-grow > * {
+  animation: oh-fade-in 180ms ease-out 120ms backwards;
+}
+[data-oh-presence="leaving"] > .oh-menu-card {
+  animation: oh-menu-shrink 220ms ease-in both !important;
+  pointer-events: none !important;
+}
+[data-oh-presence="leaving"] > .oh-menu-card > * {
+  animation: oh-fade-out 90ms ease-in both !important;
+}
+
+/* The small menu becomes the settings workspace: the card starts on the small
+   menu's rectangle wearing its tint, then eases to its own place as the tint
+   lifts and its contents fade in (settings.jsx useWorkspaceMorph sets the
+   transform). Back runs it in reverse before the workspace unmounts. */
+.oh-ws-card {
+  position: relative;
+}
+.oh-ws-tint {
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+.oh-ws-morphing .oh-ws-tint {
+  opacity: 1;
+  transition: none;
+}
+.oh-ws-unmorph .oh-ws-tint {
+  opacity: 1;
+  transition: opacity 200ms ease-in;
+}
+.oh-ws-card > :not(.oh-ws-tint) {
+  transition: opacity 200ms ease 80ms;
+}
+.oh-ws-morphing > :not(.oh-ws-tint) {
+  opacity: 0;
+  transition: none;
+}
+.oh-ws-unmorph > :not(.oh-ws-tint) {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.oh-fade-out-slow {
+  animation: oh-fade-out 240ms ease-in both !important;
+  pointer-events: none !important;
+}
