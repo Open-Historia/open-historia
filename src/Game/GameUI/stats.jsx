@@ -10,7 +10,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
-import { generateCountryStatSheet } from "../AI/gameplay.js";
+import { ensureIntelligenceRated, generateCountryStatSheet } from "../AI/gameplay.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1539,10 +1539,21 @@ const StatsPaneBody = ({ active }) => {
             });
     }, [active, targetCountry, player.code, worldSnapshot]);
 
+    // Opening the pane on a polity is what gets that polity its numbers: the
+    // stat sheet (loadSheet generates one when nothing persisted is valid) and,
+    // once the sheet is in, a first reading of its intelligence service. Both
+    // used to wait for the Economy sub-tab, which left every service the
+    // player looked at on the same "ordinary" default; the Diplomacy tab now
+    // pays for the sheet too, in the background, rather than showing stats
+    // that were never assessed.
     useEffect(() => {
-        if (!active || !targetCountry || statsView !== "economy") return;
-        void loadSheet();
-    }, [active, targetCountry, statsView, loadSheet]);
+        if (!active || !targetCountry) return undefined;
+        let cancelled = false;
+        loadSheet().finally(() => {
+            if (!cancelled) void ensureIntelligenceRated(targetCountry, { reason: "stats pane" });
+        });
+        return () => { cancelled = true; };
+    }, [active, targetCountry, loadSheet]);
 
     useEffect(() => {
         if (!active || typeof window === "undefined") return undefined;

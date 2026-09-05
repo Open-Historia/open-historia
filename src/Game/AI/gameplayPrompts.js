@@ -172,6 +172,19 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description: "A first reading of a polity's intelligence service, asked the moment that service matters.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "intelligenceAssessment",
+    label: "Intelligence Assessment",
+    type: "task",
+  },
+  {
     description: "Structured national statistics for the selected polity.",
     helpers: [
       "PLAYER_POLITY",

@@ -48,7 +48,7 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
@@ -130,6 +130,7 @@ import {
 } from "./nativeDiplomaticDirector.js";
 import {
   appendCountryStatHistorySample,
+  buildCompactEconomicContext,
   captureCountryStatsHistory,
   COUNTRY_STATS_POPULATION_CALIBRATION_VERSION,
   COUNTRY_STATS_TRACKING_MAX_POLITIES,
@@ -147,6 +148,7 @@ import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import { isProviderConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
 import { getLibraryState } from "../../runtime/library.js";
 
@@ -5037,6 +5039,12 @@ const applySimulationResult = async ({
     for (const skipped of outcome.rejected) {
       logDebugEvent("espionage", `Spy order skipped: ${skipped.reason}`, { op: skipped.op });
     }
+    // An agent ordered into a polity nobody has rated: get that service its
+    // first reading now (it waits for this turn's write), so the espionage
+    // maths it meets next turn run on a judgement rather than the default.
+    for (const entry of outcome.applied) {
+      if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
+    }
   }
   const spySync = [
     // Order matters: provenance first, so an entry stamped this turn can be
@@ -8516,6 +8524,129 @@ export const refreshSpyIntercepts = async () => {
   }
 };
 
+
+// ---- First readings -------------------------------------------------------
+//
+// Every service is "ordinary" (spycraft.js DEFAULT_INTELLIGENCE) until something
+// puts a number on it, and until now only a turn could — the simulator moves
+// world.intelligence through polityChanges.intelligence when a purge or an
+// academy warrants it. So every service the player ever looked at sat on the
+// same 40/100, their own included, and the espionage maths ran on a default
+// rather than a judgement. These ask the model for a first reading the moment
+// a service matters — the Stats pane opens on a polity, an agent is sent, an
+// intercept is read, a foreign agent is caught — and store it where the turn
+// already writes, so from then on it moves like any other rating. A rated
+// service is never re-rated here: the turn owns the number after that.
+//
+// The stat sheet gets the same treatment for the same reason: a polity the
+// player is dealing with should have its numbers, not a "loading" card the
+// first time they look.
+
+// Both writers below run OUTSIDE a turn. A jump reads the world, works for
+// minutes and writes it back; a write from here in the middle of that would be
+// clobbered by the turn's, or worse, clobber it. So they wait for the
+// simulation to go idle before calling the model at all (the answer would
+// otherwise describe a world the turn is about to change) and check again
+// before writing.
+const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}) => {
+  const startedAt = Date.now();
+  while (isSimulationBusy()) {
+    throwIfAborted(signal);
+    if (Date.now() - startedAt > timeoutMs) throw new Error("The simulation stayed busy.");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+};
+
+// One in-flight promise per (campaign, kind, polity), so the pane re-opening
+// on the same polity, or a deploy right after the tab opened, does not ask
+// twice. Settled promises are dropped, so a failure is retried the next time
+// something asks. Silent by design: a reading that fails costs the player
+// nothing but the default they already had.
+const firstReadingsInFlight = new Map();
+const firstReading = (kind, target, reason, work) => {
+  const name = normalizeString(target);
+  if (!name || typeof window === "undefined" || !isProviderConfigured()) return Promise.resolve(null);
+  const key = `${activeCampaignId()}|${kind}|${name.toLowerCase()}`;
+  if (firstReadingsInFlight.has(key)) return firstReadingsInFlight.get(key);
+  const run = work(name)
+    .catch((error) => {
+      if (error?.name === "AbortError") return null;
+      logDebugEvent("espionage", `${name}: first ${kind} reading failed${reason ? ` (${reason})` : ""}: ${error?.message || error}`);
+      return null;
+    })
+    .finally(() => firstReadingsInFlight.delete(key));
+  firstReadingsInFlight.set(key, run);
+  return run;
+};
+
+// A first reading of one polity's intelligence service: 0-100 from the model,
+// written to world.intelligence only while nothing has rated that service.
+export const assessIntelligenceService = async (target, { signal } = {}) => {
+  const name = normalizeString(target);
+  if (!name) return null;
+  const campaign = activeCampaignId();
+  await waitForSimulationIdle({ signal });
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  if (isIntelligenceRated(world, name)) return intelligenceOf(world, name);
+  const variables = {
+    ...(await buildTemplateVariables(bundle, { taskKey: "intelligenceAssessment" })),
+    targetPolity: name,
+  };
+  const dossier = await buildTargetDossier(bundle, name, world);
+  const era = normalizeString(world.simulationRules).slice(0, 700);
+  const statSheet = normalizeString(buildCompactEconomicContext(world.countryStats?.[name], { name }));
+  const { payload } = await runJsonTask("intelligenceAssessment", {
+    signal,
+    userMessage: [
+      `Rate the intelligence service of ${name} as it stands on ${variables.date || "the current date"}.`,
+      era ? `ERA & WORLD RULES:\n${era}` : "",
+      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      statSheet ? `STAT SHEET:\n${statSheet}` : "",
+    ].filter(Boolean).join("\n\n"),
+    variables,
+  });
+  const rating = normalizeIntelligenceRating(payload?.intelligence);
+  if (rating === null) throw new Error("The assessment carried no rating.");
+  // Re-read at write time, once the simulation is idle again: a turn may have
+  // rated the service meanwhile (its number wins), and the campaign in front
+  // of the player may have changed (then this belongs to nobody).
+  await waitForSimulationIdle({ signal });
+  throwIfAborted(signal);
+  if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the service was being assessed.");
+  const fresh = normalizeWorldState(await readWorldState({ force: true }));
+  if (isIntelligenceRated(fresh, name)) return intelligenceOf(fresh, name);
+  await writeWorldState({ ...fresh, intelligence: { ...(fresh.intelligence ?? {}), [name]: rating } });
+  const service = normalizeString(payload?.service);
+  logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
+    rationale: normalizeString(payload?.rationale),
+  });
+  return rating;
+};
+
+// Fire-and-forget forms for the UI and the turn: deduplicated, silent on
+// failure, and no-ops for a polity that already has its number or a provider
+// that is not set up yet.
+export const ensureIntelligenceRated = (target, { reason = "" } = {}) =>
+  firstReading("intelligence", target, reason, async (name) => {
+    const world = normalizeWorldState(await readWorldState({ force: false }));
+    if (isIntelligenceRated(world, name)) return intelligenceOf(world, name);
+    return assessIntelligenceService(name);
+  });
+
+export const ensureCountryStatSheet = (target, { reason = "" } = {}) =>
+  firstReading("stat sheet", target, reason, async (name) => {
+    const world = normalizeWorldState(await readWorldState({ force: false }));
+    const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
+    if (isCompleteCountryStatSheet(persisted)) return persisted;
+    await waitForSimulationIdle();
+    return generateCountryStatSheet({ code: name, name });
+  });
+
+// Everything a polity the player is dealing with should have: the sheet first,
+// so the service reading can see the numbers it rests on.
+export const ensureCountryAssessed = (target, options = {}) =>
+  ensureCountryStatSheet(target, options).then(() => ensureIntelligenceRated(target, options));
 
 // Structured national stat sheet for the Stats tab, grounded in the same
 // campaign context as the intelligence briefing.

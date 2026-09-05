@@ -26,6 +26,22 @@ const clamp01 = (n, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, n));
 export const intelligenceOf = (world, polity) =>
   clampPct(world?.intelligence?.[String(polity ?? "").trim()], DEFAULT_INTELLIGENCE);
 
+// Whether anything has ever put a number on this service. intelligenceOf()
+// answers "ordinary" for an unrated one — right for the maths, wrong for the
+// question "does this polity still need its first reading".
+export const isIntelligenceRated = (world, polity) =>
+  Number.isFinite(Number(world?.intelligence?.[String(polity ?? "").trim()]));
+
+// A rating as the model wrote it -> what goes in the world, or null for junk.
+export const normalizeIntelligenceRating = (value) => {
+  // Only a number or a numeric string counts: Number([]) is 0 and Number(null)
+  // is 0, and neither is a rating the model gave.
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+};
+
 // FNV-1a over a string -> [0, 1). Stable, so a hidden word stays hidden between
 // renders, and a round's discoveries come out the same on every replay.
 export const draw = (key) => {

@@ -3,7 +3,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, isChatGenerationLikely, processPendingEventOutreach } from "../AI/gameplay.js";
+import { chooseNextDiplomaticSpeaker, ensureCountryAssessed, isChatGenerationLikely, processPendingEventOutreach } from "../AI/gameplay.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -1507,6 +1507,11 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         } catch { /* keep what we have */ }
     };
     useEffect(() => { refresh(); const iv = setInterval(refresh, 5000); return () => clearInterval(iv); }, []);
+    // Opening the tab is the first time most players meet their own service, and
+    // sending an agent the first time they meet another's: each gets its stat
+    // sheet and a first intelligence reading then (gameplay.js ensureCountryAssessed)
+    // instead of every service sitting on the same "ordinary" default.
+    useEffect(() => { void ensureCountryAssessed(playerCountry, { reason: "spies tab" }); }, [playerCountry]);
 
     const myIntel = intelligenceOf(world, playerCountry);
     // Pre-ownership records (no owner) were all the player's.
@@ -1541,11 +1546,11 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
     const handleExpel = async (spy) => {
         setError("");
-        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); } catch (err) { setError(err?.message || String(err)); }
+        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" }); } catch (err) { setError(err?.message || String(err)); }
     };
     const handleTurn = async (spy) => {
         setError("");
-        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); } catch (err) { setError(err?.message || String(err)); }
+        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" }); } catch (err) { setError(err?.message || String(err)); }
     };
     const handleStory = async (spy) => {
         setError("");
@@ -1558,6 +1563,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         try {
             const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
             await commitSpies(next);
+            void ensureCountryAssessed(target, { reason: "agent deployed" });
         } catch (err) { setError(err?.message || String(err)); }
     };
 
@@ -1659,7 +1665,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Intercepts</div>
         )}
         {targets.map((target) => intercepts[target].exchanges.map((exchange) => (
-            <button key={exchange.id} onClick={() => setOpen({ target, exchange })}
+            <button key={exchange.id} onClick={() => { setOpen({ target, exchange }); void ensureCountryAssessed(target, { reason: "intercept read" }); }}
                 style={{ width: "100%", padding: "0.6rem 0.8rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer", fontFamily: "sans-serif", textAlign: "left", color: "white" }}>
             <span aria-hidden="true" style={{ fontSize: "1rem" }}>📡</span>
             <span style={{ flex: 1, minWidth: 0 }}>
