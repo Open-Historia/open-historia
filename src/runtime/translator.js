@@ -115,7 +115,7 @@ const showProgress = () => {
   progressEl.setAttribute("data-no-translate", "");
   progressEl.style.cssText =
     "position:fixed;bottom:5.2rem;left:50%;transform:translateX(-50%);z-index:10075;" +
-    "background:rgba(17,24,39,0.96);border:1px solid rgba(139,92,246,0.5);border-radius:999px;" +
+    "background:rgba(24,24,27,0.96);border:1px solid rgba(139,92,246,0.5);border-radius:999px;" +
     "color:#fff;font-family:sans-serif;font-size:0.8rem;font-weight:600;padding:0.45rem 0.95rem;" +
     "box-shadow:0 6px 24px rgba(0,0,0,0.5);pointer-events:none;";
   document.body.appendChild(progressEl);

@@ -69,7 +69,7 @@ const MARKER_STATUS_META = {
   under_construction: { label: "Under construction", color: "#fcd34d" },
   active: { label: "Active", color: "#86efac" },
   damaged: { label: "Damaged", color: "#fca5a5" },
-  inactive: { label: "Inactive", color: "#cbd5e1" },
+  inactive: { label: "Inactive", color: "#d1d1d5" },
   abandoned: { label: "Abandoned", color: "#fdba74" },
   destroyed: { label: "Destroyed", color: "#f87171" },
 };
@@ -221,7 +221,7 @@ const FeaturePopup = () => {
     >
       <div
         style={{
-          backgroundColor: "rgba(17, 24, 39, 0.96)",
+          backgroundColor: "rgba(24, 24, 27, 0.96)",
           backdropFilter: "blur(4px)",
           WebkitBackdropFilter: "blur(4px)",
           borderRadius: "12px",
@@ -260,7 +260,7 @@ const FeaturePopup = () => {
           <button
             onClick={() => _dismiss?.()}
             style={{
-              background: "rgba(17,24,39,0.7)",
+              background: "rgba(24,24,27,0.7)",
               border: "1px solid rgba(255,255,255,0.12)",
               borderRadius: "6px",
               width: "20px",

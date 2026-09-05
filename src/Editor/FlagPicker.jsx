@@ -34,7 +34,7 @@ const overlay = {
   // the viewport, so its top was cut off and the Apply & Play / close buttons sat
   // over it however high its z-index went.
   zIndex: 130,
-  background: "rgba(4,6,14,0.74)",
+  background: "rgba(8,8,9,0.74)",
   backdropFilter: "blur(4px)",
   display: "flex",
   alignItems: "center",
@@ -46,7 +46,7 @@ const panel = {
   maxHeight: "88vh",
   display: "flex",
   flexDirection: "column",
-  background: "rgba(14,18,32,0.98)",
+  background: "rgba(21,21,24,0.98)",
   border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: "18px",
   color: "#fff",

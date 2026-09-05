@@ -99,7 +99,7 @@ const PackCard = ({ post, onClick }) => {
                 textAlign: "left",
             }}
         >
-            <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "linear-gradient(135deg, rgba(124,58,237,0.2), rgba(30,41,59,0.9))", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "linear-gradient(135deg, rgba(124,58,237,0.2), rgba(38,38,42,0.9))", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {post?.imageUrl ? (
                     <img src={post.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.78 }} />
                 ) : (
@@ -108,7 +108,7 @@ const PackCard = ({ post, onClick }) => {
                         <span style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em" }}>FLAG PACK</span>
                     </div>
                 )}
-                <span style={{ position: "absolute", top: 7, right: 7, padding: "0.2rem 0.38rem", borderRadius: 999, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(196,181,253,0.45)", color: "#ddd6fe", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.06em" }}>PACK</span>
+                <span style={{ position: "absolute", top: 7, right: 7, padding: "0.2rem 0.38rem", borderRadius: 999, background: "rgba(20,20,23,0.9)", border: "1px solid rgba(196,181,253,0.45)", color: "#ddd6fe", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.06em" }}>PACK</span>
             </div>
             <div style={{ fontSize: "0.75rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{post?.title || "Scenario flag pack"}</div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -302,8 +302,8 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
     if (!isOpen) return null;
 
     return createPortal(
-        <div style={{ position: "fixed", inset: 0, zIndex: 12050, background: "rgba(2,6,23,0.78)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-            <div style={{ width: "min(56rem, 96vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", background: "rgba(16,18,24,0.99)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: 16, boxShadow: "0 24px 70px rgba(0,0,0,0.6)", overflow: "hidden", color: "white", fontFamily: "sans-serif" }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 12050, background: "rgba(8,8,10,0.78)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+            <div style={{ width: "min(56rem, 96vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", background: "rgba(18,18,20,0.99)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: 16, boxShadow: "0 24px 70px rgba(0,0,0,0.6)", overflow: "hidden", color: "white", fontFamily: "sans-serif" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", padding: "1rem 1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                     {current.imageUrl ? <img src={current.imageUrl} alt="" style={{ width: 46, height: 29, objectFit: "cover", borderRadius: 4, boxShadow: "0 0 0 1px rgba(255,255,255,0.18)" }} /> : <div style={{ width: 46, height: 29, borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)" }} />}
                     <div style={{ flex: 1, minWidth: 0 }}>

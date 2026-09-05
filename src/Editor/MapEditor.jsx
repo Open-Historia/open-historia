@@ -493,7 +493,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       style={{
         position: "fixed",
         inset: 0,
-        background: "#0b1020",
+        background: "#111113",
         overflow: "hidden",
         fontFamily: "sans-serif",
         color: "white",

@@ -268,7 +268,7 @@ const relationTone = (score = 0) => {
     if (key === "cautious") return "#fbbf24";
     if (key === "friendly") return "#34d399";
     if (key === "cordial") return "#60a5fa";
-    return "#cbd5e1";
+    return "#d1d1d5";
 };
 
 const formatRelationScore = (value) => {
@@ -315,7 +315,7 @@ const RelationMeter = ({ score, tone }) => {
     );
 };
 
-const DiplomacyMetric = ({ label, value, tone = "#e5e7eb" }) => (
+const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
     <div style={{ ...cardStyle, minWidth: 0, padding: "0.55rem 0.6rem" }}>
     <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>
     {label}
@@ -521,7 +521,7 @@ const ADVANCED_METRIC_GROUPS = [
         icon: "◈",
         metrics: [
             { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatEuroTotal },
-            { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e5e7eb", format: formatEuroPerCapita },
+            { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatEuroPerCapita },
             { key: "population", label: "Population", unit: "population", color: "#a78bfa", format: formatPopulation },
         ],
     },
@@ -679,7 +679,7 @@ const AdvancedLineChart = ({ samples, metricKeys }) => {
                         <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
                     </linearGradient>
                 </defs>
-                <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(2,6,23,0.18)" stroke="rgba(255,255,255,0.06)" />
+                <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(8,8,10,0.18)" stroke="rgba(255,255,255,0.06)" />
                 {yTicks.map((tick, index) => {
                     const y = pad.top + (plotHeight * index) / Math.max(1, yTicks.length - 1);
                     return (
@@ -705,7 +705,7 @@ const AdvancedLineChart = ({ samples, metricKeys }) => {
                 {validSamples.length <= 24 && metrics.map((metric) => validSamples.map((sample) => {
                     const value = Number(sample?.[metric.key]);
                     if (!Number.isFinite(value)) return null;
-                    return <circle key={`${metric.key}-${sample.date}`} cx={xFor(sample)} cy={yFor(value)} r="3.7" fill={metric.color} stroke="#0f172a" strokeWidth="2" />;
+                    return <circle key={`${metric.key}-${sample.date}`} cx={xFor(sample)} cy={yFor(value)} r="3.7" fill={metric.color} stroke="#141417" strokeWidth="2" />;
                 }))}
                 {hovered && (
                     <>
@@ -713,7 +713,7 @@ const AdvancedLineChart = ({ samples, metricKeys }) => {
                         {metrics.map((metric) => {
                             const value = Number(hovered?.[metric.key]);
                             if (!Number.isFinite(value)) return null;
-                            return <circle key={`hover-${metric.key}`} cx={hoverX} cy={yFor(value)} r="6" fill={metric.color} stroke="#0f172a" strokeWidth="3" />;
+                            return <circle key={`hover-${metric.key}`} cx={hoverX} cy={yFor(value)} r="6" fill={metric.color} stroke="#141417" strokeWidth="3" />;
                         })}
                     </>
                 )}
@@ -728,7 +728,7 @@ const AdvancedLineChart = ({ samples, metricKeys }) => {
                 <text x={pad.left} y="18" fill="rgba(255,255,255,0.38)" fontSize="11" fontWeight="700" letterSpacing="1">{ADVANCED_UNIT_LABELS[unit] || "Value"}</text>
             </svg>
             {hovered && (
-                <div style={{ backgroundColor: "rgba(9,14,27,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
+                <div style={{ backgroundColor: "rgba(16,16,18,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
                     <div data-no-translate style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em", marginBottom: "0.45rem", textTransform: "uppercase" }}>{formatHistoryDate(hovered.date)}</div>
                     {metrics.map((metric) => {
                         const value = Number(hovered?.[metric.key]);
@@ -811,8 +811,8 @@ const AdvancedStatsModal = ({
             : "No history yet";
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(2,6,15,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(15,26,41,0.995), rgba(7,13,22,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
+        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
                         {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
@@ -876,7 +876,7 @@ const AdvancedStatsModal = ({
                         )}
                     </div>
 
-                    <aside style={{ backgroundColor: "rgba(3,8,18,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem" }}>
+                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem" }}>
                         <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.58rem", fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>Time range</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
                             {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
@@ -897,7 +897,7 @@ const AdvancedStatsModal = ({
                                         const compatible = !selectedMetrics.length || selectedUnit === metric.unit || checked;
                                         return (
                                             <button key={metric.key} type="button" onClick={() => toggleMetric(metric)} style={{ alignItems: "center", backgroundColor: checked ? `${metric.color}16` : "transparent", border: `1px solid ${checked ? `${metric.color}50` : "transparent"}`, borderRadius: "7px", color: checked ? "rgba(255,255,255,0.9)" : compatible ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", cursor: "pointer", display: "flex", fontSize: "0.66rem", fontWeight: checked ? 800 : 650, gap: "0.45rem", padding: "0.38rem 0.45rem", textAlign: "left", width: "100%" }}>
-                                                <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: checked ? metric.color : "rgba(255,255,255,0.08)", border: `1px solid ${checked ? metric.color : "rgba(255,255,255,0.13)"}`, borderRadius: "4px", color: "#07111f", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{checked ? "✓" : ""}</span>
+                                                <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: checked ? metric.color : "rgba(255,255,255,0.08)", border: `1px solid ${checked ? metric.color : "rgba(255,255,255,0.13)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{checked ? "✓" : ""}</span>
                                                 <span style={{ flex: 1, minWidth: 0 }}>{metric.label}</span>
                                             </button>
                                         );
@@ -990,8 +990,8 @@ const HistoricalTrackingModal = ({
     if (!open || typeof document === "undefined") return null;
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(15,26,41,0.995), rgba(7,13,22,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "1rem 1.05rem 0.95rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
                         <div style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "1.2rem", height: "2.5rem", justifyContent: "center", width: "2.5rem" }}>⚙</div>
@@ -1112,7 +1112,7 @@ const HistoricalTrackingModal = ({
                                         >
                                             <span style={{ minWidth: 0 }}>
                                                 <span style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0 }}>
-                                                    <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: tracked ? "#22c55e" : "rgba(255,255,255,0.06)", border: `1px solid ${tracked ? "#22c55e" : "rgba(255,255,255,0.12)"}`, borderRadius: "4px", color: "#07111f", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{tracked ? "✓" : ""}</span>
+                                                    <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: tracked ? "#22c55e" : "rgba(255,255,255,0.06)", border: `1px solid ${tracked ? "#22c55e" : "rgba(255,255,255,0.12)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{tracked ? "✓" : ""}</span>
                                                     <span style={{ fontSize: "0.74rem", fontWeight: tracked ? 800 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polityDisplayName(world, key)}</span>
                                                 </span>
                                                 <span style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flexWrap: "wrap", fontSize: "0.62rem", gap: "0.35rem", marginTop: "0.18rem" }}>
@@ -1856,7 +1856,7 @@ const StatsPaneBody = ({ active }) => {
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
                 Total population
                 </div>
-                <div data-no-translate style={{ color: "#e5e7eb", fontSize: "1.15rem", fontWeight: 800 }}>
+                <div data-no-translate style={{ color: "#e7e7e9", fontSize: "1.15rem", fontWeight: 800 }}>
                 {formatPopulation(totalPopulation)}
                 </div>
                 {populationScope && (
@@ -1879,7 +1879,7 @@ const StatsPaneBody = ({ active }) => {
                 label="GDP/capita"
                 value={formatEuroPerCapita(displayedPerCapita)}
                 sub={capitaScope}
-                tone="#e5e7eb"
+                tone="#e7e7e9"
                 />
                 <EconomyCard label="Inflation" value={formatPercent(sheet.economy?.inflation)} tone="#34d399" />
                 <EconomyCard label="Unemployment" value={formatPercent(sheet.economy?.unemployment)} tone="#34d399" />
@@ -1935,7 +1935,7 @@ const StatsPaneBody = ({ active }) => {
                 <button
                 type="button"
                 onClick={() => setTrackingOpen(true)}
-                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.035))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e5e7eb", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.035))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
                 >
                     <span style={{ alignItems: "center", display: "flex", gap: "0.65rem", minWidth: 0 }}>
                         <span style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "8px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "0.98rem", height: "2rem", justifyContent: "center", width: "2rem" }}>⚙</span>

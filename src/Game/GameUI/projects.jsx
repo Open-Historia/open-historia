@@ -1036,7 +1036,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
     <div
       style={{
         backdropFilter: "blur(8px)",
-        backgroundColor: "rgba(17, 24, 39, 0.95)",
+        backgroundColor: "rgba(24, 24, 27, 0.95)",
         border: "1px solid rgba(255,255,255,0.1)",
         borderRadius: "16px",
         bottom: isOpen ? "4.25rem" : "-30rem",
@@ -1134,7 +1134,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
               data-no-translate
             >
               {PROJECT_SORTS.map((sort) => (
-                <option key={sort.key} value={sort.key} style={{ backgroundColor: "#111827" }}>
+                <option key={sort.key} value={sort.key} style={{ backgroundColor: "#18181b" }}>
                   {sort.label}
                 </option>
               ))}

@@ -56,6 +56,7 @@ import {
     subscribeToDebugLog,
 } from "../../runtime/debugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 
 const baseStyle = {
@@ -276,7 +277,7 @@ const Toggle = ({ label, enabled, onToggle }) => (
         cursor: "pointer",
         position: "relative",
         transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#4b5563",
+        backgroundColor: enabled ? "#3b82f6" : "#55555b",
     }}
     >
     <div
@@ -1025,7 +1026,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
         cursor: "pointer",
         fontSize: "1.5rem",
         fontWeight: 800,
-        background: "linear-gradient(180deg, rgba(39,55,75,0.58), rgba(8,16,28,0.48))",
+        background: "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
     }}
     >
     ☰
@@ -1442,6 +1443,7 @@ const SettingsWorkspace = ({
     context,
 }) => {
     const isMobile = useIsMobile();
+    const leaving = usePresenceLeaving();
 
     useEffect(() => {
         const priorOverflow = document?.body?.style?.overflow ?? "";
@@ -1498,7 +1500,7 @@ const SettingsWorkspace = ({
     const pageDescription = page?.description ?? "";
 
     const content = (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div key={activeSection} className="oh-surface-in" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             <div style={{ marginBottom: "0.1rem" }}>
                 <div style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>{pageTitle}</div>
                 <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.66rem", marginTop: "0.18rem" }}>{pageDescription}</div>
@@ -1658,8 +1660,8 @@ const SettingsWorkspace = ({
     );
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Game settings" style={{ alignItems: "center", background: "rgba(2,6,15,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(32,48,67,0.72), rgba(8,16,28,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
                     <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -1674,7 +1676,7 @@ const SettingsWorkspace = ({
                     <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
-                    <aside style={{ backgroundColor: "rgba(3,8,18,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
+                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
                     <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
                 </div>
             </div>
@@ -1965,7 +1967,7 @@ const SettingsMenu = ({
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
-            background: "linear-gradient(180deg, rgba(32,48,67,0.68), rgba(8,16,28,0.58))",
+            background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))",
             border: "1px solid var(--oh-hud-border)",
             boxShadow: "var(--oh-hud-shadow)",
         }}
@@ -1989,7 +1991,7 @@ const SettingsMenu = ({
                 ))}
             </div>
 
-            <div style={{ flex: 1, minHeight: 0 }}>
+            <div key={activeQuickTab} className="oh-surface-in" style={{ flex: 1, minHeight: 0 }}>
                 {panelContent}
             </div>
         </div>

@@ -61,7 +61,7 @@ const MODE_HINT = {
 };
 
 const surface = {
-  backgroundColor: "rgba(17, 24, 39, 0.92)",
+  backgroundColor: "rgba(24, 24, 27, 0.92)",
   backdropFilter: "blur(6px)",
   WebkitBackdropFilter: "blur(6px)",
   border: "1px solid rgba(255,255,255,0.12)",

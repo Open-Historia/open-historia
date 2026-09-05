@@ -225,7 +225,7 @@ const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country
     <select value={value} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}>
     <option value="">{placeholder}</option>
     {polities.map((polity) => (
-        <option key={polity.code} value={polity.code} style={{ background: "#111827", color: "#fff" }}>
+        <option key={polity.code} value={polity.code} style={{ background: "#18181b", color: "#fff" }}>
         {polity.name}
         </option>
     ))}
@@ -324,7 +324,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     return (
         <>
         {clickMode && (
-            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(17, 24, 39, 0.96)", border: "1px solid rgba(139,92,246,0.32)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
+            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24, 24, 27, 0.96)", border: "1px solid rgba(139,92,246,0.32)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
             <span>{clickMode.label}</span>
             <button type="button" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
             </div>
@@ -333,7 +333,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
         <div
         className="oh-hud-panel"
         style={{
-            background: "rgba(17, 24, 39, 0.96)",
+            background: "rgba(24, 24, 27, 0.96)",
             backdropFilter: "blur(8px)",
             border: "1px solid rgba(255,255,255,0.1)",
             borderRadius: 18,
@@ -476,7 +476,7 @@ const MAP_FEATURE_STATUS_META = {
     under_construction: { label: "Under construction", color: "#fcd34d" },
     active: { label: "Active", color: "#86efac" },
     damaged: { label: "Damaged", color: "#fca5a5" },
-    inactive: { label: "Inactive", color: "#cbd5e1" },
+    inactive: { label: "Inactive", color: "#d1d1d5" },
     abandoned: { label: "Abandoned", color: "#fdba74" },
     destroyed: { label: "Destroyed", color: "#f87171" },
 };
@@ -1821,7 +1821,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                 </div>
                             )}
                             {!pendingReaction && !isEditing && reactionResult === "silent" && (
-                                <div style={{ background: "rgba(148,163,184,0.055)", border: "1px solid rgba(148,163,184,0.16)", borderRadius: 8, color: "rgba(203,213,225,0.72)", fontSize: "0.61rem", lineHeight: 1.35, marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
+                                <div style={{ background: "rgba(148,163,184,0.055)", border: "1px solid rgba(148,163,184,0.16)", borderRadius: 8, color: "rgba(212,212,216,0.72)", fontSize: "0.61rem", lineHeight: 1.35, marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
                                     NPC reaction check complete. No chat message sent.
                                 </div>
                             )}
@@ -1832,11 +1832,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                             )}
                             {!isEditing && event?.quote?.text && (
                                 <div style={{ borderLeft: "2px solid rgba(148,163,184,0.38)", marginTop: "0.45rem", padding: "0.08rem 0 0.08rem 0.58rem" }}>
-                                    <div style={{ color: "rgba(245,247,252,0.78)", fontSize: "0.65rem", fontStyle: "italic", lineHeight: 1.45 }}>
+                                    <div style={{ color: "rgba(247,247,249,0.78)", fontSize: "0.65rem", fontStyle: "italic", lineHeight: 1.45 }}>
                                         “{event.quote.text}”
                                     </div>
                                     {(event.quote.speaker || event.quote.role) && (
-                                        <div style={{ color: "rgba(196,207,224,0.46)", fontSize: "0.58rem", marginTop: "0.2rem" }}>
+                                        <div style={{ color: "rgba(206,206,210,0.46)", fontSize: "0.58rem", marginTop: "0.2rem" }}>
                                             — {event.quote.speaker || "Unknown speaker"}{event.quote.role ? `, ${event.quote.role}` : ""}
                                         </div>
                                     )}
@@ -3656,7 +3656,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}
                                     >
                                         {MARKER_STATUSES.map((markerStatus) => (
-                                            <option key={markerStatus} value={markerStatus} style={{ background: "#111827", color: "#fff" }}>
+                                            <option key={markerStatus} value={markerStatus} style={{ background: "#18181b", color: "#fff" }}>
                                                 {mapFeatureStatusMeta(markerStatus).label}
                                             </option>
                                         ))}
@@ -4014,7 +4014,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}
                     >
                         {MARKER_STATUSES.map((markerStatus) => (
-                            <option key={markerStatus} value={markerStatus} style={{ background: "#111827", color: "#fff" }}>
+                            <option key={markerStatus} value={markerStatus} style={{ background: "#18181b", color: "#fff" }}>
                                 {mapFeatureStatusMeta(markerStatus).label}
                             </option>
                         ))}

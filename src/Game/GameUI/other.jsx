@@ -208,7 +208,7 @@ const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
                 <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.75rem", fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {displayName}
                 </div>
-                <div style={{ color: "rgba(198,215,235,0.42)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.04em", marginTop: "0.18rem", textTransform: "uppercase" }}>
+                <div style={{ color: "rgba(216,216,219,0.42)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.04em", marginTop: "0.18rem", textTransform: "uppercase" }}>
                     Player polity
                 </div>
             </div>
