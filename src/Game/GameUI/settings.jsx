@@ -59,6 +59,12 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 
+// The same list the game and scenario editors suggest, kept in step with them.
+const LABEL_FONT_SUGGESTIONS = [
+    "Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact",
+    "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS",
+];
+
 const baseStyle = {
     position: "fixed",
     backgroundColor: "var(--oh-hud-bg)",
@@ -1482,6 +1488,8 @@ const SettingsWorkspace = ({
     updateMapSetting,
     basemapStyle,
     updateBasemapStyle,
+    labelFont,
+    updateLabelFont,
     updateBetaUnits,
     telemetryOn,
     onToggleTelemetry,
@@ -1588,6 +1596,26 @@ const SettingsWorkspace = ({
                             {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
                         </select>
                         <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
+                    </div>
+                    {/* Labels rasterize from the player's LOCAL fonts (the style
+                        has no glyph server), so any installed family works - the
+                        list only suggests common safe ones. Empty = whatever the
+                        scenario set, which itself defaults to Georgia. */}
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-label-font">Country label font</label>
+                        <input
+                        id="game-label-font"
+                        data-no-translate
+                        list="oh-settings-label-font-options"
+                        placeholder="Scenario default"
+                        style={inputStyle}
+                        value={labelFont}
+                        onChange={(event) => updateLabelFont(event.target.value)}
+                        />
+                        <datalist id="oh-settings-label-font-options">
+                            {LABEL_FONT_SUGGESTIONS.map((font) => <option key={font} value={font} />)}
+                        </datalist>
+                        <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
                 </SettingsSection>
@@ -1871,6 +1899,8 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+    const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
+    const updateLabelFont = (value) => setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
 
     // Telemetry switches (telemetry.js): their own keys, both on by default.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
@@ -1972,6 +2002,8 @@ const SettingsMenu = ({
             updateMapSetting={updateMapSetting}
             basemapStyle={basemapStyle}
             updateBasemapStyle={updateBasemapStyle}
+            labelFont={labelFont}
+            updateLabelFont={updateLabelFont}
             updateBetaUnits={updateBetaUnits}
             telemetryOn={telemetryOn}
             onToggleTelemetry={toggleTelemetry}

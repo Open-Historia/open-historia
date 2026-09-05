@@ -16,6 +16,13 @@ export const MAP_SETTING_KEYS = {
     // Empty/unset means "use the scenario author's basemap". A built-in ESRI
     // basemap id here is a local, reversible player override for this browser.
     basemapStyle: "map_basemap_style",
+    // Empty/unset means "use the scenario author's label font" (world.labelFont,
+    // itself defaulting to Georgia). A family name here is a local, reversible
+    // player override, the same shape as basemapStyle above. It exists in
+    // Settings as well as in the two editors because a label font you cannot
+    // read is a reason to change it, and until now the only way to was through
+    // the game editor.
+    labelFont: "map_label_font",
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
