@@ -11,6 +11,7 @@ import {
 } from "../../runtime/spycraft.js";
 import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
+import { Presence } from "./presence.jsx";
 import {
     JSON_URLS,
     getNationColors,
@@ -310,7 +311,7 @@ const MessageBubble = ({ msg }) => {
             ? "#3b82f6"
             : isError
             ? "rgba(239,68,68,0.2)"
-            : `color-mix(in srgb, ${accentColor} 5%, rgba(30,35,50,0.95))`,
+            : `color-mix(in srgb, ${accentColor} 5%, rgba(38,38,41,0.95))`,
             fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
             border: isPlayer
             ? "none"
@@ -357,7 +358,7 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
             left: pos.x,
             top: pos.y - 2,
             transform: "translate(-50%, -100%)",
-                                                    backgroundColor: "rgba(17,24,39,0.95)",
+                                                    backgroundColor: "rgba(24,24,27,0.95)",
                                                     border: "1px solid rgba(255,255,255,0.12)",
                                                     borderRadius: "6px",
                                                     padding: "0.2rem 0.45rem",
@@ -385,8 +386,8 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
         style={{
             width: "1.6rem", height: "1.6rem", borderRadius: "50%",
             backgroundColor: nationColor
-            ? `color-mix(in srgb, ${nationColor} 25%, rgba(20,28,48,0.98))`
-            : "rgba(30,40,60,0.95)",
+            ? `color-mix(in srgb, ${nationColor} 25%, rgba(31,31,34,0.98))`
+            : "rgba(41,41,45,0.95)",
             border: nationColor
             ? `1.5px solid ${nationColor}`
             : "1px solid rgba(255,255,255,0.15)",
@@ -488,7 +489,7 @@ const CountrySelectorModal = ({
         : single ? [{ name, code }] : [...prev, { name, code }]);
 
     return (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(17,24,39,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(24,24,27,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
         <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
@@ -1039,7 +1040,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
     return (
         <>
-        {choosing && (
+        <Presence open={choosing}>
             <CountrySelectorModal
                 countries={candidates}
                 loading={loadingCountries}
@@ -1052,7 +1053,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                 emptyLabel="No target chosen yet"
                 confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
             />
-        )}
+        </Presence>
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
@@ -1323,9 +1324,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, onConsumeRequest }) => {
         return (
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(17,24,39,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
 
-            {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
+            <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} />
@@ -1426,7 +1427,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         return (
             <>
             {hasOpened && <ChatPanel isOpen={isOpen} onClose={onToggle} requestedCountry={pendingCountry} onConsumeRequest={() => setPendingCountry(null)} />}
-            <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(40,55,80,0.95),rgba(20,30,50,0.95))" : "linear-gradient(145deg,rgba(30,42,65,0.95),rgba(15,22,40,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
+            <button title="Chat" style={{ width: "3.3rem", height: "3.3rem", borderRadius: "10px", border: hovered ? "1px solid rgba(255,255,255,0.2)" : isOpen ? "1px solid rgba(139,92,246,0.5)" : "1px solid rgba(255,255,255,0.1)", background: isOpen ? "linear-gradient(145deg,rgba(109,40,217,0.4),rgba(76,29,149,0.4))" : hovered ? "linear-gradient(145deg,rgba(54,54,59,0.95),rgba(32,32,35,0.95))" : "linear-gradient(145deg,rgba(43,43,47,0.95),rgba(24,24,27,0.95))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s ease", boxShadow: hovered ? "inset 0 1px 0 rgba(255,255,255,0.1),0 2px 8px rgba(0,0,0,0.4)" : "inset 0 1px 0 rgba(255,255,255,0.06),inset 0 -1px 0 rgba(0,0,0,0.3),0 2px 6px rgba(0,0,0,0.35)", fontSize: "1.2rem", outline: "none", transform: hovered ? "translateY(-1px)" : "translateY(0)", color: "white", fontFamily: "sans-serif", flexShrink: 0 }}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
             onClick={() => setChatOpen(o => !o)}>
             <span style={{ position: "relative", display: "inline-flex" }}>
@@ -1448,7 +1449,7 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     return (
-        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "8.75rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(17,24,39,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
+        <div style={{ position: "fixed", bottom: "0.5rem", left: "0.5rem", height: "4rem", width: "8.75rem", gap: "0.75rem", padding: "0 0.1rem", backgroundColor: "rgba(24,24,27,0.9)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)" }}>
         <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
         <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
         </div>

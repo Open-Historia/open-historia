@@ -1,6 +1,7 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { SettingsButton, SettingsMenu } from "./settings";
+import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
 import { DateWidget } from "./time";
@@ -33,7 +34,7 @@ const readAdvisorWidth = () => {
 };
 const baseStyle = {
   position: "fixed",
-  backgroundColor: "rgba(17, 24, 39, 0.9)",
+  backgroundColor: "rgba(24, 24, 27, 0.9)",
   backdropFilter: "blur(4px)",
   zIndex: 9999,
   display: "flex",
@@ -78,7 +79,7 @@ const WebGLWarningPopup = () => (
   >
     <div
       style={{
-        backgroundColor: "#1a1a2e",
+        backgroundColor: "#1a1a1e",
         border: "1px solid #e94560",
         borderRadius: "12px",
         padding: "2rem",
@@ -310,15 +311,15 @@ const Main = ({
         )}
       </Suspense>
       <Suspense fallback={null}>
-        {shouldLoadCheats && (
+        <Presence open={isCheatsOpen}>
           <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
-        )}
+        </Presence>
       </Suspense>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
       />
-      {isSettingsOpen && (
+      <Presence open={isSettingsOpen}>
         <SettingsMenu
           discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
@@ -344,7 +345,7 @@ const Main = ({
           providerSettings={providerSettings}
           onProviderSettingChange={handleProviderSettingChange}
         />
-      )}
+      </Presence>
     </>
   );
 };

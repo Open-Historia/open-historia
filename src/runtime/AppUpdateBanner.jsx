@@ -31,7 +31,7 @@ const bar = {
   gap: "0.75rem",
   padding: "0.55rem max(0.9rem, env(safe-area-inset-left)) 0.55rem max(0.9rem, env(safe-area-inset-right))",
   paddingTop: "max(0.55rem, env(safe-area-inset-top))",
-  background: "linear-gradient(180deg, #12172b, #0d1122)",
+  background: "linear-gradient(180deg, #161618, #101012)",
   borderBottom: "1px solid rgba(212,175,55,0.35)",
   color: "#f4ead0",
   font: "600 0.85rem/1.3 system-ui, sans-serif",

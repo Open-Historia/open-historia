@@ -205,7 +205,7 @@ function App() {
       : new URLSearchParams();
   if (params.has("editor")) {
     return (
-      <Suspense fallback={<div style={{ position: "fixed", inset: 0, background: "#0b1020" }} />}>
+      <Suspense fallback={<div style={{ position: "fixed", inset: 0, background: "#111113" }} />}>
         <MapEditor />
       </Suspense>
     );

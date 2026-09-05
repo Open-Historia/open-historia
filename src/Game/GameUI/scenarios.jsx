@@ -18,7 +18,7 @@ const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
   background:
-  "linear-gradient(180deg, rgba(8, 10, 17, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
+  "linear-gradient(180deg, rgba(13, 13, 15, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
   border: "1px solid rgba(255,255,255,0.08)",
   boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
   backdropFilter: "blur(18px)",
@@ -30,7 +30,7 @@ const actionButtonStyle = {
   background: "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "999px",
-  color: "rgba(244,246,255,0.92)",
+  color: "rgba(246,246,248,0.92)",
   cursor: "pointer",
   display: "inline-flex",
   fontSize: "0.82rem",
@@ -240,7 +240,7 @@ const ScenarioCard = ({
     </div>
     <div
     style={{
-      color: "rgba(240,244,255,0.7)",
+      color: "rgba(244,244,246,0.7)",
           fontSize: "0.92rem",
           lineHeight: 1.45,
           marginTop: "0.65rem",
@@ -296,7 +296,7 @@ const ScenarioCard = ({
     onClick={() => onEdit(scenario.id)}
     style={{
       ...actionButtonStyle,
-      background: "rgba(10,13,20,0.58)",
+      background: "rgba(15,15,17,0.58)",
           color: "rgba(255,255,255,0.92)",
           flex: 1,
     }}
