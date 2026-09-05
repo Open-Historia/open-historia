@@ -8,6 +8,7 @@
 // build only, never in the local download.
 
 import { connectBestNode } from "./nodeConnect.js";
+import { isNativeApp } from "./nativeBoot.js";
 
 const ENTERED_KEY = "oh:entered";
 const FONTS_HREF = "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap";
@@ -146,7 +147,11 @@ const renderConnection = (c) => {
   );
 };
 
-const enter = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } overlay?.remove(); overlay = null; };
+// Remembered for the tab session, so a reload does not ask again. Exported
+// because the Android app never shows this screen at all (nativeBoot.js, wired
+// in index.js) and must not leave shouldShowHome() answering true behind it.
+export const markEntered = () => { try { sessionStorage.setItem(ENTERED_KEY, "1"); } catch { /* private mode */ } };
+const enter = () => { markEntered(); overlay?.remove(); overlay = null; };
 
 // Shown in front of the Enter button rather than beside it: the same words on
 // the card were next to a large primary button and went unread. Dismissing it is
@@ -158,9 +163,9 @@ const DEMO_ACK_KEY = "oh:demo-ack";
 // notice written for the WEBSITE: "this is a demo, get the desktop app, expect
 // lag". None of that is true there — the app IS the real thing, it keeps its own
 // games and its own copy of the map, and there is no desktop app to send an
-// Android player to. Capacitor injects window.Capacitor before the bundle runs,
-// which is the same signal the API router uses to pick native HTTP.
-const isNativeApp = () => typeof window !== "undefined" && Boolean(window.Capacitor);
+// Android player to. (In practice the app does not reach this screen at all any
+// more — see nativeBoot.js — but the guard stays: it is what makes that true if
+// the home page is ever shown there deliberately.)
 const demoAcknowledged = () => {
   try { return sessionStorage.getItem(DEMO_ACK_KEY) === "1"; } catch { return false; }
 };
