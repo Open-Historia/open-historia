@@ -494,6 +494,21 @@ const markerSchema = {
   additionalProperties: false,
 };
 
+// The player's espionage orders, executed by the event that carries them: an
+// agent deployed to a country or recalled from it. Only the player's own
+// service — foreign agents are the engine's (spycraft.js resolveEspionage).
+const spyOpSchema = {
+  type: "object",
+  properties: {
+    op: { type: "string", enum: ["deploy", "recall"] },
+    target: nonEmptyTextSchema("The target country's FULL name as this world names it, never a code."),
+    coverStory: textSchema("One line on who the officer poses as. Optional; deploy only."),
+    note: textSchema("Why, in a few words. Optional."),
+  },
+  required: ["op", "target"],
+  additionalProperties: false,
+};
+
 const markerOpSchema = {
   description:
     "Persistent physical-world mutation. Use build for a genuinely new feature; update or rename for an "
@@ -887,6 +902,14 @@ const impactsSchema = {
         + "base, bunker, missile silo, embassy, port - so the map shows it, and "
         + "whenever a city's POPULATION changes.",
       items: markerOpSchema,
+    },
+    spyOps: {
+      type: "array",
+      description:
+        "The player's espionage orders this event executes: deploy an agent to a "
+        + "country or recall the one there. Only when the player's queued actions or "
+        + "explicit chat statements ordered it; never for other powers.",
+      items: spyOpSchema,
     },
     regionClaims: {
       type: "array",
@@ -2855,6 +2878,7 @@ const normalizeEventShape = (entry) => {
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],
+      spyOps: ["spies", "spyOperations", "espionageOps", "agentOps"],
       createdChats: ["chats", "diplomaticChats"],
       projectOps: ["projects", "projectOperations"],
     };

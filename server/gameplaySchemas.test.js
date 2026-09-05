@@ -176,3 +176,22 @@ test("does not fabricate events when the model omitted them, and leaves other ta
   assert.equal(normalizeGameplayPayload("nextSpeaker", untouched), untouched);
   assert.equal(normalizeGameplayPayload("jumpForward", null), null);
 });
+
+test("spy orders ride an event's impacts, under their own name or an alias", () => {
+  const normalized = normalizeGameplayPayload("jumpForward", jump({
+    events: [event({
+      impacts: {
+        actionIds: ["act-1"],
+        espionageOps: [{ op: "deploy", target: "Germany", coverStory: "a grain buyer" }],
+      },
+    })],
+  }));
+  assert.deepEqual(normalized.events[0].impacts.spyOps, [{ op: "deploy", target: "Germany", coverStory: "a grain buyer" }]);
+  assert.equal(normalized.events[0].impacts.espionageOps, undefined);
+  assert.deepEqual(validateGameplayPayload("jumpForward", normalized), { valid: true, error: "" });
+
+  const bad = normalizeGameplayPayload("jumpForward", jump({
+    events: [event({ impacts: { spyOps: [{ op: "assassinate", target: "Germany" }] } })],
+  }));
+  assert.equal(validateGameplayPayload("jumpForward", bad).valid, false);
+});

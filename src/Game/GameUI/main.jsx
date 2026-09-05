@@ -1,9 +1,10 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
-import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab } from "./libraryBar";
+import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "./libraryBar";
+import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
@@ -13,7 +14,10 @@ import { Search } from "./search";
 import { ForcesPanel } from "./forces";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
+  describeProviderSetupNeed,
+  getProviderMeta,
   getStoredProvider,
+  isProviderConfigured,
   loadProviderSettingsFormState,
   logProviderSwitch,
   normalizeProvider,
@@ -164,6 +168,9 @@ const Main = ({
   setIsTerrainEnabled,
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Which workspace section the menu opens on; null is the quick menu. Set by
+  // the AI setup prompt's Configure button, cleared whenever the menu closes.
+  const [settingsInitialSection, setSettingsInitialSection] = useState(null);
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
@@ -188,6 +195,23 @@ const Main = ({
   const activeCountryName = useCountryDisplayName(activeGame?.country || "");
   // No games -> nothing to simulate (the main menu covers the empty world).
   const hasNoGames = loaded && (games?.length ?? 0) === 0;
+
+  // Starting a game with nothing to call the AI with: a prompt, once per game
+  // per session, offering the AI settings. providerSettings is a dependency so
+  // the prompt goes away the moment a key is typed into the settings.
+  const mainMenuOpen = useMainMenuOpen();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const providerReady = useMemo(() => isProviderConfigured(apiProvider), [apiProvider, providerSettings]);
+  const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
+    try { return sessionStorage.getItem("oh:api-setup-answered") || ""; } catch { return ""; }
+  });
+  const answerApiPrompt = () => {
+    const id = String(activeGame?.id || "");
+    setApiPromptAnsweredFor(id);
+    try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
+  };
+  const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
+    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen;
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -397,9 +421,24 @@ const Main = ({
         </Presence>
       </Suspense>
       <GenerationRatingToast />
+      <Presence open={showApiPrompt}>
+        <ApiSetupPrompt
+          providerLabel={getProviderMeta(apiProvider)?.label || "the selected provider"}
+          missing={describeProviderSetupNeed(apiProvider)}
+          onDismiss={answerApiPrompt}
+          onConfigure={() => {
+            answerApiPrompt();
+            setSettingsInitialSection("ai");
+            setIsSettingsOpen(true);
+          }}
+        />
+      </Presence>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
-        onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
+        onToggle={() => {
+          setSettingsInitialSection(null);
+          setIsSettingsOpen(!isSettingsOpen);
+        }}
       />
       <Presence open={isSettingsOpen}>
         <SettingsMenu
@@ -413,7 +452,11 @@ const Main = ({
             countryName: activeCountryName || activeGame?.country || "",
             date: activeGame?.currentDate || "",
           }}
-          onClose={() => setIsSettingsOpen(false)}
+          initialSection={settingsInitialSection}
+          onClose={() => {
+            setSettingsInitialSection(null);
+            setIsSettingsOpen(false);
+          }}
           onOpenGameManagement={() => openLibraryTab("games")}
           onOpenEvents={() => setActiveBottomPanel("history")}
           onOpenCheats={() => {
