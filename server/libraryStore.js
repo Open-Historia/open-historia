@@ -499,10 +499,14 @@ const writeJsonFile = (targetPath, value) => {
 // vanished". Correctness first — the win is in the reads.
 let gameCatalogCache = null;
 let scenarioCatalogCache = null;
+// Degraded summaries for scenarios a game names but the catalog lacks
+// (getGameScenarioSummary), rebuilt on the catalogs' schedule.
+let missingScenarioSummaryCache = new Map();
 
 const invalidateCatalogs = () => {
   gameCatalogCache = null;
   scenarioCatalogCache = null;
+  missingScenarioSummaryCache = new Map();
 };
 
 const normalizeId = (rawValue, prefix) => {
@@ -1262,22 +1266,9 @@ const buildScenarioCatalog = () => {
       return null;
     }
 
-    const meta = readScenarioMeta(scenarioId);
-    const assetStatus = getScenarioAssetStatus(scenarioId);
-    const cacheToken = `${scenarioId}-${meta.updatedAt}`;
-
-    return {
-      ...meta,
-      assetStatus,
-      cacheToken,
-      // Every scenario is deletable, the built-in one included (usage by
-      // existing games still blocks deletion in deleteScenario).
-      canDelete: true,
-      coverImageUrl: assetStatus.cover
-      ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
-      : null,
-      gameCount: usageCounts.get(scenarioId) ?? 0,
-    };
+    // Every scenario is deletable, the built-in one included (usage by
+    // existing games still blocks deletion in deleteScenario).
+    return buildScenarioCatalogEntry(scenarioId, { gameCount: usageCounts.get(scenarioId) ?? 0 });
   })
   .filter(Boolean);
 
@@ -1335,7 +1326,10 @@ const buildGameCatalog = () => {
     const gameData = readJsonFile(getGameJsonPath(gameId, "game"), {});
     const actions = readJsonFile(getGameJsonPath(gameId, "actions"), []);
     const events = readJsonFile(getGameJsonPath(gameId, "events"), []);
-    const scenario = scenarioLookup.get(meta.scenarioId) ?? readScenarioMeta(meta.scenarioId);
+    // The same shape as a catalog entry when the scenario is gone, so the
+    // library never hands out two spellings of "a scenario".
+    const scenario = scenarioLookup.get(meta.scenarioId)
+      ?? buildScenarioCatalogEntry(meta.scenarioId, { canDelete: false, missing: true });
     const pendingActions = Array.isArray(actions)
     ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
     : 0;
@@ -1436,6 +1430,38 @@ const getScenarioSummary = (scenarioId) => {
   return scenario;
 };
 
+// A scenario as the library describes it, whether it is in the catalog
+// (buildScenarioCatalog) or only named by a game (getGameScenarioSummary,
+// buildGameCatalog): one shape, built here and nowhere else.
+const buildScenarioCatalogEntry = (scenarioId, { gameCount = 0, canDelete = true, missing = false } = {}) => {
+  const meta = readScenarioMeta(scenarioId);
+  const assetStatus = getScenarioAssetStatus(scenarioId);
+  // A scenario that is not there has no updatedAt of its own — readScenarioMeta
+  // mints one per read — so its token is fixed, or it would differ on every call.
+  const cacheToken = missing ? `${scenarioId}-missing` : `${scenarioId}-${meta.updatedAt}`;
+  return {
+    ...meta,
+    assetStatus,
+    cacheToken,
+    canDelete,
+    coverImageUrl: assetStatus.cover
+      ? buildScenarioAssetUrl(scenarioId, COVER_IMAGE_ASSET_KEY, cacheToken)
+      : null,
+    gameCount,
+    // A scenario that is gone is named by its id, not by the "Modern Day" the
+    // defaults would fill in: the editor header and new-game names read
+    // scenario.name, and nothing in the client reads `missing`.
+    ...(missing ? {
+      missing: true,
+      name: scenarioId,
+      heroTitle: scenarioId,
+      subtitle: "No longer in the library",
+      heroSubtitle: "No longer in the library",
+      description: "This game's scenario is no longer in the library.",
+    } : {}),
+  };
+};
+
 // A save is its game.json, not its scenario. getScenarioSummary throws when the
 // scenario a game names is gone - a ported save, a scenario deleted after the
 // games made from it - and on the game routes that turned a playable save into
@@ -1445,31 +1471,24 @@ const getScenarioSummary = (scenarioId) => {
 // only the detail read and the update path threw.
 //
 // Degrade the same way it does: the scenario's own metadata read defensively,
-// in the shape a catalog entry has, marked so a caller can tell. The scenario
-// routes keep getScenarioSummary and keep throwing - asking for a scenario that
-// is not there is a genuine miss.
+// in the shape a catalog entry has, marked `missing` so a caller can tell. The
+// scenario routes keep getScenarioSummary and keep throwing - asking for a
+// scenario that is not there is a genuine miss - and so does every runtime
+// WRITE (writeRuntimeJsonAsset): a read can borrow a placeholder, a write to
+// it would create the scenario directory from nothing.
+//
+// Cached on the catalogs' schedule: every runtime asset read for such a game
+// resolves its scenario, and each resolution stats every uploadable asset.
 const getGameScenarioSummary = (scenarioId) => {
   const catalog = getScenarioCatalog();
   const scenario = catalog.scenarios.find((entry) => entry.id === scenarioId);
   if (scenario) return scenario;
-
-  try {
-    const meta = readScenarioMeta(scenarioId);
-    return {
-      ...meta,
-      assetStatus: getScenarioAssetStatus(scenarioId),
-      cacheToken: `${scenarioId}-${meta.updatedAt}`,
-      canDelete: false,
-      coverImageUrl: null,
-      gameCount: 0,
-      missing: true,
-    };
-  } catch {
-    // An unreadable or unsafe scenario id (one that escapes the scenarios
-    // directory) still must not take the game down with it.
-    return { ...DEFAULT_SCENARIO_META, assetStatus: {}, cacheToken: "", canDelete: false,
-      coverImageUrl: null, gameCount: 0, id: String(scenarioId ?? ""), missing: true };
+  let summary = missingScenarioSummaryCache.get(scenarioId);
+  if (!summary) {
+    summary = buildScenarioCatalogEntry(scenarioId, { canDelete: false, missing: true });
+    missingScenarioSummaryCache.set(scenarioId, summary);
   }
+  return summary;
 };
 
 const getGameSummary = (gameId) => {
@@ -2569,6 +2588,13 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     const scenario = getActiveRuntimeScenarioSummary();
     if (!scenario?.id) {
       throw new Error("No active scenario — start a game from a scenario first.");
+    }
+    // A game whose scenario is gone still READS through the placeholder
+    // getGameScenarioSummary hands out; a write here would create
+    // scenarios/<id>/ from nothing and, through writeScenarioMeta, a
+    // scenario.json that lists a hollow "Modern Day" in the library.
+    if (scenario.missing) {
+      throw new Error(`Scenario not found: ${scenario.id} — this game's scenario is no longer in the library, so its map cannot be edited.`);
     }
     const targetPath = getScenarioUploadPath(scenario.id, assetKey);
     ensureDirectory(path.dirname(targetPath));

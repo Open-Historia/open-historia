@@ -332,6 +332,35 @@ const getScenarioSummary = async (id) => {
   return scenario;
 };
 
+// A game names a scenario that may be gone — a synced game whose scenario record
+// never arrived, or a scenario deleted after the games made from it. The same
+// degradation as the server store's getGameScenarioSummary: the catalog entry
+// when there is one, else the metadata read defensively in the same shape,
+// marked `missing` so a caller can tell. getScenarioSummary above keeps throwing
+// for the scenario routes, where asking for a missing scenario is a genuine miss.
+const getGameScenarioSummary = async (scenarioId) => {
+  const catalog = await getScenarioCatalog();
+  const scenario = catalog.scenarios.find((s) => s.id === scenarioId);
+  if (scenario) return scenario;
+  const meta = readScenarioMeta(scenarioId, {});
+  return {
+    ...meta,
+    assetStatus: {},
+    cacheToken: `${scenarioId}-missing`,
+    canDelete: false,
+    coverImageUrl: null,
+    gameCount: 0,
+    missing: true,
+    // Named by its id, not the "Modern Day" the defaults fill in (the editor
+    // header and new-game names read scenario.name).
+    name: scenarioId,
+    heroTitle: scenarioId,
+    subtitle: "No longer in the library",
+    heroSubtitle: "No longer in the library",
+    description: "This game's scenario is no longer in the library.",
+  };
+};
+
 const jsonDataBundle = (record) => {
   const data = {};
   for (const key of JSON_ASSET_KEYS) data[key] = jsonAsset(record, key);
@@ -355,9 +384,10 @@ const getGameDetails = async (id) => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
   const meta = readGameMeta(id, record.meta ?? {});
-  // Server getGameDetails calls getScenarioSummary inline (throws → 404) — no
-  // graceful degradation for a game whose scenario no longer resolves.
-  const scenario = await getScenarioSummary(meta.scenarioId);
+  // Mirrors the server store: a game whose scenario is gone still opens in the
+  // editor (getGameScenarioSummary) instead of a 404 that the Edit button
+  // swallows into nothing.
+  const scenario = await getGameScenarioSummary(meta.scenarioId);
   return { assetStatus: getGameAssetStatus(record), data: jsonDataBundle(record), game: await getGameSummary(id), scenario };
 };
 
@@ -403,7 +433,7 @@ const fetchDefaultRegionsGeojson = () => {
   return defaultRegionsGeojsonPromise;
 };
 
-// Raw region-seed delivery for the worker-backed indexer (src/runtime/regionSeed.js).
+// Raw region-seed delivery for the worker-backed indexer (src/Game/Map/legacy/regionSeed.js).
 // Returns the scenario's regions.geojson in its STORED form — an uploaded string
 // stays a string, the default scenario's CDN copy arrives as BYTES — so the
 // 55-220 MB JSON.parse runs in the worker, not on the main thread, and the

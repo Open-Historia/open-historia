@@ -11,7 +11,7 @@
 // import time, so one process can only ever see one data directory.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import url from "node:url";
@@ -165,8 +165,49 @@ describe("game catalog: a game whose scenario is gone", () => {
     assert.ok(result.listed.includes("game-alpha"), "the save stays in the library");
     assert.equal(result.scenarioId, "scenario-that-was-deleted");
     assert.equal(result.scenarioMissing, true, "the editor is told the scenario is absent");
-    assert.ok(result.scenarioName, "and still gets something to render");
+    assert.equal(result.scenarioName, "scenario-that-was-deleted", "and is shown which scenario, not a default name");
     assert.equal(result.country, "Testland", "the game's own data still reads");
     assert.equal(result.savedName, "Renamed", "and an edit saves through it");
+  });
+});
+
+// The runtime geometry write, in a child process bound to `root`: whether it
+// threw, and whether anything appeared under scenarios/ afterwards.
+const probeGeometryWrite = (root) => {
+  const script = `
+    const store = await import(${JSON.stringify(STORE_URL)});
+    let error = "";
+    try {
+      store.writeRuntimeJsonAsset("citiesGeojson", { type: "FeatureCollection", features: [] });
+    } catch (caught) {
+      error = String(caught?.message || caught);
+    }
+    const first = store.getGameDetails("game-alpha").scenario.cacheToken;
+    const second = store.getGameDetails("game-alpha").scenario.cacheToken;
+    process.stdout.write(JSON.stringify({ error, first, second }));
+  `;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf-8",
+    env: { ...process.env, OH_DATA_DIR: root },
+  });
+  return JSON.parse(out);
+};
+
+describe("game catalog: a game whose scenario is gone, on the write side", () => {
+  test("a geometry edit is refused rather than recreating the scenario", () => {
+    // The placeholder that lets the editor open must not reach the write path:
+    // writeRuntimeJsonAsset used to create scenarios/<deleted-id>/ from it and,
+    // through writeScenarioMeta, a scenario.json that listed a hollow "Modern
+    // Day" in the library.
+    const root = buildDataDir({ active: "game-alpha", ids: ["game-alpha"] });
+    const metaPath = path.join(root, "games", "game-alpha", "game-instance.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    writeJson(metaPath, { ...meta, scenarioId: "scenario-that-was-deleted" });
+    const result = probeGeometryWrite(root);
+    assert.match(result.error, /Scenario not found/);
+    assert.equal(existsSync(path.join(root, "scenarios", "scenario-that-was-deleted")), false, "nothing is created for it");
+    // The degraded summary is one value, not a fresh timestamp per read.
+    assert.equal(result.first, result.second);
+    assert.equal(result.first, "scenario-that-was-deleted-missing");
   });
 });
