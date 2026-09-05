@@ -16,6 +16,7 @@ import {
   attackRegion,
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
@@ -1042,6 +1043,27 @@ const WorldMap = ({ isGlobe = false }) => {
       setDisputedRegionData(result.disputedData?.features ? result.disputedData : EMPTY_FEATURE_COLLECTION);
       setPolityBoundaryData(result.data?.features ? result.data : EMPTY_FEATURE_COLLECTION);
       setPolitySurfaceData(result.polityData?.features ? result.polityData : EMPTY_FEATURE_COLLECTION);
+      // The dissolve counts were computed and thrown away - a polity that fell
+      // back to raw pieces, or one dropped outright, left no trace anywhere. Put
+      // them in the debug log so a bug report carries them.
+      if (Number.isFinite(result.stats?.polityCount)) {
+        const { polityCount, dissolvedPolityCount, fallbackPolityCount, failedPartCount,
+          emptyUnionPolityCount, droppedPolityCount } = result.stats;
+        logDebugEvent(
+          (droppedPolityCount > 0 || fallbackPolityCount > 0) ? "warn" : "map",
+          `[map] Polity surfaces: ${dissolvedPolityCount ?? 0}/${polityCount} dissolved, `
+          + `${fallbackPolityCount ?? 0} on raw pieces, ${droppedPolityCount ?? 0} with no surface.`,
+          {
+            polityCount,
+            dissolvedPolityCount,
+            fallbackPolityCount,
+            failedPartCount,
+            emptyUnionPolityCount,
+            droppedPolityCount,
+            regionsUrl: regionsGeojsonUrl,
+          },
+        );
+      }
 
       if (Number.isFinite(result.stats?.parseMs)) {
         globalThis.__OH_MAP_SOURCE_PERF__ = {

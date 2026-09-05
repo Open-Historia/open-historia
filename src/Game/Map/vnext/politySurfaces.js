@@ -130,7 +130,14 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
   if (features.length === 0) {
     return {
       data: EMPTY_FEATURE_COLLECTION,
-      stats: { polityCount: 0, dissolvedPolityCount: 0, fallbackPolityCount: 0, failedPartCount: 0 },
+      stats: {
+        polityCount: 0,
+        dissolvedPolityCount: 0,
+        fallbackPolityCount: 0,
+        failedPartCount: 0,
+        emptyUnionPolityCount: 0,
+        droppedPolityCount: 0,
+      },
     };
   }
 
@@ -161,20 +168,39 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
   let dissolvedPolityCount = 0;
   let fallbackPolityCount = 0;
   let failedPartCount = 0;
+  let emptyUnionPolityCount = 0;
+  let droppedPolityCount = 0;
 
   for (const [owner, group] of groups) {
     const stats = { failedPartCount: 0 };
     let coordinates = cleanDisplayHoles(unionAll(group.polygons, stats, unionChunk));
-    // Let the batch structures go before the next polity starts.
+    // A union that collapses to nothing used to skip the polity outright. The
+    // labels are built from these surfaces, so that removed the polity's fill,
+    // its frontier line and its name together - it was simply not on the map,
+    // and nothing said so. Fall back to the raw pieces instead: an undissolved
+    // surface shows its internal seams, an absent one shows nothing. This is
+    // the total-failure case; unionBatch's bisection covers a partial one.
+    let emptyUnion = false;
+    if (coordinates.length === 0) {
+      emptyUnion = true;
+      coordinates = cleanDisplayHoles(group.polygons);
+    }
+    // Let the batch structures go before the next polity starts. Russia is
+    // ~5,800 polygons and that ceiling is why they are freed at all, so the
+    // free stays - it just happens after the fallback has read them.
     group.polygons = null;
-    if (stats.failedPartCount > 0) {
+    if (emptyUnion) emptyUnionPolityCount += 1;
+    if (stats.failedPartCount > 0 || emptyUnion) {
       fallbackPolityCount += 1;
       failedPartCount += stats.failedPartCount;
     } else {
       dissolvedPolityCount += 1;
     }
 
-    if (coordinates.length === 0) continue;
+    if (coordinates.length === 0) {
+      droppedPolityCount += 1;
+      continue;
+    }
     surfaceFeatures.push({
       type: "Feature",
       id: `polity-surface-${surfaceFeatures.length}`,
@@ -184,7 +210,7 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
         gadm0: [...group.gadm0Counts.entries()]
           .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
           .map(([code]) => code),
-        dissolveFallback: stats.failedPartCount > 0,
+        dissolveFallback: stats.failedPartCount > 0 || emptyUnion,
       },
       geometry: { type: "MultiPolygon", coordinates },
     });
@@ -197,6 +223,8 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
       dissolvedPolityCount,
       fallbackPolityCount,
       failedPartCount,
+      emptyUnionPolityCount,
+      droppedPolityCount,
     },
   };
 };
