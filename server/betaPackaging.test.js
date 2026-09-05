@@ -134,7 +134,20 @@ test("the beta build stamps its own package name", () => {
   // %LOCALAPPDATA%\open-historia-updater\pending.
   const stamped = workflow.match(/p\.name='([^']+)'/)?.[1];
   assert.ok(stamped, "the workflow does not stamp package.json's name");
-  assert.notEqual(stamped, packageJson.name, "the beta would share the stable app's updater cache and deb name");
+
+  // Compared against main.cjs, NOT against packageJson.name. The workflow's own
+  // "Stamp the app version" step rewrites package.json's name to the stamped
+  // value, and it runs BEFORE "Run the tests" — so in CI the two are equal by
+  // construction and this assertion could only ever fail there while passing on
+  // every developer's clean tree. It did exactly that, in run 33989433938.
+  //
+  // STABLE_LIBRARY_NAME is the same string, is load-bearing rather than
+  // decorative (it names the %APPDATA% folder the beta shares the world map
+  // from), and nothing in the pipeline touches it. A rename that updated one and
+  // not the other is worth failing on.
+  const stableName = mainCjs.match(/STABLE_LIBRARY_NAME\s*=\s*"([^"]+)"/)?.[1];
+  assert.ok(stableName, "electron/main.cjs no longer names the stable library");
+  assert.notEqual(stamped, stableName, "the beta would share the stable app's updater cache and deb name");
   assert.match(stamped, /^[a-z0-9-]+$/, "not a name electron-builder can use as a folder and a deb package");
 });
 
