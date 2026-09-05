@@ -1,5 +1,5 @@
 /*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Map from "./Game/Map/World.jsx";
 import UI from "./Game/GameUI/main.jsx";
 
@@ -14,6 +14,7 @@ import {
   runStartupPreload,
 } from "./runtime/preload.js";
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
+import { announceMapRerender } from "./runtime/mapReadiness.js";
 
 const WorldShell = {
   backgroundColor: "#000",
@@ -61,6 +62,20 @@ function GameApp() {
   // the map ~8 times — the repeated flashing/reloading. The game id changes once,
   // when the new game activates, so the map remounts exactly once.
   const { activeGameId } = useLibraryState();
+
+  // Switching the globe on or off replaces the map instance (World.jsx keys it
+  // on the projection): a full redraw of the world, covered by the same opening
+  // screen a game gets. Announced BEFORE the state changes, so the new
+  // instance's readiness marks land after the reset rather than under it.
+  const globeRef = useRef(isGlobeEnabled);
+  useEffect(() => {
+    globeRef.current = isGlobeEnabled;
+  }, [isGlobeEnabled]);
+  const setGlobeEnabled = useCallback((next) => {
+    const value = typeof next === "function" ? next(globeRef.current) : Boolean(next);
+    if (value !== globeRef.current) announceMapRerender();
+    setIsGlobeEnabled(value);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("Globe", JSON.stringify(isGlobeEnabled));
@@ -186,7 +201,7 @@ function GameApp() {
       isGlobeEnabled={isGlobeEnabled}
       isTerrainEnabled={isTerrainEnabled}
       mapRef={mapRef}
-      setIsGlobeEnabled={setIsGlobeEnabled}
+      setIsGlobeEnabled={setGlobeEnabled}
       setIsTerrainEnabled={setIsTerrainEnabled}
       />
     )}
