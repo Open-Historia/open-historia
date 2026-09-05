@@ -241,7 +241,7 @@ const pillButton = {
   background: "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: "999px",
-  color: "rgba(244,246,255,0.92)",
+  color: "rgba(246,246,248,0.92)",
   cursor: "pointer",
   display: "inline-flex",
   fontSize: "0.8rem",
@@ -321,7 +321,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
         </div>
       </div>
     </div>
-    <div style={{ color: "rgba(240,244,255,0.72)", flex: 1, fontSize: "0.8rem", lineHeight: 1.5 }}>
+    <div style={{ color: "rgba(244,244,246,0.72)", flex: 1, fontSize: "0.8rem", lineHeight: 1.5 }}>
       {post.description || "No description."}
     </div>
     <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
@@ -451,7 +451,7 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
       Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>
 
-    <p style={{ color: "rgba(240,244,255,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
+    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
       {post.description || "No description."}
     </p>
 

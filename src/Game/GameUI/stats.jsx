@@ -426,7 +426,7 @@ const StatsPane = ({ active }) => {
                 <div style={sectionTitleStyle}>📈 Economy</div>
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "1fr 1fr" }}>
                 <EconomyCard label="GDP" value={sheet.economy?.gdp} sub={sheet.economy?.gdpGrowth} tone="#34d399" />
-                <EconomyCard label="GDP/capita" value={sheet.economy?.gdpPerCapita} sub={sheet.economy?.currency} tone="#e5e7eb" />
+                <EconomyCard label="GDP/capita" value={sheet.economy?.gdpPerCapita} sub={sheet.economy?.currency} tone="#e7e7e9" />
                 <EconomyCard label="Inflation" value={sheet.economy?.inflation} tone="#34d399" />
                 <EconomyCard label="Unemployment" value={sheet.economy?.unemployment} tone="#34d399" />
                 <EconomyCard label="Public debt" value={sheet.economy?.publicDebt} tone="#34d399" />

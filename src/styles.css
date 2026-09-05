@@ -10,7 +10,7 @@ body {
   overflow: hidden;
   overscroll-behavior: none;
   background: #02050a;
-  color: #f3f8ff;
+  color: #f6f6f7;
   font-family: "Segoe UI", sans-serif;
 }
 
@@ -29,7 +29,7 @@ body {
   background:
     radial-gradient(circle at 20% 20%, rgba(39, 119, 255, 0.14), transparent 30%),
     radial-gradient(circle at 75% 22%, rgba(37, 196, 169, 0.12), transparent 26%),
-    linear-gradient(180deg, #040812 0%, #07111c 44%, #03060d 100%);
+    linear-gradient(180deg, #08080a 0%, #111113 44%, #060607 100%);
 }
 
 .startup-grid {
@@ -70,11 +70,11 @@ body {
   position: relative;
   width: min(32rem, calc(100vw - 2rem));
   padding: 1.75rem;
-  border: 1px solid rgba(183, 216, 255, 0.12);
+  border: 1px solid rgba(220, 220, 224, 0.12);
   border-radius: 1.5rem;
   background:
-    linear-gradient(180deg, rgba(10, 18, 30, 0.94), rgba(5, 11, 20, 0.92)),
-    rgba(5, 9, 16, 0.82);
+    linear-gradient(180deg, rgba(18, 18, 20, 0.94), rgba(10, 10, 12, 0.92)),
+    rgba(9, 9, 10, 0.82);
   box-shadow:
     0 2rem 5rem rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -88,7 +88,7 @@ body {
   border-radius: 999px;
   border: 1px solid rgba(138, 190, 255, 0.18);
   background: rgba(76, 127, 195, 0.12);
-  color: rgba(196, 222, 255, 0.85);
+  color: rgba(228, 228, 231, 0.85);
   font-size: 0.72rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -144,7 +144,7 @@ body {
   position: absolute;
   width: 8rem;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(193, 233, 255, 0.9), transparent);
+  background: linear-gradient(90deg, transparent, rgba(235, 235, 238, 0.9), transparent);
   animation: startupPulse 2.2s ease-in-out infinite;
 }
 
@@ -160,7 +160,7 @@ body {
   max-width: 28rem;
   text-align: center;
   line-height: 1.55;
-  color: rgba(216, 231, 255, 0.68);
+  color: rgba(230, 230, 233, 0.68);
   font-size: 0.95rem;
 }
 
@@ -169,7 +169,7 @@ body {
   padding: 0.95rem 1rem 1rem;
   border-radius: 1rem;
   border: 1px solid rgba(144, 187, 255, 0.12);
-  background: rgba(11, 20, 34, 0.72);
+  background: rgba(20, 20, 23, 0.72);
 }
 
 .startup-progress-meta,
@@ -182,7 +182,7 @@ body {
 }
 
 .startup-progress-meta {
-  color: rgba(223, 236, 255, 0.82);
+  color: rgba(235, 235, 238, 0.82);
 }
 
 .startup-progress-track {
@@ -215,7 +215,7 @@ body {
 
 .startup-status-row {
   margin-top: 0.8rem;
-  color: rgba(196, 218, 247, 0.68);
+  color: rgba(224, 224, 228, 0.68);
 }
 
 .startup-steps {
@@ -231,8 +231,8 @@ body {
   padding: 0.72rem 0.85rem;
   border-radius: 0.9rem;
   border: 1px solid rgba(138, 188, 255, 0.1);
-  background: rgba(9, 16, 28, 0.7);
-  color: rgba(206, 224, 248, 0.58);
+  background: rgba(17, 17, 19, 0.7);
+  color: rgba(228, 228, 231, 0.58);
   font-size: 0.88rem;
   transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
 }
@@ -247,8 +247,8 @@ body {
 
 .startup-step-active {
   border-color: rgba(89, 168, 255, 0.28);
-  background: rgba(14, 28, 48, 0.9);
-  color: rgba(232, 242, 255, 0.92);
+  background: rgba(28, 28, 31, 0.9);
+  color: rgba(240, 240, 242, 0.92);
 }
 
 .startup-step-active .startup-step-indicator {
@@ -304,5 +304,88 @@ body {
 
   50% {
     transform: translate3d(1.4rem, -1rem, 0);
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Motion. Every menu, panel, popup and picker eases in and out, and every
+   control eases between its states. Three layers:
+
+   1. Entrances. Almost every UI surface is positioned with an inline style,
+      so the attribute rules below give each one a short fade the moment it
+      mounts — no component has to opt in. The larger surfaces add
+      .oh-surface-in for a small rise as well.
+   2. Exits. Presence (GameUI/presence.jsx) keeps a closing surface mounted
+      for PRESENCE_LEAVE_MS and marks the phase; the rules play the exit.
+   3. Controls. Buttons, links and fields ease colour, border, shadow and
+      transform; a pressed button dips slightly.
+
+   Reduced motion turns the lot off.
+   ------------------------------------------------------------------------- */
+@keyframes oh-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes oh-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes oh-surface-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes oh-surface-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.985); }
+}
+
+[style*="position: fixed"]:not(.maplibregl-marker):not(.maplibregl-popup):not([data-oh-no-motion]),
+[style*="position: absolute"]:not(.maplibregl-marker):not(.maplibregl-popup):not([data-oh-no-motion]) {
+  animation: oh-fade-in 160ms ease-out both;
+}
+
+.oh-surface-in {
+  animation: oh-surface-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both !important;
+}
+.oh-fade-in {
+  animation: oh-fade-in 160ms ease-out both !important;
+}
+
+[data-oh-presence="leaving"] > *,
+.oh-surface-out {
+  animation: oh-surface-out 150ms ease-in both !important;
+  pointer-events: none !important;
+}
+.oh-fade-out {
+  animation: oh-fade-out 150ms ease-in both !important;
+  pointer-events: none !important;
+}
+
+button,
+[role="button"],
+a,
+select,
+input,
+textarea,
+summary {
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

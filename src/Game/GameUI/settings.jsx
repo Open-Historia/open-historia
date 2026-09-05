@@ -23,7 +23,7 @@ import {
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
+    backgroundColor: "rgba(24, 24, 27, 0.9)",
     backdropFilter: "blur(4px)",
     zIndex: 9999,
     display: "flex",
@@ -211,7 +211,7 @@ const Toggle = ({ label, enabled, onToggle }) => (
         cursor: "pointer",
         position: "relative",
         transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#4b5563",
+        backgroundColor: enabled ? "#3b82f6" : "#55555b",
     }}
     >
     <div

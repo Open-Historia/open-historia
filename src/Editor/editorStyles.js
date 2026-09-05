@@ -4,13 +4,13 @@
  */
 
 // Shared dark-glass UI constants for the map editor, matching the game's GameUI
-// look (rgba(17,24,39,.9) surfaces, blur, white text, blue accent #3b82f6).
+// look (rgba(24,24,27,.9) surfaces, blur, white text, blue accent #3b82f6).
 
 export const ACCENT = "#3b82f6";
 export const ACCENT_RGB = [59, 130, 246];
 
 export const panelSurface = {
-  backgroundColor: "rgba(17, 24, 39, 0.92)",
+  backgroundColor: "rgba(24, 24, 27, 0.92)",
   backdropFilter: "blur(8px)",
   WebkitBackdropFilter: "blur(8px)",
   border: "1px solid rgba(255,255,255,0.12)",
