@@ -298,6 +298,24 @@ Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game`
 
 ---
 
+## 7-bis. Projects & Operations panel — `src/Game/GameUI/projects.jsx`
+
+`ProjectsPanel` (`projects.jsx:697`) — bottom-left slide-up (z 9998), the third `activePanel` slot after Chat and Actions. Its launcher `Projects` (the `ProjectsDockIcon` glyph) sits in the same `Toolbar` (`chat.jsx:2962`), which widened to hold three buttons (`12.8rem` at this commit). Entries are created and edited by the AI, by design; the player owns exactly two things on the board — a project's priority (`PrioritySwitch`) and whether to abandon it — see [World state](world-state.md) §2e-bis.
+
+| Element | Behavior | Connects to |
+|---|---|---|
+| Data | Its own 5 s `setInterval` while open: `readWorldState({force:true})` + `JSON_URLS.game`, signature-gated so a poll that changed nothing does not re-render the list under the cursor | `src/runtime/gameState.js` |
+| Cards | Kind glyph, name, status pill, owner, summary, tag chips, progress bar (`Bar`, copied from `stats.jsx:153`), timeline row, next milestone, last update | — |
+| Derived badges | ⚠ Overdue / ⏳ Due in Nd / Milestone slipped / No recent progress — all from `deriveProjectFlags` against the game clock, never from what the model wrote, so they cannot go stale | `src/runtime/projects.js` |
+| Sort & filter | `PROJECT_SORTS` dropdown, Mine/Foreign/All, and tag chips built from the live vocabulary (`collectProjectTags`). Open work always sorts above closed work whatever the chosen sort |
+| Closed view | An **exclusive** switch, not an "also include" filter: off shows only running work, on shows only completed/failed/cancelled. It previously widened the list to everything, which — because the sort ranks open above closed — buried the closed entries under a screen of active ones and made the button look broken. `isProjectClosed` (`runtime/projects.js`) is the one definition the filter, the count and the sort all share | `src/runtime/projects.js` |
+| **🧭 Ask advisor** | `onOpenAdvisor(seed)` — opens the drawer with a per-project brief request **pre-filled, never sent**; the same path the Actions panel's "Help brainstorm actions" button uses | `Main.openAdvisor` |
+| **📍 Show on map** | Resolves `project.focus` → first linked marker → first linked unit, then `map.flyTo`. Hidden entirely when nothing resolves, rather than offered and inert | `mapRef`, threaded through `Toolbar` |
+| Activity feed | Expanding a card resolves `project.eventIds` against `readEventsState()`, fetched **once and only after a first expand** — `events.json` is the largest runtime document and most opens never expand anything | `src/runtime/gameState.js` |
+| Empty state | The **backfill path**, not a dead end: a button seeding the advisor with "put my ongoing efforts on the board". An existing campaign's history is already in the advisor's prompt, so it can reconstruct one | — |
+
+Two authors create the board's entries (the player only sets a priority or abandons one): events through `impacts.projectOps` — supplied by the separate `projects` AI task after a jump, or inline by the game master — and the advisor through a ```` ```projects ```` block — `applyAdvisorProjects` in `advisor.jsx`, with an `AdvisorProjectsCard` receipt, the same "advisor creates, I review" contract as ```` ```actions ````. The advisor's write does a read-modify-write that spreads the **whole** world back; a shallow patch there would drop `polityOverrides`/`regionOwnershipOverrides` and blank the map.
+
 ## 8. Forces panel — `src/Game/GameUI/forces.jsx`
 
 `ForcesPanel` (`forces.jsx:85`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now primarily from the Cheats panel's "Manual force deployment"). Manual troop control is treated as a cheat.

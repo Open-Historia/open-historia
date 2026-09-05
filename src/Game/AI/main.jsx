@@ -46,6 +46,7 @@ import {
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
+import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
 import { foreignAgentBrief } from "../../runtime/spycraft.js";
 
 // main.jsx - AI chat module
@@ -2230,10 +2231,14 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // chat — so the polity answering here could see, and react to, what the
     // player had said to someone else. Diplomacy with others is private; the
     // only way to learn it is the spy the game now lets the player plant.
-    const isParticipant = (chat) => (Array.isArray(chat?.countries) ? chat.countries : [])
-        .some((country) => [country?.name, country?.code].map((v) => String(v ?? "").trim().toUpperCase())
-            .includes(String(speakingAs).trim().toUpperCase()));
-    const ownChats = Array.isArray(chatData) ? chatData.filter(isParticipant) : [];
+    //
+    // One rule, in chatVisibility.js — the same matcher promptContext applies
+    // again on the way into the transcript. The speaker is settled FIRST, so
+    // the filter never runs against a blank name: with no speaker at all a
+    // leader is shown no chats, never all of them.
+    const speaker = speakingAs || countries.find((country) => country !== playerCountry) || "";
+    const chats = Array.isArray(chatData) ? chatData : [];
+    const ownChats = speaker ? filterChatsVisibleTo(chats, speaker) : [];
     const variables = {
         ...(await buildPromptVariables({
             actionData,
@@ -2241,7 +2246,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
             chatData: ownChats,
             eventData,
             gameData,
-            speakingAs: speakingAs || countries.find((country) => country !== playerCountry) || "",
+            speakingAs: speaker,
             worldData,
         })),
         chatParticipants: participantList || "",
@@ -2253,7 +2258,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // player has with everyone else, and the player's queued plans — redacted by
     // that polity's service against the player's. A polity whose agent has been
     // turned gets the cover story the player wrote instead, and believes it.
-    const otherChats = Array.isArray(chatData) ? chatData.filter((chat) => !isParticipant(chat)) : [];
+    const otherChats = speaker ? chats.filter((chat) => !isChatVisibleTo(chat, speaker)) : chats;
     const stolen = [
         ...otherChats.slice(-4).map((chat) => {
             const who = (chat.countries || []).map((c) => c?.name).filter(Boolean).join(", ");

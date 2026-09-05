@@ -87,10 +87,23 @@ const bboxMinX = (polygon) => {
 // Union of a small batch. A batch the sweep cannot complete is bisected until
 // the offending piece stands alone; that piece is kept raw rather than deleted,
 // so canonical territory is never lost from the map.
+const FALLBACK_OWNER_SAMPLE = 12;
+
+// An empty result from a non-empty batch is the same failure as a throw: the
+// territory would simply vanish from the dissolve, and one batch of a large
+// polity going quietly is far likelier than the whole polity collapsing. Keep
+// the pieces and count it, so the caller marks the polity as undissolved.
+const unionKept = (merged, pieces, stats) => {
+  if (merged.length > 0) return merged;
+  stats.failedPartCount += 1;
+  stats.emptyUnionCount += 1;
+  return pieces;
+};
+
 const unionBatch = (polygons, stats) => {
   if (polygons.length <= 1) return polygons;
   try {
-    return polygonClipping.union(...polygons);
+    return unionKept(polygonClipping.union(...polygons), polygons, stats);
   } catch {
     if (polygons.length === 2) {
       stats.failedPartCount += 1;
@@ -100,7 +113,7 @@ const unionBatch = (polygons, stats) => {
     const left = unionBatch(polygons.slice(0, middle), stats);
     const right = unionBatch(polygons.slice(middle), stats);
     try {
-      return polygonClipping.union(left, right);
+      return unionKept(polygonClipping.union(left, right), [...left, ...right], stats);
     } catch {
       stats.failedPartCount += 1;
       return [...left, ...right];
@@ -130,7 +143,14 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
   if (features.length === 0) {
     return {
       data: EMPTY_FEATURE_COLLECTION,
-      stats: { polityCount: 0, dissolvedPolityCount: 0, fallbackPolityCount: 0, failedPartCount: 0 },
+      stats: {
+        polityCount: 0,
+        dissolvedPolityCount: 0,
+        fallbackPolityCount: 0,
+        failedPartCount: 0,
+        emptyUnionPolityCount: 0,
+        fallbackOwners: [],
+      },
     };
   }
 
@@ -161,20 +181,32 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
   let dissolvedPolityCount = 0;
   let fallbackPolityCount = 0;
   let failedPartCount = 0;
+  let emptyUnionPolityCount = 0;
+  // Who fell back, by name, so the debug log can say more than a count.
+  const fallbackOwners = [];
 
   for (const [owner, group] of groups) {
-    const stats = { failedPartCount: 0 };
-    let coordinates = cleanDisplayHoles(unionAll(group.polygons, stats, unionChunk));
-    // Let the batch structures go before the next polity starts.
+    const stats = { failedPartCount: 0, emptyUnionCount: 0 };
+    // Never empty: unionBatch keeps a batch's pieces when its union comes back
+    // empty - a partial collapse used to vanish quietly, and a total one used
+    // to drop the polity's fill, frontier line and name together, simply not
+    // on the map with nothing said - and cleanDisplayHoles prunes only holes,
+    // never outer rings. An undissolved surface shows its internal seams; an
+    // absent one shows nothing.
+    const coordinates = cleanDisplayHoles(unionAll(group.polygons, stats, unionChunk));
+    // Let the batch structures go before the next polity starts. Russia is
+    // ~5,800 polygons and that ceiling is why they are freed at all.
     group.polygons = null;
-    if (stats.failedPartCount > 0) {
+    const fallback = stats.failedPartCount > 0;
+    if (stats.emptyUnionCount > 0) emptyUnionPolityCount += 1;
+    if (fallback) {
       fallbackPolityCount += 1;
       failedPartCount += stats.failedPartCount;
+      if (fallbackOwners.length < FALLBACK_OWNER_SAMPLE) fallbackOwners.push(owner);
     } else {
       dissolvedPolityCount += 1;
     }
 
-    if (coordinates.length === 0) continue;
     surfaceFeatures.push({
       type: "Feature",
       id: `polity-surface-${surfaceFeatures.length}`,
@@ -184,7 +216,7 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
         gadm0: [...group.gadm0Counts.entries()]
           .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
           .map(([code]) => code),
-        dissolveFallback: stats.failedPartCount > 0,
+        dissolveFallback: fallback,
       },
       geometry: { type: "MultiPolygon", coordinates },
     });
@@ -197,6 +229,8 @@ export const derivePolitySurfaces = (regions, ownershipOverrides = {}, { unionCh
       dissolvedPolityCount,
       fallbackPolityCount,
       failedPartCount,
+      emptyUnionPolityCount,
+      fallbackOwners,
     },
   };
 };

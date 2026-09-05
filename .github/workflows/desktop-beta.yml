@@ -14,7 +14,7 @@
 #     lists a workflow_dispatch entry if the file is on the DEFAULT branch, so a
 #     copy of this file is kept on `main` purely to make the entry appear — the
 #     copy on the branch you select is the one that actually runs. Same
-#     arrangement as desktop-seventhdread-beta.yml and android-apk-beta.yml.
+#     arrangement as android-apk-beta.yml.
 #     Clearing the tag field builds the installers without publishing them.
 #   * push a tag matching `desktop-beta-v*` at a commit on `beta`. A tag push
 #     runs the workflow file from the tagged tree, so this works whatever is on

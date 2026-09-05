@@ -11,11 +11,12 @@ import {
   basemapMaxZoom,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
+  esriTileTemplate,
   ensureBasemapProtocol,
   isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
-import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -298,6 +299,16 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
     : "#0b1017";
 
+  // THE BLACK TILES. The renderer before vNext put a second raster layer UNDER
+  // the basemap: "satellite-lowres", z0-2 only, levels that always have real
+  // data. Anywhere the detailed tiles had not arrived yet, that low-resolution
+  // image showed through, so a region being loaded looked coarse rather than
+  // empty. vNext dropped it and put a near-black background in its place, which
+  // is fine under a relief basemap that covers the globe at z3 and is exactly
+  // what paints those black rectangles while detailed tiles stream in. It is a
+  // property of the basemap, not of the components MapScene swaps, so it lives
+  // here in the one style both renderers share: every player gets the underlay,
+  // and the legacy renderer no longer needs a style of its own.
   const style = {
     version: 8,
     sources: {
@@ -315,6 +326,13 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
           attribution: "Relief: NOAA/NCEI ETOPO1",
         },
       } : {}),
+      "satellite-lowres": {
+        type: "raster",
+        // Levels 0-2 always have real data - no placeholder handling needed.
+        tiles: [esriTileTemplate(renderedBasemapId)],
+        tileSize: 256,
+        maxzoom: 2,
+      },
       satellite: {
         type: "raster",
         tiles: [basemapProtocolTemplate(renderedBasemapId)],
@@ -327,6 +345,12 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         id: "strategy-map-base",
         type: "background",
         paint: { "background-color": physicalBackground },
+      },
+      {
+        id: "satellite-lowres-layer",
+        type: "raster",
+        source: "satellite-lowres",
+        paint: basemapPaint,
       },
       {
         id: "satellite-layer",
@@ -431,6 +455,12 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // reversible. Empty — the default — leaves the scenario author's background
   // and basemap authoritative; only a real built-in id replaces them, so a
   // stray value left in localStorage by an older build changes nothing.
+  // Which renderer MapScene will mount. World needs it only to key the map
+  // instance: the two renderers register different sources and layers under
+  // the same ids, so a switch is a remount rather than a style diff under a
+  // mid-swap component tree. Settings announces the redraw (announceMapRerender)
+  // so the game loading screen covers it, as it does for the globe switch.
+  const legacyRenderer = useMapSetting(MAP_SETTING_KEYS.legacyMapRenderer);
   const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
   const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
   const useScenarioBackground = !validBasemapOverride;
@@ -463,6 +493,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     projection,
     basemapId: effectiveBasemap,
     backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+    renderer: legacyRenderer ? "legacy" : "vnext",
   });
   // 3D terrain deforms the mesh using the same raster-dem source that drives
   // the "hills" hillshade layer in buildWorldStyle. It only applies against the

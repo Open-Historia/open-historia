@@ -30,6 +30,7 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
+import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -889,7 +890,7 @@ const EditorDrawer = ({
                 onChange={(event) => onChange("labelFont", event.target.value)}
               />
               <datalist id="oh-label-font-options">
-                {["Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact", "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS"].map((font) => (
+                {LABEL_FONT_SUGGESTIONS.map((font) => (
                   <option key={font} value={font} />
                 ))}
               </datalist>

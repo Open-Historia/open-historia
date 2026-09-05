@@ -81,7 +81,7 @@ export const loadRegionSeed = (url) => {
       // stringify nor a parse happens on the main thread. Dead-code-eliminated
       // from the desktop build (VITE_OH_WEB is a compile-time false).
       try {
-        const { readRuntimeGeojsonRaw } = await import("./web/libraryStore.js");
+        const { readRuntimeGeojsonRaw } = await import("../../../runtime/web/libraryStore.js");
         const raw = await readRuntimeGeojsonRaw("regionsGeojson");
         if (raw) input = raw;
       } catch {

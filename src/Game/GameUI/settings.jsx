@@ -37,8 +37,9 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { announceMapRerender } from "../../runtime/mapReadiness.js";
 import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
@@ -1482,6 +1483,8 @@ const SettingsWorkspace = ({
     updateMapSetting,
     basemapStyle,
     updateBasemapStyle,
+    labelFont,
+    updateLabelFont,
     updateBetaUnits,
     telemetryOn,
     onToggleTelemetry,
@@ -1589,7 +1592,38 @@ const SettingsWorkspace = ({
                         </select>
                         <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
                     </div>
+                    {/* Labels rasterize from the player's LOCAL fonts (the style
+                        has no glyph server), so any installed family works - the
+                        list only suggests common safe ones. Empty = whatever the
+                        scenario set, which itself defaults to Georgia. */}
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-label-font">Country label font</label>
+                        <input
+                        id="game-label-font"
+                        data-no-translate
+                        list="oh-settings-label-font-options"
+                        placeholder="Scenario default"
+                        style={inputStyle}
+                        value={labelFont}
+                        onChange={(event) => updateLabelFont(event.target.value)}
+                        />
+                        <datalist id="oh-settings-label-font-options">
+                            {LABEL_FONT_SUGGESTIONS.map((font) => <option key={font} value={font} />)}
+                        </datalist>
+                        <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
+                    </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                </SettingsSection>
+                <SettingsSection title="Renderer" description="Which renderer draws the map. A rendering choice only: no world state, save data or geometry differs between them.">
+                    <ExperimentalPill />
+                    {/* Announced BEFORE the setting changes: World.jsx keys the map
+                        instance on the renderer, so the flip replaces the map and
+                        the game loading screen covers the redraw — the globe switch
+                        does the same (App.jsx). */}
+                    <Toggle label="Legacy map renderer" enabled={mapSettings.legacyMapRenderer} onToggle={() => { announceMapRerender(); updateMapSetting("legacyMapRenderer", MAP_SETTING_KEYS.legacyMapRenderer, !mapSettings.legacyMapRenderer); }} />
+                    <div style={settingsHelper}>
+                    Off (default): Map vNext — dissolved polity surfaces, stitched frontiers and curved polity labels. On: the renderer used before it, with per-region fills and its own country labels. Switching redraws the map.
+                    </div>
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
@@ -1852,6 +1886,7 @@ const SettingsMenu = ({
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+        legacyMapRenderer: getMapSetting(MAP_SETTING_KEYS.legacyMapRenderer),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Not getMapSetting: this one ships ON, and an absent key must read as
@@ -1871,6 +1906,18 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+    const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
+    // The field shows the keystrokes; the setting stores them trimmed. Storing
+    // on every keystroke through setMapSettingValue's trim and echoing the
+    // stored value back used to eat a space the moment it was typed, so "Times
+    // New Roman" could not be typed at all. The draft is shown while it is the
+    // stored value plus whitespace; a change made elsewhere wins over it.
+    const [labelFontDraft, setLabelFontDraft] = useState(labelFont);
+    const labelFontShown = labelFontDraft.trim() === labelFont ? labelFontDraft : labelFont;
+    const updateLabelFont = (value) => {
+        setLabelFontDraft(value);
+        setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
+    };
 
     // Telemetry switches (telemetry.js): their own keys, both on by default.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
@@ -1972,6 +2019,8 @@ const SettingsMenu = ({
             updateMapSetting={updateMapSetting}
             basemapStyle={basemapStyle}
             updateBasemapStyle={updateBasemapStyle}
+            labelFont={labelFontShown}
+            updateLabelFont={updateLabelFont}
             updateBetaUnits={updateBetaUnits}
             telemetryOn={telemetryOn}
             onToggleTelemetry={toggleTelemetry}

@@ -16,6 +16,7 @@ import {
   attackRegion,
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
@@ -35,7 +36,7 @@ import {
   summarizePolityLabelDiagnostics,
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
 import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
 import { resolveContextualPolityLabels } from "./vnext/polityNaming.js";
@@ -414,6 +415,9 @@ const WorldMap = ({ isGlobe = false }) => {
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
   };
+  // A player's own choice from Settings > Map. Empty means "whatever the
+  // scenario author set", so it changes nothing until it is filled in.
+  const labelFontOverride = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
   const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionMeta, setCustomRegionMeta] = useState(EMPTY_CUSTOM_REGION_META);
@@ -1114,6 +1118,30 @@ const WorldMap = ({ isGlobe = false }) => {
       setDisputedRegionData(result.disputedData?.features ? result.disputedData : EMPTY_FEATURE_COLLECTION);
       setPolityBoundaryData(result.data?.features ? result.data : EMPTY_FEATURE_COLLECTION);
       setPolitySurfaceData(result.polityData?.features ? result.polityData : EMPTY_FEATURE_COLLECTION);
+      // The dissolve counts were computed and thrown away - a polity that fell
+      // back to raw pieces, or one dropped outright, left no trace anywhere. Put
+      // them in the debug log so a bug report carries them.
+      if (Number.isFinite(result.stats?.polityCount)) {
+        const { polityCount, dissolvedPolityCount, fallbackPolityCount, failedPartCount,
+          emptyUnionPolityCount, fallbackOwners } = result.stats;
+        const named = Array.isArray(fallbackOwners) && fallbackOwners.length
+          ? ` (${fallbackOwners.join(", ")})`
+          : "";
+        logDebugEvent(
+          fallbackPolityCount > 0 ? "warn" : "map",
+          `[map] Polity surfaces: ${dissolvedPolityCount ?? 0}/${polityCount} dissolved, `
+          + `${fallbackPolityCount ?? 0} on raw pieces${named}.`,
+          {
+            polityCount,
+            dissolvedPolityCount,
+            fallbackPolityCount,
+            failedPartCount,
+            emptyUnionPolityCount,
+            fallbackOwners,
+            regionsUrl: regionsGeojsonUrl,
+          },
+        );
+      }
 
       if (Number.isFinite(result.stats?.parseMs)) {
         globalThis.__OH_MAP_SOURCE_PERF__ = {
@@ -1508,10 +1536,12 @@ const WorldMap = ({ isGlobe = false }) => {
   // first is not installed.
   const labelFontStack = useMemo(
     // Pax-style political labels read more like atlas typography than delicate
-    // annotations. Georgia is a heavier default on Windows while authored
-    // scenario fonts still win when explicitly provided.
-    () => [labelFont || "Georgia", "Georgia", "Times New Roman", "Palatino Linotype", "serif"],
-    [labelFont],
+    // annotations. Georgia is a heavier default on Windows; an authored scenario
+    // font wins over it, and the player's own Settings > Map override wins over
+    // both - it is the one setting whose whole purpose is to overrule what the
+    // author picked.
+    () => [labelFontOverride || labelFont || "Georgia", "Georgia", "Times New Roman", "Palatino Linotype", "serif"],
+    [labelFont, labelFontOverride],
   );
 
   const pointLabelLayerLayout = useMemo(() => ({
