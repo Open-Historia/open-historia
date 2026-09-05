@@ -138,3 +138,17 @@ test("clearing forgets the session", async () => {
   await clearAiRecords();
   assert.equal((await getAiRecords()).length, 0);
 });
+
+test("a record keeps a system prompt longer than 80,000 characters whole", () => {
+  // A jump's prompt is well past 80k. The console used to show it cut off at
+  // exactly that length, which read as the game truncating what it sends.
+  const systemPrompt = "S".repeat(120000);
+  const userMessage = "U".repeat(30000);
+  const rawResponse = "R".repeat(70000);
+  const record = startAiRecord({ taskKey: "jumpForward", provider: "gemini", systemPrompt, userMessage });
+  finishAiRecord(record, { ok: true, rawResponse });
+  assert.equal(record.systemPrompt.length, 120000);
+  assert.equal(record.systemPrompt.length, record.systemPromptChars);
+  assert.equal(record.userMessage.length, 30000);
+  assert.equal(record.rawResponse.length, 70000);
+});

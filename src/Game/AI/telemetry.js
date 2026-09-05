@@ -18,9 +18,12 @@ const DB_VERSION = 1;
 const STORE = "generations";
 const MAX_PERSISTED_RECORDS = 200;
 const MAX_SESSION_RECORDS = 500;
-const MAX_RAW_RESPONSE_CHARS = 60000;
-const MAX_RAW_PROMPT_CHARS = 80000;
-const MAX_USER_MESSAGE_CHARS = 20000;
+// Prompts, user messages and answers are kept WHOLE. They used to be clipped
+// (80k / 20k / 60k characters), which cut the system prompt of any real turn
+// short in the console — a jump's prompt is well past 80k — and read as the
+// game sending a truncated prompt. It never did: the provider always got the
+// full text; only this record was cut. Storage is bounded by record COUNT
+// (MAX_SESSION_RECORDS / MAX_PERSISTED_RECORDS), never by trimming their text.
 
 // Settings (localStorage, same pattern as mapSettings/providerConfig). Both
 // default ON: only an explicit "0" turns them off.
@@ -153,8 +156,8 @@ export const startAiRecord = (meta = {}) => {
     // what was asked
     systemPromptChars: systemPrompt.length,
     userMessageChars: userMessage.length,
-    systemPrompt: clip(systemPrompt, MAX_RAW_PROMPT_CHARS),
-    userMessage: clip(userMessage, MAX_USER_MESSAGE_CHARS),
+    systemPrompt,
+    userMessage,
     // what came back
     responseChars: 0,
     rawResponse: "",
@@ -194,7 +197,7 @@ export const finishAiRecord = (record, { ok = true, error = "", rawResponse = ""
   record.error = String(error ?? "").slice(0, 2000);
   if (rawResponse) {
     record.responseChars = rawResponse.length;
-    record.rawResponse = clip(rawResponse, MAX_RAW_RESPONSE_CHARS);
+    record.rawResponse = rawResponse;
   }
   // A failed call is final whatever the caller planned to attach.
   if (!ok) record.awaitingOutcome = false;

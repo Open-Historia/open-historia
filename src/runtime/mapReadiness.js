@@ -40,6 +40,27 @@ export const announceGameOpening = (gameId) => {
   window.dispatchEvent(new CustomEvent(GAME_OPENING_EVENT, { detail: store().opening }));
 };
 
+// The same game drawn again from scratch — the 3D globe switched on or off,
+// which replaces the MapLibre instance. The opening screen covers it until the
+// new instance has its polity layers in and has gone idle, exactly as a game
+// open does.
+//
+// The marks so far belong to the instance about to go, and unlike a game
+// switch they carry THIS game's id, so they would count for the new one and
+// end the screen before anything was drawn: cleared here. That is also why this
+// must be called BEFORE the state that remounts the map changes — React runs a
+// child's mount effects before the parent's, so an announce from an effect
+// would land after the new instance's first marks and wipe them instead.
+// (announceGameOpening itself does not clear: on a game switch the new
+// instance may well have marked before the library announces, and its marks
+// are told apart from the old game's by their game id.)
+export const announceMapRerender = () => {
+  if (typeof window === "undefined") return;
+  store().polities = null;
+  store().idleAt = 0;
+  announceGameOpening(store().gameId ?? "");
+};
+
 export const markPolitiesReady = (url = "", { failed = false } = {}) => {
   if (typeof window === "undefined") return;
   const record = { gameId: store().gameId ?? "", url: String(url ?? ""), at: now(), failed };

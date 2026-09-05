@@ -253,7 +253,7 @@ Both label sources feed `type:"symbol"` layers (`country-labels`, `country-curve
 | Property | Value |
 |---|---|
 | `text-font` | `labelFontStack` = `[world.labelFont || "Georgia", "Georgia", "Times New Roman", "Palatino Linotype", "serif"]` (drawn locally as a CSS font-family — MapLibre v5 has no glyphs endpoint here) |
-| `text-size` | `buildCountryTextSize(1, isGlobe)` — exponential-in-zoom, scaled by each feature's baked `areaScale`, capped at 254 |
+| `text-size` | `buildCountryTextSize(mult, isGlobe, prop)` — exponential-in-zoom with a stop at every integer zoom, each the uncapped size, so the two sizes MapLibre mixes per tile are exactly 2× apart and a label doubles with the map. MapLibre itself clamps glyphs at 255 px, so `buildCountryTextOpacity` keys each layer's `text-opacity` to the same size expression and fades a label out between 140 and 230 px, on top of the layer's zoom ramp (z5.8–z7.1) |
 | `text-color` / `text-halo-color` | `world.labelTextColor || "#FFFFFF"` / `world.labelHaloColor || "rgba(0,0,0,0.5)"` |
 | `text-opacity` | interp zoom `5→0.75, 8→0` (labels fade out as you zoom in and cities take over) |
 | `visibility` | `none` when `hideCountryLabels` map setting is on |

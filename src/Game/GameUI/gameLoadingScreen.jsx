@@ -47,16 +47,24 @@ export const useGameLoading = () => {
       if (politiesSettled()) finish();
       else if (politiesReady()) setPhase((current) => (current === "done" ? current : "settling"));
     };
+    // The status line moves on its own after a moment; the world read is quick.
+    // Armed on every opening, so a redraw (the globe switched) gets its own
+    // ceiling rather than whatever was left of the first one's.
+    const arm = () => {
+      later(() => setPhase((current) => (current === "world" ? "polities" : current)), 1200);
+      later(finish, LOADING_CEILING_MS);
+    };
     const reopen = () => {
       settled = false;
+      timers.splice(0).forEach(clearTimeout);
       setPhase("world");
+      arm();
+      later(check, 0);
     };
     window.addEventListener(MAP_POLITIES_READY_EVENT, check);
     window.addEventListener(MAP_IDLE_EVENT, check);
     window.addEventListener(GAME_OPENING_EVENT, reopen);
-    // The status line moves on its own after a moment; the world read is quick.
-    later(() => setPhase((current) => (current === "world" ? "polities" : current)), 1200);
-    later(finish, LOADING_CEILING_MS);
+    arm();
     // Deferred so signals that already fired are handled like live ones.
     later(check, 0);
     return () => {
@@ -95,7 +103,9 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
       inset: 0,
       justifyContent: "center",
       position: "fixed",
-      zIndex: 10045,
+      // Above the settings workspace portal (2147483000): the globe is switched
+      // from Settings → Map, and the redraw screen has to cover that too.
+      zIndex: 2147483200,
     }}
   >
     <div style={{ padding: "1rem", textAlign: "center" }}>
