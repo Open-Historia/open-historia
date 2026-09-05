@@ -60,39 +60,102 @@ const EMPTY_CUSTOM_REGION_META = Object.freeze({
 // visibly wrong in mercator at high latitude, so never enable it there).
 const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math.PI / 180]];
 
-// A country label is painted on the map: it keeps the size it has relative to
-// its territory at every zoom, doubling per level exactly as the geometry does,
-// and the opacity ramps in the paint (labelLayerPaint and friends) are what take
-// it away as the player zooms in. Each stop below is the uncapped size at that
-// zoom and the interpolation is exponential base 2, which between such stops is
-// exact doubling.
+// How a country label is sized, and why its opacity is tied to that size.
 //
-// There is deliberately NO pixel cap. There used to be one inside every stop
-// (min(maxSize, …)), and it did far more than cap: a base-2 interpolation
-// between the uncapped stop at z4 and a capped one at z8 spreads the cap over
-// the whole interval, so a label that should double per level grew a few
-// percent per level from z4 on — while the map doubled — and read as shrinking
-// against its country as the player zoomed in. Field report: "labels shrink
-// when you zoom in". Fading, not clamping, is how a label leaves.
+// MapLibre draws a label from two sizes per tile — this expression evaluated at
+// the tile's zoom and at one level above — mixed by the zoom in between, and it
+// packs each of those sizes into 8 bits: 255 px is the most a glyph is ever
+// drawn at (symbol_size.ts MAX_GLYPH_ICON_SIZE). Two things follow.
+//
+// 1. The stops are every integer zoom, each the uncapped size at that zoom, so
+//    the two sizes the engine mixes are exactly one level and exactly 2× apart
+//    and a label doubles with the map, as if painted on it. The first version
+//    had stops four levels apart with a pixel cap inside them; the engine then
+//    mixed an honest z4 size toward a clamped z8 one across the whole interval,
+//    and every label crept while the map doubled — the field report "labels
+//    shrink as you zoom in". Dropping the app's cap changed nothing, because the
+//    engine's own 255 px clamp did the same to the z8 stop.
+//
+// 2. A label has to be GONE before its size reaches that clamp, or the clamp
+//    reappears as the same creep in its last level. So buildCountryTextOpacity
+//    ties text-opacity to the size this expression yields: a label fades out
+//    between LABEL_FADE_START_PX and LABEL_FADE_END_PX at whatever zoom it gets
+//    there, on top of each layer's own zoom ramp (which is how the small
+//    labels, which never grow that big, leave). Fading, never shrinking.
+const LABEL_FADE_START_PX = 140;
+const LABEL_FADE_END_PX = 230;
+const LABEL_SIZE_STOP_ZOOMS = Array.from({ length: 25 }, (_, zoom) => zoom);
+// Opacity is read by the engine at the tile's zoom and one above, so half-level
+// stops are as fine as it can use; each ramp's own stops are merged in by the
+// builder so no ramp corner is skipped.
+const LABEL_OPACITY_STOP_ZOOMS = Array.from({ length: 13 }, (_, index) => 2 + index * 0.5);
+
+const countryTextScale = (multiplier, correctForGlobe) =>
+  (correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier);
+
+// The size at one zoom, as an expression over the feature's own scale property.
+const countryTextSizeAt = (zoom, multiplier, correctForGlobe, scaleProperty, { safe = false } = {}) => [
+  "*",
+  countryTextScale(multiplier, correctForGlobe),
+  ["*", safe ? ["coalesce", ["get", scaleProperty], 0] : ["get", scaleProperty], 2 ** (zoom - 16)],
+];
+
 const buildCountryTextSize = (
   multiplier = 1,
   correctForGlobe = false,
   scaleProperty = "areaScale",
-) => {
-  const scale = correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier;
-  const atZoom = (power) => ["*", scale, ["*", ["get", scaleProperty], ["^", 2, power]]];
+) => [
+  "interpolate", ["exponential", 2], ["zoom"],
+  ...LABEL_SIZE_STOP_ZOOMS.flatMap((zoom) => [zoom, countryTextSizeAt(zoom, multiplier, correctForGlobe, scaleProperty)]),
+];
 
+// A [zoom, value, zoom, value, …] ramp read at one zoom: piecewise-linear, held
+// flat beyond its ends.
+const rampValueAt = (ramp, zoom) => {
+  if (zoom <= ramp[0]) return ramp[1];
+  for (let index = 2; index < ramp.length; index += 2) {
+    if (zoom <= ramp[index]) {
+      const fromZoom = ramp[index - 2];
+      const fromValue = ramp[index - 1];
+      const toZoom = ramp[index];
+      const toValue = ramp[index + 1];
+      return fromValue + ((toValue - fromValue) * (zoom - fromZoom)) / (toZoom - fromZoom);
+    }
+  }
+  return ramp[ramp.length - 1];
+};
+
+// text-opacity for a label layer: the layer's zoom ramp times a fade keyed to
+// the label's own size — the same expression as its text-size, so the two agree
+// — which has it transparent before the engine would clamp it.
+const buildCountryTextOpacity = (
+  ramp,
+  multiplier = 1,
+  correctForGlobe = false,
+  scaleProperty = "areaScale",
+) => {
+  const rampZooms = ramp.filter((_, index) => index % 2 === 0);
+  const zooms = [...new Set([...LABEL_OPACITY_STOP_ZOOMS, ...rampZooms])].sort((left, right) => left - right);
+  const fadeAt = (zoom) => [
+    "min", 1,
+    ["max", 0, [
+      "/",
+      ["-", LABEL_FADE_END_PX, countryTextSizeAt(zoom, multiplier, correctForGlobe, scaleProperty, { safe: true })],
+      LABEL_FADE_END_PX - LABEL_FADE_START_PX,
+    ]],
+  ];
   return [
-    "interpolate", ["exponential", 2], ["zoom"],
-    0, atZoom(-16),
-    4, atZoom(-12),
-    8, atZoom(-8),
-    12, atZoom(-4),
-    16, atZoom(0),
-    20, atZoom(4),
-    24, atZoom(8),
+    "interpolate", ["linear"], ["zoom"],
+    ...zooms.flatMap((zoom) => [zoom, ["*", Number(rampValueAt(ramp, zoom).toFixed(4)), fadeAt(zoom)]]),
   ];
 };
+
+// Each label layer's own zoom ramp (see buildCountryTextOpacity).
+const STOCK_LABEL_RAMP = Object.freeze([4, 0.98, 5.8, 0.90, 6.6, 0.52, 7.1, 0]);
+// The curved glyph layer on a custom map hands off from the live point labels
+// at z3.85–4.15.
+const CUSTOM_CURVED_LABEL_RAMP = Object.freeze([3.85, 0, 4.15, 0.98, 5.8, 0.90, 6.6, 0.52, 7.1, 0]);
+const LIVE_LABEL_RAMP = Object.freeze([2.0, 0.90, 3.2, 0.985, 5.8, 0.96, 6.55, 0.72, 7.1, 0]);
 
 const buildFallbackColorExpression = () => ([
   "rgb",
@@ -1519,30 +1582,26 @@ const WorldMap = ({ isGlobe = false }) => {
     visibility: mapDisplaySettings.hideCountryLabels ? "none" : "visible",
   }), [isGlobe, labelFontStack, mapDisplaySettings.hideCountryLabels]);
 
-  const labelLayerPaint = useMemo(() => ({
+  const labelPaintBase = useMemo(() => ({
     "text-color": labelTextColor || "rgba(247, 246, 240, 0.98)",
     "text-halo-color": labelHaloColor || "rgba(7, 10, 14, 0.92)",
     "text-halo-width": 1.1,
     "text-halo-blur": 0.32,
-    "text-opacity": [
-      "interpolate", ["linear"], ["zoom"],
-      4, 0.98,
-      5.8, 0.90,
-      6.6, 0.52,
-      7.1, 0,
-    ],
   }), [labelHaloColor, labelTextColor]);
+  // Every opacity below is keyed to its layer's own text-size: the multiplier and
+  // scale property must match the layout's buildCountryTextSize call.
+  const pointLabelLayerPaint = useMemo(() => ({
+    ...labelPaintBase,
+    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.72, isGlobe),
+  }), [isGlobe, labelPaintBase]);
+  const curvedStockLabelLayerPaint = useMemo(() => ({
+    ...labelPaintBase,
+    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.78, isGlobe),
+  }), [isGlobe, labelPaintBase]);
   const curvedLabelLayerPaint = useMemo(() => ({
-    ...labelLayerPaint,
-    "text-opacity": [
-      "interpolate", ["linear"], ["zoom"],
-      3.85, 0,
-      4.15, 0.98,
-      5.8, 0.90,
-      6.6, 0.52,
-      7.1, 0,
-    ],
-  }), [labelLayerPaint]);
+    ...labelPaintBase,
+    "text-opacity": buildCountryTextOpacity(CUSTOM_CURVED_LABEL_RAMP, 0.78, isGlobe),
+  }), [isGlobe, labelPaintBase]);
   const integratedLabelLayerPaint = useMemo(() => ({
     // Stronger atlas treatment: the polity name is a primary political layer,
     // not a faint annotation. Keep a crisp dark edge so large white serif text
@@ -1551,15 +1610,9 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-halo-color": labelHaloColor || "rgba(4, 6, 9, 0.96)",
     "text-halo-width": 1.45,
     "text-halo-blur": 0.18,
-    "text-opacity": [
-      "interpolate", ["linear"], ["zoom"],
-      2.0, 0.90,
-      3.2, 0.985,
-      5.8, 0.96,
-      6.55, 0.72,
-      7.1, 0,
-    ],
-  }), [labelHaloColor, labelTextColor]);
+    // The live line and point layers both size 1 × fitScale.
+    "text-opacity": buildCountryTextOpacity(LIVE_LABEL_RAMP, 1, isGlobe, "fitScale"),
+  }), [isGlobe, labelHaloColor, labelTextColor]);
 
   return (
     <>
@@ -1784,7 +1837,7 @@ const WorldMap = ({ isGlobe = false }) => {
           minzoom={customFlag && useLivePolityLabels ? 3.85 : undefined}
           maxzoom={7.1}
           layout={curvedLabelLayerLayout}
-          paint={customFlag && useLivePolityLabels ? curvedLabelLayerPaint : labelLayerPaint}
+          paint={customFlag && useLivePolityLabels ? curvedLabelLayerPaint : curvedStockLabelLayerPaint}
         />
       </Source>
 
@@ -1886,7 +1939,7 @@ const WorldMap = ({ isGlobe = false }) => {
           type="symbol"
           maxzoom={7.1}
           layout={pointLabelLayerLayout}
-          paint={labelLayerPaint}
+          paint={pointLabelLayerPaint}
         />
       </Source>
     </>
