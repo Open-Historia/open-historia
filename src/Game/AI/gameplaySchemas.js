@@ -2452,8 +2452,35 @@ const SPY_INTERCEPT_SCHEMA = {
   additionalProperties: false,
 };
 
+// A first reading of one polity's intelligence service, asked the moment that
+// service matters (gameplay.js assessIntelligenceService). It replaces
+// spycraft.js DEFAULT_INTELLIGENCE for that polity, once; the turn moves the
+// number after that through polityChanges.intelligence.
+const INTELLIGENCE_ASSESSMENT_SCHEMA = {
+  type: "object",
+  description: "An assessment of one polity's intelligence service as it stands on the current date.",
+  properties: {
+    intelligence: {
+      type: "number",
+      description:
+        "Intelligence service capability 0-100 for this polity right now. 0-34 weak: no real foreign "
+        + "service, porous, easily read. 35-54 ordinary: a working service of no particular note. "
+        + "55-74 capable: a professional service with real reach abroad and sound counter-intelligence. "
+        + "75-100 formidable: a first-rank service with global reach, deep penetration of its rivals and "
+        + "secrets that are very hard to read. Judge from the era, the state's size and wealth, its regime, "
+        + "its tradition of espionage and the events so far: a great power of the period is rarely below "
+        + "55, a small or newly founded state rarely above 50.",
+    },
+    service: textSchema("The service's actual name where one is known or plausible for this era and regime (KGB, MI6, Okhrana, Abwehr), else blank."),
+    rationale: nonEmptyTextSchema("One or two sentences on what the rating rests on."),
+  },
+  required: ["intelligence", "rationale"],
+  additionalProperties: false,
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
+  intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -2599,8 +2626,15 @@ export const SPY_INTERCEPT_TOOL = makeTool(
   SPY_INTERCEPT_SCHEMA,
 );
 
+export const INTELLIGENCE_ASSESSMENT_TOOL = makeTool(
+  "submit_intelligence_assessment",
+  "Submit the assessment of the target polity's intelligence service.",
+  INTELLIGENCE_ASSESSMENT_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
+  intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
