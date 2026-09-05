@@ -1213,7 +1213,7 @@ const TimelineSkipPanel = ({
             out. The game can skip straight to what works — on a long turn that
             can save several minutes. Nothing else changes.
             <div style={{ color: "rgba(191,219,254,0.62)", fontSize: "0.72rem", marginTop: "0.4rem" }}>
-            You can undo this any time under Settings → How the AI answers.
+            You can undo this any time under Settings → Advanced → How the AI answers.
             </div>
             </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>

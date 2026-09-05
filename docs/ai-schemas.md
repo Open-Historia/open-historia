@@ -142,6 +142,44 @@ Not a single object: an `anyOf` of four shapes discriminated by `op`. Each branc
 
 > **Note:** `validateGeneratedWorldChanges` (Layer 2) also accepts `op: "found"` as an alias of `build` and `op: "destroy"` as an alias of `remove` (`gameplay.js:1095`, `:1105`), and for a build reads coordinates from `operation.marker ?? operation`. The **schema itself only declares `build`/`remove`** — the aliases pass Layer 1 only because `unitOp`/`markerOp` schemas validate loosely (see the caveat in §6).
 
+### 4.5-bis `projectOpSchema` — ONE object, discriminated by `op` (`:805`)
+
+Unlike `unitOpSchema` and `markerOpSchema`, this is a single object with an `op` enum and all-optional fields, not an `anyOf`.
+
+| `op` | Meaning |
+|---|---|
+| `create` | open a new effort (give it a `summary` too) |
+| `update` | progress moved, or the status changed; `newName` renames |
+| `milestone` | a checkpoint reached or missed (`projectMilestoneSchema`, `:607`) |
+| `complete` / `cancel` / `fail` | it ended; all three keep it on the board under Closed |
+| `remove` | erase an entry that should never have been opened — NOT how a project ends |
+
+Required: `op` and `name`. `eventIndex` says which of the events this op follows from.
+
+> **Why it is not an `anyOf`.** It used to be, with six branches — and three of them (nested `create`, flat `create`, `update`) each restated `projectSchema`'s twenty properties in full. Serialized, that was **41,538 characters of a 63,161-character jump schema**: two thirds of the entire output contract for one impact branch, more than three times every other branch combined, sent on every jump and once per segment.
+>
+> It was also duplication rather than information. `normalizeProjectOp` (`runtime/gameState.js`) already accepts a create written flat *or* nested (`operation.project ?? operation`), already resolves every op alias, and already merges a create naming an existing project into an update of only the fields it carried. The schema was spending 13 KB describing tolerance the reducer had all along.
+>
+> Collapsing it was also a **reliability** win, not only a size one: a six-branch `anyOf` is one of the worst constructs for Gemini's OpenAPI subset (see `geminiSchema.js`) and for small local models, which routinely pick the wrong branch or blend two. `onComplete` was thinned the same way — it re-embedded `polityChangeSchema`, `regionTransferSchema` and `regionClaimSchema` in full, all three of which appear elsewhere in the very same payload.
+>
+> The nested `create` spelling survives as a permissive `project: { type: "object" }` key. The model is no longer told to nest, but `additionalProperties: false` means one that does anyway would fail validation and cost the whole turn — the exact failure the flat variant was added to prevent. ~150 characters instead of 13,000.
+>
+> `src/Game/AI/projectOpSchema.test.js` is the safety net: every op shape the six-variant schema accepted must still validate.
+
+### 4.5-ter `PROJECTS_SCHEMA` — the board's own task (`:2082`)
+
+`projectOps` no longer appears on a jump at all. `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
+
+```
+{ "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
+```
+
+`{"projectOps": []}` is a valid and expected answer — the prompt says so explicitly, because a schema that rejected it would push the model into inventing progress, which is the one thing the board must never contain.
+
+The **game master keeps the full `impactsSchema`**, board included: it is a single call with no second pass to hand the work to.
+
+Jump schema size across the two changes, measured when they landed: **63,161 → 31,678 → 21,609 characters.** It has grown again since with what beta added to the jump (30,441 at this commit); the figures are there for the reduction each change bought, not for the absolute number, which every new branch moves.
+
 ### 4.6 `createdChatSchema` (`:57`)
 
 The initiating polity always speaks first — a blank untitled chat tells the player nothing.

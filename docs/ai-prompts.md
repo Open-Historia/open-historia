@@ -341,6 +341,16 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Prompt:** `tasks.idleDiplomacy` (uses lowercase `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`). **Entry:** `maybeSendIdleDiplomacy({chance})` `gameplay.js:2128` (1/20 default; suspended by the simulation busy-lock, `628`).
 - **Tool/schema:** `submit_idle_diplomacy` / `IDLE_DIPLOMACY_SCHEMA` (`468`): `{ chat: null | createdChat }`. No editor section; no canned fallback (silent). A note from a country the player already 1:1s with lands in that thread.
 
+### 7.17 `projects` — the Projects & Operations board
+
+- **Purpose:** move the board to match the events a jump has just produced. Bookkeeping, not authorship: it records what the story did to each running effort.
+- **Prompt:** `tasks.projects`. **Entry:** `generateProjectOps`, run by `simulateTimelineJump` after the segments merge and before anything is written.
+- **Inputs:** the board (`${projectsSummary}`) and the merged events, numbered, in the user message. Deliberately nothing else — no world summary, no city coordinates, no unit list, no chat history. ~20 KB against the jump's ~500 KB.
+- **Tool/schema:** `submit_project_ops` / `PROJECTS_SCHEMA`: `{ projectOps[] }`, each carrying `eventIndex` so the op can be attached back onto the event that caused it.
+- **No fallback.** An empty board is what a failed call should leave behind, and `runJsonTask` throwing is what lets the caller hold the turn and offer a retry rather than pretending the board moved.
+
+Unlike every other task, **all of its rules live in the template** rather than being injected at call time — a new task key reaches every save through `PROMPT_TASK_DEFAULTS`, so there is no frozen-prompt problem to work around (§2).
+
 ### 7.14 Root prompt: `leader` — AI diplomacy
 - **Purpose:** Roleplay a single non-player polity replying in an ongoing chat; hard rule to **match the player's average message length** and tone; simulate a polity leaving.
 - **Prompt:** top-level `leader` string. **Assembly:** `buildDiplomaticSystemPrompt(countries, playerCountry)` (`main.jsx:1036`, `+difficultyDirective`) then `sendDiplomaticMessage(playerMessage, speakingAs, countries)` (`1138`) adds the per-turn instruction + optional `REACTION:<emoji>`. Free-form text (no tool/schema). `${RESPONDING_POLITY_NAME}` selects the voiced polity.

@@ -277,6 +277,19 @@ Anthropic's `cache_read_input_tokens` and `cache_creation_input_tokens` are adde
 | `unitDirector` | `submit_unit_director` | `directGeneratedUnitOps` (`nativeUnitDirector.js`, from `finishTimelineJump`) | Keeps existing NPC formations coherent with the turn's military events: proposes spawn/move/strength/remove ops that native rules sanitize before they ride the normal unitOps path. |
 | `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` | Optional unprompted diplomatic note. |
 | `pregameHistory` | `submit_pregame_history` | `maybeGeneratePregameHistory` | Backstory events before the start date. |
+| `projects` | `submit_project_ops` | `generateProjectOps` (internal; run by `simulateTimelineJump`) | The Projects & Operations board, kept in step with the events a jump just produced. |
+
+### Why `projects` is its own call
+
+The board used to move inline, through `impacts.projectOps` on a jump's events. That made `projectOps` **41.5 KB of the jump's 63 KB tool schema** — two thirds of the whole output contract for one impact branch, three times every other branch combined — and the board dominated what the model spent its attention on. A field run caught one narrating stalled programmes for three minutes and never reaching the events it was asked for.
+
+So the jump writes the story and a second call reads that story and moves the board. It runs **once per jump, never per segment**: a segmented jump would otherwise pay for it three times and show the model a third of the round each time. Its prompt is the board plus the merged events — no world summary, no city coordinates, no unit list, no chat history — and comes to ~20 KB against the jump's ~500 KB.
+
+The ops are **attached back onto the events that caused them** (by `eventIndex`) rather than applied separately, so `events.json` still records them for the staged reveal and the existing write path runs unchanged: `applyEventImpactsToWorld` → `releaseProjectCompletionEffects` → `applyProjectOps`, inside one write and one rollback snapshot.
+
+**A failure holds the turn rather than losing it.** The events are generated and valid at that point, so throwing them away to re-roll a bookkeeping call would be the worst outcome. Nothing is written, `pendingProjectsJump` keeps the whole turn, and the UI offers Retry (re-runs only the board) or Discard. Holding is what keeps the retry honest: the ops must ride in on their events, which only works *before* the world is written — a retry afterwards would have to use the non-event door, which refuses to close a project carrying an `onComplete`. A held turn also counts as `isSimulationBusy`, so the idle pulse cannot write into a world about to be replaced.
+
+The game master still moves the board inline: it is one call with no second pass to hand the work to.
 
 
 ---
