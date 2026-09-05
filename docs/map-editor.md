@@ -200,7 +200,7 @@ Shown whenever ≥1 region is selected. Writes go straight through `api.setRegio
 |---|---|---|
 | **Name** (single only) | `{ name }` | The region label. |
 | **Type** | `{ typeId }` | `— mixed —` shown when a multi-selection disagrees. |
-| **Country** (owner) | `{ owner: v.trim() \| null }` | Free-text country NAME, backed by a `<datalist>` of existing owners (`listOwners()`). **Typing a name that doesn't exist creates that country** — there is no separate "add country" step. Field keeps raw text but applies trimmed (`:118`). No case-folding. |
+| **Polity** (owner) | `{ owner: key \| null }` | Free text over the polity registry, backed by a `<datalist>` of existing polities (registry entries plus `listOwners()`), shown by display name. An existing polity is matched by its stable key or display name without regard to case and its key is stored unchanged, so "france" cannot fork a second France. **A name nobody has yet becomes a new polity** — `upsertPolity` writes the same record the Polities panel creates (`name`, `code`, `aliases`, `status`) and the selection is assigned to it — but only on **Enter** or the **Create “…”** button that appears under the field; leaving the field assigns only an existing match, and Escape reverts, so a half-typed name never mints a one-province country by accident. Blanking the field offers **Make unowned**. |
 | **Disputed by** (claimants) | `{ claimants }` | `TagField` of country names. Any claimant makes the region render **striped** (owner colour + each claimant's), here and in-game. |
 | **Colour** | `setColorOverride(owner, rgb)` | Only shown with an owner. **Reset** appears when an override exists (`colorOverrides[owner]`). |
 | **Flag** | opens `FlagPicker` via `onOpenFlagPicker(owner)` | Renders current flag thumbnail. |
@@ -265,7 +265,7 @@ This is the single most important invariant and the source of most historical bu
 Where names come from and stay clean:
 
 1. **Seed load** (`regionImport.js:68`) — each stock region's owner is resolved from its `gid0` through `COUNTRY_NAMES` (`gid0 → name`), **not** the seed's own `country` string (which disagrees: "México" vs "Mexico", truncated names). The seed's `country` is unset after resolution so a second copy can't drift.
-2. **Paint / inspector** — owner text is trimmed but **never case-folded** (`OlMap.jsx:401`, `SelectionInspector.jsx:118`); a trailing space would fork a duplicate polity.
+2. **Paint / inspector** — owner text is trimmed but the STORED key is **never case-folded** (`OlMap.jsx`, `SelectionInspector.jsx`). The inspector's lookup of an existing polity is case-insensitive (it stores that polity's own key, not the typed spelling); a genuinely new name is stored exactly as typed.
 3. **Legacy documents** — `migrateDocumentOwners` (§23) rekeys code→name on open.
 
 **Export polity logic** (`exportPreset.js:184`): `STOCK_COUNTRY_NAMES = new Set(Object.values(COUNTRY_NAMES))`. For each owner:
@@ -431,7 +431,7 @@ The editor was split into a standalone repo (`Open-Historia/open-historia-map-ed
 
 ## 23. Gotchas & invariants (quick reference)
 
-- **Owner is a NAME, everywhere.** Never re-introduce a code path or case-fold owner text (`OlMap.jsx:401`, `SelectionInspector.jsx:118`).
+- **Owner is a stable polity KEY, everywhere.** Never re-introduce a code path or case-fold stored owner text (`OlMap.jsx`, `SelectionInspector.jsx`). Matching typed text to an EXISTING key case-insensitively is a lookup, not a fold — the key stored is the registry's.
 - **`buildPayload` is a whitelist** — a new doc field that isn't listed silently fails to persist (`MapEditor.jsx:180`).
 - **`edited`/`mergedFrom`/non-GADM id ⇒ tier 2.** These are the only signals that ship geometry (`exportPreset.js:87`).
 - **`flags`/`tags`/`background` null = "clear the scenario asset."** Always re-hydrate them on open so a round-trip is a no-op (`MapEditor.jsx:352`, `libraryBar.jsx:2525`).
@@ -453,7 +453,7 @@ Ported from kernely's Continuum branch. The editor's document gained an explicit
 | **Import Map** chip | `ProvinceImportPanel.jsx` + `provinceRasterWorker.js` | Turns a colour-coded province raster (a HOI4-style `provinces.bmp`, any PNG) into regions in a worker, entirely in the browser; optional definition CSV / GeoJSON metadata assign polities, names and city markers (`importCityMarkers`); a GeoJSON backup of the current regions and cities is downloaded first. Colours are never assigned by feature order — ambiguous sources are refused. |
 | **Paint** tool | `OlMap.jsx`, `MapEditor.jsx` | Paints a stable polity key by click or drag (one stroke = one undo), with a "paint over" filter (any region / unowned only / only regions of one polity); the picker lists registry polities by display name. |
 | **Edit vertices** / **Shared border precision** | `OlMap.jsx` (`weldPointIntoFeature`, `sharedBorderPoint`, `removeSharedVertexNear`) | Vertex editing with snapping and undo; with exactly two neighbouring regions selected, a dragged border vertex or edge is welded into BOTH regions. |
-| **Selection inspector** | `SelectionInspector.jsx` | The owner field is a registry pick-list rather than free text, so a typo can no longer mint a one-province country. |
+| **Selection inspector** | `SelectionInspector.jsx` | The owner field is free text over the registry: existing polities are suggested and matched by key or display name, and a name nobody has becomes a new polity on Enter or the Create button — never on blur or a keystroke — so a country that does not exist yet can be made from the map without a typo silently minting one. |
 | **Basemaps** | `basemaps.js`, `BasemapPicker.jsx`, `OlMap.jsx` | Two dark physical presets (`ocean-dark`, `atlas-relief-dark`) with graded preview cards and a dark editor presentation (`editorOpacity`, `editorBackground`). |
 
 **Saving.** The Workshop has three actions: **Save** (write the map into the scenario and keep editing), **Save & Exit**, and **Apply & Play** (the old flow: save, then create and activate a fresh game). `libraryBar.jsx` `applyMapToScenario(scenario, seed, { play })` replaces the scenario's `polityOverrides` with the Workshop's registry (it hydrated the full registry, landless polities included, so merging would resurrect deleted entries), writes `ownerSchema`, and refreshes the drawer's cached scenario details from the save's response so a later ordinary scenario save cannot write a stale basemap back. A "Scenario unsaved" chip shows while the document has autosaved edits not yet written into the scenario, and closing asks first.
