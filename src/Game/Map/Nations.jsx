@@ -60,18 +60,27 @@ const EMPTY_CUSTOM_REGION_META = Object.freeze({
 // visibly wrong in mercator at high latitude, so never enable it there).
 const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math.PI / 180]];
 
+// A country label is painted on the map: it keeps the size it has relative to
+// its territory at every zoom, doubling per level exactly as the geometry does,
+// and the opacity ramps in the paint (labelLayerPaint and friends) are what take
+// it away as the player zooms in. Each stop below is the uncapped size at that
+// zoom and the interpolation is exponential base 2, which between such stops is
+// exact doubling.
+//
+// There is deliberately NO pixel cap. There used to be one inside every stop
+// (min(maxSize, …)), and it did far more than cap: a base-2 interpolation
+// between the uncapped stop at z4 and a capped one at z8 spreads the cap over
+// the whole interval, so a label that should double per level grew a few
+// percent per level from z4 on — while the map doubled — and read as shrinking
+// against its country as the player zoomed in. Field report: "labels shrink
+// when you zoom in". Fading, not clamping, is how a label leaves.
 const buildCountryTextSize = (
   multiplier = 1,
   correctForGlobe = false,
-  maxSize = 254,
   scaleProperty = "areaScale",
 ) => {
   const scale = correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier;
-  const atZoom = (power) => [
-    "min",
-    maxSize,
-    ["*", scale, ["*", ["get", scaleProperty], ["^", 2, power]]],
-  ];
+  const atZoom = (power) => ["*", scale, ["*", ["get", scaleProperty], ["^", 2, power]]];
 
   return [
     "interpolate", ["exponential", 2], ["zoom"],
@@ -1445,7 +1454,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const pointLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "name"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(0.72, isGlobe, 64),
+    "text-size": buildCountryTextSize(0.72, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-anchor": "center",
     "text-allow-overlap": false,
@@ -1462,7 +1471,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const curvedLabelLayerLayout = useMemo(() => ({
     "text-field": ["get", "glyph"],
     "text-font": labelFontStack,
-    "text-size": buildCountryTextSize(0.78, isGlobe, 78),
+    "text-size": buildCountryTextSize(0.78, isGlobe),
     "text-rotate": ["get", "rotation"],
     "text-offset": ["coalesce", ["get", "textOffset"], ["literal", [0, 0]]],
     "text-anchor": "center",
@@ -1478,7 +1487,7 @@ const WorldMap = ({ isGlobe = false }) => {
     ...pointLabelLayerLayout,
     // fitScale is solved from the actual territory width + name width at z4;
     // it then scales with the map at the same 2^zoom rate as the geometry.
-    "text-size": buildCountryTextSize(1, isGlobe, 148, "fitScale"),
+    "text-size": buildCountryTextSize(1, isGlobe, "fitScale"),
     "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.18],
     "text-allow-overlap": false,
     // Important tiers may still opt into overlap, but every placed polity label
@@ -1494,7 +1503,7 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-font": labelFontStack,
     // Unlike R1, fitScale is the TARGET territory occupancy, not an area-based
     // size that is merely capped by the spine. This is what makes RUSSIA stretch.
-    "text-size": buildCountryTextSize(1, isGlobe, 300, "fitScale"),
+    "text-size": buildCountryTextSize(1, isGlobe, "fitScale"),
     "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.18],
     // Pax-like warping should follow a territory, not corkscrew through it.
     // A moderate max-angle keeps long labels visibly shaped by the polity while

@@ -253,7 +253,7 @@ Both label sources feed `type:"symbol"` layers (`country-labels`, `country-curve
 | Property | Value |
 |---|---|
 | `text-font` | `labelFontStack` = `[world.labelFont || "Georgia", "Georgia", "Times New Roman", "Palatino Linotype", "serif"]` (drawn locally as a CSS font-family — MapLibre v5 has no glyphs endpoint here) |
-| `text-size` | `buildCountryTextSize(1, isGlobe)` — exponential-in-zoom, scaled by each feature's baked `areaScale`, capped at 254 |
+| `text-size` | `buildCountryTextSize(1, isGlobe)` — exponential-in-zoom (exact doubling per level, no pixel cap: a cap inside the stops made labels lag the map and read as shrinking), scaled by each feature's baked `areaScale`; the paint's `text-opacity` ramp fades labels out from z5.8 to z7.1 |
 | `text-color` / `text-halo-color` | `world.labelTextColor || "#FFFFFF"` / `world.labelHaloColor || "rgba(0,0,0,0.5)"` |
 | `text-opacity` | interp zoom `5→0.75, 8→0` (labels fade out as you zoom in and cities take over) |
 | `visibility` | `none` when `hideCountryLabels` map setting is on |
