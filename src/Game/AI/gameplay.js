@@ -144,7 +144,7 @@ import {
 } from "../../runtime/countryStats.js";
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
-import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, isBetaUnits } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
@@ -1317,7 +1317,7 @@ const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of leve
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
 export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
 
-// "Limit AI generation" (ON by default) — the whole policy, in one place rather
+// "Limit AI generation" (OFF by default) — the whole policy, in one place rather
 // than a number per call site.
 //
 // It used to be a stopwatch: five minutes for a jump, two for most tasks, one
@@ -1329,10 +1329,12 @@ export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty respons
 // Now it counts SILENCE (idleDeadline.js): five minutes with nothing arriving
 // part-way through an answer, fifteen with no answer at all. A model that keeps
 // writing is never interrupted however long the turn takes, so the setting is
-// safe to ship on; a stalled one is caught instead of hanging the turn forever.
-// Off still means "wait as long as the model needs".
+// safe to turn on; a stalled one is caught instead of hanging the turn forever.
+// It ships OFF all the same: the fallback it triggers is a canned turn the
+// player did not ask for, and the beta leaves that trade to the player. Off —
+// and an absent key — means "wait as long as the model needs".
 const taskIdleTimeoutMs = () =>
-  (getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
+  (getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
 // Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
 // diplomacy reading, catalysts their own, everything else the simulation one.
@@ -9715,9 +9717,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
   // Long skips are generated in SEGMENTS and merged into the one round the player
   // asked for — see jumpSegments.js for why, and for the merge rules. Auto jumps
   // never split: they stop at the next notable moment, so there is no span to
-  // divide up front. Short enough, or the setting off, is a single call worded and
+  // divide up front. Short enough, or the setting off (the default), is a single call worded and
   // validated exactly as it always was.
-  const segmentDays = (getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps)
+  const segmentDays = (getMapSetting(MAP_SETTING_KEYS.chunkLongJumps)
     && mode !== "auto"
     && dateStep >= SEGMENTED_JUMP_MIN_DAYS)
     ? planJumpSegments(dateStep)

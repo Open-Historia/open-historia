@@ -37,7 +37,7 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, getMapSettingDefaultOn, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, applySaveBetaUnits, getMapSetting, isBetaUnits, resolveBetaUnits, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -1612,11 +1612,11 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
-                    On (default): the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Off: waits forever, however stuck. Cancel works either way.
+                    Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
                     </div>
                     <Toggle label="Generate long time skips in segments" enabled={mapSettings.chunkLongJumps} onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)} />
                     <div style={settingsHelper}>
-                    On (default): skips of more than a few months are generated in several shorter requests and merged into one round — slower, but far less likely to time out on a hosted provider. Off: the whole skip is generated in a single request.
+                    Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
@@ -1856,9 +1856,9 @@ const SettingsMenu = ({
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Not getMapSetting: this one ships ON, and an absent key must read as
         // on rather than off (see mapSettings.js).
-        limitAiGeneration: getMapSettingDefaultOn(MAP_SETTING_KEYS.limitAiGeneration),
+        limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
         // Same again: ships ON.
-        chunkLongJumps: getMapSettingDefaultOn(MAP_SETTING_KEYS.chunkLongJumps),
+        chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
         // Not getMapSetting: this one belongs to the save, not the browser
         // profile (see mapSettings.js). resolveBetaUnits falls back to the

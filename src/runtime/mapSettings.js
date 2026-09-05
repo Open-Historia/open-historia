@@ -24,16 +24,14 @@ export const MAP_SETTING_KEYS = {
     // an answer, 15 with no answer at all — and falls back to canned events. Off
     // waits as long as the model needs.
     //
-    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
-    // an absent key here means "on", not "off".
+    // OFF by default — read with getMapSetting, so an absent key means "off".
     //
-    // It ships on because it now measures SILENCE rather than elapsed time (see
-    // AI/idleDeadline.js). The old version was a stopwatch started when the
-    // request was sent — five minutes for a jump, however well it was going —
-    // which threw away good turns from slow models, so it had to default off,
-    // which left a genuinely stalled request hanging forever. A window that
-    // every token restarts never interrupts a model that is answering, so it is
-    // safe to have on, and it is the only thing that ever ends a stall.
+    // It measures SILENCE rather than elapsed time (see AI/idleDeadline.js): a
+    // window that every token restarts never interrupts a model that is still
+    // answering, so turning it on is safe, and it is the only thing that ever
+    // ends a genuine stall. It ships off all the same, because the fallback it
+    // triggers is a canned turn the player did not ask for; the beta leaves
+    // that trade to the player, who opts in from Settings → AI.
     limitAiGeneration: "ai_limit_generation",
     // Opt-in (ported from the abdulrahman-2005 fork): tasks nobody is waiting
     // on — today the event consolidator — ride the provider's batch endpoint
@@ -47,10 +45,11 @@ export const MAP_SETTING_KEYS = {
     // field report behind this was a gateway closing exactly that with a 502 at
     // 301.7s, costing the player a turn with fourteen queued orders in it.
     //
-    // ON by default — read with getMapSettingDefaultOn, NOT getMapSetting, since
-    // an absent key here means "on", not "off". Off restores the single-request
-    // behaviour for players who would rather have one long wait than several
-    // short ones (it re-sends the prompt per segment, so it costs more tokens).
+    // OFF by default — read with getMapSetting, so an absent key means "off":
+    // a skip is one request unless the player opts in. Segments re-send the
+    // prompt per piece, so they cost more tokens and a round reads less like
+    // one; a player whose provider drops long requests turns them on from
+    // Settings → AI.
     chunkLongJumps: "ai_chunk_long_jumps",
     // The work-in-progress unit system: the AI owns movement and combat, units
     // carry a posture, and the engine advances standing orders every turn
@@ -87,6 +86,9 @@ export function getMapSetting(key) {
 //
 // A default-on setting CANNOT use getMapSetting above — an absent key reads as
 // "1" !== null, i.e. off — so every consumer of such a key must come through here.
+//
+// No key ships on today: the two AI toggles that did (limitAiGeneration and
+// chunkLongJumps) went default-off in the beta. Kept for the next one.
 export function getMapSettingDefaultOn(key) {
     if (typeof localStorage === "undefined") return true;
     return localStorage.getItem(key) !== "0";
