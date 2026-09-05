@@ -24,6 +24,14 @@ export const MAP_SETTING_KEYS = {
     // the game editor.
     labelFont: "map_label_font",
     hideCountryLabels: "map_hide_country_labels",
+    // Draw the map with the renderer this project used before Map vNext, kept
+    // verbatim under src/Game/Map/legacy/ (see the README there). MapScene picks
+    // which set of components mounts; nothing else about vNext is touched.
+    //
+    // OFF by default, and that is load-bearing: vNext is the renderer for
+    // everyone who does not ask otherwise, so its development is unaffected by
+    // this key existing.
+    legacyMapRenderer: "map_legacy_renderer",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
@@ -106,6 +114,7 @@ export function getMapSettingDefaultOn(key) {
 // forgets to add a name still logs its key rather than nothing.
 const SETTING_LABELS = {
     [MAP_SETTING_KEYS.hideCountryLabels]: "Hide country labels",
+    [MAP_SETTING_KEYS.legacyMapRenderer]: "Legacy map renderer",
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",

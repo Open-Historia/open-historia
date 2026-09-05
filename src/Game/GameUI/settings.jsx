@@ -1619,6 +1619,13 @@ const SettingsWorkspace = ({
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
                 </SettingsSection>
+                <SettingsSection title="Renderer" description="Which renderer draws the map. A rendering choice only: no world state, save data or geometry differs between them.">
+                    <ExperimentalPill />
+                    <Toggle label="Legacy map renderer" enabled={mapSettings.legacyMapRenderer} onToggle={() => updateMapSetting("legacyMapRenderer", MAP_SETTING_KEYS.legacyMapRenderer, !mapSettings.legacyMapRenderer)} />
+                    <div style={settingsHelper}>
+                    Off (default): Map vNext — dissolved polity surfaces, stitched frontiers and curved polity labels. On: the renderer used before it, kept verbatim, with per-region fills and its own country labels. Reload after switching.
+                    </div>
+                </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
                     <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
@@ -1880,6 +1887,7 @@ const SettingsMenu = ({
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+        legacyMapRenderer: getMapSetting(MAP_SETTING_KEYS.legacyMapRenderer),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Not getMapSetting: this one ships ON, and an absent key must read as

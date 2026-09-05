@@ -15,7 +15,7 @@ import {
   isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
-import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -227,7 +227,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, legacy = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -283,11 +283,17 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // relief composition too, so a map authored on Ocean or Dark Gray opened on a
   // satellite-looking globe and only showed its real basemap once the relief
   // had faded out around z5.
-  const usePaxRelief = basemapId === "atlas-relief" || basemapId === "atlas-relief-dark";
+  // The legacy renderer predates the relief presets and the atlas paint: it drew
+  // the basemap raster with SATELLITE_PAINT at whatever id was asked for. Those
+  // are the basemap half of its look, so the switch has to reach here as well as
+  // MapScene - a legacy map under vNext's relief material is not the old map.
+  const usePaxRelief = !legacy && (basemapId === "atlas-relief" || basemapId === "atlas-relief-dark");
   const paxReliefPaints = getPaxReliefPaints(basemapId);
-  const basemapPaint = usePaxRelief
-    ? paxReliefPaints.terrain
-    : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
+  const basemapPaint = legacy
+    ? SATELLITE_PAINT
+    : usePaxRelief
+      ? paxReliefPaints.terrain
+      : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
   // World_Ocean_Base bakes political names into the raster, while plain shaded
   // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
   // World Terrain Base is the useful middle ground for the relief presets:
@@ -431,6 +437,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // reversible. Empty — the default — leaves the scenario author's background
   // and basemap authoritative; only a real built-in id replaces them, so a
   // stray value left in localStorage by an older build changes nothing.
+  // Which renderer MapScene will mount. World only needs it for the basemap
+  // material above; everything else about the choice lives in MapScene.
+  const legacyRenderer = useMapSetting(MAP_SETTING_KEYS.legacyMapRenderer);
   const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
   const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
   const useScenarioBackground = !validBasemapOverride;
@@ -450,6 +459,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveBgDeclared,
       styleUsesGlobeCoords,
       terrainEnabled,
+      legacyRenderer,
     ),
     [
       effectiveBasemap,
@@ -457,6 +467,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveCustomBg,
       styleUsesGlobeCoords,
       terrainEnabled,
+      legacyRenderer,
     ],
   );
   const mapInstanceKey = buildBasemapRenderKey({
