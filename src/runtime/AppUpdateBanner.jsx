@@ -4,10 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   APP_UPDATE_CHECK_INTERVAL_MS,
   APP_UPDATE_REFOCUS_THROTTLE_MS,
+  describeUpdateFailure,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
 } from "./appUpdate.js";
+import { logDebugEvent } from "./debugLog.js";
 
 // Stamped into the native app build by the APK workflow (VITE_APP_BUILD / _TRACK).
 // Desktop and dev builds have no stamp, so the banner is a no-op there.
@@ -110,8 +112,14 @@ export default function AppUpdateBanner() {
         setProgress(data);
         // A failure mid-download hands the player back to the installer link, so
         // the button has to become pressable again — otherwise it sits disabled
-        // reading "Opening…" while nothing is opening.
-        if (data.state === "error") setUpdating(false);
+        // reading "Opening…" while nothing is opening. The reason goes on the
+        // banner (desktopStatus) and into the debug log, where a bug report can
+        // carry it: the updater's message used to be stored and never shown, so
+        // "0%" flipping back to "Update now" was all a player saw of a failure.
+        if (data.state === "error") {
+          setUpdating(false);
+          logDebugEvent("update", describeUpdateFailure(data.error), { version: data.version || "" });
+        }
       } catch {
         /* a missed poll changes nothing: the next one has the same answer */
       }
@@ -208,7 +216,7 @@ export default function AppUpdateBanner() {
         }
         // The route is gone or refused — never leave the player with a button that
         // did nothing. This is the behaviour that used to be the only one.
-        setProgress({ state: "error", error: "" });
+        setProgress({ state: "error", error: "the app's update service did not answer" });
       }
       // window.open goes through the main process's window-open handler, which sends
       // it to the real browser — so the installer downloads where the player can see
@@ -248,7 +256,7 @@ export default function AppUpdateBanner() {
       // The app quits and reopens on the new version; the response comes back
       // before it goes, so a refusal is still visible.
       const res = await fetch("/api/app-update/restart", { method: "POST" });
-      if (!res.ok) setProgress({ state: "error", error: "" });
+      if (!res.ok) setProgress({ state: "error", error: "the downloaded update could not be started" });
     } catch {
       /* the app is already going down — nothing left to report to */
     }
@@ -264,11 +272,14 @@ export default function AppUpdateBanner() {
   };
 
   // What the desktop line says depends on how far along the app's own update is.
-  // "error" is not shown as a failure: the button falls back to the installer
-  // download, so the honest thing to say is what the player can still do.
+  // "error" says why, then what the player can still do: the button falls back
+  // to the installer download, and the line has to make sense of "Update now"
+  // coming back after it was pressed.
   const desktopStatus = () => {
     if (!desktop.auto || progress?.state === "error") {
-      return updating ? "Opening the download…" : "Download the new version and run it — your games are kept.";
+      if (updating) return "Opening the download…";
+      const failure = progress?.state === "error" ? `${describeUpdateFailure(progress.error)} ` : "";
+      return `${failure}Download the new version and run it — your games are kept.`;
     }
     if (progress?.state === "ready") return "Downloaded. Restart to finish — your games are kept.";
     if (progress?.state === "downloading") return `Downloading the update… ${progress.percent || 0}%`;
@@ -285,7 +296,7 @@ export default function AppUpdateBanner() {
     <div style={bar} role="status" aria-live="polite">
       <div style={text}>
         A new version of Open Historia is ready.
-        <span style={sub}>
+        <span style={sub} title={desktop && progress?.state === "error" ? desktopStatus() : undefined}>
           {desktop
             ? desktopStatus()
             : isWeb

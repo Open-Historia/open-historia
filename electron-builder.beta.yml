@@ -84,6 +84,12 @@ afterPack: ./scripts/mac-adhoc-sign.cjs
 # `channel: latest` matches the stable app's, which is safe because the two feeds
 # sit at different tags: this writes latest.yml, latest-linux.yml and latest-mac.yml
 # under the beta tag only, and never touches desktop-stable.
+#
+# Where a download lands is not decided here either: electron-updater's cache is
+# <package.json name>-updater under %LOCALAPPDATA%, so the beta workflow stamps
+# `name` to open-historia-beta before building. Without that the beta and the
+# official app download into ONE pending folder and clean out each other's
+# installers.
 publish:
   - provider: generic
     url: https://github.com/Open-Historia/open-historia/releases/download/desktop-beta
