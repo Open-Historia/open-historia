@@ -120,5 +120,24 @@ test("Map vNext reports the polities that could not be dissolved", () => {
   assert.equal(result.stats.dissolvedPolityCount, 1);
   assert.equal(result.stats.fallbackPolityCount, 1);
   assert.equal(result.stats.emptyUnionPolityCount, 1);
-  assert.equal(result.stats.droppedPolityCount, 0);
+  assert.deepEqual(result.stats.fallbackOwners, ["Russia"], "and names them");
+});
+
+test("Map vNext keeps a batch whose union comes back empty beside the rest of the polity", () => {
+  // A polity of more than one union batch (64 polygons) where one batch unions
+  // to nothing: the pieces of that batch must survive next to the real land,
+  // the polity must be marked undissolved, and the real land must still be
+  // there — the previous fallback only fired when the WHOLE polity collapsed.
+  const features = [];
+  for (let index = 0; index < 64; index += 1) features.push(degenerate(`flat-${index}`, "Russia"));
+  features.push(square("real", "Russia", 3, 4));
+  const result = derivePolitySurfaces({ type: "FeatureCollection", features });
+  assert.equal(result.data.features.length, 1);
+  const [surface] = result.data.features;
+  assert.equal(surface.properties.dissolveFallback, true);
+  assert.equal(surface.properties.regionCount, 65);
+  const realLand = surface.geometry.coordinates.filter((polygon) => polygon[0].some(([x]) => x === 3));
+  assert.equal(realLand.length, 1, "the square survives the batch that collapsed");
+  assert.equal(result.stats.fallbackPolityCount, 1);
+  assert.equal(result.stats.emptyUnionPolityCount, 1);
 });

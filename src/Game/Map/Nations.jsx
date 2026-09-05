@@ -1123,18 +1123,21 @@ const WorldMap = ({ isGlobe = false }) => {
       // them in the debug log so a bug report carries them.
       if (Number.isFinite(result.stats?.polityCount)) {
         const { polityCount, dissolvedPolityCount, fallbackPolityCount, failedPartCount,
-          emptyUnionPolityCount, droppedPolityCount } = result.stats;
+          emptyUnionPolityCount, fallbackOwners } = result.stats;
+        const named = Array.isArray(fallbackOwners) && fallbackOwners.length
+          ? ` (${fallbackOwners.join(", ")})`
+          : "";
         logDebugEvent(
-          (droppedPolityCount > 0 || fallbackPolityCount > 0) ? "warn" : "map",
+          fallbackPolityCount > 0 ? "warn" : "map",
           `[map] Polity surfaces: ${dissolvedPolityCount ?? 0}/${polityCount} dissolved, `
-          + `${fallbackPolityCount ?? 0} on raw pieces, ${droppedPolityCount ?? 0} with no surface.`,
+          + `${fallbackPolityCount ?? 0} on raw pieces${named}.`,
           {
             polityCount,
             dissolvedPolityCount,
             fallbackPolityCount,
             failedPartCount,
             emptyUnionPolityCount,
-            droppedPolityCount,
+            fallbackOwners,
             regionsUrl: regionsGeojsonUrl,
           },
         );
