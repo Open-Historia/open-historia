@@ -162,7 +162,7 @@ The engine never decides whether a programme was real; that is fiction, and only
 | Field | Type | Default | Element shape (normalizer) |
 |---|---|---|---|
 | `intelligence` | `{[polity]: number}` | `{}` | Per-polity service capability 0-100, clamped and rounded. Absent means `DEFAULT_INTELLIGENCE` (40) — "ordinary", not "none". |
-| `spies` | `Spy[]` | `[]` | `normalizeSpy`: `{id,owner,target,deployedAt,status,turnedAt,exposedAt,coverStory,suspected}`. |
+| `spies` | `Spy[]` | `[]` | `normalizeSpy`: `{id,owner,target,deployedAt,status,turnedAt,exposedAt,coverStory,suspected}`. The Spy tab deploys and recalls by hand; a jump event's `impacts.spyOps` does the same for the player's queued orders (`spycraft.js applySpyOps`, same rules, skipped orders logged). |
 | `spySeal` | `string` | `""` | 64 hex chars, validated `/^[0-9a-f]{64}$/i`; blanked if malformed. |
 
 `intelligence` is keyed by country **NAME**, verbatim — the same namespace as `internationalReputation`, `polityOverrides` and `countryTags` — and moves exactly like reputation: the AI sets it through `polityChanges.intelligence` (0-100), applied in `applyPolityAndTerritoryImpacts` against the **alias-resolved** owner key, so a polity the model names by an alias cannot end up with two split ratings. It decides how much of others' diplomacy a polity can read and how much of its own it can keep secret. Rendered by the Stats tab's 🕵 card, never part of the AI-written stat sheet.

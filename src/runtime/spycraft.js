@@ -122,6 +122,52 @@ export const turnSpy = (world, id, { date = "", coverStory = "" } = {}) =>
   setStatus(world, id, { status: "turned", turnedAt: date, coverStory: String(coverStory ?? "").trim() });
 export const setCoverStory = (world, id, coverStory) => setStatus(world, id, { coverStory: String(coverStory ?? "").trim() });
 
+// ---- orders from the turn ----------------------------------------------------
+// The player's espionage orders as a jump carried them (an event's
+// impacts.spyOps): deploy an agent to a country, or recall the one already
+// there. The same rules as the Spy tab — deploySpy enforces them — but every
+// failure is reported instead of thrown, because one bad order must not cost
+// the whole turn. Returns the next spies list plus what was applied and what
+// was skipped, with the reason in the words the UI would have shown.
+export const SPY_OP_KINDS = ["deploy", "recall"];
+
+export const applySpyOps = (world, ops, { date = "", playerPolity = "" } = {}) => {
+  const owner = String(playerPolity ?? "").trim();
+  const same = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+  let spies = normalizeSpies(world?.spies);
+  const applied = [];
+  const rejected = [];
+  for (const raw of Array.isArray(ops) ? ops : []) {
+    const op = String(raw?.op ?? "").trim().toLowerCase();
+    const target = String(raw?.target ?? raw?.country ?? raw?.polity ?? "").trim();
+    const coverStory = String(raw?.coverStory ?? "").trim();
+    if (!SPY_OP_KINDS.includes(op)) {
+      rejected.push({ op: raw, reason: `Unknown spy operation "${op || "?"}".` });
+      continue;
+    }
+    if (!owner) {
+      rejected.push({ op: raw, reason: "No player polity to run the service." });
+      continue;
+    }
+    try {
+      if (op === "deploy") {
+        spies = deploySpy({ spies }, target, { date, playerPolity: owner });
+        const placed = spies.find((spy) => spy.owner === owner && isLive(spy) && same(spy.target, target));
+        if (placed && coverStory) spies = setCoverStory({ spies }, placed.id, coverStory);
+        applied.push({ op, target: placed?.target || target });
+      } else {
+        const spy = spies.find((entry) => entry.owner === owner && isLive(entry) && same(entry.target, target));
+        if (!spy) throw new Error(`No agent of yours is in ${target || "that country"}.`);
+        spies = recallSpy({ spies }, spy.id);
+        applied.push({ op, target: spy.target });
+      }
+    } catch (error) {
+      rejected.push({ op: raw, reason: error?.message || String(error) });
+    }
+  }
+  return { spies, applied, rejected };
+};
+
 // ---- the odds ---------------------------------------------------------------
 
 // Per jump, the target's service catches a spy. Mostly the GAP between the two

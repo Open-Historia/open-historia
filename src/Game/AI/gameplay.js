@@ -48,7 +48,8 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
@@ -1858,6 +1859,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   // list of levers the model can pull (reaches existing games too — see ACTIONS_REFERENCE).
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
+    // The espionage lever rides after the menu for the same reason: it reaches
+    // campaigns whose prompts were frozen before it existed.
+    systemPrompt = `${systemPrompt}\n\n${buildSpyOrdersDirective(normalizeString(variables?.playerPolity) || "the player")}`;
   }
 
   // The scenario briefing arrives twice on eight of the sixteen prompts: once
@@ -5015,6 +5019,23 @@ const applySimulationResult = async ({
   // caught a moment ago. Engine bookkeeping, not narrative: it only opens an
   // entry and closes it (projects.js spyOperationOps says why).
   const playerPolity = normalizeString(baseGame.country);
+  // The player's espionage orders, carried by the events that executed them
+  // (impacts.spyOps). Applied here rather than inside applyEventImpactsToWorld
+  // so the Spy tab's slot rules hold (three agents, one per country, never at
+  // home) with a skipped order logged instead of a lost turn, and so the board
+  // sync right below already sees the new agent. After resolveEspionage on
+  // purpose: an agent placed this turn is not also caught this turn.
+  const spyOrders = normalizeArray(freshEvents).flatMap((event) => normalizeArray(event?.impacts?.spyOps));
+  if (spyOrders.length) {
+    const outcome = applySpyOps(worldWithImpacts, spyOrders, { date: nextGame.gameDate, playerPolity });
+    worldWithImpacts.spies = outcome.spies;
+    if (outcome.applied.length) {
+      logDebugEvent("espionage", `Spy orders applied: ${outcome.applied.map((entry) => `${entry.op} ${entry.target}`).join(", ")}`);
+    }
+    for (const skipped of outcome.rejected) {
+      logDebugEvent("espionage", `Spy order skipped: ${skipped.reason}`, { op: skipped.op });
+    }
+  }
   const spySync = [
     // Order matters: provenance first, so an entry stamped this turn can be
     // doubted in the same pass rather than a turn later.

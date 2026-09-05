@@ -64,6 +64,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from Settings) |
 | `SettingsButton` (☰) | `settings.jsx` | Toggles the game menu; same corner and size as before, glass finish |
 | `SettingsMenu` | `settings.jsx` | Ported from kernely's Continuum branch as it is there: a quick menu with Game / Tools / Settings / Help tabs (session card, Game Management, Cheats, Events, AI debug console, Guides, bug report, community links) and `SettingsWorkspace`, a full-screen portal with Continuum's four sections — General, Map (with the basemap picker), AI, Advanced. This branch's own settings (profiles, per-task models, segments, batching, telemetry, beta units, network sharing, diagnostics) sit inside those four sections |
+| `ApiSetupPrompt` | `apiSetupPrompt.jsx` | Shown once per game per session when the selected provider has no key (hosted) or no endpoint (self-hosted) — `providerConfig.js isProviderConfigured`; Configure AI opens the game menu on the AI section (`SettingsMenu initialSection`), Not now dismisses it |
 
 ---
 
@@ -281,7 +282,7 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 
 ## 7. Actions panel — `src/Game/GameUI/actions.jsx`
 
-`ActionsPanel` (`actions.jsx:225`) — bottom-left slide-up (z 9998). The player's planned-action queue for the current turn.
+`ActionsPanel` (`actions.jsx:225`) — bottom-left slide-up (z 9998). The player's planned-action queue for the current turn. An order that deploys or recalls a spy ("deploy a spy in Germany") is executed by the next time skip through the event's `impacts.spyOps` ([Espionage Orders] in `docs/ai-prompts.md`); the Spy tab still shows and manages the agents.
 
 | Control | Effect | Connects to |
 |---|---|---|

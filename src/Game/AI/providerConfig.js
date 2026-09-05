@@ -301,6 +301,23 @@ export function getProviderSettings(provider) {
     };
 }
 
+// What a provider needs before a single call can go out: a hosted provider
+// its key, a self-hosted one its endpoint (their key is optional). The game
+// start prompt asks for it up front instead of letting the first turn fail.
+export function providerSetupRequirement(provider) {
+    const normalized = normalizeProvider(provider);
+    return normalized === "openai-compatible" || normalized === "anthropic-compatible" ? "endpoint" : "apiKey";
+}
+
+export function describeProviderSetupNeed(provider) {
+    return providerSetupRequirement(provider) === "endpoint" ? "a server endpoint" : "an API key";
+}
+
+export function isProviderConfigured(provider = getStoredProvider()) {
+    const settings = getProviderSettings(provider);
+    return String(settings[providerSetupRequirement(provider)] ?? "").trim().length > 0;
+}
+
 // Global "model reasoning" toggle — applied by callAI in every provider mode
 // (Gemini thinkingConfig, OpenAI/compatible reasoning_effort, Anthropic thinking).
 const REASONING_STORAGE_KEY = "ai_reasoning_enabled";

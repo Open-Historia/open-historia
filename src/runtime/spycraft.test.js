@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   DEFAULT_INTELLIGENCE, MAX_ACTIVE_SPIES, MAX_FOREIGN_SPIES,
-  activeSpies, deploySpy, detectionChance, espionageBrief, expelSpy, foreignAgentBrief, foreignDeployChance,
+  activeSpies, applySpyOps, deploySpy, detectionChance, espionageBrief, expelSpy, foreignAgentBrief, foreignDeployChance,
   foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies, recallSpy, redactExchange, redactText,
   resolveEspionage, setCoverStory, signalClarity, suspicionChance, turnChance, turnSpy,
 } from "./spycraft.js";
@@ -247,4 +247,45 @@ test("what the simulator is told, and what a foreign leader is told", () => {
   assert.match(germany, /reports: "France will not mobilise\."/);
   assert.ok(!germany.includes("Rhine"));
   assert.equal(foreignAgentBrief(world, "Spain", { playerPolity: P, material: "x" }), "");
+});
+
+test("applySpyOps: the turn's orders follow the Spy tab's rules and never throw", () => {
+  const date = "1938-03-01";
+  let world = { spies: [] };
+  let outcome = applySpyOps(world, [
+    { op: "deploy", target: "Germany", coverStory: "a trade attaché" },
+    { op: "deploy", target: "Germany" },          // already there
+    { op: "deploy", target: "france" },           // the player's own country
+    { op: "sabotage", target: "Italy" },          // not a spy operation
+    { op: "recall", target: "Italy" },            // nobody there to recall
+  ], { date, playerPolity: P });
+  world = { spies: outcome.spies };
+  assert.deepEqual(outcome.applied, [{ op: "deploy", target: "Germany" }]);
+  assert.equal(outcome.rejected.length, 4);
+  assert.match(outcome.rejected[0].reason, /already deployed/);
+  assert.match(outcome.rejected[1].reason, /yourself/);
+  assert.match(outcome.rejected[2].reason, /Unknown spy operation/);
+  assert.match(outcome.rejected[3].reason, /No agent of yours/);
+  const [spy] = activeSpies(world, P);
+  assert.equal(spy.target, "Germany");
+  assert.equal(spy.deployedAt, date);
+  assert.equal(spy.coverStory, "a trade attaché");
+
+  // The cap holds across one order list, and a recall frees the slot.
+  outcome = applySpyOps(world, [
+    { op: "deploy", target: "Italy" },
+    { op: "deploy", target: "Spain" },
+    { op: "deploy", target: "Belgium" },
+    { op: "recall", target: "GERMANY" },
+    { op: "deploy", target: "Belgium" },
+  ], { date, playerPolity: P });
+  world = { spies: outcome.spies };
+  assert.equal(outcome.rejected.length, 1);
+  assert.match(outcome.rejected[0].reason, /at most/);
+  assert.deepEqual(activeSpies(world, P).map((entry) => entry.target).sort(), ["Belgium", "Italy", "Spain"]);
+  assert.equal(world.spies.find((entry) => entry.target === "Germany").status, "recalled");
+
+  // No orders, no change; no player, nothing applied.
+  assert.deepEqual(applySpyOps(world, [], { playerPolity: P }).spies, world.spies);
+  assert.equal(applySpyOps(world, [{ op: "deploy", target: "Japan" }], {}).applied.length, 0);
 });

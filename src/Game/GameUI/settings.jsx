@@ -1768,11 +1768,14 @@ const SettingsMenu = ({
     githubUrl,
     reportBugUrl,
     context,
+    // A workspace section to open on straight away (the AI setup prompt sends
+    // the player to "ai"); null opens the quick menu.
+    initialSection = null,
 }) => {
     const selectedProvider = apiProvider ?? DEFAULT_PROVIDER;
     const isMobile = useIsMobile();
-    const [activeSettingsSection, setActiveSettingsSection] = useState(null);
-    const [activeQuickTab, setActiveQuickTab] = useState("tools");
+    const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
+    const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
     // The basemap override is a value setting (a basemap id, or empty for the
     // scenario's own), read live so the picker follows a change made elsewhere.
     const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
