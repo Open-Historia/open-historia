@@ -75,7 +75,7 @@ Every fixed element declares its own `zIndex`. From back to front (source-verifi
 
 | z-index | Element | File |
 |---:|---|---|
-| 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**, **⏻**) | `libraryBar.jsx:1993` / `:2061` |
+| 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**) | `libraryBar.jsx:1993` / `:2061` |
 | 9998 | Timeline panels (`panelSurface`), **Actions** panel, **Chat** panel | `time.jsx:149`, `actions.jsx:427`, `chat.jsx:851` |
 | 9999 | `DateWidget` pill, bottom `Toolbar`, `Search`, `Other` flag badge, 🧭 `AdvisorButton`, ⋮ `SettingsButton`, `SettingsMenu`, `ForcesPanel` body, `WebGLWarningPopup` | shared `baseStyle`/`widgetSurface` |
 | 10000 | Forces **mode banner** (deploy/move/attack hint) | `forces.jsx:156` |
@@ -141,7 +141,7 @@ Full-page overlay at z 10046. Header is a 3-column grid: **logo/title** | **tab 
 | Scenarios | 🔥 Most Played, 🕐 Last Updated, ✦ Your Scenarios (with `CreateScenarioTile`) | `ScenarioCard` |
 | Community | Lazy `CommunityPanel fullPage` | `communityHub.jsx` |
 
-Header action buttons (right cell): **Refresh** (`refreshLibraryCatalog({force:true})`, hidden on Community), **Import JSON** (Scenarios only → hidden file input `handleImportScenarioFile`), **⏻** shutdown (hidden on the web build via `import.meta.env.VITE_OH_WEB`).
+Header action buttons (right cell): **Refresh** (`refreshLibraryCatalog({force:true})`, hidden on Community), **Import JSON** (Scenarios only → hidden file input `handleImportScenarioFile`).
 
 The Games tab's empty state ("No games yet") offers **Start from a scenario** / **Browse community scenarios** shortcuts.
 
@@ -210,7 +210,7 @@ When the Scenarios tab shows any scenario carrying `hubOrigin`, an effect (`libr
 
 ### 4.8 In-game floating cluster & server shutdown
 
-When the menu is closed, `LibraryTopBar` renders a compact cluster (z 9997): a session-summary pill (`summaryText` = name / country / date), **⌂ Exit Game** (→ `setMenuOpen(true)`), and **⏻** (`handleShutdownServer` → `POST /api/server/shutdown`, then a full-screen "Server stopped" overlay at z 20000). Desktop lays them out top-left of the date widget; phones stack **⌂**/**⏻** vertically in the left gutter. **⏻** is stripped from the web build (`!import.meta.env.VITE_OH_WEB`).
+When the menu is closed, `LibraryTopBar` renders a compact cluster (z 9997): a session-summary pill (`summaryText` = name / country / date), **⌂ Exit Game** (→ `setMenuOpen(true)`). Desktop lays them out top-left of the date widget; phones put **⌂** in the left gutter. The ⏻ server-shutdown button that used to sit beside it is gone from the beta; `POST /api/server/shutdown` stays for scripts and the launcher.
 
 ---
 
@@ -391,7 +391,7 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | 19 | Game/Scenario editor drawer | `libraryBar.jsx` | panel | `editorKind`/`editorDetails` | scenario/game details | `saveScenario`/`saveGame`, asset up/clear, `exportScenarioBundle` |
 | 20 | Country / faction picker | `libraryBar.jsx` | modal | `countryPicker` | country options, custom regions | `createGame`, `saveGame`, `activateGame` |
 | 21 | Map editor host | `libraryBar.jsx` | overlay | `isMapEditorOpen` | scenario assets | `applyMapToScenario` → many asset writes + new game |
-| 22 | ⌂ Exit Game / ⏻ shutdown / summary | `libraryBar.jsx` | cluster | `!menuOpen` | `activeGame` | `setMenuOpen(true)`, `POST /api/server/shutdown` |
+| 22 | ⌂ Exit Game / summary | `libraryBar.jsx` | cluster | `!menuOpen` | `activeGame` | `setMenuOpen(true)` |
 | 23 | Community hub tab | `communityHub.jsx` | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle`, publish/export |
 
 ---

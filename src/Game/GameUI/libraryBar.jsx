@@ -1750,21 +1750,6 @@ const LibraryTopBar = () => {
   }, [activeGame, activeCountryName]);
 
   const isMobile = useIsMobile();
-  // True once the user shut the server down from the ⏻ button — swaps the whole
-  // UI for a "server stopped" screen (every poll would just error underneath).
-  const [serverDown, setServerDown] = useState(false);
-
-  const handleShutdownServer = async () => {
-    if (!window.confirm("Shut down the Open Historia server? The game stops for everyone connected to it.")) {
-      return;
-    }
-    try {
-      await fetch("/api/server/shutdown", { method: "POST" });
-    } catch {
-      // The socket may drop before the response arrives — that IS the shutdown.
-    }
-    setServerDown(true);
-  };
 
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
@@ -2044,7 +2029,7 @@ const LibraryTopBar = () => {
     <>
       {/* In-game the full-width top bar is gone — the map gets the space. What
           remains is a compact floating cluster beside the ⋮ settings button: a
-          small sleek pill with the session summary, plus Exit Game and ⏻.
+          small sleek pill with the session summary, plus Exit Game.
           Below the settings menu and date widget (z 9998/9999) so opening
           either covers it instead of the other way around. */}
       {!menuOpen && !isMobile && (
@@ -2089,35 +2074,11 @@ const LibraryTopBar = () => {
           >
             ⌂ Exit Game
           </button>
-          {/* Shut the server down (phones/Termux have no terminal handy). Hidden
-              on the hosted website (web build) — there's no local server to stop
-              there, and the compile-time flag strips this from that bundle. */}
-          {!import.meta.env.VITE_OH_WEB && (
-            <button
-              onClick={handleShutdownServer}
-              title="Exit: shut down the Open Historia server"
-              type="button"
-              style={{
-                ...actionButtonStyle,
-                ...surfaceStyle,
-                background: "rgba(220,70,70,0.14)",
-                borderColor: "rgba(248,113,113,0.35)",
-                borderRadius: "11px",
-                color: "#fca5a5",
-                fontSize: "0.74rem",
-                minHeight: "2.85rem",
-                minWidth: "0",
-                padding: "0 0.7rem",
-              }}
-            >
-              ⏻
-            </button>
-          )}
         </div>
       )}
 
-      {/* Phones: the date widget spans the whole top row, so Exit Game and ⏻
-          stack in the left gutter under the ⋮ settings button instead. */}
+      {/* Phones: the date widget spans the whole top row, so Exit Game sits
+          in the left gutter under the ⋮ settings button instead. */}
       {!menuOpen && isMobile && (
         <div
           style={{
@@ -2139,55 +2100,6 @@ const LibraryTopBar = () => {
           >
             ⌂
           </button>
-          {!import.meta.env.VITE_OH_WEB && (
-            <button
-              onClick={handleShutdownServer}
-              title="Exit: shut down the Open Historia server"
-              type="button"
-              style={{
-                ...actionButtonStyle,
-                ...surfaceStyle,
-                background: "rgba(220,70,70,0.14)",
-                borderColor: "rgba(248,113,113,0.35)",
-                borderRadius: "12px",
-                color: "#fca5a5",
-                fontSize: "1rem",
-                height: "2.6rem",
-                minHeight: "0",
-                minWidth: "0",
-                padding: 0,
-                width: "2.6rem",
-              }}
-            >
-              ⏻
-            </button>
-          )}
-        </div>
-      )}
-
-      {serverDown && (
-        <div
-          style={{
-            alignItems: "center",
-            background: "rgba(10,10,12,0.97)",
-            color: "#fff",
-            display: "flex",
-            flexDirection: "column",
-            fontFamily: "sans-serif",
-            gap: "0.8rem",
-            inset: 0,
-            justifyContent: "center",
-            padding: "1rem",
-            position: "fixed",
-            textAlign: "center",
-            zIndex: 20000,
-          }}
-        >
-          <div style={{ fontSize: "2.2rem" }}>⏻</div>
-          <div style={{ fontSize: "1.2rem", fontWeight: 800 }}>Server stopped</div>
-          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", maxWidth: "22rem" }}>
-            You can close this tab now. Run the launcher (or <code>node server/server.js</code>) to start it again.
-          </div>
         </div>
       )}
 
@@ -2424,23 +2336,6 @@ const LibraryTopBar = () => {
               {activeTab === "scenarios" && (
                 <button onClick={() => importScenarioInputRef.current?.click()} style={actionButtonStyle} type="button">
                   {isMobile ? "⬆" : "Import JSON"}
-                </button>
-              )}
-              {!import.meta.env.VITE_OH_WEB && (
-                <button
-                  onClick={handleShutdownServer}
-                  title="Exit: shut down the Open Historia server"
-                  type="button"
-                  style={{
-                    ...actionButtonStyle,
-                    background: "rgba(220,70,70,0.14)",
-                    borderColor: "rgba(248,113,113,0.35)",
-                    color: "#fca5a5",
-                    minWidth: "2.35rem",
-                    padding: isMobile ? "0.55rem 0.7rem" : undefined,
-                  }}
-                >
-                  ⏻
                 </button>
               )}
             </div>

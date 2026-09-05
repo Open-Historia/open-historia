@@ -203,7 +203,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
 | `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |
-| `/api/server/shutdown` | POST | Exits the process (the ⏻ button) |
+| `/api/server/shutdown` | POST | Exits the process (no button in the beta UI any more; scripts and the launcher) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 
 **Security middleware** (`server/server.js:73`, `:112`): blanket permissive CORS (so the Android WebView's cross-origin *probe* works) but state-changing writes are blocked unless same-origin or loopback (`crossOriginWriteAllowed` in `security.js`); override with `OH_ALLOW_CROSS_ORIGIN=1`. See [Server & security](server-api.md).
