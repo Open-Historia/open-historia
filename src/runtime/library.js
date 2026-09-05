@@ -1,5 +1,6 @@
 /*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import { useSyncExternalStore } from "react";
+import { announceGameOpening, setReadinessGame } from "./mapReadiness.js";
 import {
   JSON_URLS,
   readJson,
@@ -72,6 +73,9 @@ const resolveCountryNameOverride = (overrides, name, code) => {
 const syncLibraryRuntime = () => {
   const token = libraryState.token ?? libraryState.activeGame?.cacheToken ?? "";
   setRuntimeAssetEndpoints({ token });
+  // Before the UI re-renders for the new save, so the map's readiness marks
+  // (mapReadiness.js) are stamped with the game they belong to.
+  setReadinessGame(libraryState.activeGameId);
   setCountryNameResolver((name, code) =>
     resolveCountryNameOverride(libraryState.runtimeScenario?.countryNameOverrides, name, code),
   );
@@ -450,6 +454,7 @@ export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
 export const createGame = async (payload) => {
+  announceGameOpening(payload?.scenarioId ?? payload?.id ?? "");
   const details = await requestJson(GAMES_API_ROOT, {
     body: payload,
     method: "POST",
@@ -476,6 +481,9 @@ export const saveGame = async (gameId, payload) => {
 };
 
 export const activateGame = async (gameId) => {
+  // The loading screen comes up now, not when the new UI mounts a round trip
+  // later (GameUI/gameLoadingScreen.jsx).
+  announceGameOpening(gameId);
   const catalog = await requestJson(`${GAMES_API_ROOT}/active`, {
     body: { gameId },
     method: "PUT",

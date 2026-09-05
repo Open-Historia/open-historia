@@ -5,6 +5,7 @@ import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "./libraryBar";
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
+import { GameLoadingScreen, useGameLoading } from "./gameLoadingScreen.jsx";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
@@ -200,6 +201,10 @@ const Main = ({
   // per session, offering the AI settings. providerSettings is a dependency so
   // the prompt goes away the moment a key is typed into the settings.
   const mainMenuOpen = useMainMenuOpen();
+  // The screen a game opens under, until the map has drawn it (this UI is
+  // remounted per game, so it starts over with every game opened).
+  const gameLoading = useGameLoading();
+  const showGameLoading = gameLoading.active && Boolean(activeGame?.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const providerReady = useMemo(() => isProviderConfigured(apiProvider), [apiProvider, providerSettings]);
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
@@ -211,7 +216,7 @@ const Main = ({
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
-    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen;
+    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading;
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -421,6 +426,14 @@ const Main = ({
         </Presence>
       </Suspense>
       <GenerationRatingToast />
+      <Presence open={showGameLoading} leaveMs={450}>
+        <GameLoadingScreen
+          gameName={activeGame?.name || ""}
+          scenarioName={runtimeScenario?.name || ""}
+          countryName={activeCountryName || activeGame?.country || ""}
+          phase={gameLoading.phase}
+        />
+      </Presence>
       <Presence open={showApiPrompt}>
         <ApiSetupPrompt
           providerLabel={getProviderMeta(apiProvider)?.label || "the selected provider"}

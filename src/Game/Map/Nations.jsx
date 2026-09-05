@@ -1,5 +1,6 @@
 /*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { markPolitiesReady } from "../../runtime/mapReadiness.js";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
@@ -1025,6 +1026,7 @@ const WorldMap = ({ isGlobe = false }) => {
         setDisputedRegionData(EMPTY_FEATURE_COLLECTION);
         setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
         setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+        markPolitiesReady(regionsGeojsonUrl, { failed: true });
         return;
       }
 
@@ -1064,6 +1066,7 @@ const WorldMap = ({ isGlobe = false }) => {
       setDisputedRegionData(EMPTY_FEATURE_COLLECTION);
       setPolityBoundaryData(EMPTY_FEATURE_COLLECTION);
       setPolitySurfaceData(EMPTY_FEATURE_COLLECTION);
+      markPolitiesReady(regionsGeojsonUrl, { failed: true });
     };
     worker.postMessage({
       type: "initialize",
@@ -1079,6 +1082,17 @@ const WorldMap = ({ isGlobe = false }) => {
       if (polityBoundaryWorkerRef.current === worker) polityBoundaryWorkerRef.current = null;
     };
   }, [customFlag, regionsGeojsonUrl]);
+
+  // The loading screen a game opens under waits for this (mapReadiness.js).
+  // Marked after the derived layers' data has been committed, so the idle
+  // that follows is the drawn map; a stock map has no derivation to wait
+  // for, so it is ready as soon as the world store has told us it IS a stock
+  // map (before that the flag reads false for every map, custom ones too).
+  useEffect(() => {
+    if (!worldKnown) return;
+    if (customFlag && !politySurfaceData.features.length && !polityBoundaryData.features.length) return;
+    markPolitiesReady(regionsGeojsonUrl);
+  }, [customFlag, polityBoundaryData, politySurfaceData, regionsGeojsonUrl, worldKnown]);
 
   useEffect(() => {
     const worker = polityBoundaryWorkerRef.current;
