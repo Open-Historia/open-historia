@@ -121,3 +121,52 @@ describe("game catalog: which save gets written", () => {
     assert.equal(manifestOf(root).activeGameId, "game-alpha");
   });
 });
+
+// Opens the game editor's read the way the UI does, then saves an edit through
+// it, in a child process bound to `root`.
+const probeEditor = (root, gameId) => {
+  const script = `
+    const store = await import(${JSON.stringify(STORE_URL)});
+    const listed = store.getGameCatalog().games.map((game) => game.id);
+    const details = store.getGameDetails(${JSON.stringify(gameId)});
+    const saved = store.updateGame(${JSON.stringify(gameId)}, { name: "Renamed" });
+    process.stdout.write(JSON.stringify({
+      listed,
+      scenarioId: details.game.scenarioId,
+      scenarioMissing: details.scenario?.missing === true,
+      scenarioName: details.scenario?.name ?? null,
+      country: details.data.game?.country ?? null,
+      savedName: saved.game.name,
+    }));
+  `;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf-8",
+    env: { ...process.env, OH_DATA_DIR: root },
+  });
+  return JSON.parse(out);
+};
+
+// A save is its game.json, not its scenario. getGameDetails used to hard-throw
+// "Scenario not found" when the scenario a game names was gone — a ported save,
+// or a scenario deleted after the games made from it — which GET
+// /api/games/:gameId returned as a 404 and the Edit button swallowed. The game
+// listed and played the whole time, because buildGameCatalog was already
+// tolerant; only the detail read and the update path were not.
+describe("game catalog: a game whose scenario is gone", () => {
+  test("lists, opens in the editor, and saves an edit", () => {
+    const root = buildDataDir({ active: "game-alpha" });
+    // Name a scenario that certainly is not in the store.
+    const metaPath = path.join(root, "games", "game-alpha", "game-instance.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    writeJson(metaPath, { ...meta, scenarioId: "scenario-that-was-deleted" });
+
+    const result = probeEditor(root, "game-alpha");
+
+    assert.ok(result.listed.includes("game-alpha"), "the save stays in the library");
+    assert.equal(result.scenarioId, "scenario-that-was-deleted");
+    assert.equal(result.scenarioMissing, true, "the editor is told the scenario is absent");
+    assert.ok(result.scenarioName, "and still gets something to render");
+    assert.equal(result.country, "Testland", "the game's own data still reads");
+    assert.equal(result.savedName, "Renamed", "and an edit saves through it");
+  });
+});

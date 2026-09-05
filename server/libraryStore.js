@@ -1436,6 +1436,42 @@ const getScenarioSummary = (scenarioId) => {
   return scenario;
 };
 
+// A save is its game.json, not its scenario. getScenarioSummary throws when the
+// scenario a game names is gone - a ported save, a scenario deleted after the
+// games made from it - and on the game routes that turned a playable save into
+// a 404: the Edit button loaded nothing and reported nothing, because
+// openGameEditor swallows the failure into editorError. buildGameCatalog is
+// already tolerant here, which is why such a game still LISTS and still PLAYS;
+// only the detail read and the update path threw.
+//
+// Degrade the same way it does: the scenario's own metadata read defensively,
+// in the shape a catalog entry has, marked so a caller can tell. The scenario
+// routes keep getScenarioSummary and keep throwing - asking for a scenario that
+// is not there is a genuine miss.
+const getGameScenarioSummary = (scenarioId) => {
+  const catalog = getScenarioCatalog();
+  const scenario = catalog.scenarios.find((entry) => entry.id === scenarioId);
+  if (scenario) return scenario;
+
+  try {
+    const meta = readScenarioMeta(scenarioId);
+    return {
+      ...meta,
+      assetStatus: getScenarioAssetStatus(scenarioId),
+      cacheToken: `${scenarioId}-${meta.updatedAt}`,
+      canDelete: false,
+      coverImageUrl: null,
+      gameCount: 0,
+      missing: true,
+    };
+  } catch {
+    // An unreadable or unsafe scenario id (one that escapes the scenarios
+    // directory) still must not take the game down with it.
+    return { ...DEFAULT_SCENARIO_META, assetStatus: {}, cacheToken: "", canDelete: false,
+      coverImageUrl: null, gameCount: 0, id: String(scenarioId ?? ""), missing: true };
+  }
+};
+
 const getGameSummary = (gameId) => {
   const catalog = getGameCatalog();
   const game = catalog.games.find((entry) => entry.id === gameId);
@@ -1480,7 +1516,7 @@ const getGameDetails = (gameId) => {
       world: readJsonFile(getGameJsonPath(gameId, "world"), {}),
     },
     game: summary,
-    scenario: getScenarioSummary(summary.scenarioId),
+    scenario: getGameScenarioSummary(summary.scenarioId),
   };
 };
 
@@ -2208,10 +2244,12 @@ const getActiveGameId = () => getGameCatalog().activeGameId;
 const getActiveRuntimeScenarioSummary = () => {
   const activeGame = getActiveGameSummary();
   if (!activeGame) {
-    return getScenarioSummary(DEFAULT_SCENARIO_ID);
+    return getGameScenarioSummary(DEFAULT_SCENARIO_ID);
   }
 
-  return getScenarioSummary(activeGame.scenarioId);
+  // Same reason as getGameScenarioSummary: the active game's scenario being
+  // gone must not take the whole library listing with it.
+  return getGameScenarioSummary(activeGame.scenarioId);
 };
 
 // Every scenario renders the custom map style: worlds that never set the flag
