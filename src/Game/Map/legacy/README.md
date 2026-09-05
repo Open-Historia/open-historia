@@ -61,9 +61,18 @@ nothing was taken away from the current renderer to make them work.
 Two places, and nothing else:
 
 1. `MapScene.jsx` mounts either these components or the vNext ones.
-2. `World.jsx` passes `legacy` into `buildWorldStyle`, which then paints the
-   basemap with `SATELLITE_PAINT` and skips the relief presets — the basemap
-   half of the old look.
+2. `World.jsx` passes `legacy` into `buildWorldStyle`, which then returns the
+   old style object instead of the current one — the basemap half of the look,
+   which `MapScene` cannot reach.
+
+   That branch is a rebuild rather than a restyle, and the reason is the black
+   rectangles that appear while tiles stream in. The legacy style put a second
+   raster layer UNDER the basemap — `satellite-lowres`, z0–2 only, levels that
+   always have real data — so anywhere the detailed tiles had not arrived yet
+   showed a coarse image rather than nothing. vNext dropped it for a near-black
+   background (`#0b1017`), which is fine beneath a relief basemap that covers
+   the globe at z3, and is what those black blocks are. Restoring the old look
+   therefore means restoring the source/layer pair, not just the paint.
 
 With the setting off, every vNext file behaves exactly as it does without this
 feature present. That is deliberate: it must not constrain work on the new

@@ -11,6 +11,7 @@ import {
   basemapMaxZoom,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
+  esriTileTemplate,
   ensureBasemapProtocol,
   isBuiltinBasemapId,
   resolveBasemapId,
@@ -283,17 +284,11 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // relief composition too, so a map authored on Ocean or Dark Gray opened on a
   // satellite-looking globe and only showed its real basemap once the relief
   // had faded out around z5.
-  // The legacy renderer predates the relief presets and the atlas paint: it drew
-  // the basemap raster with SATELLITE_PAINT at whatever id was asked for. Those
-  // are the basemap half of its look, so the switch has to reach here as well as
-  // MapScene - a legacy map under vNext's relief material is not the old map.
-  const usePaxRelief = !legacy && (basemapId === "atlas-relief" || basemapId === "atlas-relief-dark");
+  const usePaxRelief = basemapId === "atlas-relief" || basemapId === "atlas-relief-dark";
   const paxReliefPaints = getPaxReliefPaints(basemapId);
-  const basemapPaint = legacy
-    ? SATELLITE_PAINT
-    : usePaxRelief
-      ? paxReliefPaints.terrain
-      : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
+  const basemapPaint = usePaxRelief
+    ? paxReliefPaints.terrain
+    : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
   // World_Ocean_Base bakes political names into the raster, while plain shaded
   // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
   // World Terrain Base is the useful middle ground for the relief presets:
@@ -303,6 +298,59 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   const physicalBackground = darkPhysicalVariant
     ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
     : "#0b1017";
+
+  // THE BLACK TILES. The legacy renderer put a second raster layer UNDER the
+  // basemap: "satellite-lowres", z0-2 only, levels that always have real data.
+  // Anywhere the detailed tiles had not arrived yet, that low-resolution image
+  // showed through, so a region being loaded looked coarse rather than empty.
+  //
+  // vNext dropped it and put a near-black background (#0b1017) in its place,
+  // which is fine under a relief basemap that covers the globe at z3 - and is
+  // what paints those black rectangles while the detailed tiles stream in. It
+  // is a property of the basemap, not of the components MapScene swaps, so the
+  // legacy path has to rebuild the source/layer pair rather than only restyle
+  // what vNext builds.
+  if (legacy) {
+    const legacyStyle = {
+      version: 8,
+      sources: {
+        "satellite-lowres": {
+          type: "raster",
+          // Levels 0-2 always have real data - no placeholder handling needed.
+          tiles: [esriTileTemplate(basemapId)],
+          tileSize: 256,
+          maxzoom: 2,
+        },
+        satellite: {
+          type: "raster",
+          tiles: [basemapProtocolTemplate(basemapId)],
+          tileSize: 256,
+          maxzoom: basemapMaxZoom(basemapId),
+        },
+      },
+      layers: [
+        { id: "satellite-lowres-layer", type: "raster", source: "satellite-lowres", paint: SATELLITE_PAINT },
+        { id: "satellite-layer", type: "raster", source: "satellite", paint: SATELLITE_PAINT },
+      ],
+      sky: { "atmosphere-blend": 0 },
+    };
+    if (terrainEnabled) {
+      legacyStyle.sources["terrain-source"] = {
+        type: "raster-dem",
+        tiles: [TERRAIN_TILE_TEMPLATE],
+        encoding: "terrarium",
+        maxzoom: 5,
+        tileSize: 256,
+      };
+      legacyStyle.layers.push({
+        id: "hills",
+        type: "hillshade",
+        source: "terrain-source",
+        paint: { "hillshade-exaggeration": 0.1, "hillshade-shadow-color": "#000" },
+      });
+    }
+    return legacyStyle;
+  }
 
   const style = {
     version: 8,
