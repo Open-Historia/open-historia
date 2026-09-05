@@ -68,7 +68,7 @@ const ensureTimelineStyles = () => {
     }
 
     .timeline-markdown em {
-        color: rgba(216,227,255,0.78);
+        color: rgba(230,230,233,0.78);
     }
 
     .timeline-markdown ul,
@@ -83,13 +83,13 @@ const ensureTimelineStyles = () => {
 
     .timeline-markdown blockquote {
         border-left: 2px solid rgba(96,165,250,0.55);
-        color: rgba(214,226,255,0.68);
+        color: rgba(229,229,232,0.68);
         margin: 0.55rem 0;
         padding-left: 0.8rem;
     }
 
     .timeline-markdown code {
-        background: rgba(15,23,42,0.55);
+        background: rgba(20,20,23,0.55);
         border-radius: 4px;
         padding: 0.05rem 0.32rem;
     }
@@ -479,7 +479,7 @@ const MetricPill = ({ children, icon = null, tone = "default" }) => {
         default: {
             background: "rgba(148,163,184,0.12)",
             border: "1px solid rgba(148,163,184,0.18)",
-            color: "rgba(226,232,240,0.84)",
+            color: "rgba(232,232,234,0.84)",
         },
         accent: {
             background: "rgba(96,165,250,0.12)",
@@ -523,7 +523,7 @@ const TagPill = ({ children }) => (
         background: "rgba(255,255,255,0.04)",
                                    border: "1px solid rgba(255,255,255,0.08)",
                                    borderRadius: "999px",
-                                   color: "rgba(226,228,240,0.74)",
+                                   color: "rgba(230,230,233,0.74)",
                                    display: "inline-flex",
                                    fontSize: "0.68rem",
                                    fontWeight: 600,
@@ -605,7 +605,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(221,228,240,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
             <ReactMarkdown>{event.description}</ReactMarkdown>
             </div>
         )}
@@ -623,7 +623,7 @@ const EmptyPanelState = ({ text }) => (
         background: "rgba(255,255,255,0.03)",
                                        border: "1px dashed rgba(255,255,255,0.1)",
                                        borderRadius: "16px",
-                                       color: "rgba(214,226,255,0.48)",
+                                       color: "rgba(229,229,232,0.48)",
                                        display: "flex",
                                        fontSize: "0.78rem",
                                        fontStyle: "italic",

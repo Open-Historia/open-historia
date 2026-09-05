@@ -11,6 +11,7 @@ import {
 import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { Actions } from "./actions";
 import { Projects } from "./projects";
+import { Presence } from "./presence.jsx";
 import { useMainMenuOpen } from "./libraryBar";
 import {
     JSON_URLS,
@@ -302,7 +303,7 @@ const EnvelopeIcon = ({ filled }) => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor"
          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     <rect x="3" y="5" width="18" height="14" rx="2" />
-    <path d="m3.5 6.5 8.5 6 8.5-6" stroke={filled ? "rgba(17,24,39,0.9)" : "currentColor"} />
+    <path d="m3.5 6.5 8.5 6 8.5-6" stroke={filled ? "rgba(24,24,27,0.9)" : "currentColor"} />
     </svg>
 );
 
@@ -355,7 +356,7 @@ const MessageBubble = ({ msg, onRetry }) => {
             ? "#3b82f6"
             : isError
             ? "rgba(239,68,68,0.2)"
-            : `color-mix(in srgb, ${accentColor} 5%, rgba(30,35,50,0.95))`,
+            : `color-mix(in srgb, ${accentColor} 5%, rgba(38,38,41,0.95))`,
             fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
             border: isPlayer
             ? "none"
@@ -414,7 +415,7 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
             left: pos.x,
             top: pos.y - 2,
             transform: "translate(-50%, -100%)",
-                                                    backgroundColor: "rgba(17,24,39,0.95)",
+                                                    backgroundColor: "rgba(24,24,27,0.95)",
                                                     border: "1px solid rgba(255,255,255,0.12)",
                                                     borderRadius: "6px",
                                                     padding: "0.2rem 0.45rem",
@@ -442,8 +443,8 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
         style={{
             width: "1.6rem", height: "1.6rem", borderRadius: "50%",
             backgroundColor: nationColor
-            ? `color-mix(in srgb, ${nationColor} 25%, rgba(20,28,48,0.98))`
-            : "rgba(30,40,60,0.95)",
+            ? `color-mix(in srgb, ${nationColor} 25%, rgba(31,31,34,0.98))`
+            : "rgba(41,41,45,0.95)",
             border: nationColor
             ? `1.5px solid ${nationColor}`
             : "1px solid rgba(255,255,255,0.15)",
@@ -545,7 +546,7 @@ const CountrySelectorModal = ({
         : single ? [{ name, code }] : [...prev, { name, code }]);
 
     return (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(17,24,39,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
+        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(24,24,27,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
         <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
@@ -1580,7 +1581,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
     return (
         <>
-        {choosing && (
+        <Presence open={choosing}>
             <CountrySelectorModal
                 countries={candidates}
                 loading={loadingCountries}
@@ -1593,7 +1594,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                 emptyLabel="No target chosen yet"
                 confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
             />
-        )}
+        </Presence>
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
@@ -2038,9 +2039,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return (
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(17,24,39,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
 
-            {showSelector && <CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} />}
+            <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate}
@@ -2692,9 +2693,9 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             position: "relative",
                             width: "100%",
                             textAlign: "left",
-                            border: "1px solid rgba(214,231,255,0.20)",
+                            border: "1px solid rgba(230,230,233,0.20)",
                             borderRadius: "14px",
-                            background: "linear-gradient(180deg, rgba(29,44,63,0.72), rgba(8,16,28,0.62))",
+                            background: "linear-gradient(180deg, rgba(42,42,46,0.72), rgba(17,17,19,0.62))",
                             backdropFilter: "blur(26px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(26px) saturate(1.35)",
                             color: "white",
@@ -2766,7 +2767,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                         fontFamily: "sans-serif",
                     }}
                 >
-                    {notificationCenterOpen && (
+                    <Presence open={notificationCenterOpen}>
                         <div
                             style={{
                                 position: "absolute",
@@ -2776,8 +2777,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                 maxHeight: "min(27rem, calc(100vh - 7rem))",
                                 overflowY: "auto",
                                 borderRadius: "16px",
-                                border: "1px solid rgba(214,231,255,0.18)",
-                                background: "linear-gradient(180deg, rgba(28,43,61,0.74), rgba(8,16,28,0.64))",
+                                border: "1px solid rgba(230,230,233,0.18)",
+                                background: "linear-gradient(180deg, rgba(41,41,45,0.74), rgba(17,17,19,0.64))",
                                 backdropFilter: "blur(28px) saturate(1.38)",
                                 WebkitBackdropFilter: "blur(28px) saturate(1.38)",
                                 boxShadow: "0 18px 50px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08)",
@@ -2794,7 +2795,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                     gap: "0.45rem",
                                     padding: "0.65rem 0.75rem",
                                     borderBottom: "1px solid rgba(255,255,255,0.08)",
-                                    background: "rgba(16,28,43,0.76)",
+                                    background: "rgba(27,27,30,0.76)",
                                     backdropFilter: "blur(18px)",
                                     WebkitBackdropFilter: "blur(18px)",
                                 }}
@@ -2860,7 +2861,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                 </button>
                             ))}
                         </div>
-                    )}
+                    </Presence>
 
                     <button
                         onClick={() => setNotificationCenterOpen((open) => !open)}
@@ -2870,8 +2871,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             height: "2.5rem",
                             padding: "0 0.65rem",
                             borderRadius: "10px",
-                            border: "1px solid rgba(214,231,255,0.20)",
-                            background: "linear-gradient(180deg, rgba(31,47,67,0.72), rgba(9,18,31,0.62))",
+                            border: "1px solid rgba(230,230,233,0.20)",
+                            background: "linear-gradient(180deg, rgba(45,45,49,0.72), rgba(18,18,20,0.62))",
                             backdropFilter: "blur(24px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(24px) saturate(1.35)",
                             color: "white",

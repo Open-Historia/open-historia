@@ -2,6 +2,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
+import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab } from "./libraryBar";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -89,7 +90,7 @@ const WebGLWarningPopup = () => (
   >
     <div
       style={{
-        backgroundColor: "#1a1a2e",
+        backgroundColor: "#1a1a1e",
         border: "1px solid #e94560",
         borderRadius: "12px",
         padding: "2rem",
@@ -147,7 +148,7 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen
         ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
-        : "linear-gradient(180deg, rgba(39,55,75,0.58), rgba(8,16,28,0.48))",
+        : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
       transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease",
     }}
   >
@@ -386,21 +387,21 @@ const Main = ({
         )}
       </Suspense>
       <Suspense fallback={null}>
-        {shouldLoadCheats && (
+        <Presence open={isCheatsOpen}>
           <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
-        )}
+        </Presence>
       </Suspense>
       <Suspense fallback={null}>
-        {shouldLoadDebugConsole && (
+        <Presence open={isDebugConsoleOpen}>
           <LazyDebugConsole open={isDebugConsoleOpen} onClose={() => setIsDebugConsoleOpen(false)} />
-        )}
+        </Presence>
       </Suspense>
       <GenerationRatingToast />
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         onToggle={() => setIsSettingsOpen(!isSettingsOpen)}
       />
-      {isSettingsOpen && (
+      <Presence open={isSettingsOpen}>
         <SettingsMenu
           discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"
@@ -441,7 +442,7 @@ const Main = ({
           providerSettings={providerSettings}
           onProviderSettingChange={handleProviderSettingChange}
         />
-      )}
+      </Presence>
     </>
   );
 };

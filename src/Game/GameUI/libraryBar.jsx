@@ -1,5 +1,6 @@
 /*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Presence } from "./presence.jsx";
 import {
   PROMPT_SECTION_DEFINITIONS,
   normalizePromptPack,
@@ -113,7 +114,7 @@ const TOP_BAR_OFFSET = "0.5rem";
 
 const surfaceStyle = {
   background:
-    "linear-gradient(180deg, rgba(36, 52, 72, 0.58) 0%, rgba(8, 16, 28, 0.48) 100%)",
+    "linear-gradient(180deg, rgba(50, 50, 55, 0.58) 0%, rgba(17, 17, 19, 0.48) 100%)",
   border: "1px solid var(--oh-hud-border)",
   boxShadow: "var(--oh-hud-shadow-soft)",
   backdropFilter: "var(--oh-hud-blur)",
@@ -125,7 +126,7 @@ const actionButtonStyle = {
   background: "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "999px",
-  color: "rgba(244,246,255,0.92)",
+  color: "rgba(246,246,248,0.92)",
   cursor: "pointer",
   display: "inline-flex",
   fontSize: "0.82rem",
@@ -476,7 +477,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             </div>
             <div
               style={{
-                color: "rgba(240,244,255,0.7)",
+                color: "rgba(244,244,246,0.7)",
                 fontSize: "0.92rem",
                 lineHeight: 1.45,
                 marginTop: "0.65rem",
@@ -589,10 +590,10 @@ const GameCard = ({ active, game, onActivate, onArchive, onClone, onEdit }) => {
             <div style={{ color: "#fff", fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
               {game.name}
             </div>
-            <div style={{ color: "rgba(240,244,255,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
+            <div style={{ color: "rgba(244,244,246,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
               {game.country || "No player country"} / {game.currentDate || "No date"} / Round {game.round || 1}
             </div>
-            <div style={{ color: "rgba(240,244,255,0.58)", fontSize: "0.84rem", marginTop: "0.5rem", lineHeight: 1.45 }}>
+            <div style={{ color: "rgba(244,244,246,0.58)", fontSize: "0.84rem", marginTop: "0.5rem", lineHeight: 1.45 }}>
               {game.description || "Playable campaign session."}
             </div>
           </div>
@@ -2077,7 +2078,7 @@ const LibraryTopBar = () => {
             <div style={{ alignItems: "center", background: "rgba(59,130,246,0.13)", border: "1px solid rgba(96,165,250,0.18)", borderRadius: "8px", color: "#bfdbfe", display: "flex", flexShrink: 0, fontSize: "0.68rem", fontWeight: 950, height: "1.9rem", justifyContent: "center", width: "1.9rem" }}>OH</div>
             <div style={{ minWidth: 0, lineHeight: 1.08 }}>
               <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.72rem", fontWeight: 850 }}>Open Historia</div>
-              <div style={{ color: "rgba(210,226,245,0.42)", fontSize: "0.6rem", marginTop: "0.18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
+              <div style={{ color: "rgba(226,226,229,0.42)", fontSize: "0.6rem", marginTop: "0.18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
             </div>
           </div>
           <button
@@ -2168,7 +2169,7 @@ const LibraryTopBar = () => {
         <div
           style={{
             alignItems: "center",
-            background: "rgba(5,8,18,0.97)",
+            background: "rgba(10,10,12,0.97)",
             color: "#fff",
             display: "flex",
             flexDirection: "column",
@@ -2194,7 +2195,7 @@ const LibraryTopBar = () => {
         <div style={{ position: "fixed", inset: 0, zIndex: 10050 }}>
           <Suspense
             fallback={
-              <div style={{ position: "fixed", inset: 0, background: "#0b1020", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>
+              <div style={{ position: "fixed", inset: 0, background: "#111113", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>
                 Loading map editor…
               </div>
             }
@@ -2215,7 +2216,8 @@ const LibraryTopBar = () => {
         </div>
       )}
 
-      {countryPicker && (
+      <Presence open={Boolean(countryPicker)} value={countryPicker}>
+        {(countryPicker) => (
         <div
           onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); setPickerOwnerOverrides(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
@@ -2344,7 +2346,8 @@ const LibraryTopBar = () => {
             )}
           </div>
         </div>
-      )}
+        )}
+      </Presence>
 
       <input
         ref={importScenarioInputRef}
@@ -2356,13 +2359,13 @@ const LibraryTopBar = () => {
 
       {/* The Main Menu: a full page over everything in-game. Opens on app start
           (module default) and via Exit Game; closes only by entering a game. */}
-      {menuOpen && (
+      <Presence open={menuOpen}>
         <div
           style={{
             background:
               "radial-gradient(circle at 12% -4%, rgba(124,58,237,0.16), transparent 42%), " +
               "radial-gradient(circle at 88% 110%, rgba(56,120,255,0.10), transparent 46%), " +
-              "linear-gradient(180deg, #0b1020 0%, #090d18 100%)",
+              "linear-gradient(180deg, #111113 0%, #0d0d0f 100%)",
             color: "#fff",
             display: "flex",
             flexDirection: "column",
@@ -2578,7 +2581,7 @@ const LibraryTopBar = () => {
             )}
           </div>
         </div>
-      )}
+      </Presence>
 
       <EditorDrawer
         details={editorDetails}

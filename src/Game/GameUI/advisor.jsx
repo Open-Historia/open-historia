@@ -19,7 +19,7 @@ const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
+    backgroundColor: "rgba(24, 24, 27, 0.9)",
     backdropFilter: "blur(4px)",
     zIndex: 9999,
     display: "flex",
@@ -557,7 +557,7 @@ const AdvisorChart = ({ config }) => {
                     ...coloredConfig.options?.plugins,
                     legend: { display: false },
                     tooltip: {
-                        backgroundColor: "rgba(10,15,28,0.95)",
+                        backgroundColor: "rgba(17,17,19,0.95)",
                                      borderColor: "rgba(255,255,255,0.12)", borderWidth: 1,
                                      titleColor: "rgba(255,255,255,0.85)", bodyColor: "rgba(255,255,255,0.6)",
                                      padding: 10, cornerRadius: 8,
@@ -1177,7 +1177,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
             // above, so height: 100vh reaches the top edge.
             width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH, height: "100vh",
-            backgroundColor: "rgba(17, 24, 39, 0.95)", backdropFilter: "blur(8px)",
+            backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
             // Above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the open drawer on
             // phones; below the editor (10050) and server-down (10060) overlays.

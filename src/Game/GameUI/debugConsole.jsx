@@ -26,9 +26,9 @@ import { readWorldState } from "../../runtime/gameState.js";
 const COLORS = {
     bg: "#0a0e11",
     panel: "#101518",
-    raised: "#161b22",
-    border: "#30363d",
-    text: "#c9d1d9",
+    raised: "#1a1a1c",
+    border: "#353538",
+    text: "#cdcdd1",
     muted: "#8b949e",
     accent: "#3b82f6",
     danger: "#f85149",
@@ -58,7 +58,7 @@ const buttonStyle = {
     padding: "0.35rem 0.7rem",
     borderRadius: "8px",
     border: `1px solid ${COLORS.border}`,
-    backgroundColor: "#21262d",
+    backgroundColor: "#262628",
     color: "white",
     fontSize: "0.72rem",
     fontWeight: 700,
@@ -80,7 +80,7 @@ const selectStyle = {
 
 const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: "0.72rem", color: COLORS.text };
 const thStyle = { textAlign: "left", padding: "0.45rem 0.6rem", backgroundColor: COLORS.raised, color: COLORS.muted, fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.08em" };
-const tdStyle = { padding: "0.35rem 0.6rem", borderTop: `1px solid #21262d` };
+const tdStyle = { padding: "0.35rem 0.6rem", borderTop: `1px solid #262628` };
 const monoTd = { ...tdStyle, fontFamily: MONO };
 
 const Card = ({ label, value, sub, accent }) => (
@@ -121,7 +121,7 @@ const RatingWidget = ({ rating, onRate }) => (
                     padding: "0.15rem 0.35rem",
                     fontSize: "0.68rem",
                     color: rating >= value ? COLORS.gold : COLORS.muted,
-                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "#21262d",
+                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "#262628",
                 }}
             >
                 {value}
@@ -218,7 +218,7 @@ const GenerationRow = ({ record, selected, onSelect }) => (
             textAlign: "left",
             padding: "0.45rem 0.7rem",
             border: "none",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #262628",
             backgroundColor: selected ? "rgba(59,130,246,0.12)" : "transparent",
             color: COLORS.text,
             cursor: "pointer",
@@ -584,7 +584,7 @@ export const DebugConsole = ({ open, onClose }) => {
                                             </div>
                                         ) : (
                                             <>
-                                                <div style={{ padding: "0.25rem 0.7rem", fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, borderBottom: "1px solid #21262d", backgroundColor: COLORS.bg }}>
+                                                <div style={{ padding: "0.25rem 0.7rem", fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, borderBottom: "1px solid #262628", backgroundColor: COLORS.bg }}>
                                                     {filtered.length} shown (newest first)
                                                 </div>
                                                 {filtered.map((record) => (
