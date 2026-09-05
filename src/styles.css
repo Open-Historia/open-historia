@@ -479,3 +479,17 @@ button:active:not(:disabled) {
   animation: oh-fade-out 240ms ease-in both !important;
   pointer-events: none !important;
 }
+
+/* The screen a game opens under (GameUI/gameLoadingScreen.jsx): the logo
+   turns until the map is drawn, then the whole screen fades off. */
+@keyframes oh-logo-spin {
+  to { transform: rotate(360deg); }
+}
+.oh-loading-logo {
+  animation: oh-logo-spin 4s linear infinite;
+  filter: drop-shadow(0 6px 22px rgba(0, 0, 0, 0.5));
+}
+[data-oh-presence="leaving"] > .oh-loading-screen {
+  animation: oh-fade-out 450ms ease both !important;
+  pointer-events: none !important;
+}

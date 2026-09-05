@@ -15,6 +15,7 @@ import {
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { markMapIdle } from "../../runtime/mapReadiness.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
@@ -588,6 +589,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, []);
   const handleIdle = useCallback(() => {
     recordMapTrace("map:idle");
+    // Every idle, not only the first: the loading screen a game opens under
+    // waits for the one that follows the polity layers (mapReadiness.js).
+    markMapIdle();
     emitMapMotion(false);
     applyFixedPixelRatio();
     if (hasReportedInitialIdleRef.current) return;

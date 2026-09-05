@@ -384,3 +384,7 @@ Every owner recolour, label rebuild, and unit/marker update is a consequence of 
 - [World state](world-state.md) — the `world.json` schema, `regionOwnershipOverrides`, `polityOverrides`, `regionClaimants`, `markers`, `units`, staged-reveal overrides.
 - Runtime asset layer (`src/runtime/assets.js`) — `JSON_URLS`, `PMTILES_PROTOCOL_URLS`, the `ohbase://` protocol, `getNationColors`, `resolveCountryDisplayName`, scenario-token cache sweeping.
 - Selection popups (`src/Game/Selection/*`) — consumers of `onRegionSelected` / `onFeatureSelected` / `onUnitSelected`.
+
+## Readiness signals
+
+`src/runtime/mapReadiness.js` records two things on `window.__OH_MAP_READINESS__` and dispatches them as events: `oh:map-polities-ready` (Nations.jsx, with the regions asset URL the polity layers were built for — after the boundary worker answers or fails, or at once on a stock map) and `oh:map-idle` (World.jsx, every idle). The loading screen a game opens under (`GameUI/gameLoadingScreen.jsx`) waits for the first, then for the next idle.
