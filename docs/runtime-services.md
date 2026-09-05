@@ -294,7 +294,7 @@ Tiny localStorage-backed boolean toggles read reactively instead of threaded as 
 | `hideCountryLabels` | `map_hide_country_labels` | Hide country name labels |
 | `disableIdleRotation` | `map_disable_idle_rotation` | Stop the idle globe spin |
 | `disableEventCamera` | `map_disable_event_camera` | Suppress event camera moves |
-| `limitAiGeneration` | `ai_limit_generation` | (Not a map setting) timeline-jump generation gets a 5-min deadline → canned-event fallback; OFF waits as long as the model needs |
+| `limitAiGeneration` | `ai_limit_generation` | (Not a map setting) timeline-jump generation gets a 5-min deadline → canned-event fallback; OFF (the default) waits as long as the model needs |
 
 | Export | Purpose |
 |---|---|
