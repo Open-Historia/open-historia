@@ -9,7 +9,7 @@
 // would be ESM, and Electron's main process is most predictable as CJS. The
 // server is ESM and is pulled in with a dynamic import().
 
-const { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -463,23 +463,60 @@ const createMainWindow = () => {
 // listen(), which is too late if listen() throws synchronously rather than
 // emitting. Probing first sidesteps the whole question: by the time server.js
 // runs, the port it is about to take is known free.
-const findFreePort = (start, attempts = 20) =>
-  new Promise((resolve, reject) => {
-    if (attempts <= 0) {
-      reject(new Error(`No free port found in ${start - 20}-${start}.`));
-      return;
-    }
+// Every address the server might end up bound to. A port counts as free only if
+// it is free on ALL of them, because a bind that succeeds on one says nothing
+// about another.
+//
+// This used to probe the wildcard alone, reasoning that a loopback-only probe
+// would miss a 0.0.0.0 publisher. True, but the reverse is what actually reaches
+// players, and it is worse: on Windows a wildcard bind SUCCEEDS beside a listener
+// on a specific interface (the same SO_REUSEADDR behaviour server/network.test.js
+// skips its rebind-rollback assertion for on win32 and darwin). Docker Desktop
+// publishes on 127.0.0.1, so it holds 127.0.0.1:3000 while 0.0.0.0:3000 still
+// binds cleanly — the probe called 3000 free, server.js bound loopback, and the
+// app died on EADDRINUSE with an empty window. Reported from a laptop running
+// Docker, 2026-09-04.
+//
+// Loopback first: it is what the server binds by default, so the common conflict
+// is settled without a wildcard bind at all.
+const probeHosts = () => {
+  const hosts = ["127.0.0.1", null]; // null = the wildcard, i.e. listen(port)
+  // A player who has pointed OH_HOST at one interface has the server binding
+  // exactly that, and on Windows neither probe above can see a conflict on it.
+  const forced = String(process.env.OH_HOST || "").trim();
+  if (forced && forced !== "0.0.0.0" && !hosts.includes(forced)) hosts.push(forced);
+  return hosts;
+};
+
+const canBind = (port, host) =>
+  new Promise((resolve) => {
     const probe = net.createServer();
     probe.unref();
-    probe.once("error", () => resolve(findFreePort(start + 1, attempts - 1)));
-    probe.once("listening", () => probe.close(() => resolve(start)));
-    // Bind the wildcard, not 127.0.0.1. server.js now binds loopback by default
-    // (OH_HOST), but a player can point it at every interface, and a loopback-only
-    // probe would call a port free that a 0.0.0.0 publisher (Docker's default)
-    // already owns — exactly the case this exists for. Probing wider than we bind
-    // can only skip a port that would have worked, which costs nothing.
-    probe.listen(start);
+    probe.once("error", () => resolve(false));
+    probe.once("listening", () => probe.close(() => resolve(true)));
+    // An address we cannot even parse is not a reason to reject the port.
+    try {
+      if (host) probe.listen(port, host);
+      else probe.listen(port);
+    } catch {
+      resolve(true);
+    }
   });
+
+const findFreePort = async (start, attempts = 20) => {
+  const hosts = probeHosts();
+  for (let port = start; port < start + attempts; port += 1) {
+    let free = true;
+    for (const host of hosts) {
+      // Sequential on purpose: probing one port on two addresses at once has the
+      // two racing each other, and the first refusal is already the answer.
+      free = await canBind(port, host);
+      if (!free) break;
+    }
+    if (free) return port;
+  }
+  throw new Error(`No free port found in ${start}-${start + attempts - 1}.`);
+};
 
 // Starting the server is importing it: server.js calls app.listen() at module
 // scope. It reads OH_DATA_DIR / OH_ASSETS_DIR / PORT, all set before the import.
@@ -532,6 +569,28 @@ const boot = async () => {
   verifyMapData();
 };
 
+// A boot failure used to be an unhandled rejection: it reached app.log and
+// nothing else, leaving an empty window on screen and the player with nothing to
+// act on. "It does not launch" is what that looks like from outside. Whatever
+// went wrong, say it and stop.
+const reportFatalBootError = (error) => {
+  const message = String((error && error.message) || error || "Unknown error");
+  logMain("error", "main.bootFailed", message, { code: error && error.code });
+  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
+  dialog.showErrorBox(
+    `${name} could not start`,
+    portClash
+      ? `${name} runs its own local server, and every port it tried is already taken `
+        + `by another program.\n\n`
+        + `Docker Desktop is the usual culprit — it holds 3000 and 3001 on many `
+        + `machines. Close it, or set PORT to a free port before launching, then `
+        + `start ${name} again.\n\n${message}`
+      : `${message}\n\nThe full error is in the diagnostics log under Settings.`,
+  );
+  app.quit();
+};
+
 // One instance only: a second launch would hit EADDRINUSE on the server port and
 // die, which reads to the player as "the app is broken".
 if (!app.requestSingleInstanceLock()) {
@@ -543,7 +602,7 @@ if (!app.requestSingleInstanceLock()) {
       mainWindow.focus();
     }
   });
-  app.whenReady().then(boot);
+  app.whenReady().then(boot).catch(reportFatalBootError);
   app.on("window-all-closed", () => app.quit());
   ipcMain.handle("setup:cancel", () => app.quit());
 }
