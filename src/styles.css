@@ -341,14 +341,14 @@ body {
 
 [style*="position: fixed"]:not(.maplibregl-marker):not(.maplibregl-popup):not([data-oh-no-motion]),
 [style*="position: absolute"]:not(.maplibregl-marker):not(.maplibregl-popup):not([data-oh-no-motion]) {
-  animation: oh-fade-in 160ms ease-out both;
+  animation: oh-fade-in 160ms ease-out backwards;
 }
 
 .oh-surface-in {
-  animation: oh-surface-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both !important;
+  animation: oh-surface-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards !important;
 }
 .oh-fade-in {
-  animation: oh-fade-in 160ms ease-out both !important;
+  animation: oh-fade-in 160ms ease-out backwards !important;
 }
 
 [data-oh-presence="leaving"] > *,
