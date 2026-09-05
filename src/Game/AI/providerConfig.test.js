@@ -92,6 +92,37 @@ test("profiles: stock entries are seeded once, then saved, updated and deleted l
   assert.equal(config.getSavedPresets().length, 2);
 });
 
+test("OpenCode Zen is a separate, key-required provider with free-only defaults", () => {
+  assert.equal(config.normalizeProvider("opencode-zen"), "opencode-zen");
+  assert.equal(config.getProviderMeta("opencode-zen").label, "OpenCode Zen");
+  assert.equal(config.providerSupportsModelDiscovery("opencode-zen"), true);
+  assert.equal(config.providerSetupRequirement("opencode-zen"), "apiKey");
+  assert.equal(config.isProviderConfigured("opencode-zen"), false);
+  assert.equal(config.getProviderField("opencode-zen", "model"), "");
+  assert.equal(config.getProviderField("opencode-zen", "allowPaid"), "");
+  config.persistProviderSetting("opencodeZenApiKey", "test-only-key");
+  config.persistProviderSetting("opencodeZenModel", "big-pickle");
+  config.persistProviderSetting("opencodeZenCustomParams", '{"top_p":0.9}');
+  config.persistProviderSetting("opencodeZenStructuredMode", "json_object");
+  config.persistProviderSetting("opencodeZenAllowPaid", "1");
+  assert.equal(config.isProviderConfigured("opencode-zen"), true);
+  const state = config.loadProviderSettingsFormState();
+  assert.equal(state.opencodeZenApiKey, "test-only-key");
+  assert.equal(state.opencodeZenModel, "big-pickle");
+  assert.equal(state.opencodeZenCustomParams, '{"top_p":0.9}');
+  assert.equal(state.opencodeZenStructuredMode, "json_object");
+  assert.equal(state.opencodeZenAllowPaid, "1");
+  assert.equal(config.getProviderField("openai-compatible", "apiKey"), "");
+  assert.equal(config.getProviderField("gemini", "apiKey"), "");
+  config.setProviderField("opencode-zen", "model_advisor", "mimo-v2.5-free");
+  assert.equal(config.getModelForTask("opencode-zen", "advisor"), "mimo-v2.5-free");
+  assert.equal(config.getModelForTask("opencode-zen", "jumpForward"), "big-pickle");
+  config.setProviderField("opencode-zen", "model", "mimo-v2.5-free");
+  assert.equal(config.getProviderField("opencode-zen", "structuredMode"), "auto");
+  config.setProviderField("opencode-zen", "apiKey", "   ");
+  assert.equal(config.isProviderConfigured("opencode-zen"), false);
+});
+
 test("recent models: newest first, no duplicates, capped at ten", () => {
   config.saveRecentModel("openai", "a");
   config.saveRecentModel("openai", "b");

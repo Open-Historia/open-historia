@@ -17,6 +17,7 @@ import {
     setReasoningEnabled,
     updatePreset,
 } from "../AI/providerConfig.js";
+import { isZenFreeModel, OPENCODE_ZEN_ENDPOINT } from "../AI/openCodeZen.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -268,6 +269,10 @@ const Toggle = ({ label, enabled, onToggle }) => (
     >
     <span style={{ fontSize: "0.9rem" }}>{label}</span>
     <button
+    type="button"
+    role="switch"
+    aria-label={label}
+    aria-checked={Boolean(enabled)}
     onClick={onToggle}
     style={{
         width: "3.5rem",
@@ -485,11 +490,12 @@ const SettingsInput = ({
     const list = Array.isArray(suggestions) && suggestions.length ? suggestions : null;
     return (
         <div style={fieldGroupStyle}>
-        <label style={labelStyle}>
+        <label style={labelStyle} htmlFor={`${listId}-input`}>
         {label}
         </label>
         {multiline ? (
             <textarea
+            id={`${listId}-input`}
             rows={4}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -500,6 +506,7 @@ const SettingsInput = ({
             />
         ) : (
             <input
+            id={`${listId}-input`}
             type={type}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -743,6 +750,11 @@ const PROVIDER_EXPERT_FIELDS = {
     gemini: { customParams: "geminiCustomParams", placeholder: '{"generationConfig": {"topP": 0.9}}' },
     openai: { customParams: "openaiCustomParams", placeholder: '{"top_p": 0.9}', structuredMode: "openaiStructuredMode" },
     anthropic: { customParams: "anthropicCustomParams", placeholder: '{"top_p": 0.9}' },
+    "opencode-zen": {
+        customParams: "opencodeZenCustomParams",
+        placeholder: '{"top_p": 0.9}',
+        structuredMode: "opencodeZenStructuredMode",
+    },
     "openai-compatible": {
         customParams: "openaiCompatibleCustomParams",
         placeholder: '{"top_p": 0.9}',
@@ -754,6 +766,105 @@ const PROVIDER_EXPERT_FIELDS = {
         placeholder: '{"top_p": 0.9}',
         structuredMode: "anthropicCompatibleStructuredMode",
     },
+};
+
+// Keep the beginner steps visible, not behind an advanced-settings disclosure.
+// Model discovery is a catalogue lookup, NOT proof that a key has credit/access.
+const OpenCodeZenConnection = ({ settings, onSettingChange, recentModels }) => {
+    const [models, setModels] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const request = useRef(null);
+    useEffect(() => () => request.current?.abort(), []);
+    const allowPaid = settings.opencodeZenAllowPaid === "1";
+    const visibleModels = models.filter((model) => allowPaid || isZenFreeModel(model));
+
+    const loadModels = async () => {
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
+        setLoading(true);
+        setError("");
+        try {
+            const { discoverOpenCodeZenModels } = await import("../AI/main.jsx");
+            const available = await discoverOpenCodeZenModels({ signal: controller.signal });
+            if (controller.signal.aborted) return;
+            setModels(available);
+            if (!available.some(isZenFreeModel)) setError("No supported free model is currently listed. No paid model will be selected automatically.");
+        } catch (nextError) {
+            if (!controller.signal.aborted) setError(nextError.message);
+        } finally {
+            if (!controller.signal.aborted) setLoading(false);
+        }
+    };
+
+    const linkStyle = { color: "#93c5fd" };
+    return (
+        <>
+        <div style={{ ...helperStyle, marginTop: 0, marginBottom: "1rem", color: "rgba(255,255,255,0.8)" }}>
+        <strong>First time? Start here</strong>
+        <ol style={{ paddingLeft: "1.3rem", lineHeight: 1.65 }}>
+        <li>Open <a href="https://opencode.ai/auth" target="_blank" rel="noopener noreferrer" style={linkStyle}>OpenCode Zen</a> and sign in (or create an account).</li>
+        <li>In your OpenCode workspace, open <strong>API Keys</strong>, choose <strong>Create API Key</strong>, give it a name such as <strong>Open Historia</strong>, and create it.</li>
+        <li>Copy the entire secret key and paste it into <strong>OpenCode Zen API Key</strong> below. This is not your password or the key's name. Keep it private; do not put it in screenshots or bug reports.</li>
+        <li>Leave <strong>Enable paid Zen models</strong> off. Click <strong>Load models</strong> and choose a free model, or leave Model blank to automatically try a currently listed free model.</li>
+        <li>Settings save automatically in this browser. Return to the game and send a short message to your advisor to test the key. Loading the model list alone does not test your key or balance.</li>
+        </ol>
+        <p><strong>Go is not Zen credit.</strong> An OpenCode account key used with Go may also work for Zen's free models, but the Go subscription does not cover paid Zen requests. You do not need to enable paid models here to try the free ones. To use paid models, check Zen Billing, add credit if needed, set a spending limit, then explicitly enable and select a paid model below.</p>
+        <p><strong>Use the desktop app or your own local server.</strong> Zen currently blocks cross-origin browser requests (CORS), so the hosted website may not connect. Never use a public proxy to work around this with your key.</p>
+        <p>Free availability and limits can change. Some free providers may use prompts and replies to improve their models: do not send personal or confidential information. Check <a href="https://opencode.ai/docs/zen/#pricing" target="_blank" rel="noopener noreferrer" style={linkStyle}>pricing</a> and <a href="https://opencode.ai/docs/zen/#privacy" target="_blank" rel="noopener noreferrer" style={linkStyle}>privacy terms</a>.</p>
+        </div>
+        <SettingsInput
+        label="OpenCode Zen API Key"
+        type="password"
+        value={settings.opencodeZenApiKey ?? ""}
+        onChange={(value) => onSettingChange("opencodeZenApiKey", value)}
+        placeholder="Paste the secret key from OpenCode → API Keys"
+        helperText="Stored only in this browser, like the other AI keys. Sent to OpenCode Zen directly, or through your own local game server when necessary."
+        />
+        <div style={{ ...helperStyle, marginBottom: "0.85rem", overflowWrap: "anywhere" }}>Fixed API address: {OPENCODE_ZEN_ENDPOINT} — not the /zen/go/v1 subscription endpoint.</div>
+        <Toggle
+        label="Enable paid Zen models"
+        enabled={allowPaid}
+        onToggle={() => onSettingChange("opencodeZenAllowPaid", allowPaid ? "" : "1")}
+        />
+        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.85rem" }}>
+        Off by default. Turning this on allows explicitly selected paid models, including per-task overrides, to spend Zen credit. Blank Model still auto-picks only a free model. Free labels follow Zen's model names and published offers, not a live price quote.
+        </div>
+        <SettingsInput
+        label="Model"
+        value={settings.opencodeZenModel ?? ""}
+        onChange={(value) => onSettingChange("opencodeZenModel", value)}
+        suggestions={[...new Set([...visibleModels, ...recentModels.filter((model) => allowPaid || isZenFreeModel(model))])]}
+        placeholder="Leave blank to auto-pick a free model"
+        helperText="Supports Zen Chat Completions models such as Big Pickle, MiMo, DeepSeek, GLM, Kimi and MiniMax. Models requiring Responses, Claude/Qwen Messages or Gemini APIs are not supported here yet."
+        />
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.85rem" }}>
+        <button type="button" disabled={loading} onClick={loadModels} style={primaryButtonStyle}>{loading ? "Loading models…" : "Load models"}</button>
+        {visibleModels.length > 0 && (
+            <select aria-label="Choose an OpenCode Zen model" style={{ ...inputStyle, flex: 1, minWidth: "12rem" }} value="" onChange={(event) => onSettingChange("opencodeZenModel", event.target.value)}>
+            <option value="" disabled>Choose a model…</option>
+            {[false, true].filter((paid) => !paid || allowPaid).map((paid) => (
+                <optgroup key={String(paid)} label={paid ? "Paid — uses Zen credit" : "Free tier"}>
+                {visibleModels.filter((model) => isZenFreeModel(model) !== paid).map((model) => <option key={model} value={model}>{model}</option>)}
+                </optgroup>
+            ))}
+            </select>
+        )}
+        </div>
+        {error && <div role="alert" style={{ ...helperStyle, color: "#fca5a5", marginBottom: "0.85rem" }}>{error}</div>}
+        <details style={{ ...helperStyle, marginBottom: "0.85rem" }}>
+        <summary style={{ cursor: "pointer" }}>Not working? Quick fixes</summary>
+        <ul style={{ paddingLeft: "1.3rem", lineHeight: 1.65 }}>
+        <li><strong>Invalid API key:</strong> copy the full secret again. If it was revoked, create a new one. Never share it to get help.</li>
+        <li><strong>Insufficient balance:</strong> switch to a free model, or check Zen Billing. Paying for Go does not top up Zen.</li>
+        <li><strong>Rate limit / busy:</strong> wait and retry, or choose another free model. Free access is limited, not unlimited.</li>
+        <li><strong>Model not found / access denied:</strong> load the list again and check that the model is enabled in your OpenCode workspace.</li>
+        <li><strong>Failed to fetch / CORS:</strong> use the desktop app or your own local server; do not disable browser security or share your key with a proxy.</li>
+        </ul>
+        </details>
+        </>
+    );
 };
 
 // The connection: where the provider is and what runs there. Everything a
@@ -841,6 +952,10 @@ const ProviderConnectionPanel = ({ provider, settings, onSettingChange }) => {
             helperText="Claude model ids are manual here. Leave blank to use the built-in default."
             />
             </>
+        )}
+
+        {provider === "opencode-zen" && (
+            <OpenCodeZenConnection settings={settings} onSettingChange={onSettingChange} recentModels={recentModels} />
         )}
 
         {provider === "openai-compatible" && (
