@@ -10,8 +10,9 @@
 
 import { installWebApiRouter } from "./router.js";
 import { ensureSeeded } from "./libraryStore.js";
-import { showHomePage, shouldShowHome } from "./homePage.js";
+import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
 import { connectBestNode } from "./nodeConnect.js";
+import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
 
 // Everything the player owns lives in this origin's storage: the games and
 // scenarios in IndexedDB, and the ~215MB of map archives in the preload Cache.
@@ -34,6 +35,12 @@ const requestPersistentStorage = async () => {
 };
 
 export const installWebBackend = async () => {
+  // The Android app paints its boot screen FIRST, before the seeding below. The
+  // native splash comes down the moment the WebView has a document, and a white
+  // gap where it was is most of the difference between an app and a web page in a
+  // shell. Everything after this point is the same on both.
+  const boot = isNativeApp() ? showNativeBoot() : null;
+
   // Seed the default scenario before any /api call, then intercept.
   try {
     await ensureSeeded();
@@ -46,9 +53,20 @@ export const installWebBackend = async () => {
   // Home page: connect to the best content node on entry.
   // Once the player has entered this tab session, just connect in the background.
   try {
-    if (shouldShowHome()) showHomePage();
+    if (boot) {
+      // The app has no entry screen and nothing to press: the player already
+      // chose to be here by opening it. Connect on their behalf, let the game
+      // mount behind the boot screen, and let that screen take itself down when
+      // the connection settles — including when it settles on the origin
+      // fallback, which is a playable answer and not an error. A connection that
+      // never settles is handled by the boot screen's own deadline, so a bad
+      // network delays the game rather than withholding it.
+      markEntered();
+      connectBestNode().then((node) => boot.settle(node)).catch(() => boot.settle(null));
+    } else if (shouldShowHome()) showHomePage();
     else connectBestNode().catch(() => {});
   } catch (error) {
+    if (boot) boot.settle(null);
     console.warn("Home page failed:", error.message);
   }
 };
