@@ -7,6 +7,7 @@ import MapScene from "./MapScene.jsx";
 import { recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
 import {
   DEFAULT_BASEMAP_ID,
+  TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
@@ -226,7 +227,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -297,62 +298,88 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe) => {
     ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
     : "#0b1017";
 
-  return {
-  version: 8,
-  sources: {
-    ...(usePaxRelief ? {
-      "pax-world-relief": {
+  const style = {
+    version: 8,
+    sources: {
+      ...(usePaxRelief ? {
+        "pax-world-relief": {
+          type: "raster",
+          tiles: [PAX_WORLD_RELIEF_TILES],
+          tileSize: 256,
+          // R5.4: fixed-resolution relief material. Load ETOPO only through z3;
+          // MapLibre overzooms those already-loaded tiles at higher camera zooms.
+          // This keeps the global physical/bathymetry texture but prevents the
+          // relief source from climbing a new z4/z5/z6 tile pyramid while the
+          // player is actively navigating.
+          maxzoom: 3,
+          attribution: "Relief: NOAA/NCEI ETOPO1",
+        },
+      } : {}),
+      satellite: {
         type: "raster",
-        tiles: [PAX_WORLD_RELIEF_TILES],
+        tiles: [basemapProtocolTemplate(renderedBasemapId)],
         tileSize: 256,
-        // R5.4: fixed-resolution relief material. Load ETOPO only through z3;
-        // MapLibre overzooms those already-loaded tiles at higher camera zooms.
-        // This keeps the global physical/bathymetry texture but prevents the
-        // relief source from climbing a new z4/z5/z6 tile pyramid while the
-        // player is actively navigating.
-        maxzoom: 3,
-        attribution: "Relief: NOAA/NCEI ETOPO1",
+        maxzoom: basemapMaxZoom(renderedBasemapId),
       },
-    } : {}),
-    satellite: {
-      type: "raster",
-      tiles: [basemapProtocolTemplate(renderedBasemapId)],
-      tileSize: 256,
-      maxzoom: basemapMaxZoom(renderedBasemapId),
     },
-  },
-  layers: [
-    {
-      id: "strategy-map-base",
-      type: "background",
-      paint: { "background-color": physicalBackground },
+    layers: [
+      {
+        id: "strategy-map-base",
+        type: "background",
+        paint: { "background-color": physicalBackground },
+      },
+      {
+        id: "satellite-layer",
+        type: "raster",
+        source: "satellite",
+        paint: basemapPaint,
+      },
+      // R22: keep the detailed ESRI terrain as the regional foundation, then
+      // glaze the fading ETOPO colour/bathymetry material above it. Previously
+      // ETOPO sat underneath an almost-opaque terrain layer, so only a few percent
+      // of its colour survived at the Europe/Poland zoom band.
+      ...(usePaxRelief ? [{
+        id: "pax-world-relief-layer",
+        type: "raster",
+        source: "pax-world-relief",
+        paint: paxReliefPaints.world,
+      }] : []),
+      // Do not paint the DEM as a second hillshade pass here. The old DEM overlay
+      // produced a rectangular veil at whole-world zoom. Terrain Base supplies the
+      // always-on 2D relief/bathymetry; the DEM remains available for optional 3D.
+    ],
+    // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
+    // surface light instead. Transparent space lets the stars and sun show.
+    sky: {
+      "atmosphere-blend": 0,
     },
-    {
-      id: "satellite-layer",
-      type: "raster",
-      source: "satellite",
-      paint: basemapPaint,
-    },
-    // R22: keep the detailed ESRI terrain as the regional foundation, then
-    // glaze the fading ETOPO colour/bathymetry material above it. Previously
-    // ETOPO sat underneath an almost-opaque terrain layer, so only a few percent
-    // of its colour survived at the Europe/Poland zoom band.
-    ...(usePaxRelief ? [{
-      id: "pax-world-relief-layer",
-      type: "raster",
-      source: "pax-world-relief",
-      paint: paxReliefPaints.world,
-    }] : []),
-    // Do not paint the DEM as a second hillshade pass here. The old DEM overlay
-    // produced a rectangular veil at whole-world zoom. Terrain Base supplies the
-    // always-on 2D relief/bathymetry; the DEM remains available for optional 3D.
-  ],
-  // MapLibre's uniform atmosphere is off; GlobeEffects supplies directional
-  // surface light instead. Transparent space lets the stars and sun show.
-  sky: {
-    "atmosphere-blend": 0,
-  },
   };
+
+  // Only add the DEM source and hillshade layer when 3D terrain is enabled.
+  // This is the same raster-dem source used for the MapLibre `terrain` property
+  // on <Map> below (see the `terrain` memo) — the hillshade layer here is what
+  // renders the lit relief; the `terrain` property is what deforms the mesh.
+  if (terrainEnabled) {
+    style.sources["terrain-source"] = {
+      type: "raster-dem",
+      tiles: [TERRAIN_TILE_TEMPLATE],
+      encoding: "terrarium",
+      maxzoom: 5,
+      tileSize: 256,
+    };
+
+    style.layers.push({
+      id: "hills",
+      type: "hillshade",
+      source: "terrain-source",
+      paint: {
+        "hillshade-exaggeration": 0.1,
+        "hillshade-shadow-color": "#000",
+      },
+    });
+  }
+
+  return style;
 };
 
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
@@ -422,12 +449,14 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveCustomBg,
       effectiveBgDeclared,
       styleUsesGlobeCoords,
+      terrainEnabled,
     ),
     [
       effectiveBasemap,
       effectiveBgDeclared,
       effectiveCustomBg,
       styleUsesGlobeCoords,
+      terrainEnabled,
     ],
   );
   const mapInstanceKey = buildBasemapRenderKey({
@@ -435,14 +464,21 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     basemapId: effectiveBasemap,
     backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
   });
-  // R5.0: the gameplay camera is hard-locked to pitch 0 (dragRotate/touchPitch/
-  // pitchWithRotate are all disabled). Building raster-dem terrain meshes in that
-  // mode adds tile/mesh/GPU work without changing the visible physical relief,
-  // which comes from the ESRI/NOAA raster basemap underneath political colour.
-  // Keep the user setting intact for a future pitched/3D camera, but do not bind
-  // a terrain mesh while the current renderer is strictly 2D.
-  const terrain = null;
-  void terrainEnabled;
+  // 3D terrain deforms the mesh using the same raster-dem source that drives
+  // the "hills" hillshade layer in buildWorldStyle. It only applies against the
+  // real ESRI/NOAA basemap — a custom uploaded image or vector background has
+  // no DEM data to deform against, so terrain stays off in those cases even if
+  // the player has the setting enabled.
+  const terrain = useMemo(
+    () =>
+      terrainEnabled && !effectiveCustomBg && !effectiveBgDeclared
+        ? {
+            source: "terrain-source",
+            exaggeration: 15,
+          }
+        : null,
+    [terrainEnabled, effectiveCustomBg, effectiveBgDeclared],
+  );
   // R5.1: use one renderer density for the entire session.
   // R5.0 switched between 1x and native DPR around z4.5/z5.0.
   // MapLibre setPixelRatio() rebuilds its render targets, producing a
