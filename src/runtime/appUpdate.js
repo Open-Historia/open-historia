@@ -66,3 +66,14 @@ export const isUpdateAvailable = (currentBuild, latest) => {
   if (current == null || !manifest) return false;
   return manifest.build > current;
 };
+
+// What the banner says when the app's own updater gives up. The main process
+// keeps electron-updater's message verbatim (main.cjs updateState.error) and the
+// banner used to swallow it: a player saw "0%" flip back to "Update now" and
+// nothing else. One sentence, the reason kept when there is one, clipped so a
+// stack trace cannot take over the banner.
+export const describeUpdateFailure = (error) => {
+  const reason = String(error ?? "").replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
+  const clipped = reason.length > 160 ? `${reason.slice(0, 159)}…` : reason;
+  return clipped ? `The app could not update itself: ${clipped}.` : "The app could not update itself.";
+};

@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   APP_UPDATE_SETTLED_STATES,
+  describeUpdateFailure,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
@@ -87,4 +88,23 @@ test("isUpdateSettled treats an unknown or absent state as still running", () =>
 });
 test("APP_UPDATE_SETTLED_STATES holds exactly the finished states", () => {
   assert.deepEqual([...APP_UPDATE_SETTLED_STATES].sort(), ["error", "none", "ready"]);
+});
+
+test("describeUpdateFailure keeps the updater's reason and reads as one sentence", () => {
+  assert.equal(
+    describeUpdateFailure("No newer version in the update feed."),
+    "The app could not update itself: No newer version in the update feed.",
+  );
+  assert.equal(
+    describeUpdateFailure("  net::ERR_INTERNET_DISCONNECTED \n"),
+    "The app could not update itself: net::ERR_INTERNET_DISCONNECTED.",
+  );
+});
+test("describeUpdateFailure copes with no reason at all", () => {
+  for (const v of ["", "   ", ".", null, undefined]) assert.equal(describeUpdateFailure(v), "The app could not update itself.");
+});
+test("describeUpdateFailure clips a stack-trace-sized reason", () => {
+  const text = describeUpdateFailure("x".repeat(400));
+  assert.ok(text.length < 200, text.length);
+  assert.ok(text.endsWith("…."), text.slice(-5));
 });

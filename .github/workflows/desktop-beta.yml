@@ -111,11 +111,19 @@ jobs:
       # version never changes is one it will never offer as an update, and one Windows
       # will not cleanly install over. run_number is shared by all three jobs in a
       # run, so one run is one version on every platform, and it only ever goes up.
-      - name: Stamp the app version
+      #
+      # `name` is stamped too. electron-builder derives two things from it that
+      # nothing else renames: the folder electron-updater downloads into
+      # (<name>-updater under %LOCALAPPDATA%) and the .deb package name. Left as
+      # the stable app's, the two apps shared one pending-update folder — each
+      # cleans out the other's downloaded installer — and the beta .deb replaced
+      # the official install on Linux instead of sitting beside it. productName,
+      # appId and the userData rename in main.cjs do not reach either.
+      - name: Stamp the app version and package name
         shell: bash
         run: |
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
-          node -p "'version: '+require('./package.json').version"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';p.name='open-historia-beta';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          node -p "require('./package.json').name+' '+require('./package.json').version"
 
       # server/betaPackaging.test.js is in here, and it is the only thing that
       # catches the beta's two update feeds drifting onto different tags, or
@@ -211,7 +219,8 @@ jobs:
           # appears — that comes from latest.json below — but pressing update fails
           # and falls back to a manual download, with no failing build to notice.
           # The .blockmap only makes the download differential; missing, it degrades.
-          files=(release/*.exe release/*.exe.blockmap release/*-mac-*.zip release/*.AppImage release/*.deb release/latest*.yml)
+          files=(release/*.exe release/*.exe.blockmap release/*-mac-*.zip release/*.AppImage release/*.deb)
+          feeds=(release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot each
           # publish a different view of the same release. The filenames here must
           # match the artifactNames in electron-builder.beta.yml exactly — a mismatch
@@ -222,6 +231,14 @@ jobs:
             printf '{\n  "build": "%s",\n  "notes": "%s",\n  "windows": "%s/Open-Historia-Beta-Setup.exe",\n  "mac": "%s/Open-Historia-Beta-mac-arm64.zip",\n  "linux": "%s/Open-Historia-Beta-x86_64.AppImage"\n}\n' \
               "${{ github.run_id }}" "A newer Open Historia beta build is available." "$B" "$B" "$B" > latest.json
             cat latest.json
-            files+=(latest.json)
+            feeds+=(latest.json)
           fi
+          # Installers first, feeds last, as two uploads. gh sends the files of one
+          # upload concurrently and --clobber deletes each old asset before its
+          # replacement lands, so a single upload has a window — as long as the
+          # 140 MB installer takes — in which latest.json already announces the
+          # new build while the installer it points at is a 404. A tester pressing
+          # Update in that window saw "0%" and then the manual download.
+          # Announcing only once the installers are in place closes it.
           gh release upload "$TAG" "${files[@]}" --clobber
+          gh release upload "$TAG" "${feeds[@]}" --clobber

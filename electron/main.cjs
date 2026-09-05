@@ -168,7 +168,12 @@ const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
 // What the banner polls. One object, replaced rather than mutated, so a read is
 // always internally consistent.
 let updateState = { state: "idle", percent: 0, version: "", error: "" };
-const setUpdateState = (patch) => { updateState = { ...updateState, ...patch }; };
+const setUpdateState = (patch) => {
+  updateState = { ...updateState, ...patch };
+  // A failed update used to be visible only as the banner's button coming back;
+  // the reason lives here and nowhere else, so it goes to app.log as well.
+  if (patch.state === "error") logMain("warn", "updater.failed", updateState.error);
+};
 
 const setupAutoUpdater = () => {
   // A dev run has no app-update.yml inside it, so electron-updater would only
@@ -180,6 +185,17 @@ const setupAutoUpdater = () => {
   } catch {
     return null; // not packaged with the app: fall back to the download link
   }
+  // electron-updater is silent unless given a logger, and its messages are the
+  // whole story of a failed update — which feed it read, the version it
+  // compared against, why a differential download fell back, the HTTP status
+  // that ended it. Into app.log with everything else, so "the update didn't
+  // take" comes with a reason attached.
+  autoUpdater.logger = {
+    debug: () => {},
+    info: (message) => logMain("info", "updater", message),
+    warn: (message) => logMain("warn", "updater", message),
+    error: (message) => logMain("error", "updater", message),
+  };
   // The banner decides when to download — a player on a metered connection
   // should not have ~100MB pulled out from under them by opening the game.
   autoUpdater.autoDownload = false;
