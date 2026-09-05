@@ -872,6 +872,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         setTags={d.setTags}
         setSelection={d.setSelection}
         polities={d.polities}
+        upsertPolity={d.upsertPolity}
         regionEpoch={regionEpoch}
         onOpenPolities={() => setOpenPanel("polities")}
       />
