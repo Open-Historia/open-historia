@@ -1,5 +1,5 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
-import React, { useEffect, useId, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
     AI_TASK_ROUTING,
@@ -1011,7 +1011,9 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
 
 // Same corner and size as always (the top bar's session pill is laid out from
 // it), in the glass finish and with the menu glyph.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
+// `hidden` while the menu is open: the menu grows out of this button and
+// shrinks back into it, so the button itself steps aside meanwhile.
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
     <button
     type="button"
     aria-label="Open game menu"
@@ -1027,6 +1029,9 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem" }) => (
         fontSize: "1.5rem",
         fontWeight: 800,
         background: "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
+        opacity: hidden ? 0 : 1,
+        pointerEvents: hidden ? "none" : "auto",
+        transition: "opacity 180ms ease 40ms",
     }}
     >
     ☰
@@ -1415,12 +1420,54 @@ const SETTINGS_SECTIONS = [
     { key: "advanced", label: "Advanced", icon: "⌘", description: "Provider parameters and expert controls" },
 ];
 
+// The small menu becoming the workspace. `fromRect` is the small menu's card
+// as it was measured when the section opened; on mount the card is placed on
+// that rectangle (a translate plus a non-uniform scale, top-left origin) and
+// then eases to its own place, while the CSS lifts the small menu's tint off
+// it and fades its contents in. `closing` runs the same journey backwards; the
+// menu unmounts the workspace once it has arrived. No rectangle (the menu was
+// opened straight onto a section) means a plain fade.
+const useWorkspaceMorph = (cardRef, fromRect, closing) => {
+    useLayoutEffect(() => {
+        const el = cardRef.current;
+        if (!el || !fromRect) return undefined;
+        const to = el.getBoundingClientRect();
+        if (!to.width || !to.height) return undefined;
+        el.style.transformOrigin = "top left";
+        el.style.transition = "none";
+        el.style.transform = `translate(${fromRect.left - to.left}px, ${fromRect.top - to.top}px) scale(${fromRect.width / to.width}, ${fromRect.height / to.height})`;
+        el.classList.add("oh-ws-morphing");
+        // A forced style flush makes the small rectangle the "before" state, so
+        // the assignments right after it transition instead of snapping. Done
+        // synchronously rather than over animation frames: frames stall in a
+        // background tab, and the card must never be left stuck at the small size.
+        void el.offsetWidth;
+        el.style.transition = "transform 260ms cubic-bezier(0.2, 0.7, 0.2, 1)";
+        el.style.transform = "none";
+        el.classList.remove("oh-ws-morphing");
+        return undefined;
+    }, [cardRef, fromRect]);
+
+    useLayoutEffect(() => {
+        const el = cardRef.current;
+        if (!closing || !el || !fromRect) return;
+        const to = el.getBoundingClientRect();
+        if (!to.width || !to.height) return;
+        el.style.transformOrigin = "top left";
+        el.style.transition = "transform 220ms ease-in";
+        el.style.transform = `translate(${fromRect.left - to.left}px, ${fromRect.top - to.top}px) scale(${fromRect.width / to.width}, ${fromRect.height / to.height})`;
+        el.classList.add("oh-ws-unmorph");
+    }, [cardRef, closing, fromRect]);
+};
+
 const SettingsWorkspace = ({
     activeSection,
     onSectionChange,
     onBack,
     onClose,
     onOpenDebugConsole,
+    fromRect = null,
+    closing = false,
     isFullscreenEnabled,
     isGlobeEnabled,
     isTerrainEnabled,
@@ -1444,6 +1491,8 @@ const SettingsWorkspace = ({
 }) => {
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
+    const cardRef = useRef(null);
+    useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
         const priorOverflow = document?.body?.style?.overflow ?? "";
@@ -1660,8 +1709,9 @@ const SettingsWorkspace = ({
     );
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+                <div aria-hidden="true" className="oh-ws-tint" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
                     <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -1776,6 +1826,25 @@ const SettingsMenu = ({
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
+    // The small menu's card: measured when a section opens so the workspace can
+    // grow out of it, and told the button's size so it can grow out of the
+    // button (the --oh-grow-* ratios the CSS keyframes read). Coming back from
+    // the workspace the card does not grow again — it is already there under
+    // the shrinking workspace.
+    const menuRef = useRef(null);
+    const [fromRect, setFromRect] = useState(null);
+    const [workspaceClosing, setWorkspaceClosing] = useState(false);
+    const [menuEntrance, setMenuEntrance] = useState("oh-menu-grow");
+    const backTimer = useRef(null);
+    useEffect(() => () => clearTimeout(backTimer.current), []);
+    useLayoutEffect(() => {
+        const el = menuRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        el.style.setProperty("--oh-grow-x", (64 / rect.width).toFixed(4));
+        el.style.setProperty("--oh-grow-y", (64 / rect.height).toFixed(4));
+    });
     // The basemap override is a value setting (a basemap id, or empty for the
     // scenario's own), read live so the picker follows a change made elsewhere.
     const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
@@ -1863,14 +1932,30 @@ const SettingsMenu = ({
         action?.();
         onClose?.();
     };
-    const openSettingsSection = (section) => setActiveSettingsSection(section);
+    const openSettingsSection = (section) => {
+        const rect = menuRef.current?.getBoundingClientRect();
+        setFromRect(rect && rect.width ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null);
+        setActiveSettingsSection(section);
+    };
+    const backToMenu = () => {
+        if (workspaceClosing) return;
+        if (!fromRect) { setActiveSettingsSection(null); return; }
+        setWorkspaceClosing(true);
+        backTimer.current = setTimeout(() => {
+            setWorkspaceClosing(false);
+            setMenuEntrance("oh-menu-return");
+            setActiveSettingsSection(null);
+        }, 230);
+    };
 
     if (activeSettingsSection) {
         return (
             <SettingsWorkspace
             activeSection={activeSettingsSection}
             onSectionChange={setActiveSettingsSection}
-            onBack={() => setActiveSettingsSection(null)}
+            onBack={backToMenu}
+            fromRect={fromRect}
+            closing={workspaceClosing}
             onClose={() => onClose?.()}
             onOpenDebugConsole={typeof onOpenDebugConsole === "function" ? () => runAndClose(onOpenDebugConsole) : undefined}
             isFullscreenEnabled={isFullscreenEnabled}
@@ -1954,16 +2039,19 @@ const SettingsMenu = ({
 
     return (
         <div
+        ref={menuRef}
+        className={`oh-menu-card ${menuEntrance}`}
         style={{
             ...baseStyle,
-            top: `calc(${topOffset} + 4.25rem)`,
+            // On the button's own corner: the menu is the button, grown.
+            top: topOffset,
             left: "0.5rem",
             width: isMobile ? "calc(100vw - 1rem)" : "29rem",
             maxWidth: "calc(100vw - 1rem)",
             minHeight: isMobile ? "auto" : "22rem",
             // Never taller than the space below the panel's own top edge — the old
             // 100vh-5rem pushed the bottom (Discord/GitHub links) off short screens.
-            maxHeight: `calc(100vh - ${topOffset} - 5.25rem)`,
+            maxHeight: `calc(100vh - ${topOffset} - 1rem)`,
             overflowY: "auto",
             padding: "0.85rem",
             flexDirection: "column",

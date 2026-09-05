@@ -435,12 +435,13 @@ const Main = ({
       </Presence>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
+        hidden={isSettingsOpen}
         onToggle={() => {
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
         }}
       />
-      <Presence open={isSettingsOpen}>
+      <Presence open={isSettingsOpen} leaveMs={260}>
         <SettingsMenu
           discordUrl="https://discord.gg/QaqAK7fQAg"
           redditUrl="https://www.reddit.com/r/OpenHistoria"

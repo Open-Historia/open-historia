@@ -10,6 +10,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from "r
 //
 // Two ways to give it children:
 //   <Presence open={flag}>{...jsx...}</Presence>
+//     (leaveMs lengthens the exit for a surface with a longer animation)
 //     for a surface whose content does not depend on a value that is null
 //     while it is closed (the JSX is built by the parent on every render);
 //   <Presence open={Boolean(item)} value={item}>{(item) => ...jsx...}</Presence>
@@ -27,7 +28,7 @@ const PresenceContext = createContext(false);
 
 export const usePresenceLeaving = () => useContext(PresenceContext);
 
-export const Presence = ({ open, value, children }) => {
+export const Presence = ({ open, value, leaveMs = PRESENCE_LEAVE_MS, children }) => {
   const [leaving, setLeaving] = useState(false);
   // Derived from the flag during render (React's own pattern for state that
   // follows a prop), so the exit starts on the very render that closed it.
@@ -41,9 +42,9 @@ export const Presence = ({ open, value, children }) => {
 
   useEffect(() => {
     if (!leaving || open) return undefined;
-    const timer = setTimeout(() => setLeaving(false), PRESENCE_LEAVE_MS);
+    const timer = setTimeout(() => setLeaving(false), leaveMs);
     return () => clearTimeout(timer);
-  }, [leaving, open]);
+  }, [leaving, leaveMs, open]);
 
   if (!open && !leaving) return null;
   const phase = open ? "in" : "leaving";
