@@ -76,7 +76,7 @@
           "file": "play/time.md",
           "nav": "Time & turns",
           "title": "Time and Turns",
-          "description": "Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn."
+          "description": "Nothing happens until you skip time. Jump lengths, auto-jump, cancelling a stuck turn, and undoing one that went badly."
         },
         {
           "slug": "orders",
@@ -90,7 +90,7 @@
           "file": "play/events.md",
           "nav": "Events & history",
           "title": "Events and History",
-          "description": "How a turn's events are revealed, categorised, remembered and eventually compacted."
+          "description": "How a turn's events are revealed one at a time, what they change, and how the world remembers them."
         }
       ]
     },
@@ -116,15 +116,15 @@
           "slug": "territory",
           "file": "systems/territory.md",
           "nav": "Territory",
-          "title": "Territory: Control, Sovereignty and Claims",
-          "description": "Who holds the ground, who lawfully owns it, and who says it is theirs — three separate layers, drawn differently."
+          "title": "Territory: Control and Claims",
+          "description": "Who holds the ground and who says it should be theirs — two separate things, drawn differently on the map."
         },
         {
           "slug": "military",
           "file": "systems/military.md",
           "nav": "Military & combat",
           "title": "Military and Combat",
-          "description": "Unit types, strength, postures, movement ranges and the combat maths — plus the two switchable unit systems."
+          "description": "Unit types, strength, movement ranges, era limits and the combat maths — how a clash actually resolves."
         },
         {
           "slug": "espionage",
@@ -167,7 +167,7 @@
           "file": "systems/advisor.md",
           "nav": "The advisor",
           "title": "The Advisor",
-          "description": "Your in-game analyst: asking questions, reading charts, and turning advice into orders and projects."
+          "description": "Your in-game analyst: asking questions about your real position, reading charts, and turning advice into orders."
         }
       ]
     },
@@ -186,7 +186,7 @@
           "file": "tools/cheats.md",
           "nav": "Cheats & GM console",
           "title": "Cheats and the Game Master Console",
-          "description": "Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns."
+          "description": "Fourteen tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns."
         },
         {
           "slug": "saves",

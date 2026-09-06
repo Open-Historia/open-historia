@@ -27,11 +27,16 @@ This is the rule that makes the ledger worth having. **An event that narrates ba
 combat must name an active canonical war and the countries fighting on each side.** Battles,
 invasions, offensives, bombardments, active fronts and unit attacks all qualify.
 
-An event describing a battle with no war behind it is rejected. So is one pointing at a war that
-is in ceasefire or already over.
+An event describing a battle with no war behind it is rejected while the turn still has a retry
+left, as is one pointing at a war that is in ceasefire or already over. On the final attempt the
+turn is repaired rather than thrown away: a war record that still cannot be bound to an event is
+dropped, along with the war bindings of its events, and the rest of the turn stands. The events
+survive as narrative; only the canonical war change is lost, and it is written to the diagnostics
+log.
 
 The practical effect: fighting cannot quietly appear out of nowhere. Someone has to have started
-a war, and the record says who and when.
+a war, and the record says who and when — but a single unbindable record no longer costs you the
+whole turn.
 
 ## Relations
 

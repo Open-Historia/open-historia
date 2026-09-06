@@ -1,6 +1,10 @@
 Almost the entire screen is map. Everything else sits around the edges and gets out of the way
 when you are not using it.
 
+<p class="beta-note"><b>This page describes the stable build.</b> The beta channel reorganises the
+menus considerably and adds a Projects button to the toolbar — see
+<a href="/wiki/settings/">the settings reference</a> for a side-by-side of the two menu systems.</p>
+
 ## The edges at a glance
 
 | Where | What |
@@ -42,7 +46,8 @@ Full detail in [time and turns](/wiki/time/).
 
 ## The toolbar
 
-Two buttons, bottom left.
+Two buttons, bottom left. (Beta adds a third, **Projects** — see
+[projects and operations](/wiki/projects/).)
 
 ### 💬 Chat
 
@@ -78,12 +83,15 @@ See [the advisor](/wiki/advisor/) and [national statistics](/wiki/statistics/).
 
 ## Settings
 
-The **☰** button opens one menu with everything in it: your AI provider and its key and model,
-UI and chat language, fullscreen, the 3D globe and terrain, and a **Map** group holding country
-labels, reduced motion and the camera options. There is also a **📖 Guides** link and the
-community links.
+On stable, the **☰** button opens **one flat menu** with everything in it: your AI provider and
+its key and model, UI and chat language, fullscreen, the 3D globe and terrain, a **Map** group
+holding country labels, reduced motion and the camera options, plus **🧪 Cheats**, a **📖 Wiki**
+link and the community links. No tabs, no sections — scroll to what you want.
 
-Full breakdown in [the settings reference](/wiki/settings/).
+On beta the same button opens a **quick menu** with Game / Tools / Settings / Help tabs, and
+settings themselves live in a separate four-section workspace.
+
+Both are laid out side by side in [the settings reference](/wiki/settings/).
 
 ## Search
 

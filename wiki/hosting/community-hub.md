@@ -1,6 +1,8 @@
 The Community Hub is where scenarios are shared. It is the **Community** tab of the main menu,
 and it is where every scenario except Modern Day comes from — including the official presets.
 
+You will also see it called the **Scenario Hub**; they are the same thing.
+
 ## Browsing
 
 The tab is laid out in shelves:

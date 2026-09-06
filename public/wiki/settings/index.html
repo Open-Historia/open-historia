@@ -121,13 +121,135 @@
     <h1>Settings Reference</h1>
     <p class="tagline">Every option in the game, what it does, and which ones are worth changing first.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#help-and-community">Help and community</a></li><li class="d2"><a href="#cheats">Cheats</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#what-the-beta-adds">What the beta adds</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
-    <p>Everything lives behind the <strong>☰</strong> button. This page lists what each option does and which ones
-are actually worth changing.</p>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Settings live behind the <strong>☰</strong> button — but <em>what you find there depends on which build you are
+running</em>, and the two are laid out very differently. Work out which one you have first;
+everything below is easier once you know.</p>
+<h2 id="which-menu-am-i-looking-at">Which menu am I looking at?</h2>
+<p class="beta-note"><b>The stable and beta builds have different menus.</b> They hold much the
+same options, but they are organised differently and reached differently. The beta build installs
+alongside the stable app, so it is entirely possible to have both on one machine.</p><h3 id="stable-one-flat-menu">Stable — one flat menu</h3>
+<p>Press <strong>☰</strong> and everything is in a single scrolling list, top to bottom:</p>
+<pre><code>☰ ─────────────────────────────────────────
+  AI provider              ▾
+  API key / model / endpoint
+  Custom parameters (JSON)
+  UI language              ▾
+  AI chat language         ▾
+  Fullscreen               [ ]
+  3D Globe                 [ ]
+  3D Terrain               [ ]
+  MAP
+    Hide country labels             [ ]
+    Reduce motion                   [ ]
+    Disable idle globe rotation     [ ]
+    Disable camera movement         [ ]
+  Limit AI generation      [ ]
+  🧪 Cheats
+  📖 Wiki
+  Discord · Reddit · GitHub
+</code></pre>
+<p>No tabs, no sections, no search. Scroll to what you want.</p>
+<h3 id="beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</h3>
+<p>Press <strong>☰</strong> and you get a small <strong>quick menu</strong> with four tabs:</p>
+<pre><code>☰ ┌── Game ──┬── Tools ──┬── Settings ──┬── Help ──┐
+  │                                                │
+  │ Game      current campaign · switch ·          │
+  │           duplicate · import · manage          │
+  │                                                │
+  │ Tools     🧪 Cheats                            │
+  │           Events / Timeline                    │
+  │           AI debug console                     │
+  │                                                │
+  │ Settings  ◫ General      ◇ Map                 │
+  │           ✦ AI           ⌘ Advanced            │
+  │                                                │
+  │ Help      Guides · Report a Bug ·              │
+  │           Discord · Reddit · GitHub            │
+  └────────────────────────────────────────────────┘
+</code></pre>
+<p>Choosing one of the four <strong>Settings</strong> tiles opens a full-screen <strong>workspace</strong> with that section
+selected:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Section</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>◫</td>
+<td><strong>General</strong></td>
+<td>Language, display, accessibility</td>
+</tr>
+<tr>
+<td>◇</td>
+<td><strong>Map</strong></td>
+<td>Basemap, labels, globe, terrain, camera</td>
+</tr>
+<tr>
+<td>✦</td>
+<td><strong>AI</strong></td>
+<td>Provider, model, reasoning, limits, telemetry</td>
+</tr>
+<tr>
+<td>⌘</td>
+<td><strong>Advanced</strong></td>
+<td>Provider parameters, per-task models, profiles, network, diagnostics</td>
+</tr>
+</tbody></table></div>
+<p>So on beta, reaching a setting is two steps — the quick menu, then the section — while tools that
+are buried on stable, such as cheats and the timeline, are one click from the quick menu.</p>
+<h3 id="translating-between-the-two">Translating between the two</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>I want to…</th>
+<th>Stable</th>
+<th>Beta</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Set my API key</td>
+<td>☰ → top of the list</td>
+<td>☰ → Settings → <strong>AI</strong></td>
+</tr>
+<tr>
+<td>Change language</td>
+<td>☰ → UI language</td>
+<td>☰ → Settings → <strong>General</strong></td>
+</tr>
+<tr>
+<td>Turn off the globe</td>
+<td>☰ → 3D Globe</td>
+<td>☰ → Settings → <strong>Map</strong></td>
+</tr>
+<tr>
+<td>Open cheats</td>
+<td>☰ → 🧪 Cheats</td>
+<td>☰ → <strong>Tools</strong> → Cheats</td>
+</tr>
+<tr>
+<td>Read the wiki</td>
+<td>☰ → 📖 Wiki</td>
+<td>☰ → <strong>Help</strong> → Guides</td>
+</tr>
+<tr>
+<td>Switch campaign</td>
+<td>Exit to the main menu</td>
+<td>☰ → <strong>Game</strong></td>
+</tr>
+<tr>
+<td>See what the AI cost</td>
+<td><em>(not available)</em></td>
+<td>☰ → <strong>Tools</strong> → AI debug console</td>
+</tr>
+</tbody></table></div>
+<p>Everything from here down applies to both builds unless it says otherwise.</p>
 <h2 id="ai-provider">AI provider</h2>
-<p>The top of the menu, and the only part you must set up. Provider, API key, model, endpoint —
-covered in full in <a href="/wiki/ai-setup/">connecting an AI provider</a> and
-<a href="/wiki/ai-providers/">AI providers and models</a>.</p>
+<p>The only part you must set up. Covered in full in
+<a href="/wiki/ai-setup/">connecting an AI provider</a> and <a href="/wiki/ai-providers/">AI providers and models</a>.</p>
 <div class="table-scroll"><table>
 <thead>
 <tr>
@@ -145,7 +267,7 @@ covered in full in <a href="/wiki/ai-setup/">connecting an AI provider</a> and
 </tr>
 <tr>
 <td><strong>Model</strong></td>
-<td>Which model to use. Defaults are sensible; see below.</td>
+<td>Defaults are sensible; see below.</td>
 </tr>
 <tr>
 <td><strong>API Endpoint</strong></td>
@@ -153,7 +275,7 @@ covered in full in <a href="/wiki/ai-setup/">connecting an AI provider</a> and
 </tr>
 <tr>
 <td><strong>Model reasoning</strong></td>
-<td>Enables extended reasoning on models that support it. Slower, better on hard turns.</td>
+<td>Extended reasoning on models that support it. Slower, better on hard turns.</td>
 </tr>
 <tr>
 <td><strong>Custom parameters (JSON)</strong></td>
@@ -161,7 +283,7 @@ covered in full in <a href="/wiki/ai-setup/">connecting an AI provider</a> and
 </tr>
 <tr>
 <td><strong>Strict tool schema</strong></td>
-<td>For OpenAI-compatible endpoints that handle structured output badly. Try toggling it if turns keep failing to parse.</td>
+<td>For OpenAI-compatible endpoints that handle structured output badly. Toggle it if turns keep failing to parse.</td>
 </tr>
 </tbody></table></div>
 <p>Default models: Gemini <code>gemini-3.5-flash-lite</code>, Anthropic <code>claude-haiku-4-5</code>, and
@@ -224,13 +346,9 @@ run an English interface with French diplomacy, or the reverse.</p>
 <td>Stops the camera flying to each event during the <a href="/wiki/events/">staged reveal</a>.</td>
 </tr>
 </tbody></table></div>
-<p>The <strong>basemap</strong> — which imagery sits under the political colours — is chosen from the map
-controls rather than this menu. See <a href="/wiki/world-map/">the world map</a> for the ten options.</p>
-<h2 id="help-and-community">Help and community</h2>
-<p>A <strong>📖 Guides</strong> link (which brings you here), plus Discord, Reddit and GitHub.</p>
-<h2 id="cheats">Cheats</h2>
-<p>The menu also opens the <strong>🧪 Cheats</strong> panel. See
-<a href="/wiki/cheats/">cheats and the GM console</a>.</p>
+<p>The <strong>basemap</strong> — the imagery under the political colours — is chosen from the map controls on
+stable, and from Settings → Map on beta. See <a href="/wiki/world-map/">the world map</a> for the ten
+options.</p>
 <h2 id="what-to-change-first">What to change first</h2>
 <ol>
 <li><strong>Set up your AI provider.</strong> Nothing else matters until this is done.</li>
@@ -241,17 +359,29 @@ the game to render.</li>
 <li><strong>Reduce motion</strong> if the interface feels restless.</li>
 </ol>
 <h2 id="where-settings-are-stored">Where settings are stored</h2>
-<p>All of it lives in your browser&#39;s local storage, or in the desktop app&#39;s own profile. That means
-settings are <strong>per device and per install</strong>, not per save — moving a campaign to another machine
+<p>All of it lives in your browser&#39;s local storage, or in the desktop app&#39;s own profile. Settings
+are therefore <strong>per device and per install</strong>, not per save — moving a campaign to another machine
 does not carry your API key with it, which is deliberate.</p>
-<p>It also means the beta build keeps entirely separate settings from the stable one.</p>
-<h2 id="what-the-beta-adds">What the beta adds</h2>
-<p class="beta-note"><b>Beta channel only.</b></p><p>The beta channel reorganises this into a four-section workspace (General, Map, AI, Advanced) and
-adds per-task model routing, saved configuration profiles, prompt caching, batched background
-tasks, an AI debug console showing every call and its cost, telemetry and generation ratings, a
-network-sharing panel, and a copyable diagnostics log.</p>
+<p>It also means <strong>the beta build keeps entirely separate settings from the stable one</strong>. Installing
+beta does not inherit your stable API key; you will need to paste it in again.</p>
+<h2 id="beta-only-options">Beta-only options</h2>
+<p class="beta-note"><b>Beta channel only.</b> These have no equivalent on stable.</p><p>Under <strong>Settings → AI</strong> and <strong>Settings → Advanced</strong>:</p>
+<ul>
+<li><strong>Per-task model routing</strong> — a cheap model for background work, a strong one for the jump.</li>
+<li><strong>Configuration profiles</strong> — saved provider setups you can switch between.</li>
+<li><strong>Prompt caching</strong> and <strong>batched background tasks</strong> (Anthropic), roughly halving the cost of
+background work.</li>
+<li><strong>AI debug console</strong> — every call with its prompt, answer and cost. Also on the Tools tab.</li>
+<li><strong>Telemetry</strong> and <strong>generation ratings</strong>.</li>
+<li><strong>Network sharing</strong> — an explicit toggle for letting other devices reach your server. On
+stable the server is reachable from your network with no toggle and no password; see
+<a href="/wiki/self-hosting/">hosting a server</a>.</li>
+<li><strong>Diagnostics log</strong> with detailed logging, copyable for bug reports.</li>
+<li><strong>Beta unit system</strong> — see <a href="/wiki/military/">military and combat</a>.</li>
+</ul>
 <h2 id="next">Next</h2>
 <ul>
+<li><a href="/wiki/interface/">The interface</a> — the rest of the screen.</li>
 <li><a href="/wiki/ai-providers/">AI providers and models</a> — choosing a model properly.</li>
 <li><a href="/wiki/troubleshooting/">Troubleshooting</a> — when a setting does not fix it.</li>
 </ul>
