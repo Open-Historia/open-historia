@@ -67,6 +67,35 @@ stalled generation and falls back to a canned event rather than waiting indefini
 for *silence* rather than total elapsed time, so a slow-but-working model is not cut off
 mid-answer.
 
+## Long skips in segments
+
+<p class="beta-note"><b>Beta channel only.</b> On stable, every skip is a single request and
+there is no setting.</p>
+
+**Settings → AI → "Generate long time skips in segments"**, off by default.
+
+Off, the whole skip is generated in one request. On, a skip of more than a few months is
+generated as **several shorter requests, merged into one round**. The result still arrives as a
+single turn with one set of events — you are not asked anything in between.
+
+The trade:
+
+| | Off (default) | On |
+|---|---|---|
+| Requests per skip | One | Several |
+| Token cost | Lower | Higher — the prompt is re-sent per segment |
+| Timeouts on long skips | More likely | Far less likely |
+| How the turn reads | More like one continuous stretch | Slightly more episodic |
+
+**Turn it on if long skips keep failing or timing out**, which is the usual symptom on a hosted
+provider that drops long requests. Leave it off otherwise: it costs more tokens, and a year
+generated in one pass hangs together better than one generated in pieces.
+
+It only affects long skips. A week or a month is a single request either way.
+
+Each segment is validated against the world as the previous segments left it, so the pieces
+cannot contradict each other — a war started in the first segment is real by the second.
+
 ## Undo
 
 **↩ Undo last turn** is in the time panel, and it tells you how many turns can be undone.

@@ -198,6 +198,21 @@ header {
 .wiki-main ul, .wiki-main ol { margin: 0 0 1rem; padding-left: 1.5rem; }
 .wiki-main li { margin-bottom: 0.4rem; }
 .wiki-main img { max-width: 100%; height: auto; border-radius: 0.5rem; border: 1px solid var(--line); }
+
+/* Markdown renders "![alt](src)" then an italic caption line as ONE paragraph, so the image is
+   an inline box with the caption flowing after it. On a wide screenshot that wraps and looks
+   right by accident; on a cropped panel there is room left over and the caption sits BESIDE the
+   image instead of under it. Force both to blocks so the caption is always below. */
+.wiki-main p > img { display: block; margin: 0 auto 0.55rem; }
+.wiki-main p > img + em {
+  display: block;
+  text-align: center;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--sepia);
+  max-width: 34rem;
+  margin: 0 auto;
+}
 .wiki-main hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 .wiki-main blockquote {
   margin: 0 0 1rem; padding: 0.6rem 1rem;

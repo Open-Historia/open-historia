@@ -121,7 +121,7 @@
     <h1>Events and History</h1>
     <p class="tagline">How a turn&#39;s events are revealed one at a time, what they change, and how the world remembers them.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#events-change-things">Events change things</a></li><li class="d2"><a href="#the-staged-reveal">The staged reveal</a></li><li class="d2"><a href="#reading-a-turn-well">Reading a turn well</a></li><li class="d2"><a href="#major-and-minor">Major and minor</a></li><li class="d2"><a href="#what-the-world-remembers">What the world remembers</a></li><li class="d2"><a href="#before-round-one">Before round one</a></li><li class="d2"><a href="#if-a-turn-produced-nothing-useful">If a turn produced nothing useful</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#events-change-things">Events change things</a></li><li class="d2"><a href="#the-staged-reveal">The staged reveal</a></li><li class="d2"><a href="#reading-a-turn-well">Reading a turn well</a></li><li class="d2"><a href="#major-and-minor">Major and minor</a></li><li class="d2"><a href="#event-categories">Event categories</a></li><li class="d2"><a href="#what-the-world-remembers">What the world remembers</a></li><li class="d2"><a href="#before-round-one">Before round one</a></li><li class="d2"><a href="#if-a-turn-produced-nothing-useful">If a turn produced nothing useful</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>Events are what a time skip produces. Each one is a piece of narrated history — a crisis, a
 treaty, a battle, an election — and most of them carry real changes to the world attached.</p>
 <p>Open the history with <strong>«</strong> on the date pill.</p>
@@ -161,6 +161,15 @@ plan around next turn.</li>
 <p>Country dossiers let you filter their event history by <strong>All</strong>, <strong>Major</strong> or <strong>Minor</strong>. Major
 events are the ones that reshaped something; minor ones are the connective tissue. When catching
 up on a country you have not watched for a while, Major is the fast read.</p>
+<h2 id="event-categories">Event categories</h2>
+<p class="beta-note"><b>Beta channel only.</b> Stable filters a country's history by Major and
+Minor instead; see above.</p><p>On beta every event carries up to <strong>three</strong> category tags, drawn from a fixed set of six:</p>
+<p><strong>Military · Diplomacy · Economy · Politics · Culture · Disaster</strong></p>
+<p>The history panel shows a filter chip for each category <strong>present in that turn</strong> — you never see
+a chip for a category nothing matched. Use them to read a busy turn one thread at a time: all the
+military events, then all the diplomacy.</p>
+<p>The categories are fixed. The model cannot invent a seventh, and anything it returns that is not
+one of the six is dropped.</p>
 <h2 id="what-the-world-remembers">What the world remembers</h2>
 <p>The game keeps the <strong>last 12 turns</strong> in full detail. Older turns do not vanish — they are
 compacted into a running summary, so the world still knows that a war happened in year two even

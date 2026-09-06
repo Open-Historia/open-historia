@@ -110,6 +110,26 @@ This last one is the most powerful field in the editor. It is where you write th
 
 **Bundles** — download the whole scenario as a `.zip` or `.json`.
 
+## The Scenario Workshop
+
+<p class="beta-note"><b>Beta channel only.</b></p>
+
+The beta editor adds three panels for building a world's politics rather than its shapes:
+
+**Polities** — a registry of every country in the scenario, edited in one place rather than by
+painting regions one at a time. On beta the region owner field also takes a name that does not
+exist yet and creates the polity from it, so you can still work map-first.
+
+**Topology** — tools for the relationships between regions: adjacency and the structure that sits
+underneath the geometry.
+
+**Province import** — turns a raster image into provinces. Feed it a map coloured by province and
+it traces the regions out for you, which is dramatically faster than drawing a few hundred by
+hand.
+
+If you are authoring a large historical scenario, these are the reason to build it on beta even
+if you play on stable — a scenario is portable between the two.
+
 ## Sharing what you make
 
 Export a bundle and publish it to the [Community Hub](/wiki/community-hub/). Bundles carry the

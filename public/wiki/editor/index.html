@@ -121,7 +121,7 @@
     <h1>The Map Editor</h1>
     <p class="tagline">Draw your own world: regions, owners, cities, flags, basemaps and imported maps.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-tools">The tools</a></li><li class="d3"><a href="#two-things-that-make-it-pleasant">Two things that make it pleasant</a></li><li class="d2"><a href="#creating-countries">Creating countries</a></li><li class="d2"><a href="#region-properties">Region properties</a></li><li class="d2"><a href="#panels">Panels</a></li><li class="d2"><a href="#importing">Importing</a></li><li class="d2"><a href="#reference-tracing">Reference tracing</a></li><li class="d2"><a href="#saving-and-playing">Saving and playing</a></li><li class="d2"><a href="#the-scenario-editor">The scenario editor</a></li><li class="d2"><a href="#sharing-what-you-make">Sharing what you make</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-tools">The tools</a></li><li class="d3"><a href="#two-things-that-make-it-pleasant">Two things that make it pleasant</a></li><li class="d2"><a href="#creating-countries">Creating countries</a></li><li class="d2"><a href="#region-properties">Region properties</a></li><li class="d2"><a href="#panels">Panels</a></li><li class="d2"><a href="#importing">Importing</a></li><li class="d2"><a href="#reference-tracing">Reference tracing</a></li><li class="d2"><a href="#saving-and-playing">Saving and playing</a></li><li class="d2"><a href="#the-scenario-editor">The scenario editor</a></li><li class="d2"><a href="#the-scenario-workshop">The Scenario Workshop</a></li><li class="d2"><a href="#sharing-what-you-make">Sharing what you make</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>The map editor is a full vector editor for building worlds. Draw regions, assign owners, place
 cities, set flags and colours, import a background, and hit <strong>Apply &amp; Play</strong> to start a campaign
 on what you made.</p>
@@ -266,6 +266,18 @@ This last one is the most powerful field in the editor. It is where you write th
 <p><strong>Prompts</strong> — per-section prompt overrides, for authors who want to change how the world thinks.</p>
 <p><strong>Assets</strong> — cover image, cities, colours, countries, regions.</p>
 <p><strong>Bundles</strong> — download the whole scenario as a <code>.zip</code> or <code>.json</code>.</p>
+<h2 id="the-scenario-workshop">The Scenario Workshop</h2>
+<p class="beta-note"><b>Beta channel only.</b></p><p>The beta editor adds three panels for building a world&#39;s politics rather than its shapes:</p>
+<p><strong>Polities</strong> — a registry of every country in the scenario, edited in one place rather than by
+painting regions one at a time. On beta the region owner field also takes a name that does not
+exist yet and creates the polity from it, so you can still work map-first.</p>
+<p><strong>Topology</strong> — tools for the relationships between regions: adjacency and the structure that sits
+underneath the geometry.</p>
+<p><strong>Province import</strong> — turns a raster image into provinces. Feed it a map coloured by province and
+it traces the regions out for you, which is dramatically faster than drawing a few hundred by
+hand.</p>
+<p>If you are authoring a large historical scenario, these are the reason to build it on beta even
+if you play on stable — a scenario is portable between the two.</p>
 <h2 id="sharing-what-you-make">Sharing what you make</h2>
 <p>Export a bundle and publish it to the <a href="/wiki/community-hub/">Community Hub</a>. Bundles carry the
 map, cities, colours, flags and any custom basemap, so someone importing it gets exactly what you

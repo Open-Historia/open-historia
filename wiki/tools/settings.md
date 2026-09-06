@@ -205,19 +205,41 @@ pause on open is normal for vNext, not a hang. The legacy renderer opens faster.
 
 <p class="beta-note"><b>Beta channel only.</b> These have no equivalent on stable.</p>
 
-Under **Settings → AI** and **Settings → Advanced**:
+Every one of these is under **Settings → AI** or **Settings → Advanced**, and none has an
+equivalent on stable.
 
-- **Per-task model routing** — a cheap model for background work, a strong one for the jump.
-- **Configuration profiles** — saved provider setups you can switch between.
-- **Prompt caching** and **batched background tasks** (Anthropic), roughly halving the cost of
-  background work.
-- **AI debug console** — every call with its prompt, answer and cost. Also on the Tools tab.
-- **Telemetry** and **generation ratings**.
-- **Network sharing** — an explicit toggle for letting other devices reach your server. On
-  stable the server is reachable from your network with no toggle and no password; see
-  [hosting a server](/wiki/self-hosting/).
-- **Diagnostics log** with detailed logging, copyable for bug reports.
-- **Beta unit system** — see [military and combat](/wiki/military/).
+### Cost and speed
+
+| Setting | |
+|---|---|
+| **Generate long time skips in segments** | A long skip runs as several shorter requests merged into one round. Costs more tokens; far less likely to time out. See [time and turns](/wiki/time/). |
+| **Batch background AI tasks** | Anthropic only. Background work (such as history consolidation) rides the Message Batches API at roughly half price. It is not instant, which is why it is only used for work you are not waiting on. |
+| **Per-task model routing** | A cheap model for background tasks, a strong one for the jump itself. The single most effective way to cut cost without making turns worse. |
+| **Configuration profiles** | Saved provider setups — key, model, endpoint, parameters — that you can switch between by name. |
+
+### Seeing what the AI did
+
+| Setting | |
+|---|---|
+| **AI debug console** | Every call with its task, model, prompt, answer, token counts, latency and cost. Also on the quick menu's Tools tab. |
+| **Record AI telemetry** | Keeps that per-call record. On by default. Turning it off empties the debug console. |
+| **Rate AI generations** | Shows a 1–10 rating bar after each jump so you can score what the model produced. Feedback for you, not sent anywhere. |
+
+### Diagnostics and network
+
+| Setting | |
+|---|---|
+| **Keep a diagnostics log** | Records errors, API failures and the exact context the model was given, copyable for a bug report. |
+| **Detailed logging** | Verbose mode for the above. Turn it on before reproducing a bug, not before. |
+| **Let other devices connect** | Opens the server to your network. Beta binds to loopback only by default; stable is open with no toggle and no password. See [hosting a server](/wiki/self-hosting/). |
+
+### Gameplay and presentation
+
+| Setting | |
+|---|---|
+| **Beta unit system** | AI-driven unit movement with postures and standing orders, instead of hands-on control. Stored per save, not per browser. See [military and combat](/wiki/military/). |
+| **Legacy map renderer** | The pre-vNext renderer. **Restart the app after switching.** See above. |
+| **Basemap** and **label font** | Beta moves the basemap picker into Settings → Map and adds a label-font override; on stable the basemap is chosen from the map controls. |
 
 ## Next
 

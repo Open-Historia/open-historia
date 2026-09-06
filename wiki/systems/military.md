@@ -163,6 +163,9 @@ does not annex it. See [cities and structures](/wiki/cities/).
 
 ## The beta unit system
 
+<p class="beta-note"><b>Beta channel only.</b> Everything above describes the stable build's
+classic system.</p>
+
 The beta channel replaces hands-on control with an AI-driven system: units carry postures and
 standing orders, the engine advances them at era-appropriate speeds across multiple turns, and
 the model adjudicates combat rather than the local resolver. Saves are compatible in both

@@ -121,7 +121,7 @@
     <h1>Time and Turns</h1>
     <p class="tagline">Nothing happens until you skip time. Jump lengths, auto-jump, cancelling a stuck turn, and undoing one that went badly.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#fixed-jumps">Fixed jumps</a></li><li class="d2"><a href="#custom-jumps">Custom jumps</a></li><li class="d2"><a href="#auto-jump">Auto-jump</a></li><li class="d2"><a href="#how-far-should-i-skip">How far should I skip?</a></li><li class="d2"><a href="#while-it-runs">While it runs</a></li><li class="d2"><a href="#undo">Undo</a></li><li class="d2"><a href="#rounds-and-dates">Rounds and dates</a></li><li class="d2"><a href="#the-first-turn-is-special">The first turn is special</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#fixed-jumps">Fixed jumps</a></li><li class="d2"><a href="#custom-jumps">Custom jumps</a></li><li class="d2"><a href="#auto-jump">Auto-jump</a></li><li class="d2"><a href="#how-far-should-i-skip">How far should I skip?</a></li><li class="d2"><a href="#while-it-runs">While it runs</a></li><li class="d2"><a href="#long-skips-in-segments">Long skips in segments</a></li><li class="d2"><a href="#undo">Undo</a></li><li class="d2"><a href="#rounds-and-dates">Rounds and dates</a></li><li class="d2"><a href="#the-first-turn-is-special">The first turn is special</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>Open Historia has no tick. There is no clock running in the background, nothing accumulates
 while you think, and no timer forces your hand. The world advances <strong>only</strong> when you press the
 button, and only as far as you tell it to.</p>
@@ -203,6 +203,48 @@ as it was.</p>
 stalled generation and falls back to a canned event rather than waiting indefinitely. It watches
 for <em>silence</em> rather than total elapsed time, so a slow-but-working model is not cut off
 mid-answer.</p>
+<h2 id="long-skips-in-segments">Long skips in segments</h2>
+<p class="beta-note"><b>Beta channel only.</b> On stable, every skip is a single request and
+there is no setting.</p><p><strong>Settings → AI → &quot;Generate long time skips in segments&quot;</strong>, off by default.</p>
+<p>Off, the whole skip is generated in one request. On, a skip of more than a few months is
+generated as <strong>several shorter requests, merged into one round</strong>. The result still arrives as a
+single turn with one set of events — you are not asked anything in between.</p>
+<p>The trade:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Off (default)</th>
+<th>On</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Requests per skip</td>
+<td>One</td>
+<td>Several</td>
+</tr>
+<tr>
+<td>Token cost</td>
+<td>Lower</td>
+<td>Higher — the prompt is re-sent per segment</td>
+</tr>
+<tr>
+<td>Timeouts on long skips</td>
+<td>More likely</td>
+<td>Far less likely</td>
+</tr>
+<tr>
+<td>How the turn reads</td>
+<td>More like one continuous stretch</td>
+<td>Slightly more episodic</td>
+</tr>
+</tbody></table></div>
+<p><strong>Turn it on if long skips keep failing or timing out</strong>, which is the usual symptom on a hosted
+provider that drops long requests. Leave it off otherwise: it costs more tokens, and a year
+generated in one pass hangs together better than one generated in pieces.</p>
+<p>It only affects long skips. A week or a month is a single request either way.</p>
+<p>Each segment is validated against the world as the previous segments left it, so the pieces
+cannot contradict each other — a war started in the first segment is real by the second.</p>
 <h2 id="undo">Undo</h2>
 <p><strong>↩ Undo last turn</strong> is in the time panel, and it tells you how many turns can be undone.</p>
 <p>Undo restores the world, the game state, the events, your action queue, the chat history and the

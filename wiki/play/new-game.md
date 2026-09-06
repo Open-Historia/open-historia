@@ -81,6 +81,15 @@ get you an event about a policy that did not work.
 Difficulty is set when you start and stored with the game, but you can change it mid-campaign
 from the [cheats panel](/wiki/cheats/).
 
+## Opening a campaign
+
+Starting or resuming a game shows a loading screen while the map is drawn, naming the scenario
+and the country. On stable this is brief.
+
+<p class="beta-note"><b>On beta this takes noticeably longer</b> — Map vNext dissolves every
+polity's surface before revealing the map, so a pause on "drawing borders and labels" is normal
+rather than a hang. The <a href="/wiki/settings/">legacy renderer</a> opens faster.</p>
+
 ## What gets created
 
 Starting a game copies the scenario's world into a new playthrough and gives it its own set of

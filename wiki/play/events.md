@@ -52,6 +52,22 @@ Country dossiers let you filter their event history by **All**, **Major** or **M
 events are the ones that reshaped something; minor ones are the connective tissue. When catching
 up on a country you have not watched for a while, Major is the fast read.
 
+## Event categories
+
+<p class="beta-note"><b>Beta channel only.</b> Stable filters a country's history by Major and
+Minor instead; see above.</p>
+
+On beta every event carries up to **three** category tags, drawn from a fixed set of six:
+
+**Military · Diplomacy · Economy · Politics · Culture · Disaster**
+
+The history panel shows a filter chip for each category **present in that turn** — you never see
+a chip for a category nothing matched. Use them to read a busy turn one thread at a time: all the
+military events, then all the diplomacy.
+
+The categories are fixed. The model cannot invent a seventh, and anything it returns that is not
+one of the six is dropped.
+
 ## What the world remembers
 
 The game keeps the **last 12 turns** in full detail. Older turns do not vanish — they are
