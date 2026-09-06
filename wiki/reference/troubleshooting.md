@@ -53,6 +53,69 @@ Then: **Cancel** in the time panel always works and leaves the world untouched.
 If it is a local model, it may genuinely be that slow — check whether it is producing tokens at
 all. If it is a cloud model, you may be rate limited.
 
+## When a request fails
+
+<p class="beta-note"><b>Beta channel only.</b> The stable build has no retry controls — a failed
+request there means redoing the action, or undoing the turn.</p>
+
+Model calls fail: a provider is overloaded, a rate limit bites, a response comes back empty.
+Beta's answer is that **a failure should cost you the thing that failed, and nothing else**.
+
+### The advisor
+
+A failed answer appears as an error in the thread with a **Retry** button. Press it and the same
+question is asked again — you do not retype anything, and if it succeeds the thread reads as
+though the error never happened.
+
+![An advisor request that failed, with Retry](/wiki/img/retry-advisor.jpg)
+*Your question is kept above the error, so Retry re-asks it as written. **Copy for a bug report**
+puts the failure and its context on the clipboard in one go.*
+
+Retry is offered on the **newest** error only. Most advisor failures are the transport or an
+overloaded provider rather than anything about your question, and the transport has already
+waited and tried once by the time you see this.
+
+### Diplomatic messages
+
+The same, in the chat. A message that fails to get a reply shows an error bubble with **Retry**
+on it. Pressing it re-sends that message; the conversation carries on as if it had worked first
+time.
+
+![A diplomatic message that failed, with Retry](/wiki/img/retry-diplomacy.jpg)
+*The message you sent stays in the thread. Retry asks Berlin again; nothing needs retyping.*
+
+### A held time skip
+
+This is the one that saves real time. When a long skip is generated in segments and one segment
+does not come back, the turn is **held**, not failed:
+
+- Nothing has been written. Your campaign is still on its old date.
+- The segments that already succeeded are still in hand.
+- **Retry re-runs only the segment that failed** — the minutes spent on the earlier ones are not
+  spent again.
+
+The panel goes amber rather than red for exactly that reason: a held turn is recoverable. If a
+retry fails it says so plainly and counts the attempts, rather than re-showing the same message
+and looking like a dead button. Discard the turn and run it as a shorter skip if it keeps
+failing. See [time and turns](/wiki/time/).
+
+### A held Projects board
+
+The turn's events can succeed while the **Projects & Operations** update fails. When that happens
+the turn is held the same way: *"Your events are ready, but the Projects & Operations board did
+not update, so nothing has been saved yet."*
+
+**Retry the board** and it finishes the turn, keeping the events that already came back. You do
+not re-run the whole simulation to fix a board that was the only thing to fail. Discard it and
+the turn runs again from the start.
+
+The turn is released before the retry runs, so a turn can never be applied twice, and it is only
+held again if the **board** fails a second time.
+
+### If retrying does not help
+
+Undo the turn from the time panel and try a shorter skip, or a different model.
+
 ## Rate limits
 
 Symptoms: turns fail intermittently, or stall on long jumps while short ones work.
@@ -124,8 +187,15 @@ Also not code-signed. Right-click the app and choose **Open**, then confirm. Onc
 
 ## Reporting a bug
 
-Copy the **Diagnostics Log** from the cheats panel and open an issue at
-[GitHub](https://github.com/Open-Historia/open-historia/issues). The
+**Turn on detailed logging first** — Settings → Advanced — then reproduce the problem. It records
+far more than the normal log, including the full text of the exchange that went wrong, and it is
+usually the difference between a report someone can act on and one that cannot be diagnosed. See
+[the settings reference](/wiki/settings/#detailed-logging).
+
+Then copy the **Diagnostics Log** from the cheats panel and open an issue at
+[GitHub](https://github.com/Open-Historia/open-historia/issues). On beta, an advisor or chat
+error also has **Copy for a bug report** on the error itself, which grabs that failure and its
+context without going near the log. The
 [Discord](https://discord.gg/QaqAK7fQAg) is faster for "is this just me?".
 
 Include your platform, your build (stable or beta), your provider and model, and what you were

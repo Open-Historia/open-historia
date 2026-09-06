@@ -121,7 +121,7 @@
     <h1>Troubleshooting</h1>
     <p class="tagline">Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-map-is-blank">The map is blank</a></li><li class="d2"><a href="#the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</a></li><li class="d2"><a href="#turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</a></li><li class="d2"><a href="#turns-hang-forever">Turns hang forever</a></li><li class="d2"><a href="#rate-limits">Rate limits</a></li><li class="d2"><a href="#cors-errors-with-a-local-model">CORS errors with a local model</a></li><li class="d2"><a href="#everything-is-slow">Everything is slow</a></li><li class="d2"><a href="#i-lost-my-games">I lost my games</a></li><li class="d2"><a href="#a-country-is-behaving-incoherently">A country is behaving incoherently</a></li><li class="d2"><a href="#quotserver-stoppedquot">&quot;Server stopped&quot;</a></li><li class="d2"><a href="#windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</a></li><li class="d2"><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li><li class="d2"><a href="#reporting-a-bug">Reporting a bug</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-map-is-blank">The map is blank</a></li><li class="d2"><a href="#the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</a></li><li class="d2"><a href="#turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</a></li><li class="d2"><a href="#turns-hang-forever">Turns hang forever</a></li><li class="d2"><a href="#when-a-request-fails">When a request fails</a></li><li class="d3"><a href="#the-advisor">The advisor</a></li><li class="d3"><a href="#diplomatic-messages">Diplomatic messages</a></li><li class="d3"><a href="#a-held-time-skip">A held time skip</a></li><li class="d3"><a href="#a-held-projects-board">A held Projects board</a></li><li class="d3"><a href="#if-retrying-does-not-help">If retrying does not help</a></li><li class="d2"><a href="#rate-limits">Rate limits</a></li><li class="d2"><a href="#cors-errors-with-a-local-model">CORS errors with a local model</a></li><li class="d2"><a href="#everything-is-slow">Everything is slow</a></li><li class="d2"><a href="#i-lost-my-games">I lost my games</a></li><li class="d2"><a href="#a-country-is-behaving-incoherently">A country is behaving incoherently</a></li><li class="d2"><a href="#quotserver-stoppedquot">&quot;Server stopped&quot;</a></li><li class="d2"><a href="#windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</a></li><li class="d2"><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li><li class="d2"><a href="#reporting-a-bug">Reporting a bug</a></li></ul></nav>
     <p>The common failures, and what actually fixes them.</p>
 <p>Before anything else: the <a href="/wiki/cheats/">cheats panel</a> has a <strong>Diagnostics Log</strong> showing errors,
 API failures and the exact context the model was given. It usually explains the problem
@@ -165,6 +165,50 @@ will not cut off a slow-but-working model.</p>
 <p>Then: <strong>Cancel</strong> in the time panel always works and leaves the world untouched.</p>
 <p>If it is a local model, it may genuinely be that slow — check whether it is producing tokens at
 all. If it is a cloud model, you may be rate limited.</p>
+<h2 id="when-a-request-fails">When a request fails</h2>
+<p class="beta-note"><b>Beta channel only.</b> The stable build has no retry controls — a failed
+request there means redoing the action, or undoing the turn.</p><p>Model calls fail: a provider is overloaded, a rate limit bites, a response comes back empty.
+Beta&#39;s answer is that <strong>a failure should cost you the thing that failed, and nothing else</strong>.</p>
+<h3 id="the-advisor">The advisor</h3>
+<p>A failed answer appears as an error in the thread with a <strong>Retry</strong> button. Press it and the same
+question is asked again — you do not retype anything, and if it succeeds the thread reads as
+though the error never happened.</p>
+<p><img src="/wiki/img/retry-advisor.jpg" alt="An advisor request that failed, with Retry">
+<em>Your question is kept above the error, so Retry re-asks it as written. <strong>Copy for a bug report</strong>
+puts the failure and its context on the clipboard in one go.</em></p>
+<p>Retry is offered on the <strong>newest</strong> error only. Most advisor failures are the transport or an
+overloaded provider rather than anything about your question, and the transport has already
+waited and tried once by the time you see this.</p>
+<h3 id="diplomatic-messages">Diplomatic messages</h3>
+<p>The same, in the chat. A message that fails to get a reply shows an error bubble with <strong>Retry</strong>
+on it. Pressing it re-sends that message; the conversation carries on as if it had worked first
+time.</p>
+<p><img src="/wiki/img/retry-diplomacy.jpg" alt="A diplomatic message that failed, with Retry">
+<em>The message you sent stays in the thread. Retry asks Berlin again; nothing needs retyping.</em></p>
+<h3 id="a-held-time-skip">A held time skip</h3>
+<p>This is the one that saves real time. When a long skip is generated in segments and one segment
+does not come back, the turn is <strong>held</strong>, not failed:</p>
+<ul>
+<li>Nothing has been written. Your campaign is still on its old date.</li>
+<li>The segments that already succeeded are still in hand.</li>
+<li><strong>Retry re-runs only the segment that failed</strong> — the minutes spent on the earlier ones are not
+spent again.</li>
+</ul>
+<p>The panel goes amber rather than red for exactly that reason: a held turn is recoverable. If a
+retry fails it says so plainly and counts the attempts, rather than re-showing the same message
+and looking like a dead button. Discard the turn and run it as a shorter skip if it keeps
+failing. See <a href="/wiki/time/">time and turns</a>.</p>
+<h3 id="a-held-projects-board">A held Projects board</h3>
+<p>The turn&#39;s events can succeed while the <strong>Projects &amp; Operations</strong> update fails. When that happens
+the turn is held the same way: <em>&quot;Your events are ready, but the Projects &amp; Operations board did
+not update, so nothing has been saved yet.&quot;</em></p>
+<p><strong>Retry the board</strong> and it finishes the turn, keeping the events that already came back. You do
+not re-run the whole simulation to fix a board that was the only thing to fail. Discard it and
+the turn runs again from the start.</p>
+<p>The turn is released before the retry runs, so a turn can never be applied twice, and it is only
+held again if the <strong>board</strong> fails a second time.</p>
+<h3 id="if-retrying-does-not-help">If retrying does not help</h3>
+<p>Undo the turn from the time panel and try a shorter skip, or a different model.</p>
 <h2 id="rate-limits">Rate limits</h2>
 <p>Symptoms: turns fail intermittently, or stall on long jumps while short ones work.</p>
 <p>Free tiers have per-minute limits that a long jump can exceed. Options: use the smaller/faster
@@ -218,8 +262,14 @@ being shut down by something else.</p>
 <h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
 <p>Also not code-signed. Right-click the app and choose <strong>Open</strong>, then confirm. Once only.</p>
 <h2 id="reporting-a-bug">Reporting a bug</h2>
-<p>Copy the <strong>Diagnostics Log</strong> from the cheats panel and open an issue at
-<a href="https://github.com/Open-Historia/open-historia/issues">GitHub</a>. The
+<p><strong>Turn on detailed logging first</strong> — Settings → Advanced — then reproduce the problem. It records
+far more than the normal log, including the full text of the exchange that went wrong, and it is
+usually the difference between a report someone can act on and one that cannot be diagnosed. See
+<a href="/wiki/settings/#detailed-logging">the settings reference</a>.</p>
+<p>Then copy the <strong>Diagnostics Log</strong> from the cheats panel and open an issue at
+<a href="https://github.com/Open-Historia/open-historia/issues">GitHub</a>. On beta, an advisor or chat
+error also has <strong>Copy for a bug report</strong> on the error itself, which grabs that failure and its
+context without going near the log. The
 <a href="https://discord.gg/QaqAK7fQAg">Discord</a> is faster for &quot;is this just me?&quot;.</p>
 <p>Include your platform, your build (stable or beta), your provider and model, and what you were
 doing.</p>

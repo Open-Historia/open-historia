@@ -40,6 +40,11 @@ probing.
 
 ## Group conversations
 
+![Starting a group conversation](/wiki/img/diplomacy-group-picker.jpg)
+*Starting a thread. Select as many countries as you want in it — one for a private line, several
+for a summit.*
+
+
 You can open a thread with several countries at once. Speaking passes around the participants
 in rotation, and the panel shows whose turn it is, with a **Let X speak →** control to hand the
 floor on.

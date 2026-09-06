@@ -121,7 +121,7 @@
     <h1>Settings Reference</h1>
     <p class="tagline">Every option in the game, what it does, and which ones are worth changing first.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#the-map-renderer">The map renderer</a></li><li class="d3"><a href="#restart-the-app-after-switching">Restart the app after switching</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d3"><a href="#cost-and-speed">Cost and speed</a></li><li class="d3"><a href="#seeing-what-the-ai-did">Seeing what the AI did</a></li><li class="d3"><a href="#diagnostics-and-network">Diagnostics and network</a></li><li class="d3"><a href="#gameplay-and-presentation">Gameplay and presentation</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#the-map-renderer">The map renderer</a></li><li class="d3"><a href="#restart-the-app-after-switching">Restart the app after switching</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d3"><a href="#cost-and-speed">Cost and speed</a></li><li class="d3"><a href="#seeing-what-the-ai-did">Seeing what the AI did</a></li><li class="d3"><a href="#diagnostics-and-network">Diagnostics and network</a></li><li class="d3"><a href="#gameplay-and-presentation">Gameplay and presentation</a></li><li class="d2"><a href="#detailed-logging">Detailed logging</a></li><li class="d3"><a href="#please-turn-it-on-before-reporting-a-bug">Please turn it on before reporting a bug</a></li><li class="d3"><a href="#what-it-adds">What it adds</a></li><li class="d3"><a href="#what-it-means-for-your-privacy">What it means for your privacy</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>Settings live behind the settings button — <strong>⋮</strong> on stable, <strong>☰</strong> on beta — but <em>what you find there depends on which build you are
 running</em>, and the two are laid out very differently. Work out which one you have first;
 everything below is easier once you know.</p>
@@ -422,11 +422,11 @@ equivalent on stable.</p>
 </thead>
 <tbody><tr>
 <td><strong>Keep a diagnostics log</strong></td>
-<td>Records errors, API failures and the exact context the model was given, copyable for a bug report.</td>
+<td>On by default. Records errors, API failures and the exact context the model was given, copyable for a bug report. Off means nothing is recorded and the stored log is thrown away.</td>
 </tr>
 <tr>
 <td><strong>Detailed logging</strong></td>
-<td>Verbose mode for the above. Turn it on before reproducing a bug, not before.</td>
+<td>Off by default. See below — <strong>please turn it on if you are going to report a bug</strong>.</td>
 </tr>
 <tr>
 <td><strong>Let other devices connect</strong></td>
@@ -454,6 +454,65 @@ equivalent on stable.</p>
 <td>Beta moves the basemap picker into Settings → Map and adds a label-font override; on stable the basemap is chosen from the map controls.</td>
 </tr>
 </tbody></table></div>
+<h2 id="detailed-logging">Detailed logging</h2>
+<p><strong>Settings → Advanced → Detailed logging</strong>, off by default.</p>
+<p>The ordinary log records failures. Detailed logging records <strong>everything</strong>, and it is the
+difference between a bug report someone can act on and one that just says the game misbehaved.</p>
+<h3 id="please-turn-it-on-before-reporting-a-bug">Please turn it on before reporting a bug</h3>
+<p>If you are about to report something — especially anything about the advisor, diplomacy or a turn
+going wrong — switch it on, reproduce the problem, then copy the log out. A maintainer can very
+often find the cause immediately from a detailed log and not at all from a normal one.</p>
+<h3 id="what-it-adds">What it adds</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Normal</th>
+<th>Detailed</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Entries kept</td>
+<td>400</td>
+<td>5,000</td>
+</tr>
+<tr>
+<td>Total log size</td>
+<td>~192 KB</td>
+<td>~1 MB</td>
+</tr>
+<tr>
+<td>Detail per entry</td>
+<td>600 characters</td>
+<td>20,000</td>
+</tr>
+<tr>
+<td>Stack frames</td>
+<td>1</td>
+<td>8</td>
+</tr>
+</tbody></table></div>
+<p>And it records categories the normal log leaves out entirely:</p>
+<ul>
+<li><strong>Every AI task and API call</strong>, not only the ones that failed.</li>
+<li><strong>World-state changes</strong>, turn by turn.</li>
+<li><strong>Panel navigation</strong> and general console output.</li>
+<li><strong>The full text of every conversation with the model</strong> — what you asked the advisor and what it
+answered, every diplomatic message in both directions, and the notes a turn or the idle drip
+dropped into your inbox.</li>
+</ul>
+<p>That last one is deliberate. The bugs people actually report about diplomacy are about the
+<em>content</em> of an exchange — &quot;it forgot what I told it&quot;, &quot;it replied as the wrong country&quot;, &quot;it
+drafted a letter and sent something else&quot; — and a log that records only that an exchange happened
+cannot settle any of them.</p>
+<h3 id="what-it-means-for-your-privacy">What it means for your privacy</h3>
+<p>It quotes considerably more of your campaign than the normal log: your conversations, in full.
+That is all fiction you or the model wrote, but it is yours, so read the log before you paste it
+somewhere public.</p>
+<p><strong>API keys are never recorded.</strong> Nothing on this path reads a key deliberately, and every entry is
+run through a redaction pass as it is written — not at export time — so a key that arrives by
+accident inside a provider error or a URL is scrubbed before it is ever stored.</p>
+<p>Both switches persist across restarts and across campaigns.</p>
 <h2 id="next">Next</h2>
 <ul>
 <li><a href="/wiki/interface/">The interface</a> — the rest of the screen.</li>

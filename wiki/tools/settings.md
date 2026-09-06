@@ -197,8 +197,8 @@ equivalent on stable.
 
 | Setting | |
 |---|---|
-| **Keep a diagnostics log** | Records errors, API failures and the exact context the model was given, copyable for a bug report. |
-| **Detailed logging** | Verbose mode for the above. Turn it on before reproducing a bug, not before. |
+| **Keep a diagnostics log** | On by default. Records errors, API failures and the exact context the model was given, copyable for a bug report. Off means nothing is recorded and the stored log is thrown away. |
+| **Detailed logging** | Off by default. See below — **please turn it on if you are going to report a bug**. |
 | **Let other devices connect** | Opens the server to your network. Beta binds to loopback only by default; stable is open with no toggle and no password. See [hosting a server](/wiki/self-hosting/). |
 
 ### Gameplay and presentation
@@ -208,6 +208,54 @@ equivalent on stable.
 | **Beta unit system** | AI-driven unit movement with postures and standing orders, instead of hands-on control. Stored per save, not per browser. See [military and combat](/wiki/military/). |
 | **Legacy map renderer** | The pre-vNext renderer. **Restart the app after switching.** See above. |
 | **Basemap** and **label font** | Beta moves the basemap picker into Settings → Map and adds a label-font override; on stable the basemap is chosen from the map controls. |
+
+## Detailed logging
+
+**Settings → Advanced → Detailed logging**, off by default.
+
+The ordinary log records failures. Detailed logging records **everything**, and it is the
+difference between a bug report someone can act on and one that just says the game misbehaved.
+
+### Please turn it on before reporting a bug
+
+If you are about to report something — especially anything about the advisor, diplomacy or a turn
+going wrong — switch it on, reproduce the problem, then copy the log out. A maintainer can very
+often find the cause immediately from a detailed log and not at all from a normal one.
+
+### What it adds
+
+| | Normal | Detailed |
+|---|---|---|
+| Entries kept | 400 | 5,000 |
+| Total log size | ~192 KB | ~1 MB |
+| Detail per entry | 600 characters | 20,000 |
+| Stack frames | 1 | 8 |
+
+And it records categories the normal log leaves out entirely:
+
+- **Every AI task and API call**, not only the ones that failed.
+- **World-state changes**, turn by turn.
+- **Panel navigation** and general console output.
+- **The full text of every conversation with the model** — what you asked the advisor and what it
+  answered, every diplomatic message in both directions, and the notes a turn or the idle drip
+  dropped into your inbox.
+
+That last one is deliberate. The bugs people actually report about diplomacy are about the
+*content* of an exchange — "it forgot what I told it", "it replied as the wrong country", "it
+drafted a letter and sent something else" — and a log that records only that an exchange happened
+cannot settle any of them.
+
+### What it means for your privacy
+
+It quotes considerably more of your campaign than the normal log: your conversations, in full.
+That is all fiction you or the model wrote, but it is yours, so read the log before you paste it
+somewhere public.
+
+**API keys are never recorded.** Nothing on this path reads a key deliberately, and every entry is
+run through a redaction pass as it is written — not at export time — so a key that arrives by
+accident inside a provider error or a URL is scrubbed before it is ever stored.
+
+Both switches persist across restarts and across campaigns.
 
 ## Next
 
