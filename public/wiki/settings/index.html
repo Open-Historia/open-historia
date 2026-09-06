@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Settings Reference — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/settings/" />
+  <meta name="description" content="Every option in the game, what it does, and which ones are worth changing first." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/settings/" />
+  <meta property="og:title" content="Settings Reference — Open Historia Wiki" />
+  <meta property="og:description" content="Every option in the game, what it does, and which ones are worth changing first." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Settings Reference — Open Historia Wiki" />
+  <meta name="twitter:description" content="Every option in the game, what it does, and which ones are worth changing first." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Settings Reference",
+      "item": "https://openhistoria.com/wiki/settings/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/" class="on" aria-current="page">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Settings Reference
+    </nav>
+    <h1>Settings Reference</h1>
+    <p class="tagline">Every option in the game, what it does, and which ones are worth changing first.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#help-and-community">Help and community</a></li><li class="d2"><a href="#cheats">Cheats</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#what-the-beta-adds">What the beta adds</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Everything lives behind the <strong>☰</strong> button. This page lists what each option does and which ones
+are actually worth changing.</p>
+<h2 id="ai-provider">AI provider</h2>
+<p>The top of the menu, and the only part you must set up. Provider, API key, model, endpoint —
+covered in full in <a href="/wiki/ai-setup/">connecting an AI provider</a> and
+<a href="/wiki/ai-providers/">AI providers and models</a>.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Provider</strong></td>
+<td>Gemini, OpenAI, Anthropic, OpenAI Compatible, Anthropic Compatible.</td>
+</tr>
+<tr>
+<td><strong>API Key</strong></td>
+<td>Yours. Stored locally, never sent to an Open Historia server.</td>
+</tr>
+<tr>
+<td><strong>Model</strong></td>
+<td>Which model to use. Defaults are sensible; see below.</td>
+</tr>
+<tr>
+<td><strong>API Endpoint</strong></td>
+<td>Only for the two Compatible providers.</td>
+</tr>
+<tr>
+<td><strong>Model reasoning</strong></td>
+<td>Enables extended reasoning on models that support it. Slower, better on hard turns.</td>
+</tr>
+<tr>
+<td><strong>Custom parameters (JSON)</strong></td>
+<td>Raw fields merged into the request body. An escape hatch — you do not need it.</td>
+</tr>
+<tr>
+<td><strong>Strict tool schema</strong></td>
+<td>For OpenAI-compatible endpoints that handle structured output badly. Try toggling it if turns keep failing to parse.</td>
+</tr>
+</tbody></table></div>
+<p>Default models: Gemini <code>gemini-3.5-flash-lite</code>, Anthropic <code>claude-haiku-4-5</code>, and
+<code>http://localhost:11434/v1</code> as the OpenAI-compatible endpoint (Ollama&#39;s default).</p>
+<p>Settings are stored <strong>per provider</strong>, so switching to a local model and back does not lose your
+cloud keys.</p>
+<h2 id="limit-ai-generation">Limit AI generation</h2>
+<p><strong>Off by default.</strong> Turned on, a generation that goes quiet is abandoned and the turn falls back
+to a canned event instead of hanging indefinitely.</p>
+<p>It measures <strong>silence</strong>, not total elapsed time — a model that is slowly but genuinely producing
+output is not cut off. Worth turning on if you use a local model, or if you have had turns hang.</p>
+<h2 id="language">Language</h2>
+<p><strong>UI language</strong> translates the interface. Applying it reloads the page. Around fifty languages
+are available.</p>
+<p><strong>AI chat language</strong> is separate: it is the language leaders and events are written in. You can
+run an English interface with French diplomacy, or the reverse.</p>
+<h2 id="display">Display</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Fullscreen</strong></td>
+<td>Borderless fullscreen.</td>
+</tr>
+<tr>
+<td><strong>3D Globe</strong></td>
+<td>Sphere instead of a flat map, with a real day/night terminator.</td>
+</tr>
+<tr>
+<td><strong>3D Terrain</strong></td>
+<td>Elevation with heavy exaggeration. Labelled &quot;Very Experimental&quot; and it means it. Flat map only, and disabled by a custom background.</td>
+</tr>
+</tbody></table></div>
+<h2 id="map">Map</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Hide country labels</strong></td>
+<td>Removes country names from the map.</td>
+</tr>
+<tr>
+<td><strong>Reduce motion</strong></td>
+<td>Umbrella switch quieting several animations at once. Turn this on first if the game feels busy or you are prone to motion sickness.</td>
+</tr>
+<tr>
+<td><strong>Disable idle globe rotation</strong></td>
+<td>Stops the globe turning on its own.</td>
+</tr>
+<tr>
+<td><strong>Disable camera movement during events</strong></td>
+<td>Stops the camera flying to each event during the <a href="/wiki/events/">staged reveal</a>.</td>
+</tr>
+</tbody></table></div>
+<p>The <strong>basemap</strong> — which imagery sits under the political colours — is chosen from the map
+controls rather than this menu. See <a href="/wiki/world-map/">the world map</a> for the ten options.</p>
+<h2 id="help-and-community">Help and community</h2>
+<p>A <strong>📖 Guides</strong> link (which brings you here), plus Discord, Reddit and GitHub.</p>
+<h2 id="cheats">Cheats</h2>
+<p>The menu also opens the <strong>🧪 Cheats</strong> panel. See
+<a href="/wiki/cheats/">cheats and the GM console</a>.</p>
+<h2 id="what-to-change-first">What to change first</h2>
+<ol>
+<li><strong>Set up your AI provider.</strong> Nothing else matters until this is done.</li>
+<li><strong>Turn on Limit AI generation</strong> if you are running a local model.</li>
+<li><strong>Try the 3D globe.</strong> It is the better way to look at the world, and it costs little.</li>
+<li><strong>Leave 3D terrain off</strong> unless you specifically want it — it is the most expensive thing in
+the game to render.</li>
+<li><strong>Reduce motion</strong> if the interface feels restless.</li>
+</ol>
+<h2 id="where-settings-are-stored">Where settings are stored</h2>
+<p>All of it lives in your browser&#39;s local storage, or in the desktop app&#39;s own profile. That means
+settings are <strong>per device and per install</strong>, not per save — moving a campaign to another machine
+does not carry your API key with it, which is deliberate.</p>
+<p>It also means the beta build keeps entirely separate settings from the stable one.</p>
+<h2 id="what-the-beta-adds">What the beta adds</h2>
+<p class="beta-note"><b>Beta channel only.</b></p><p>The beta channel reorganises this into a four-section workspace (General, Map, AI, Advanced) and
+adds per-task model routing, saved configuration profiles, prompt caching, batched background
+tasks, an AI debug console showing every call and its cost, telemetry and generation ratings, a
+network-sharing panel, and a copyable diagnostics log.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/ai-providers/">AI providers and models</a> — choosing a model properly.</li>
+<li><a href="/wiki/troubleshooting/">Troubleshooting</a> — when a setting does not fix it.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/advisor/"><span>← Previous</span><b>The advisor</b></a>
+        <a class="next" href="/wiki/cheats/"><span>Next →</span><b>Cheats &amp; GM console</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,487 @@
+/*! Open Historia — wiki & guides stylesheet © 2026 Nicholas Krol, MIT. */
+/* The parchment/bronze theme, shared with the landing page so the wiki reads as part of the
+   site rather than a bolted-on doc host. Tokens, the fluid root size, the header and the
+   footer are ported verbatim from site/index.html — if that page's palette moves, move these
+   with it. The guides component classes (.card, .step, .comparison-table, …) keep their names
+   from the old dark stylesheet so migrated guide markup renders unchanged; only colours moved.
+   public/guides.css is a one-line @import of this file, for anything still linking the old
+   name (older desktop installs, cached pages). */
+
+:root {
+  --parch: #e9dcc0;
+  --parch2: #e2d2b1;
+  --marble: #f6efdc;
+  --marble2: #fbf6e9;
+  --ink: #2c2216;
+  --sepia: #6c5a3c;
+  --sepia2: #87754f;
+  --line: rgba(74, 54, 24, .18);
+  --line2: rgba(74, 54, 24, .30);
+  --bronze: #9a6b2f;
+  --bronze-d: #7c531d;
+  --gold: #b8860b;
+  --gold-l: #caa53f;
+  --red: #8a2331;
+  --red-d: #6d1a25;
+  --green: #4c7a3d;
+  --grad-gold: linear-gradient(100deg, #7c4f18 0%, #b8860b 52%, #8f6a22 100%);
+  --shadow: 0 1.125rem 2.625rem -1.375rem rgba(60, 40, 14, .55);
+  --radius: 0.875rem;
+  --serif: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --display: 'Cinzel', Georgia, 'Times New Roman', serif;
+  --mono: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  /* Fluid root size, identical to the landing page: everything below is rem, so this scales
+     the page as one. Clamped to 1rem at/below ~90rem, so nothing changes on a laptop. */
+  font-size: clamp(1rem, 0.536vw + 0.51812rem, 1.5rem);
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 1.125rem;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(75rem 33.75rem at 50% -12%, rgba(184, 134, 11, .12), transparent 60%),
+    radial-gradient(62.5rem 35rem at 100% 2%, rgba(138, 35, 49, .06), transparent 55%),
+    repeating-linear-gradient(112deg, rgba(120, 90, 40, .028) 0 0.125rem, transparent 0.125rem 0.4375rem),
+    var(--parch);
+  overflow-x: hidden;
+}
+
+a { color: var(--bronze-d); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.wrap { max-width: 65rem; margin: 0 auto; padding: 0 1.5rem; }
+
+h1, h2, h3, h4, .brand { font-family: var(--display); color: var(--ink); }
+
+/* ---------- header (ported from the landing page) ---------- */
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(0.5rem);
+  background: color-mix(in srgb, var(--parch) 82%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.nav { display: flex; align-items: center; justify-content: space-between; height: 4rem; }
+.brand {
+  display: flex; align-items: center; gap: 0.625rem;
+  font-weight: 700; font-size: 1.12rem; letter-spacing: .04em; color: var(--ink);
+}
+.brand:hover { text-decoration: none; }
+.brand .globe { font-size: 1.3rem; }
+.nav-links { display: flex; align-items: center; gap: 1.75rem; font-size: 1.02rem; }
+.nav-links a { color: var(--sepia); transition: color .15s; }
+.nav-links a:hover { color: var(--ink); text-decoration: none; }
+.nav-cta {
+  font-family: var(--display); font-size: .86rem; letter-spacing: .08em;
+  text-transform: uppercase; font-weight: 700;
+  padding: 0.5625rem 1.125rem; border-radius: 0.5rem;
+  background: var(--grad-gold); color: #fbf3dc; border: 1px solid rgba(255, 225, 160, .35);
+}
+/* There is no hamburger menu, so below 720px the nav collapses to the Play button plus
+   anything explicitly marked .nav-keep — the wiki link has to survive on a phone. */
+@media (max-width: 720px) {
+  .nav-links a:not(.nav-cta):not(.nav-keep) { display: none; }
+  .nav-links { gap: 1rem; }
+}
+
+/* ---------- wiki layout ---------- */
+
+.wiki-layout {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 2.5rem;
+  align-items: start;
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+
+.wiki-sidebar {
+  position: sticky;
+  top: 5rem;
+  /* Its own scrollbar: the systems section is long enough to outrun a short viewport, and a
+     sidebar that scrolls the page instead of itself loses the reader's place. */
+  max-height: calc(100vh - 6.5rem);
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  font-size: 0.95rem;
+  /* A default scrollbar here is a bright grey slab against the parchment and reads as a page
+     divider rather than a control. Thin and tinted, it disappears until it is needed. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line2) transparent;
+}
+.wiki-sidebar::-webkit-scrollbar { width: 0.4rem; }
+.wiki-sidebar::-webkit-scrollbar-track { background: transparent; }
+.wiki-sidebar::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 999px; }
+
+.wiki-nav, .wiki-nav ul { list-style: none; margin: 0; padding: 0; }
+.wiki-nav .sec { margin-bottom: 1.25rem; }
+.wiki-nav .sec > span {
+  display: block;
+  font-family: var(--display);
+  font-size: .72rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--sepia2);
+  margin-bottom: 0.45rem;
+}
+.wiki-nav li a {
+  display: block;
+  padding: 0.22rem 0.6rem;
+  margin-left: -0.6rem;
+  border-radius: 0.375rem;
+  color: var(--sepia);
+  border-left: 2px solid transparent;
+  transition: color .15s, background .15s;
+}
+.wiki-nav li a:hover { color: var(--ink); background: rgba(255, 250, 235, .6); text-decoration: none; }
+.wiki-nav li a.on {
+  color: var(--bronze-d);
+  font-weight: 600;
+  background: var(--marble2);
+  border-left-color: var(--gold);
+}
+
+/* ---------- search ---------- */
+
+.wiki-search { position: relative; margin-bottom: 1.5rem; }
+.wiki-search input {
+  width: 100%;
+  font-family: var(--serif);
+  font-size: 0.95rem;
+  color: var(--ink);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line2);
+  border-radius: 0.5rem;
+  background: var(--marble2);
+}
+.wiki-search input:focus { outline: 2px solid var(--gold-l); outline-offset: 1px; }
+.wiki-search ul {
+  position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 0.35rem);
+  list-style: none; margin: 0; padding: 0.3rem;
+  background: var(--marble2);
+  border: 1px solid var(--line2);
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow);
+  max-height: 20rem; overflow-y: auto;
+}
+.wiki-search li a {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;
+  padding: 0.35rem 0.5rem; border-radius: 0.375rem; color: var(--ink); font-size: 0.92rem;
+}
+.wiki-search li a:hover { background: var(--parch2); text-decoration: none; }
+.wiki-search li a span { color: var(--sepia2); font-size: 0.76rem; white-space: nowrap; }
+.wiki-search li.none { padding: 0.35rem 0.5rem; color: var(--sepia2); font-size: 0.9rem; }
+
+/* ---------- main column ---------- */
+
+.wiki-main { min-width: 0; }
+.wiki-main h1 { font-size: 2.3rem; line-height: 1.2; margin: 0 0 0.4rem; }
+.wiki-main h2 {
+  font-size: 1.5rem; margin: 2.4rem 0 0.7rem;
+  padding-bottom: 0.35rem; border-bottom: 1px solid var(--line);
+}
+.wiki-main h3 { font-size: 1.15rem; margin: 1.7rem 0 0.5rem; color: var(--bronze-d); }
+.wiki-main p { margin: 0 0 1rem; }
+.wiki-main ul, .wiki-main ol { margin: 0 0 1rem; padding-left: 1.5rem; }
+.wiki-main li { margin-bottom: 0.4rem; }
+.wiki-main img { max-width: 100%; height: auto; border-radius: 0.5rem; border: 1px solid var(--line); }
+.wiki-main hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
+.wiki-main blockquote {
+  margin: 0 0 1rem; padding: 0.6rem 1rem;
+  border-left: 3px solid var(--gold); background: var(--marble2);
+  border-radius: 0 0.375rem 0.375rem 0; color: var(--sepia);
+}
+.wiki-main blockquote p:last-child { margin-bottom: 0; }
+
+.breadcrumbs { font-size: 0.88rem; color: var(--sepia2); margin-bottom: 1.2rem; }
+.breadcrumbs a { color: var(--sepia); }
+.breadcrumbs span { margin: 0 0.35rem; }
+
+.tagline { font-size: 1.15rem; color: var(--sepia); margin-bottom: 1.6rem; }
+.subtitle { font-size: 1.1rem; color: var(--sepia2); margin-bottom: 2rem; }
+.muted { color: var(--sepia); }
+.highlight { color: var(--bronze-d); font-weight: 600; }
+.check { color: var(--green); font-weight: 700; }
+.cross { color: var(--red); font-weight: 700; }
+
+/* ---------- standalone guide pages ---------- */
+
+/* The wiki owns .wiki-main, but two pages outside it still use the old .page shell and reach
+   this stylesheet through the /guides.css shim: /pax-historia-alternative/ (kept at its own URL
+   for search) and /sitemap/, plus the redirect stubs. Give .page the same typography so they do
+   not render as unstyled prose. */
+.page {
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+}
+.page h1, .wiki-main h1 { font-size: 2.3rem; line-height: 1.2; margin: 0 0 0.4rem; }
+.page h2 {
+  font-size: 1.5rem; margin: 2.4rem 0 0.7rem;
+  padding-bottom: 0.35rem; border-bottom: 1px solid var(--line);
+}
+.page h3 { font-size: 1.15rem; margin: 1.7rem 0 0.5rem; color: var(--bronze-d); }
+.page p { margin: 0 0 1rem; }
+.page ul, .page ol { margin: 0 0 1rem; padding-left: 1.5rem; }
+.page li { margin-bottom: 0.4rem; }
+
+.logo {
+  display: block;
+  width: 4rem;
+  height: 4rem;
+  margin: 0 auto 1.5rem;
+  border-radius: 0.75rem;
+}
+
+/* ---------- beta markers ---------- */
+
+/* Crimson rather than bronze: everything else on the page is warm, so a notice that says
+   "your build may not have this" has to read as an exception at a glance. */
+.beta-note, p.beta-note {
+  background: rgba(138, 35, 49, .07);
+  border: 1px solid rgba(138, 35, 49, .28);
+  border-left: 3px solid var(--red);
+  border-radius: 0 0.5rem 0.5rem 0;
+  padding: 0.7rem 1rem;
+  margin: 0 0 1.6rem;
+  font-size: 0.98rem;
+  color: var(--sepia);
+}
+.beta-note b { color: var(--red-d); }
+
+.wiki-nav li a em {
+  font-family: var(--display);
+  font-style: normal;
+  font-size: .6rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--red);
+  border: 1px solid rgba(138, 35, 49, .35);
+  border-radius: 0.25rem;
+  padding: 0 0.25rem;
+  margin-left: 0.3rem;
+  vertical-align: 0.1em;
+}
+
+/* ---------- on-page contents ---------- */
+
+.wiki-toc {
+  background: var(--marble2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin: 0 0 2rem;
+  font-size: 0.95rem;
+}
+.wiki-toc b {
+  display: block; font-family: var(--display); font-size: .72rem; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--sepia2); margin-bottom: 0.5rem;
+}
+.wiki-toc ul { list-style: none; margin: 0; padding: 0; }
+.wiki-toc li { margin: 0.15rem 0; }
+.wiki-toc li.d3 { padding-left: 1rem; font-size: 0.9rem; }
+.wiki-toc a { color: var(--sepia); }
+.wiki-toc a:hover { color: var(--bronze-d); }
+
+/* ---------- cards, steps, grids (names kept from the old guides stylesheet) ---------- */
+
+.card {
+  background: var(--marble);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.4rem 1.5rem;
+  margin-bottom: 1.2rem;
+}
+.card h3 { margin-top: 0; color: var(--ink); }
+.card p:last-child, .card li:last-child { margin-bottom: 0; }
+
+.step {
+  background: var(--marble);
+  border: 1px solid var(--line);
+  border-radius: 0.625rem;
+  padding: 1.1rem 1.4rem;
+  margin-bottom: 1rem;
+}
+.step strong { display: block; color: var(--bronze-d); font-family: var(--display); margin-bottom: 0.3rem; }
+.step p { margin: 0; font-size: 0.98rem; }
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1.2rem 0 1.8rem;
+}
+.feature-tag {
+  background: var(--marble);
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  padding: 0.65rem 1rem;
+  font-size: 0.95rem;
+  color: var(--sepia);
+  text-align: center;
+}
+
+/* ---------- tables ---------- */
+
+/* Wide reference tables scroll inside this box; the page body never scrolls sideways. */
+.table-scroll { overflow-x: auto; margin: 1rem 0 1.6rem; }
+.wiki-main table, .comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  background: var(--marble);
+}
+.wiki-main th, .comparison-table th {
+  font-family: var(--display);
+  font-size: 0.85rem;
+  letter-spacing: .04em;
+  text-align: left;
+  color: var(--ink);
+  background: var(--parch2);
+  padding: 0.6rem 0.9rem;
+  border-bottom: 2px solid var(--line2);
+  white-space: nowrap;
+}
+.wiki-main td, .comparison-table td {
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.wiki-main tbody tr:nth-child(even) td, .comparison-table tr:nth-child(even) td { background: var(--marble2); }
+.comparison-table { margin: 1rem 0 2rem; }
+
+/* ---------- code ---------- */
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--marble2);
+  border: 1px solid var(--line);
+  color: var(--bronze-d);
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+}
+pre {
+  background: #2c2216;
+  border: 1px solid var(--line2);
+  border-radius: 0.5rem;
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.4rem;
+}
+pre code {
+  background: none; border: 0; padding: 0;
+  color: #ede0c4; font-size: 0.85rem; line-height: 1.55;
+}
+
+/* ---------- calls to action ---------- */
+
+.cta, .cta-secondary {
+  display: inline-block;
+  font-family: var(--display);
+  font-size: .86rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 0.7rem 1.6rem;
+  border-radius: 0.5rem;
+  margin: 0.4rem 0.5rem 0.4rem 0;
+}
+.cta {
+  background: var(--grad-gold);
+  color: #fbf3dc;
+  border: 1px solid rgba(255, 225, 160, .35);
+}
+.cta:hover { color: #fff8e6; text-decoration: none; filter: brightness(1.08); }
+.cta-secondary {
+  background: var(--marble);
+  color: var(--bronze-d);
+  border: 1px solid var(--line2);
+}
+.cta-secondary:hover { background: var(--marble2); text-decoration: none; }
+
+/* ---------- prev / next ---------- */
+
+.wiki-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+.wiki-pager a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 48%;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.625rem;
+  background: var(--marble);
+  color: var(--ink);
+  transition: border-color .15s, background .15s;
+}
+.wiki-pager a:hover { border-color: var(--gold-l); background: var(--marble2); text-decoration: none; }
+.wiki-pager a.next { text-align: right; margin-left: auto; }
+.wiki-pager span { font-size: 0.78rem; color: var(--sepia2); letter-spacing: .04em; }
+.wiki-pager b { font-family: var(--display); font-size: 0.98rem; }
+
+/* ---------- footer ---------- */
+
+footer {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--marble) 60%, transparent);
+  padding: 1.75rem 0 2.5rem;
+  font-size: 0.92rem;
+  color: var(--sepia);
+  text-align: center;
+}
+footer a { color: var(--sepia); }
+footer a:hover { color: var(--ink); }
+footer .globe { font-size: 1.05rem; }
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 900px) {
+  /* The sidebar stops being a sidebar and becomes a contents block above the article — a
+     sticky rail on a phone would eat most of the screen. */
+  .wiki-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+  .wiki-sidebar {
+    position: static;
+    /* Capped, not unbounded: thirty links stacked full height would push the article a whole
+       screen down, so the contents scroll inside their own box and the prose stays reachable. */
+    max-height: 45vh;
+    overflow-y: auto;
+    padding: 1rem 1.25rem;
+    background: var(--marble2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .wiki-nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem 1.5rem; }
+  .wiki-nav .sec { margin-bottom: 0; }
+}
+
+@media (max-width: 600px) {
+  .wrap { padding: 0 1rem; }
+  .wiki-main h1 { font-size: 1.8rem; }
+  .wiki-main h2 { font-size: 1.3rem; }
+  .feature-grid { grid-template-columns: 1fr; }
+  .wiki-pager { flex-direction: column; }
+  .wiki-pager a { max-width: none; }
+  .wiki-pager a.next { text-align: left; margin-left: 0; }
+  pre { font-size: 0.9em; padding: 0.8rem; }
+}

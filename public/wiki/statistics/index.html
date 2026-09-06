@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>National Statistics — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/statistics/" />
+  <meta name="description" content="The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/statistics/" />
+  <meta property="og:title" content="National Statistics — Open Historia Wiki" />
+  <meta property="og:description" content="The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="National Statistics — Open Historia Wiki" />
+  <meta name="twitter:description" content="The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "National Statistics",
+      "item": "https://openhistoria.com/wiki/statistics/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/" class="on" aria-current="page">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> National Statistics
+    </nav>
+    <h1>National Statistics</h1>
+    <p class="tagline">The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#national-stability">National stability</a></li><li class="d2"><a href="#strategic-indices">Strategic indices</a></li><li class="d2"><a href="#intelligence-service">Intelligence service</a></li><li class="d2"><a href="#population-and-economy">Population and economy</a></li><li class="d2"><a href="#there-is-no-treasury">There is no treasury</a></li><li class="d2"><a href="#where-the-numbers-come-from">Where the numbers come from</a></li><li class="d2"><a href="#reading-someone-else39s">Reading someone else&amp;#39;s</a></li><li class="d2"><a href="#the-beta-version">The beta version</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Every country has a <strong>stat sheet</strong> — leader, government, stability, six strategic indices,
+population and a set of economic figures. Open it from the <strong>Stats</strong> tab of the advisor drawer
+(<strong>🧭</strong>, right edge).</p>
+<p>It retargets to <strong>whatever country you last clicked on the map</strong>, so it works as a dossier on
+anyone, not just yourself.</p>
+<h2 id="national-stability">National stability</h2>
+<p>A single 0–100 figure for how firmly the government holds the country together, with a colour
+band:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Stability</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>70–100</td>
+<td>Green — solid</td>
+</tr>
+<tr>
+<td>40–69</td>
+<td>Amber — strained</td>
+</tr>
+<tr>
+<td>Below 40</td>
+<td>Red — in trouble</td>
+</tr>
+</tbody></table></div>
+<p>Stability is the number to watch when you are pushing your own country hard. Wars, austerity,
+purges and humiliations all cost it, and a country in the red is one where events start
+happening <em>to</em> the government rather than because of it.</p>
+<h2 id="strategic-indices">Strategic indices</h2>
+<p>Six measures, each 0–100:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Index</th>
+<th>What it measures</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>⚑</td>
+<td><strong>Sovereignty</strong></td>
+<td>How much the country actually decides for itself</td>
+</tr>
+<tr>
+<td>🌾</td>
+<td><strong>Food autonomy</strong></td>
+<td>Whether it can feed itself</td>
+</tr>
+<tr>
+<td>⚡</td>
+<td><strong>Energy autonomy</strong></td>
+<td>Whether it can power itself</td>
+</tr>
+<tr>
+<td>🏦</td>
+<td><strong>Economic independence</strong></td>
+<td>How far it is at the mercy of others economically</td>
+</tr>
+<tr>
+<td>🛡</td>
+<td><strong>Internal security</strong></td>
+<td>Control over its own territory and population</td>
+</tr>
+<tr>
+<td>🤝</td>
+<td><strong>International reputation</strong></td>
+<td>How far it is trusted abroad</td>
+</tr>
+</tbody></table></div>
+<p>These are the strategic picture in six numbers. A country with high GDP and low food and energy
+autonomy is rich and vulnerable; one with high internal security and low sovereignty is a
+well-run client state.</p>
+<p><strong>International reputation</strong> is not just a display value — it is a real world field that other
+countries respond to. See <a href="/wiki/countries/">countries and identity</a>.</p>
+<h2 id="intelligence-service">Intelligence service</h2>
+<p>A separate 0–100 rating for the country&#39;s intelligence apparatus, shown on the same sheet. It is
+never written by the model as part of the economic figures — it moves only for concrete reasons
+such as a purge, a defection, a new bureau, or a spy ring being exposed.</p>
+<p>It is the governing statistic for <a href="/wiki/espionage/">espionage</a>, and worth raising deliberately
+before you start relying on agents.</p>
+<h2 id="population-and-economy">Population and economy</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Population</strong></td>
+<td>Total population</td>
+</tr>
+<tr>
+<td><strong>GDP</strong></td>
+<td>With growth rate shown beneath</td>
+</tr>
+<tr>
+<td><strong>GDP per capita</strong></td>
+<td>With the country&#39;s currency</td>
+</tr>
+<tr>
+<td><strong>Inflation</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Unemployment</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Public debt</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Budget balance</strong></td>
+<td>Surplus or deficit</td>
+</tr>
+</tbody></table></div>
+<p>Plus a <strong>GDP breakdown</strong> bar splitting output between <strong>agriculture</strong>, <strong>industry</strong> and
+<strong>services</strong>, validated to add up to 100.</p>
+<p>Large numbers are displayed compactly — 30,000,000,000 shows as 30.0B — with the currency symbol
+preserved.</p>
+<h2 id="there-is-no-treasury">There is no treasury</h2>
+<p>This is the important thing to understand about economics in Open Historia: <strong>the economy is a
+description, not a bank account.</strong></p>
+<p>There is no pot of money you spend, no per-turn income to allocate, and no build costs to pay.
+GDP, debt and budget balance describe your country&#39;s situation and inform how the world treats
+your decisions — a country with 140% public debt and a deficit will find an expensive
+rearmament programme going badly — but you never &quot;afford&quot; anything by clicking.</p>
+<p>You change the economy the way a government does: by ordering policy and living with the
+consequences. See <a href="/wiki/orders/">giving orders</a>.</p>
+<h2 id="where-the-numbers-come-from">Where the numbers come from</h2>
+<p>Stat sheets are generated on demand for the country you are looking at, from the actual world
+state, and cached so that reopening the panel does not regenerate them. There is a <strong>↻</strong> control
+to force a fresh one.</p>
+<p>They then move through events. When a turn changes a country&#39;s circumstances, the event carries
+the statistical change with it — and only the fields that actually changed, so everything else
+keeps its previous value.</p>
+<p>That includes <strong>who leads</strong>: a leader overthrown in an event has their successor written to the
+sheet in the same breath.</p>
+<h2 id="reading-someone-else39s">Reading someone else&#39;s</h2>
+<p>Click any country, open Stats. You get the same sheet for them.</p>
+<p>Two caveats. What you see is the world&#39;s view of that country, not privileged information — for
+that you need <a href="/wiki/espionage/">espionage</a>. And generating a sheet for a country you are
+interested in is itself the trigger that gets them an intelligence rating assessed, if they did
+not have one.</p>
+<h2 id="the-beta-version">The beta version</h2>
+<p class="beta-note"><b>Beta channel only.</b> The stable release generates a sheet when you ask
+for one.</p><p>The beta channel adds persistent, tracked statistics: sheets stored per country over time,
+automatic refresh on an interval you choose, up to eight countries tracked simultaneously, and a
+history you can chart. That turns the stat sheet from a snapshot into a time series.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/countries/">Countries and identity</a> — reputation, tags and leaders.</li>
+<li><a href="/wiki/advisor/">The advisor</a> — asking someone to interpret all this for you.</li>
+<li><a href="/wiki/espionage/">Espionage</a> — the intelligence rating in practice.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/projects/"><span>← Previous</span><b>Projects &amp; operations</b></a>
+        <a class="next" href="/wiki/countries/"><span>Next →</span><b>Countries &amp; identity</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

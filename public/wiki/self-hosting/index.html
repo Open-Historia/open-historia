@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Hosting a Server — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/self-hosting/" />
+  <meta name="description" content="Run Open Historia on your own machine, play offline, or reach it from your phone on the same network." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/self-hosting/" />
+  <meta property="og:title" content="Hosting a Server — Open Historia Wiki" />
+  <meta property="og:description" content="Run Open Historia on your own machine, play offline, or reach it from your phone on the same network." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Hosting a Server — Open Historia Wiki" />
+  <meta name="twitter:description" content="Run Open Historia on your own machine, play offline, or reach it from your phone on the same network." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Hosting a Server",
+      "item": "https://openhistoria.com/wiki/self-hosting/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/" class="on" aria-current="page">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Hosting a Server
+    </nav>
+    <h1>Hosting a Server</h1>
+    <p class="tagline">Run Open Historia on your own machine, play offline, or reach it from your phone on the same network.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#what-you-get">What you get</a></li><li class="d2"><a href="#running-it">Running it</a></li><li class="d2"><a href="#connecting-from-another-device">Connecting from another device</a></li><li class="d3"><a href="#read-this-before-you-open-it-up">Read this before you open it up</a></li><li class="d2"><a href="#environment-variables">Environment variables</a></li><li class="d2"><a href="#running-as-a-service">Running as a service</a></li><li class="d2"><a href="#the-map-data">The map data</a></li><li class="d2"><a href="#where-your-files-are">Where your files are</a></li><li class="d2"><a href="#privacy">Privacy</a></li><li class="d2"><a href="#what-the-beta-adds">What the beta adds</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>The desktop app already runs a local server — that is how it works. This page is about running
+that server deliberately: to play entirely offline, to reach your campaign from another device,
+or to keep everything on hardware you control.</p>
+<p><strong>There is no multiplayer.</strong> Hosting lets <em>you</em> reach <em>your</em> game from another device. It does
+not let two people play the same campaign. If you connect from your phone and your laptop at
+once, you are two windows onto one single-player game, and you will fight each other for it.</p>
+<h2 id="what-you-get">What you get</h2>
+<ul>
+<li><strong>Fully offline play.</strong> After install, nothing needs the internet — map, rendering, scenarios,
+editor and interface are all local. Only the AI needs a connection, and not even that if you
+run a <a href="/wiki/ai-setup/">local model</a>.</li>
+<li><strong>Your data on your disk.</strong> Saves and scenarios are files you can back up.</li>
+<li><strong>Play from the sofa.</strong> Start a campaign on your PC, carry on from a tablet.</li>
+</ul>
+<h2 id="running-it">Running it</h2>
+<p>If you installed the desktop app, you are already running it. To run the server on its own from
+a source checkout:</p>
+<pre><code>git clone https://github.com/Open-Historia/open-historia.git
+cd open-historia
+npm ci
+node scripts/fetch-map-assets.mjs
+node server/server.js
+</code></pre>
+<p>It listens on <strong>port 3000</strong>. Open <code>http://localhost:3000</code>.</p>
+<p>Node.js <code>^20.19.0</code> or <code>&gt;=22.12.0</code> is required on the server machine. Client devices need only a
+browser.</p>
+<h2 id="connecting-from-another-device">Connecting from another device</h2>
+<p>Find the server machine&#39;s local IP (<code>ipconfig</code> on Windows, <code>ip addr</code> on Linux, <code>ifconfig</code> on
+macOS) and open <code>http://192.168.x.x:3000</code> from the other device.</p>
+<p>Writes from a different origin are blocked by default. To allow them:</p>
+<pre><code>OH_ALLOW_CROSS_ORIGIN=1 node server/server.js
+</code></pre>
+<h3 id="read-this-before-you-open-it-up">Read this before you open it up</h3>
+<p><strong>The game&#39;s API has no password.</strong> There is no login, no token and no permission model.</p>
+<p>The server binds to all network interfaces, so <strong>anyone who can reach port 3000 can read,
+change and delete your games and scenarios.</strong> On a home network behind a router that is
+generally fine. It is not fine on a shared, public or untrusted network, and it is emphatically
+not fine exposed directly to the internet.</p>
+<p>If you want to reach your game from outside your home, use a private network overlay —
+<strong>Tailscale</strong>, <strong>ZeroTier</strong> or a WireGuard tunnel — rather than forwarding port 3000. Those give
+you the same access without publishing an unauthenticated API to the world.</p>
+<p>If you must expose it, put it behind a reverse proxy such as nginx or Caddy with authentication
+in front.</p>
+<h2 id="environment-variables">Environment variables</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PORT</code></td>
+<td>Port to listen on. Default <code>3000</code>.</td>
+</tr>
+<tr>
+<td><code>OH_DATA_DIR</code></td>
+<td>Where writable state lives — saves, scenarios, uploads. Relocate the whole library with this.</td>
+</tr>
+<tr>
+<td><code>OH_ALLOW_CROSS_ORIGIN</code></td>
+<td>Set to <code>1</code> to accept writes from another origin. Needed for another device.</td>
+</tr>
+<tr>
+<td><code>OH_ASSETS_DIR</code></td>
+<td>Where the map binaries are read from.</td>
+</tr>
+</tbody></table></div>
+<h2 id="running-as-a-service">Running as a service</h2>
+<p><strong>Linux — systemd.</strong> Create <code>/etc/systemd/system/open-historia.service</code>:</p>
+<pre><code>[Unit]
+Description=Open Historia Game Server
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/open-historia
+ExecStart=/usr/bin/node server/server.js
+Restart=on-failure
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+</code></pre>
+<p>Then <code>sudo systemctl enable --now open-historia</code>.</p>
+<p><strong>macOS</strong> — a <code>launchd</code> plist in <code>~/Library/LaunchAgents/</code>.</p>
+<p><strong>Windows</strong> — Task Scheduler, triggered at logon, running <code>node server/server.js</code> in the project
+directory.</p>
+<h2 id="the-map-data">The map data</h2>
+<p>The map binaries — roughly 200 MB of vector tiles — are not in the Git repository. They are
+release assets, fetched by:</p>
+<pre><code>node scripts/fetch-map-assets.mjs
+</code></pre>
+<p>Without them the map is blank. The desktop app does this for you on first launch.</p>
+<h2 id="where-your-files-are">Where your files are</h2>
+<p>Under the data directory: your games, your scenarios, uploaded basemaps and flags, map editor
+documents, and the manifests that index them. Back up the directory and you have backed up
+everything.</p>
+<p>Do not edit save files by hand while the game is running. Use the <a href="/wiki/cheats/">cheats panel</a>
+for changing a campaign — it goes through the same validation the game does.</p>
+<h2 id="privacy">Privacy</h2>
+<p>No accounts, and no game data leaves your machine. Your AI provider key is stored locally and
+sent only to the provider you configured.</p>
+<p>Two things do reach the network by default: the browser build&#39;s analytics on the website itself,
+and an anonymous counter that pings when a Community Hub scenario is imported (set
+<code>OH_IMPORT_COUNTER_URL</code> to an empty value to disable it). Neither carries game data.</p>
+<h2 id="what-the-beta-adds">What the beta adds</h2>
+<p class="beta-note"><b>Beta channel only.</b></p><p>The beta channel hardens all of this considerably: the server binds to <strong>loopback only</strong> by
+default, with an explicit <strong>Settings → Network</strong> toggle to let other devices in that takes effect
+immediately and tells you the address to type. The AI relay is fenced so your machine cannot be
+used as an open proxy, there is a configurable request rate limit, and <code>OH_HOST</code> lets a headless
+install pin the bind address.</p>
+<p>If you intend to expose the server on a network you do not fully control, the beta build is the
+better choice.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/mobile/">Playing on your phone</a> — the Android app, which needs no server at all.</li>
+<li><a href="/wiki/saves/">Saves and rollback</a> — what is in the data directory.</li>
+<li><a href="/wiki/ai-setup/">Connecting an AI provider</a> — running a model locally too.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/community-hub/"><span>← Previous</span><b>The community hub</b></a>
+        <a class="next" href="/wiki/mobile/"><span>Next →</span><b>Playing on your phone</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

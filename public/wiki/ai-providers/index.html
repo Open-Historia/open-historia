@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>AI Providers and Models — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/ai-providers/" />
+  <meta name="description" content="Which providers work, which models to pick, what it costs, and the expert controls." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/ai-providers/" />
+  <meta property="og:title" content="AI Providers and Models — Open Historia Wiki" />
+  <meta property="og:description" content="Which providers work, which models to pick, what it costs, and the expert controls." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="AI Providers and Models — Open Historia Wiki" />
+  <meta name="twitter:description" content="Which providers work, which models to pick, what it costs, and the expert controls." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "AI Providers and Models",
+      "item": "https://openhistoria.com/wiki/ai-providers/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/" class="on" aria-current="page">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> AI Providers and Models
+    </nav>
+    <h1>AI Providers and Models</h1>
+    <p class="tagline">Which providers work, which models to pick, what it costs, and the expert controls.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#what-the-game-asks-of-a-model">What the game asks of a model</a></li><li class="d2"><a href="#choosing-a-provider">Choosing a provider</a></li><li class="d2"><a href="#defaults">Defaults</a></li><li class="d2"><a href="#trading-up">Trading up</a></li><li class="d2"><a href="#costs">Costs</a></li><li class="d2"><a href="#local-models">Local models</a></li><li class="d2"><a href="#expert-controls">Expert controls</a></li><li class="d2"><a href="#what-the-beta-adds">What the beta adds</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p><a href="/wiki/ai-setup/">Connecting an AI provider</a> covers getting set up. This page is about choosing
+well: which provider, which model, what it costs, and what the expert controls do.</p>
+<h2 id="what-the-game-asks-of-a-model">What the game asks of a model</h2>
+<p>This matters more than raw benchmark scores. Open Historia does not just ask for prose — it asks
+the model to return <strong>strictly structured data</strong> describing territory transfers, unit operations,
+country changes, structures and diplomatic openings, alongside the narrative, and to keep them
+consistent with each other.</p>
+<p>A model that writes beautifully but cannot reliably produce valid structured output will give
+you turns that fall back to canned events. A smaller model that follows instructions precisely
+often outperforms a larger, chattier one.</p>
+<p>That is the main axis to judge on: <strong>instruction-following and structured output</strong>, then writing
+quality, then speed.</p>
+<h2 id="choosing-a-provider">Choosing a provider</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Cost</th>
+<th>Works in the browser build</th>
+<th>Good for</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Gemini</strong></td>
+<td>Free tier</td>
+<td>Yes</td>
+<td>Getting started, and most people&#39;s permanent answer</td>
+</tr>
+<tr>
+<td><strong>Anthropic</strong></td>
+<td>Pay per token</td>
+<td>Yes</td>
+<td>Richest diplomacy and narrative</td>
+</tr>
+<tr>
+<td><strong>OpenAI</strong></td>
+<td>Pay per token</td>
+<td>Desktop only</td>
+<td>Strong all-round</td>
+</tr>
+<tr>
+<td><strong>OpenAI Compatible</strong></td>
+<td>Varies</td>
+<td>Depends on the service</td>
+<td>Local models, DeepSeek, Groq, OpenRouter, everything else</td>
+</tr>
+<tr>
+<td><strong>Anthropic Compatible</strong></td>
+<td>Varies</td>
+<td>Depends</td>
+<td>A self-hosted Anthropic-protocol proxy</td>
+</tr>
+</tbody></table></div>
+<p>&quot;Works in the browser build&quot; is about whether the provider allows direct requests from a web
+page. The desktop and self-hosted builds relay around this automatically; the hosted website
+cannot. See <a href="/wiki/ai-setup/">connecting an AI provider</a>.</p>
+<h2 id="defaults">Defaults</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Gemini</td>
+<td><code>gemini-3.5-flash-lite</code></td>
+</tr>
+<tr>
+<td>Anthropic</td>
+<td><code>claude-haiku-4-5</code></td>
+</tr>
+<tr>
+<td>OpenAI</td>
+<td>none — you must set one</td>
+</tr>
+<tr>
+<td>OpenAI Compatible</td>
+<td>endpoint <code>http://localhost:11434/v1</code>, no model set</td>
+</tr>
+</tbody></table></div>
+<p>The defaults are the cheap, fast tier of each family. They are a genuinely reasonable place to
+start, not placeholders.</p>
+<h2 id="trading-up">Trading up</h2>
+<p>Moving from a fast model to a strong one changes the game noticeably. Where you will see it:</p>
+<ul>
+<li><strong>Diplomacy.</strong> Leaders that stay in character, remember, and negotiate rather than agree.</li>
+<li><strong>Long jumps.</strong> Compressing six months into a coherent set of events is hard.</li>
+<li><strong>The advisor.</strong> The most reasoning-heavy thing in the game.</li>
+<li><strong>Consistency.</strong> Whether turn twelve remembers what turn four established.</li>
+</ul>
+<p>Where you will not see much: short jumps in a quiet period, and anything mechanical.</p>
+<p>A reasonable pattern is to play on a cheap model and switch to a stronger one when something
+important is happening.</p>
+<h2 id="costs">Costs</h2>
+<p>Open Historia makes several model calls per turn — the jump itself, plus separate calls for
+things like history consolidation and stat sheets. Diplomacy and the advisor cost extra on top.</p>
+<p>Rough guidance rather than a price list:</p>
+<ul>
+<li><strong>Gemini free tier</strong> genuinely covers solo play. Watch the rate limits on the larger models —
+hitting one mid-jump stalls the turn.</li>
+<li><strong>Cheap tiers</strong> (Haiku, Flash, DeepSeek) run a campaign for small change.</li>
+<li><strong>Frontier models</strong> are noticeably better and noticeably more expensive per turn. Long jumps
+cost more than short ones because there is more to write.</li>
+<li><strong>Local models</strong> cost nothing and run offline.</li>
+</ul>
+<p>If you are watching spend, take shorter jumps and use the advisor less.</p>
+<h2 id="local-models">Local models</h2>
+<p>Free, private, offline. Setup is in <a href="/wiki/ai-setup/">connecting an AI provider</a>.</p>
+<p>Be realistic about size. Models around <strong>3B and below</strong> frequently fail to produce valid
+structured output, and you will see turns fall back to canned events. <strong>7–14B instruct models</strong>
+are a sensible floor. Larger is better if your hardware allows it.</p>
+<p>If your hardware does not, the Gemini free tier will give you a better game than a very small
+local model.</p>
+<h2 id="expert-controls">Expert controls</h2>
+<p>You do not need any of these to play.</p>
+<p><strong>Model reasoning</strong> enables extended thinking on models that support it. Slower and more
+expensive per call; better on complex turns. Worth turning on for a frontier model, pointless on
+a small one.</p>
+<p><strong>Strict tool schema</strong> changes how structured output is requested from OpenAI-compatible
+endpoints. Some gateways and local servers handle the strict form badly. <strong>If turns keep failing
+to parse, toggle this</strong> — it is the single most useful switch for a misbehaving compatible
+endpoint.</p>
+<p><strong>Custom parameters (JSON)</strong> are merged into the request body, so you can set anything the
+provider accepts — temperature, sampling, provider-specific options. Malformed JSON is ignored
+rather than breaking the game.</p>
+<p><strong>Limit AI generation</strong> abandons a stalled generation and falls back to a canned event. It
+measures silence rather than elapsed time. Recommended with local models.</p>
+<h2 id="what-the-beta-adds">What the beta adds</h2>
+<p class="beta-note"><b>Beta channel only.</b></p><p>Per-task model routing — a cheap model for background work and a strong one for the jump itself —
+saved configuration profiles, prompt caching, batched background tasks at roughly half price on
+Anthropic, and an AI debug console showing every call with its full prompt, answer and cost.</p>
+<p>If you care about cost control or about seeing what the game actually sends, that is where to
+look.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/ai-setup/">Connecting an AI provider</a> — the setup steps.</li>
+<li><a href="/wiki/troubleshooting/">Troubleshooting</a> — when it will not connect.</li>
+<li><a href="/wiki/settings/">Settings</a> — where all of this lives.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/mobile/"><span>← Previous</span><b>Playing on your phone</b></a>
+        <a class="next" href="/wiki/troubleshooting/"><span>Next →</span><b>Troubleshooting</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

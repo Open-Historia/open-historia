@@ -2,236 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <!-- Google tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-
-    gtag('config', 'G-H9EQ4JFZXZ');
-  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0b1020" />
+  <meta name="theme-color" content="#e9dcc0" />
   <link rel="icon" type="image/jpeg" href="/logo.png" />
-  <title>Self-Hosting Open Historia — Run the Game Server Yourself</title>
-  <link rel="canonical" href="https://openhistoria.com/self-hosting/" />
-  <meta name="description" content="Run Open Historia's server yourself: build from source, play your saves from other devices on your network, play offline with a local model, the environment variables that control who can reach it, and running it as a service on Linux, Windows, and macOS." />
-
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="Open Historia" />
-  <meta property="og:url" content="https://openhistoria.com/self-hosting/" />
-  <meta property="og:title" content="Self-Hosting Open Historia — Run the Game Server Yourself" />
-  <meta property="og:description" content="Build from source, play your saves from other devices on your network, play offline with a local model, and run the server as a service." />
-  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
-  <meta property="og:image:type" content="image/jpeg" />
-  <meta property="og:image:width" content="1280" />
-  <meta property="og:image:height" content="720" />
-
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Self-Hosting Open Historia — Run the Game Server Yourself" />
-  <meta name="twitter:description" content="Build from source, play your saves from other devices on your network, play offline with a local model, and run the server as a service." />
-  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
-
-  <link rel="stylesheet" href="/guides.css" />
-
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "HowTo",
-    "name": "How to Self-Host Open Historia",
-    "description": "Step-by-step guide to run the Open Historia game server yourself from source, reach it from other devices on your network, and run it as a service.",
-    "step": [
-      {
-        "@type": "HowToStep",
-        "position": "1",
-        "name": "Install from source",
-        "text": "With Git and Node.js 22 installed, clone the repository, run node scripts/fetch-map-assets.mjs to download the map data, then npm install and npm run build."
-      },
-      {
-        "@type": "HowToStep",
-        "position": "2",
-        "name": "Start the server",
-        "text": "Run node server/server.js. The server listens on port 3000 (change it with the PORT environment variable) and the game is at http://localhost:3000."
-      },
-      {
-        "@type": "HowToStep",
-        "position": "3",
-        "name": "Reach it from other devices",
-        "text": "In the current stable release the server answers on every network interface; newer builds answer only the local machine until you turn on Settings → Network → Let other devices connect, or start the server with OH_HOST=0.0.0.0. Other devices then open http://<your-ip>:3000 in a browser."
-      }
-    ]
-  }
-  </script>
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    "itemListElement": [
-      {
-        "@type": "ListItem",
-        "position": 1,
-        "name": "Open Historia",
-        "item": "https://openhistoria.com/"
-      },
-      {
-        "@type": "ListItem",
-        "position": 2,
-        "name": "Self-Hosting Guide",
-        "item": "https://openhistoria.com/self-hosting/"
-      }
-    ]
-  }
-  </script>
+  <title>Self-Hosting — moved to the Open Historia Wiki</title>
+  <!-- This page moved into the wiki. On openhistoria.com a 301 in site/_redirects fires before
+       this file is ever served; this stub is what answers inside the desktop app, which serves
+       public/ at its own root and knows nothing about _redirects. -->
+  <link rel="canonical" href="https://openhistoria.com/wiki/self-hosting/" />
+  <meta name="robots" content="noindex, follow" />
+  <meta http-equiv="refresh" content="0; url=/wiki/self-hosting/" />
+  <link rel="stylesheet" href="/wiki.css" />
 </head>
 <body>
-  <div class="page">
-    <nav class="breadcrumbs" aria-label="Breadcrumb">
-      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> Self-Hosting Guide
-    </nav>
-
-    <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
-
-    <h1>Self-Hosting Open Historia</h1>
-    <p class="tagline">Run the game server yourself — from source on any machine with Node.js, on your own network, or entirely offline with a local model.</p>
-
-    <h2>Do You Need This?</h2>
-    <div class="card">
-      <p>Probably not. The <a href="/get-started/">desktop app</a> already runs the whole game — server included — on your own machine, with nothing else to install. Self-hosting from source is for when you want to:</p>
-      <ul>
-        <li><strong>Run it on a machine without a desktop:</strong> a home server, a NAS, a Raspberry Pi, or a phone with Termux.</li>
-        <li><strong>Play from other devices:</strong> open your saves from a laptop, tablet, or phone browser on the same network.</li>
-        <li><strong>Hack on it:</strong> the source is AGPL-3.0-licensed; this is how you run your own changes.</li>
-      </ul>
-      <p>Whichever way you run it, Open Historia is <span class="highlight">local-first</span>: there is no central game server and no account. Your saves and scenarios live in the server's data directory on your machine, and your AI key goes only to the provider you configured.</p>
-    </div>
-
-    <h2>Install and Run from Source</h2>
-
-    <div class="step">
-      <strong>Step 1 — Prerequisites</strong>
-      <p><a href="https://git-scm.com/" target="_blank" rel="noopener">Git</a> and <a href="https://nodejs.org/" target="_blank" rel="noopener">Node.js</a> 22 LTS or newer (20.19 is the minimum for the server and the client build).</p>
-    </div>
-
-    <div class="step">
-      <strong>Step 2 — Clone, fetch the map data, build</strong>
-      <pre><code>git clone https://github.com/Open-Historia/open-historia.git
-cd open-historia
-node scripts/fetch-map-assets.mjs   # downloads the world map data (about 275 MB)
-npm install
-npm run build</code></pre>
-      <p>On a server-only box (Termux, a NAS, anything headless) use <code>npm install --omit=dev --omit=optional</code> instead of <code>npm install</code>: it skips Electron and the desktop build chain, which are not needed to run the server.</p>
-    </div>
-
-    <div class="step">
-      <strong>Step 3 — Start the server</strong>
-      <pre><code>node server/server.js</code></pre>
-      <p>Then open <code>http://localhost:3000</code> in a browser. Set <code>PORT</code> to use another port. All state — saves, scenarios, editor documents, uploaded flags and basemaps — is plain files under <code>server/data/</code> (or wherever <code>OH_DATA_DIR</code> points); back that directory up and you have backed up everything.</p>
-    </div>
-
-    <h2>Playing from Other Devices</h2>
-    <div class="card">
-      <p>Any device on your network can play by opening the server's address in a browser — <code>http://192.168.x.x:3000</code>, using the server machine's local IP. The game loads from the server itself, so no extra configuration is needed on the client side. Everyone who connects sees and plays the same library of saves; there is no multiplayer mode and no accounts.</p>
-      <p>Whether the server answers other devices at all depends on the build:</p>
-      <ul>
-        <li><strong>Current stable release:</strong> the server listens on every network interface as soon as it starts, so other devices can connect right away.</li>
-        <li><strong>Newer builds (the beta, and the source on the beta branch):</strong> the server answers only the machine it runs on until you turn on <strong>Settings → Network → "Let other devices connect"</strong>. It takes effect immediately, is remembered, and shows you the exact address to type on the other device. On a headless box, set <code>OH_HOST=0.0.0.0</code> instead (or one interface's address); that overrides the switch.</li>
-      </ul>
-      <p><strong>The game's API has no password.</strong> While the server is reachable from the network, anyone on it can read, change, and delete your games and scenarios — fine on a home network you control, a bad idea on café, hotel, dorm, or office Wi-Fi. For remote play across the internet, put the machines on a private network with a tool such as Tailscale or ZeroTier rather than forwarding the port on your router.</p>
-      <p>The Android app does not connect to a self-hosted server: it is the browser version packaged as an app, streaming the map from the community content nodes with its games on the phone. A phone plays your self-hosted saves through its browser instead.</p>
-    </div>
-
-    <h2>Environment Variables</h2>
-    <div class="card">
-      <table class="comparison-table">
-        <thead>
-          <tr>
-            <th>Variable</th>
-            <th>Default</th>
-            <th>What it does</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>PORT</code></td>
-            <td><code>3000</code></td>
-            <td>The port the server listens on.</td>
-          </tr>
-          <tr>
-            <td><code>OH_DATA_DIR</code></td>
-            <td><code>server/data</code></td>
-            <td>Where saves, scenarios, and everything else is stored.</td>
-          </tr>
-          <tr>
-            <td><code>OH_HOST</code></td>
-            <td>unset</td>
-            <td>Newer builds: which interface to listen on. <code>0.0.0.0</code> means every device on the network; an address means that interface only. Overrides and locks the Settings → Network switch.</td>
-          </tr>
-          <tr>
-            <td><code>OH_ALLOW_REMOTE_RELAY</code></td>
-            <td>off</td>
-            <td>Newer builds: lets other devices use this server's AI relay (the fallback for local AI backends without CORS headers). Off means the relay answers this machine only, so nobody else on the network can use it as a proxy.</td>
-          </tr>
-          <tr>
-            <td><code>OH_RATE_LIMIT</code></td>
-            <td><code>1200</code></td>
-            <td>Newer builds: requests per minute per network client (the local machine is exempt).</td>
-          </tr>
-          <tr>
-            <td><code>OH_ALLOW_CROSS_ORIGIN</code></td>
-            <td>off</td>
-            <td>Disables the cross-origin write guard. Only needed when the game's pages are served from a different origin than the API (for example a separate web server in front of it). Devices that load the game from this server itself never need it.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <h2>Going Offline</h2>
-    <div class="card">
-      <p>Once the map data is downloaded, the server, the map, the scenarios, and the editor all run <span class="highlight">without an internet connection</span>. Playing offline additionally needs an AI that runs offline: a local model through Ollama, LM Studio, or llama.cpp (see the <a href="/ai-setup/">AI setup guide</a>). Without any AI provider the world cannot advance — you can build and edit maps, but not play a turn.</p>
-    </div>
-
-    <h2>Running as a Service</h2>
-    <div class="card">
-      <h3>Linux (systemd)</h3>
-      <p>Create <code>/etc/systemd/system/open-historia.service</code>:</p>
-      <pre><code>[Unit]
-Description=Open Historia Game Server
-After=network.target
-
-[Service]
-Type=simple
-User=your-user
-WorkingDirectory=/path/to/open-historia
-ExecStart=/usr/bin/node server/server.js
-Restart=on-failure
-Environment=PORT=3000
-# Newer builds answer only the local machine unless told otherwise:
-Environment=OH_HOST=0.0.0.0
-
-[Install]
-WantedBy=multi-user.target</code></pre>
-      <p>Then enable and start it: <code>sudo systemctl enable --now open-historia</code></p>
-
-      <h3>Windows (Task Scheduler)</h3>
-      <p>Create a task that runs <code>node server\server.js</code> in the project directory at startup, with "Run whether user is logged on or not". Set any environment variables in the task's action, or in a small <code>.cmd</code> wrapper.</p>
-
-      <h3>macOS (launchd)</h3>
-      <p>Create a plist in <code>~/Library/LaunchAgents/</code> whose program arguments run <code>node server/server.js</code> with the project directory as the working directory, and load it with <code>launchctl</code>.</p>
-    </div>
-
-    <h2>Related Guides</h2>
-    <ul>
-      <li><a href="/get-started/">Get Started — the desktop app, the Android app, the browser demo, and your first game</a></li>
-      <li><a href="/ai-setup/">Connect an AI provider — including local models for offline play</a></li>
-      <li><a href="/how-to-play/">How to Play — gameplay mechanics and controls</a></li>
-    </ul>
-
-    <a href="/" class="cta">Play Open Historia</a>
-
-    <footer>
-      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> · <a href="/sitemap.xml">Sitemap</a></p>
-    </footer>
+  <div class="wrap wiki-layout" style="grid-template-columns:minmax(0,1fr)">
+    <main class="wiki-main">
+      <h1>This page has moved</h1>
+      <p class="tagline">Self-Hosting now lives in the Open Historia Wiki.</p>
+      <p><a class="cta" href="/wiki/self-hosting/">Continue to Self-Hosting</a></p>
+      <p><a href="/wiki/">Browse the whole wiki</a></p>
+    </main>
   </div>
 </body>
 </html>

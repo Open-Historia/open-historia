@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Starting a Game — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/new-game/" />
+  <meta name="description" content="Scenarios, choosing a country, inventing your own faction, and what the six difficulty levels actually change." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/new-game/" />
+  <meta property="og:title" content="Starting a Game — Open Historia Wiki" />
+  <meta property="og:description" content="Scenarios, choosing a country, inventing your own faction, and what the six difficulty levels actually change." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Starting a Game — Open Historia Wiki" />
+  <meta name="twitter:description" content="Scenarios, choosing a country, inventing your own faction, and what the six difficulty levels actually change." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Starting a Game",
+      "item": "https://openhistoria.com/wiki/new-game/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/" class="on" aria-current="page">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Starting a Game
+    </nav>
+    <h1>Starting a Game</h1>
+    <p class="tagline">Scenarios, choosing a country, inventing your own faction, and what the six difficulty levels actually change.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#scenarios">Scenarios</a></li><li class="d2"><a href="#choosing-a-country">Choosing a country</a></li><li class="d3"><a href="#country">Country</a></li><li class="d3"><a href="#faction">Faction</a></li><li class="d2"><a href="#difficulty">Difficulty</a></li><li class="d2"><a href="#what-gets-created">What gets created</a></li><li class="d2"><a href="#starting-well">Starting well</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>A new game needs three things: a scenario to play on, a country to play as, and a difficulty.</p>
+<h2 id="scenarios">Scenarios</h2>
+<p>A <strong>scenario</strong> is a world — its map, its borders, who owns what, the starting date, which troop
+types exist, and any house rules the author wrote. A <strong>game</strong> is one playthrough of a scenario.
+One scenario can seed as many games as you like, and playing one never changes it.</p>
+<p><strong>Modern Day</strong> is the only scenario built into the game. Everything else lives on the
+<a href="/wiki/community-hub/">Community Hub</a>, including the official presets:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Start</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>World War II</td>
+<td>1939</td>
+</tr>
+<tr>
+<td>Medieval</td>
+<td>1200 AD</td>
+</tr>
+<tr>
+<td>Rome</td>
+<td>117 AD</td>
+</tr>
+<tr>
+<td>Mongol World</td>
+<td>1300 AD</td>
+</tr>
+<tr>
+<td>New World</td>
+<td>1650</td>
+</tr>
+<tr>
+<td>Bronze Age</td>
+<td>1200 BC</td>
+</tr>
+</tbody></table></div>
+<p>Open the <strong>Community</strong> tab in the main menu, find one, and hit <strong>Import &amp; Play</strong>. It downloads
+into your library and behaves exactly like a built-in scenario from then on.</p>
+<p>If a scenario you imported gets updated by its author, an <strong>⬆ Update</strong> button appears on its
+card. Updating is safe — games already in progress keep working on the version they started on.</p>
+<h2 id="choosing-a-country">Choosing a country</h2>
+<p>Selecting <strong>New Game</strong> on a scenario opens the picker. It has two tabs.</p>
+<h3 id="country">Country</h3>
+<p>A map and a searchable list of every country in the scenario. Click one on the map or pick it
+from the list.</p>
+<p>The list is built from the scenario&#39;s actual roster, which includes <strong>countries that hold no
+land</strong> — governments in exile, movements, organisations. Playing one of those is a very
+different game: you have no territory to defend and no territory to lose.</p>
+<h3 id="faction">Faction</h3>
+<p>This is where you invent a country that does not exist. You give it:</p>
+<ul>
+<li><strong>A name</strong> — this is its identity everywhere in the game, so choose it properly.</li>
+<li><strong>A colour</strong> — how it paints on the map.</li>
+<li><strong>A flag</strong> — optional; pick from the library or leave it blank.</li>
+<li><strong>Lore</strong> — a few sentences on who you are and what you want. The world reads this. It is worth
+writing something real, because it shapes how every other country treats you.</li>
+<li><strong>Starting regions</strong> — select territory on the map, or none at all for a landless faction.</li>
+</ul>
+<p>The regions you take are carved out of whoever held them, and that country will notice.</p>
+<h2 id="difficulty">Difficulty</h2>
+<p>Six levels. Difficulty does not give the AI secret information or extra resources — it changes
+how the world <em>treats</em> you: whether your plans succeed on their merits, how competent your
+rivals are, and whether events tend to break your way.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+<th>What changes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>😴</td>
+<td><strong>Very Easy</strong></td>
+<td>Your actions almost always succeed and outperform expectations. Rivals act passively. Events tend to benefit you.</td>
+</tr>
+<tr>
+<td>🙂</td>
+<td><strong>Easy</strong></td>
+<td>Reasonable actions succeed. Rivals are slow to exploit mistakes. Setbacks stay small and recoverable.</td>
+</tr>
+<tr>
+<td>⚖️</td>
+<td><strong>Medium</strong></td>
+<td>Actions succeed or fail on their merits. Rivals pursue their own interests with normal competence.</td>
+</tr>
+<tr>
+<td>😰</td>
+<td><strong>Hard</strong></td>
+<td>Rivals are competent and opportunistic. Weak or vague orders fail or backfire. Success needs sound strategy.</td>
+</tr>
+<tr>
+<td>🔥</td>
+<td><strong>Very Hard</strong></td>
+<td>Rivals actively counter you and form coalitions. Only well-reasoned plans succeed. Events often work against you.</td>
+</tr>
+<tr>
+<td>💀</td>
+<td><strong>Impossible</strong></td>
+<td>Rivals are ruthless, coordinated and relentless. Even good plans meet complications, and crises compound.</td>
+</tr>
+</tbody></table></div>
+<p><strong>Medium</strong> is the honest one and the right default. The difference between Medium and Hard is
+mostly whether a vague order gets a charitable reading — on Hard, <em>&quot;improve the economy&quot;</em> will
+get you an event about a policy that did not work.</p>
+<p>Difficulty is set when you start and stored with the game, but you can change it mid-campaign
+from the <a href="/wiki/cheats/">cheats panel</a>.</p>
+<h2 id="what-gets-created">What gets created</h2>
+<p>Starting a game copies the scenario&#39;s world into a new playthrough and gives it its own set of
+documents — world state, game state, events, actions and chat history. From that point the
+game is independent: editing the scenario later does not touch it.</p>
+<p>Games appear in the <strong>Games</strong> tab of the main menu, sorted by last played and most played, with
+a cover image and your country, date and turn number on the card. From the card you can play,
+edit, or clone it.</p>
+<h2 id="starting-well">Starting well</h2>
+<ul>
+<li><strong>Take a country you know something about.</strong> You will write better orders for a situation you
+can already picture.</li>
+<li><strong>Modern Day first.</strong> It is the most polished and the most legible.</li>
+<li><strong>Medium first.</strong> Very Hard is not more interesting on turn one, just less forgiving.</li>
+<li><strong>Write the faction lore if you invent a country.</strong> A faction with no lore is a blank to the
+world, and it will be treated like one.</li>
+</ul>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/first-campaign/">Your first campaign</a> — a walkthrough of the first hour.</li>
+<li><a href="/wiki/interface/">The interface</a> — what everything on screen is.</li>
+<li><a href="/wiki/countries/">Countries and identity</a> — names, tags, flags and reputation in depth.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/first-campaign/"><span>← Previous</span><b>Your first campaign</b></a>
+        <a class="next" href="/wiki/interface/"><span>Next →</span><b>The interface</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

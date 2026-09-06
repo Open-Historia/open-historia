@@ -940,7 +940,7 @@ const SettingsMenu = ({
         )}
 
         <a
-        href="/guides/"
+        href="/wiki/"
         style={{
             alignItems: "center",
             background: "rgba(59,130,246,0.18)",
@@ -959,7 +959,7 @@ const SettingsMenu = ({
             width: "100%",
         }}
         >
-        📖 Guides
+        📖 Wiki
         </a>
 
         <SocialLinks discordUrl={discordUrl} redditUrl={redditUrl} githubUrl={githubUrl} />

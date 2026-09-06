@@ -1,0 +1,259 @@
+{
+  "_comment": [
+    "Source of truth for the wiki: page order, the sidebar, prev/next paging, the search index",
+    "and public/sitemap.xml are all generated from this file by scripts/build-wiki.mjs.",
+    "Order here is reading order. Every .md under wiki/ must be listed, and every slug becomes",
+    "the URL /wiki/<slug>/ — changing a slug breaks inbound links, so treat them as permanent.",
+    "extraSitemap holds the non-wiki URLs the sitemap must still advertise."
+  ],
+  "hub": {
+    "file": "index.md",
+    "slug": "",
+    "nav": "Wiki home",
+    "title": "Open Historia Wiki",
+    "description": "How to install, play and master Open Historia — the free, open-source, AI-driven grand strategy game."
+  },
+  "sections": [
+    {
+      "title": "Getting started",
+      "pages": [
+        {
+          "slug": "install",
+          "file": "start/install.md",
+          "nav": "Install",
+          "title": "Installing Open Historia",
+          "description": "Download and install on Windows, macOS, Linux and Android, or play straight away in your browser."
+        },
+        {
+          "slug": "ai-setup",
+          "file": "start/ai-setup.md",
+          "nav": "Connect an AI",
+          "title": "Connecting an AI Provider",
+          "description": "Open Historia is driven by a language model you supply. Set up Gemini, OpenAI, Anthropic, or a local model on your own machine."
+        },
+        {
+          "slug": "how-to-play",
+          "file": "start/how-to-play.md",
+          "nav": "How to play",
+          "title": "How to Play",
+          "description": "The core loop: pick a country, write orders in plain English, skip time, and read what the world did in response."
+        },
+        {
+          "slug": "first-campaign",
+          "file": "start/first-campaign.md",
+          "nav": "Your first campaign",
+          "title": "Your First Campaign",
+          "description": "A guided first hour — from the main menu to your first war, told step by step."
+        }
+      ]
+    },
+    {
+      "title": "Playing",
+      "pages": [
+        {
+          "slug": "new-game",
+          "file": "play/new-game.md",
+          "nav": "Starting a game",
+          "title": "Starting a Game",
+          "description": "Scenarios, choosing a country, inventing your own faction, and what the six difficulty levels actually change."
+        },
+        {
+          "slug": "interface",
+          "file": "play/interface.md",
+          "nav": "The interface",
+          "title": "The Interface",
+          "description": "Every panel, button and badge on screen, and what each one is for."
+        },
+        {
+          "slug": "world-map",
+          "file": "play/world-map.md",
+          "nav": "The world map",
+          "title": "The World Map",
+          "description": "Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps."
+        },
+        {
+          "slug": "time",
+          "file": "play/time.md",
+          "nav": "Time & turns",
+          "title": "Time and Turns",
+          "description": "Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn."
+        },
+        {
+          "slug": "orders",
+          "file": "play/orders.md",
+          "nav": "Giving orders",
+          "title": "Giving Orders",
+          "description": "The actions queue: writing orders in plain English, refining them, and how they get resolved."
+        },
+        {
+          "slug": "events",
+          "file": "play/events.md",
+          "nav": "Events & history",
+          "title": "Events and History",
+          "description": "How a turn's events are revealed, categorised, remembered and eventually compacted."
+        }
+      ]
+    },
+    {
+      "title": "Game systems",
+      "pages": [
+        {
+          "slug": "diplomacy",
+          "file": "systems/diplomacy.md",
+          "nav": "Diplomacy",
+          "title": "Diplomacy",
+          "description": "Talking to other countries: leader voices, group threads, memory, reactions and unprompted approaches."
+        },
+        {
+          "slug": "war",
+          "file": "systems/war.md",
+          "nav": "Relations, treaties & war",
+          "title": "Relations, Treaties and War",
+          "beta": true,
+          "description": "The four ledgers that decide who is at war with whom, how much they like each other, and what they have signed."
+        },
+        {
+          "slug": "territory",
+          "file": "systems/territory.md",
+          "nav": "Territory",
+          "title": "Territory: Control, Sovereignty and Claims",
+          "description": "Who holds the ground, who lawfully owns it, and who says it is theirs — three separate layers, drawn differently."
+        },
+        {
+          "slug": "military",
+          "file": "systems/military.md",
+          "nav": "Military & combat",
+          "title": "Military and Combat",
+          "description": "Unit types, strength, postures, movement ranges and the combat maths — plus the two switchable unit systems."
+        },
+        {
+          "slug": "espionage",
+          "file": "systems/espionage.md",
+          "nav": "Espionage",
+          "title": "Espionage",
+          "description": "Intelligence ratings, sending agents, being spied on, double agents and sealed intercepts."
+        },
+        {
+          "slug": "projects",
+          "file": "systems/projects.md",
+          "nav": "Projects & operations",
+          "title": "Projects and Operations",
+          "beta": true,
+          "description": "Long-running efforts that span turns: research programmes, construction, covert operations and campaigns."
+        },
+        {
+          "slug": "statistics",
+          "file": "systems/statistics.md",
+          "nav": "National statistics",
+          "title": "National Statistics",
+          "description": "The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them."
+        },
+        {
+          "slug": "countries",
+          "file": "systems/countries.md",
+          "nav": "Countries & identity",
+          "title": "Countries and Identity",
+          "description": "Names, aliases, tags, flags, colours, reputation, leaders, and countries that hold no land at all."
+        },
+        {
+          "slug": "cities",
+          "file": "systems/cities.md",
+          "nav": "Cities & structures",
+          "title": "Cities and Structures",
+          "description": "Cities on the map and the bases, ports and landmarks that get built during a campaign."
+        },
+        {
+          "slug": "advisor",
+          "file": "systems/advisor.md",
+          "nav": "The advisor",
+          "title": "The Advisor",
+          "description": "Your in-game analyst: asking questions, reading charts, and turning advice into orders and projects."
+        }
+      ]
+    },
+    {
+      "title": "Tools",
+      "pages": [
+        {
+          "slug": "settings",
+          "file": "tools/settings.md",
+          "nav": "Settings",
+          "title": "Settings Reference",
+          "description": "Every option in the game, what it does, and which ones are worth changing first."
+        },
+        {
+          "slug": "cheats",
+          "file": "tools/cheats.md",
+          "nav": "Cheats & GM console",
+          "title": "Cheats and the Game Master Console",
+          "description": "Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns."
+        },
+        {
+          "slug": "saves",
+          "file": "tools/saves.md",
+          "nav": "Saves & rollback",
+          "title": "Saves, Rollback and Sharing",
+          "description": "How campaigns are stored, how to undo, how to clone, and how to move a game or scenario between machines."
+        },
+        {
+          "slug": "editor",
+          "file": "tools/editor.md",
+          "nav": "The map editor",
+          "title": "The Map Editor",
+          "description": "Draw your own world: regions, owners, cities, flags, basemaps and imported maps."
+        }
+      ]
+    },
+    {
+      "title": "Sharing & hosting",
+      "pages": [
+        {
+          "slug": "community-hub",
+          "file": "hosting/community-hub.md",
+          "nav": "The community hub",
+          "title": "The Community Hub",
+          "description": "Download scenarios other players have made, and publish your own."
+        },
+        {
+          "slug": "self-hosting",
+          "file": "hosting/self-hosting.md",
+          "nav": "Hosting a server",
+          "title": "Hosting a Server",
+          "description": "Run Open Historia on your own machine, play offline, or reach it from your phone on the same network."
+        },
+        {
+          "slug": "mobile",
+          "file": "hosting/mobile.md",
+          "nav": "Playing on your phone",
+          "title": "Playing on Your Phone",
+          "description": "The Android app, what it downloads on first launch, and how it connects."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "pages": [
+        {
+          "slug": "ai-providers",
+          "file": "reference/ai-providers.md",
+          "nav": "AI providers & models",
+          "title": "AI Providers and Models",
+          "description": "Which providers work, which models to pick, what it costs, and the expert controls."
+        },
+        {
+          "slug": "troubleshooting",
+          "file": "reference/troubleshooting.md",
+          "nav": "Troubleshooting",
+          "title": "Troubleshooting",
+          "description": "Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong."
+        }
+      ]
+    }
+  ],
+  "extraSitemap": [
+    { "loc": "/", "changefreq": "weekly", "priority": "1.0" },
+    { "loc": "/play/", "changefreq": "weekly", "priority": "1.0" },
+    { "loc": "/pax-historia-alternative/", "changefreq": "monthly", "priority": "0.9" },
+    { "loc": "/sitemap/", "changefreq": "monthly", "priority": "0.4" }
+  ]
+}

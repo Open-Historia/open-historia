@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Cheats and the Game Master Console — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/cheats/" />
+  <meta name="description" content="Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/cheats/" />
+  <meta property="og:title" content="Cheats and the Game Master Console — Open Historia Wiki" />
+  <meta property="og:description" content="Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Cheats and the Game Master Console — Open Historia Wiki" />
+  <meta name="twitter:description" content="Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Cheats and the Game Master Console",
+      "item": "https://openhistoria.com/wiki/cheats/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/" class="on" aria-current="page">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Cheats and the Game Master Console
+    </nav>
+    <h1>Cheats and the Game Master Console</h1>
+    <p class="tagline">Twelve tools for rewriting the world by hand — annex territory, edit countries, author events, roll back turns.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#master-ai-the-gm-console">Master AI — the GM console</a></li><li class="d2"><a href="#turn-and-campaign-control">Turn and campaign control</a></li><li class="d2"><a href="#territory">Territory</a></li><li class="d2"><a href="#countries">Countries</a></li><li class="d2"><a href="#map-features">Map features</a></li><li class="d2"><a href="#events">Events</a></li><li class="d2"><a href="#forces">Forces</a></li><li class="d2"><a href="#diagnostics-log">Diagnostics log</a></li><li class="d2"><a href="#should-you-use-any-of-this">Should you use any of this?</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>The <strong>🧪 Cheats</strong> panel is the game master&#39;s toolbox. Fourteen tools for reaching into the world
+and changing it by hand — plus manual control of your own army, which lives here rather than in
+the normal interface.</p>
+<p>Calling it &quot;cheats&quot; undersells it. Most of these are how you keep a long campaign on the rails
+when the simulation drifts, or how you author a world deliberately.</p>
+<p>Open it from the settings menu.</p>
+<h2 id="master-ai-the-gm-console">Master AI — the GM console</h2>
+<p>The most useful tool on the list. Describe a change in plain English and it is planned into a
+proper set of world changes, shown to you, and then applied.</p>
+<blockquote>
+<p><em>&quot;Hungary leaves the alliance and signs a non-aggression pact with Serbia. Their relationship
+with Vienna sours.&quot;</em></p>
+</blockquote>
+<p>It works because it goes through the same machinery events do — territory transfers, country
+changes, unit operations, structures — so whatever it does is a legitimate world state rather
+than a hand-edited file.</p>
+<p>Use it when something has gone wrong that no single tool fixes, or when you want to steer the
+narrative rather than wait for the simulation to get there.</p>
+<h2 id="turn-and-campaign-control">Turn and campaign control</h2>
+<p><strong>Roll Back Turn</strong> restores the world to the start of any earlier turn, discarding everything
+after it. Broader than the <strong>Undo</strong> in the time panel, which only steps back one turn at a time.</p>
+<p><strong>Your Country</strong> switches which country you play. You can hand yourself a different nation
+mid-campaign, or follow a war from the other side.</p>
+<p><strong>Difficulty</strong> changes the level after the fact. See <a href="/wiki/new-game/">starting a game</a> for what
+each level does.</p>
+<h2 id="territory">Territory</h2>
+<p><strong>Annex Country</strong> — click a country on the map and all of its regions fold into a target.</p>
+<p><strong>Annex Regions</strong> — click regions one at a time to transfer them individually.</p>
+<p>Both enter a click-capture mode: map clicks go to the tool instead of opening the usual popups,
+and the panel gets out of the way until you are done.</p>
+<p><strong>Regions</strong> inspects any region — its name, tags and properties — and lets you edit them,
+including renaming regions on custom maps.</p>
+<h2 id="countries">Countries</h2>
+<p><strong>Edit Country</strong> opens a country&#39;s identity: name, colour, tags, reputation, and its stat sheet.
+Useful when the simulation has drifted a country somewhere you do not want it, or when you want
+to write a country&#39;s character deliberately.</p>
+<p><strong>Add Country</strong> creates a new one from nothing.</p>
+<p>Both work on any country, not just yours. See <a href="/wiki/countries/">countries and identity</a>.</p>
+<h2 id="map-features">Map features</h2>
+<p><strong>Edit Map Feature</strong> and <strong>Add Map Feature</strong> work on cities and structures — position, name,
+population, kind, owner.</p>
+<p><strong>Clear Map Features</strong> removes accumulated markers that have stopped mattering. Long campaigns
+build up a lot of them.</p>
+<p>Adding your first custom city to a scenario switches it to carrying its own city list rather
+than the stock one.</p>
+<h2 id="events">Events</h2>
+<p>The <strong>Events</strong> editor searches, creates, edits and deletes canonical events.</p>
+<p>This is the tool for repairing history. If a turn produced an event that contradicts everything
+before it, you can rewrite it rather than rolling back and re-rolling the whole turn. You can
+also author events outright, which is how you run a scripted campaign.</p>
+<p>Because events carry the world changes, editing one is editing history in both senses.</p>
+<h2 id="forces">Forces</h2>
+<p><strong>Manual force deployment</strong> opens the <a href="/wiki/military/">Forces panel</a>: spawn units, set their
+type and strength, move them, and command them directly.</p>
+<p>It is filed here deliberately. In normal play you order a military outcome and the world carries
+it out; placing divisions by hand is a game-master act.</p>
+<h2 id="diagnostics-log">Diagnostics log</h2>
+<p>Errors, API failures, and the context the AI was actually given.</p>
+<p>This is the first place to look when turns are failing, and the thing to copy into a bug report.
+It shows you what was sent to the model, which usually explains a strange result immediately.</p>
+<h2 id="should-you-use-any-of-this">Should you use any of this?</h2>
+<p>Yes. This is a single-player game with no score and nobody to cheat against. The tools exist
+because an AI-driven world sometimes produces something incoherent, and the alternative to
+fixing it is abandoning the campaign.</p>
+<p>The one habit worth keeping: <strong>prefer the GM console over the direct editors</strong> where both would
+work. Describing what happened produces a world that hangs together, including the knock-on
+consequences. Hand-editing a border produces a border that moved for no reason anyone in the
+world can remember.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/events/">Events and history</a> — what you are editing.</li>
+<li><a href="/wiki/saves/">Saves and rollback</a> — the safer undo.</li>
+<li><a href="/wiki/editor/">The map editor</a> — for changing the world itself rather than a campaign.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/settings/"><span>← Previous</span><b>Settings</b></a>
+        <a class="next" href="/wiki/saves/"><span>Next →</span><b>Saves &amp; rollback</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

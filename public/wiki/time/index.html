@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Time and Turns — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/time/" />
+  <meta name="description" content="Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/time/" />
+  <meta property="og:title" content="Time and Turns — Open Historia Wiki" />
+  <meta property="og:description" content="Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Time and Turns — Open Historia Wiki" />
+  <meta name="twitter:description" content="Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Time and Turns",
+      "item": "https://openhistoria.com/wiki/time/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/" class="on" aria-current="page">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Time and Turns
+    </nav>
+    <h1>Time and Turns</h1>
+    <p class="tagline">Nothing happens until you skip time. Jump lengths, auto-jump, segmented skips and undoing a turn.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#fixed-jumps">Fixed jumps</a></li><li class="d2"><a href="#custom-jumps">Custom jumps</a></li><li class="d2"><a href="#auto-jump">Auto-jump</a></li><li class="d2"><a href="#how-far-should-i-skip">How far should I skip?</a></li><li class="d2"><a href="#while-it-runs">While it runs</a></li><li class="d2"><a href="#undo">Undo</a></li><li class="d2"><a href="#rounds-and-dates">Rounds and dates</a></li><li class="d2"><a href="#the-first-turn-is-special">The first turn is special</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Open Historia has no tick. There is no clock running in the background, nothing accumulates
+while you think, and no timer forces your hand. The world advances <strong>only</strong> when you press the
+button, and only as far as you tell it to.</p>
+<p>Open the time panel with <strong>»</strong> on the date pill, top right.</p>
+<h2 id="fixed-jumps">Fixed jumps</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Jump</th>
+<th>Days</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>6 hours</td>
+<td>0.25</td>
+</tr>
+<tr>
+<td>1 day</td>
+<td>1</td>
+</tr>
+<tr>
+<td>3 days</td>
+<td>3</td>
+</tr>
+<tr>
+<td>1 week</td>
+<td>7</td>
+</tr>
+<tr>
+<td>1 month</td>
+<td>30</td>
+</tr>
+<tr>
+<td>3 months</td>
+<td>90</td>
+</tr>
+<tr>
+<td>6 months</td>
+<td>180</td>
+</tr>
+<tr>
+<td>1 year</td>
+<td>365</td>
+</tr>
+</tbody></table></div>
+<p>Each one shows the date you will land on, so you can see what you are committing to.</p>
+<p>Note that a &quot;month&quot; is a flat 30 days and a &quot;year&quot; is 365 — the game does not track calendar
+month lengths for jump sizing.</p>
+<h2 id="custom-jumps">Custom jumps</h2>
+<p>Type an amount and pick a unit: <strong>hours, days, weeks, months</strong> or <strong>years</strong>. The conversions are
+the same flat ones — an hour is 1/24 of a day, a week is 7, a month is 30, a year is 365.</p>
+<p>Useful when you want to land on a specific date, or when a fixed preset is slightly wrong for
+what is happening.</p>
+<h2 id="auto-jump">Auto-jump</h2>
+<p>Instead of choosing a distance, let the model choose it. Auto-jump looks at the state of the
+world and skips to the next moment it thinks you would want to be present for — which might be
+three days if a crisis is breaking, or eight months if nothing is happening.</p>
+<p>Good for quiet stretches. Less good when you have something specific in motion that you want to
+watch closely.</p>
+<h2 id="how-far-should-i-skip">How far should I skip?</h2>
+<p>The world has to fit everything that happens into one turn&#39;s worth of events. Skip a year and
+twelve months get compressed into a handful of paragraphs; skip a week and you get the texture.</p>
+<ul>
+<li><strong>Something is actively unfolding</strong> — a war opening, an ultimatum running out, a coup —
+6 hours to 3 days.</li>
+<li><strong>Normal play</strong> — 1 week to 1 month. This is where most campaigns live.</li>
+<li><strong>Building toward something</strong> — 3 to 6 months.</li>
+<li><strong>Nothing needs you</strong> — 1 year, or auto-jump.</li>
+</ul>
+<p>A common early mistake is skipping a year on turn one and wondering why the campaign feels
+thin. Start with months.</p>
+<h2 id="while-it-runs">While it runs</h2>
+<p>A time skip takes a while — the model is simulating the world. The panel shows it working, and
+there is a <strong>Cancel</strong> button. Cancelling aborts the request cleanly and leaves the world exactly
+as it was.</p>
+<p>If jumps routinely hang, turn on <strong>Limit AI generation</strong> in Settings → AI. It gives up on a
+stalled generation and falls back to a canned event rather than waiting indefinitely. It watches
+for <em>silence</em> rather than total elapsed time, so a slow-but-working model is not cut off
+mid-answer.</p>
+<h2 id="undo">Undo</h2>
+<p><strong>↩ Undo last turn</strong> is in the time panel, and it tells you how many turns can be undone.</p>
+<p>Undo restores the world, the game state, the events, your action queue, the chat history and the
+colours to exactly how they were before that jump. The game keeps up to <strong>12</strong> turns of
+snapshots, so you can step back repeatedly.</p>
+<p>Use it freely. A time skip is partly a roll of the dice, and rewinding a turn that produced
+something absurd is how the game is meant to be played, not a workaround.</p>
+<p>For jumping back further than the recent stack, the <a href="/wiki/cheats/">cheats panel</a> has a
+<strong>roll back turn</strong> tool that restores the start of any earlier turn — discarding everything
+after it.</p>
+<h2 id="rounds-and-dates">Rounds and dates</h2>
+<p>Every jump increments the <strong>round</strong> counter, which starts at 1. The round is what the game uses
+internally to seed deterministic outcomes such as espionage rolls and combat, which is why the
+same save always replays the same way.</p>
+<p>The date is stored as plain text, so scenarios can use non-Gregorian dates such as &quot;1200 BCE&quot;
+without the clock breaking. Loosely formatted dates get repaired rather than rejected.</p>
+<h2 id="the-first-turn-is-special">The first turn is special</h2>
+<p>On round 1, a scenario that has a <em>World Before Round One</em> briefing generates its own backstory
+before play begins — the recent history that led to the situation you have inherited. It happens
+once, and it gives the world something to refer back to.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/events/">Events and history</a> — reading what a jump produced.</li>
+<li><a href="/wiki/orders/">Giving orders</a> — what to queue before you jump.</li>
+<li><a href="/wiki/saves/">Saves and rollback</a> — how snapshots and autosave actually work.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/world-map/"><span>← Previous</span><b>The world map</b></a>
+        <a class="next" href="/wiki/orders/"><span>Next →</span><b>Giving orders</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

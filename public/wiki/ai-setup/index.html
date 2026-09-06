@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Connecting an AI Provider — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/ai-setup/" />
+  <meta name="description" content="Open Historia is driven by a language model you supply. Set up Gemini, OpenAI, Anthropic, or a local model on your own machine." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/ai-setup/" />
+  <meta property="og:title" content="Connecting an AI Provider — Open Historia Wiki" />
+  <meta property="og:description" content="Open Historia is driven by a language model you supply. Set up Gemini, OpenAI, Anthropic, or a local model on your own machine." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Connecting an AI Provider — Open Historia Wiki" />
+  <meta name="twitter:description" content="Open Historia is driven by a language model you supply. Set up Gemini, OpenAI, Anthropic, or a local model on your own machine." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Connecting an AI Provider",
+      "item": "https://openhistoria.com/wiki/ai-setup/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/" class="on" aria-current="page">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Connecting an AI Provider
+    </nav>
+    <h1>Connecting an AI Provider</h1>
+    <p class="tagline">Open Historia is driven by a language model you supply. Set up Gemini, OpenAI, Anthropic, or a local model on your own machine.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#what-the-ai-actually-does">What the AI actually does</a></li><li class="d2"><a href="#where-to-put-the-key">Where to put the key</a></li><li class="d2"><a href="#the-five-provider-types">The five provider types</a></li><li class="d3"><a href="#a-note-on-browser-restrictions">A note on browser restrictions</a></li><li class="d2"><a href="#google-gemini-free-and-the-quickest-start">Google Gemini — free, and the quickest start</a></li><li class="d2"><a href="#anthropic-claude">Anthropic Claude</a></li><li class="d2"><a href="#openai">OpenAI</a></li><li class="d2"><a href="#a-local-model-free-private-offline">A local model — free, private, offline</a></li><li class="d3"><a href="#ollama-easiest">Ollama (easiest)</a></li><li class="d3"><a href="#lm-studio">LM Studio</a></li><li class="d3"><a href="#llamacpp">llama.cpp</a></li><li class="d3"><a href="#be-realistic-about-model-size">Be realistic about model size</a></li><li class="d2"><a href="#other-cloud-services">Other cloud services</a></li><li class="d2"><a href="#worth-knowing">Worth knowing</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Open Historia does not ship with a model and does not sell you one. You point it at a provider —
+a cloud API you have a key for, or a model running on your own computer — and it uses that for
+everything the world does.</p>
+<p>This takes about two minutes. If you just want the shortest path: <strong>get a free Google AI Studio
+key and paste it in.</strong></p>
+<h2 id="what-the-ai-actually-does">What the AI actually does</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Diplomacy</strong></td>
+<td>Every other country&#39;s leader replies to you in their own voice, and remembers what was said before.</td>
+</tr>
+<tr>
+<td><strong>Events</strong></td>
+<td>Each time you skip time, the model writes what happened — and those events carry machine-readable changes that move borders, units and countries.</td>
+</tr>
+<tr>
+<td><strong>Advisor</strong></td>
+<td>Answers questions about your own position, with charts.</td>
+</tr>
+<tr>
+<td><strong>Intelligence briefings</strong></td>
+<td>Summaries of any country you click.</td>
+</tr>
+<tr>
+<td><strong>Combat adjudication</strong></td>
+<td>Battles and their consequences are narrated and applied.</td>
+</tr>
+</tbody></table></div>
+<p>Without a provider the game still runs — the map, the editor, saved games and the interface all
+work — but time skips fall back to a small set of canned events and the advisor cannot answer.
+You will see a <strong>Set up your AI provider</strong> prompt when you start a game without one.</p>
+<h2 id="where-to-put-the-key">Where to put the key</h2>
+<p><strong>Settings (☰) → AI → Provider.</strong> Pick a provider, paste your key, optionally set a model, and
+close the panel. That is the whole setup.</p>
+<p>Your key is stored in your browser&#39;s local storage, or in the desktop app&#39;s own profile. It is
+never sent to an Open Historia server, never written to your save files, and never included in a
+scenario you export.</p>
+<h2 id="the-five-provider-types">The five provider types</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Gemini</strong></td>
+<td>Google AI Studio&#39;s native API. The default.</td>
+</tr>
+<tr>
+<td><strong>OpenAI</strong></td>
+<td>The official OpenAI API.</td>
+</tr>
+<tr>
+<td><strong>Anthropic</strong></td>
+<td>Claude via the Messages API.</td>
+</tr>
+<tr>
+<td><strong>OpenAI Compatible</strong></td>
+<td>Anything that speaks <code>/v1/chat/completions</code> — Ollama, LM Studio, llama.cpp, DeepSeek, Groq, Together, OpenRouter, vLLM.</td>
+</tr>
+<tr>
+<td><strong>Anthropic Compatible</strong></td>
+<td>A self-hosted proxy speaking the Anthropic Messages API.</td>
+</tr>
+</tbody></table></div>
+<p>Most third-party services fall under <strong>OpenAI Compatible</strong>. If a service tells you its base URL
+ends in <code>/v1</code> and it takes an <code>Authorization: Bearer</code> header, that is the one to pick.</p>
+<h3 id="a-note-on-browser-restrictions">A note on browser restrictions</h3>
+<p>Some provider APIs refuse requests made directly from a web page. On the desktop and
+self-hosted builds this is handled for you: the game tries the provider directly, and if the
+browser blocks it, it retries through a relay on your own local server. On
+<strong>openhistoria.com there is no relay</strong>, so a provider that refuses browser requests will not
+work in the hosted browser build. Gemini and Anthropic&#39;s native APIs allow direct browser access
+and work everywhere.</p>
+<h2 id="google-gemini-free-and-the-quickest-start">Google Gemini — free, and the quickest start</h2>
+<ol>
+<li>Go to <a href="https://aistudio.google.com/app/apikey">Google AI Studio</a>, sign in, and click
+<strong>Create API key</strong>. It is free and needs no billing details.</li>
+<li>In Open Historia: <strong>Settings → AI</strong>, provider <strong>Gemini</strong>, paste the key.</li>
+<li>Leave the model alone. The default is <code>gemini-3.5-flash-lite</code>, which is fast and has generous
+free-tier limits.</li>
+</ol>
+<p>If turns feel shallow, move up to a larger Gemini model — but check the free tier&#39;s rate limits
+first, because hitting them mid-turn will stall a time skip.</p>
+<h2 id="anthropic-claude">Anthropic Claude</h2>
+<ol>
+<li>Create a key at <a href="https://console.anthropic.com">console.anthropic.com</a>.</li>
+<li>Provider <strong>Anthropic</strong>, paste the key.</li>
+<li>The default model is <code>claude-haiku-4-5</code>. It is the cheap, fast one; a Sonnet model gives
+noticeably richer diplomacy for more money per turn.</li>
+</ol>
+<p>Anthropic allows direct browser access, so this works in the hosted browser build too. It is
+pay-per-token — there is no free tier.</p>
+<h2 id="openai">OpenAI</h2>
+<ol>
+<li>Create a key at <a href="https://platform.openai.com">platform.openai.com</a> and load some credit.</li>
+<li>Provider <strong>OpenAI</strong>, paste the key, and set a model — this one has no default, so you must
+type a model name.</li>
+</ol>
+<p>Requires the desktop or a self-hosted build, because of the browser restriction above.</p>
+<h2 id="a-local-model-free-private-offline">A local model — free, private, offline</h2>
+<p>Runs entirely on your own hardware. No key, no bill, no internet once the model is downloaded.
+Use the <strong>OpenAI Compatible</strong> provider for all of these.</p>
+<h3 id="ollama-easiest">Ollama (easiest)</h3>
+<ol>
+<li>Install from <a href="https://ollama.com">ollama.com</a>.</li>
+<li>Pull a model: <code>ollama pull llama3.2</code></li>
+<li>Provider <strong>OpenAI Compatible</strong>, endpoint <code>http://localhost:11434/v1</code> — this is already the
+default, so you may not have to type anything. Leave the API key blank. Set the model to
+whatever you pulled.</li>
+</ol>
+<h3 id="lm-studio">LM Studio</h3>
+<ol>
+<li>Install from <a href="https://lmstudio.ai">lmstudio.ai</a>, download a model through its browser.</li>
+<li>Open the <strong>Local Server</strong> tab, load the model, <strong>Start Server</strong>.</li>
+<li>Provider <strong>OpenAI Compatible</strong>, endpoint <code>http://localhost:1234/v1</code>, no key.</li>
+</ol>
+<h3 id="llamacpp">llama.cpp</h3>
+<pre><code>./llama-server -m model.gguf --port 8080
+</code></pre>
+<p>Provider <strong>OpenAI Compatible</strong>, endpoint <code>http://localhost:8080/v1</code>, no key.</p>
+<h3 id="be-realistic-about-model-size">Be realistic about model size</h3>
+<p>Open Historia asks a lot of the model: it has to return strictly structured data describing
+territory changes, unit movements and diplomatic shifts, not just prose. Small models
+(3B and below) frequently fail that and you will see turns fall back to canned events. A 7–14B
+instruct model is a sensible floor, and larger is better. If you have the hardware, a local
+model is genuinely good; if you do not, the Gemini free tier will serve you better than a tiny
+local one.</p>
+<h2 id="other-cloud-services">Other cloud services</h2>
+<p>All through <strong>OpenAI Compatible</strong> — paste the endpoint, your key from that service, and a model
+name.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DeepSeek</td>
+<td><code>https://api.deepseek.com/v1</code></td>
+</tr>
+<tr>
+<td>Groq</td>
+<td><code>https://api.groq.com/openai/v1</code></td>
+</tr>
+<tr>
+<td>Together.ai</td>
+<td><code>https://api.together.xyz/v1</code></td>
+</tr>
+<tr>
+<td>OpenRouter</td>
+<td><code>https://openrouter.ai/api/v1</code></td>
+</tr>
+<tr>
+<td>DeepInfra</td>
+<td><code>https://api.deepinfra.com/v1/openai</code></td>
+</tr>
+<tr>
+<td>Fireworks</td>
+<td><code>https://api.fireworks.ai/inference/v1</code></td>
+</tr>
+</tbody></table></div>
+<h2 id="worth-knowing">Worth knowing</h2>
+<ul>
+<li><strong>You can switch provider at any time</strong>, mid-campaign. Settings are per-provider, so your
+Gemini key stays put while you try a local model.</li>
+<li><strong>Cancel works.</strong> A time skip that is taking too long can be stopped.</li>
+<li><strong>Limit AI generation</strong> (Settings → AI) is off by default. Turned on, it gives up on a stalled
+generation and falls back to a canned event rather than waiting forever. It measures <em>silence</em>,
+not total time, so a slow-but-working model is not cut off.</li>
+<li><strong>Expert controls</strong> (Settings → Advanced) let you send raw parameters to the provider, pick the
+structured-output mode, and enable reasoning on models that support it. You do not need these
+to play.</li>
+</ul>
+<h2 id="next">Next</h2>
+<p><a href="/wiki/how-to-play/">How to play</a> — the core loop. Or if something is not connecting,
+<a href="/wiki/troubleshooting/">Troubleshooting</a> covers greyed-out AI, CORS errors and rate limits.
+For picking between models in more detail, see <a href="/wiki/ai-providers/">AI providers and models</a>.</p>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/install/"><span>← Previous</span><b>Install</b></a>
+        <a class="next" href="/wiki/how-to-play/"><span>Next →</span><b>How to play</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

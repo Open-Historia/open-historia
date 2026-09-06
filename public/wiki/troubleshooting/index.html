@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Troubleshooting — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/troubleshooting/" />
+  <meta name="description" content="Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/troubleshooting/" />
+  <meta property="og:title" content="Troubleshooting — Open Historia Wiki" />
+  <meta property="og:description" content="Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Troubleshooting — Open Historia Wiki" />
+  <meta name="twitter:description" content="Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Troubleshooting",
+      "item": "https://openhistoria.com/wiki/troubleshooting/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/" class="on" aria-current="page">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Troubleshooting
+    </nav>
+    <h1>Troubleshooting</h1>
+    <p class="tagline">Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-map-is-blank">The map is blank</a></li><li class="d2"><a href="#the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</a></li><li class="d2"><a href="#turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</a></li><li class="d2"><a href="#turns-hang-forever">Turns hang forever</a></li><li class="d2"><a href="#rate-limits">Rate limits</a></li><li class="d2"><a href="#cors-errors-with-a-local-model">CORS errors with a local model</a></li><li class="d2"><a href="#everything-is-slow">Everything is slow</a></li><li class="d2"><a href="#i-lost-my-games">I lost my games</a></li><li class="d2"><a href="#a-country-is-behaving-incoherently">A country is behaving incoherently</a></li><li class="d2"><a href="#windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</a></li><li class="d2"><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li><li class="d2"><a href="#reporting-a-bug">Reporting a bug</a></li></ul></nav>
+    <p>The common failures, and what actually fixes them.</p>
+<p>Before anything else: the <a href="/wiki/cheats/">cheats panel</a> has a <strong>Diagnostics Log</strong> showing errors,
+API failures and the exact context the model was given. It usually explains the problem
+immediately, and it is what to paste into a bug report.</p>
+<h2 id="the-map-is-blank">The map is blank</h2>
+<p><strong>In the browser.</strong> The web build streams its map from community-run content nodes. If none is
+reachable you get no map. Reload; if it persists, the node network is having a bad day — try
+again later, or use the desktop app, which stores the map locally.</p>
+<p><strong>On desktop.</strong> The map data failed to download on first launch. It is about 200 MB fetched
+separately from the installer. Restart the app and let the startup screen finish. From a source
+checkout, run <code>node scripts/fetch-map-assets.mjs</code>.</p>
+<p><strong>A full-screen WebGL warning.</strong> The map cannot render without WebGL. Update your graphics
+drivers; in a browser, check that hardware acceleration is enabled. On a virtual machine or over
+remote desktop, WebGL is often unavailable.</p>
+<h2 id="the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</h2>
+<p>Work through these in order:</p>
+<ol>
+<li><strong>Is a provider configured?</strong> Settings → the provider section. No key, no world.</li>
+<li><strong>Is the key right?</strong> Paste it fresh; keys often pick up whitespace.</li>
+<li><strong>Is the model name right?</strong> OpenAI and OpenAI Compatible have no default model — you must
+type one, and it must exist on that provider.</li>
+<li><strong>Is the endpoint right?</strong> Compatible providers need the base URL, usually ending <code>/v1</code>.</li>
+<li><strong>Are you in the browser build with a provider that needs a relay?</strong> The hosted website
+cannot relay. Gemini and Anthropic work there; OpenAI and most compatible endpoints do not.
+Use the desktop app. See <a href="/wiki/ai-setup/">connecting an AI provider</a>.</li>
+</ol>
+<h2 id="turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</h2>
+<p>This is almost always the model failing to produce valid structured output.</p>
+<ul>
+<li><strong>Your model is too small.</strong> Below about 7B this is common. See
+<a href="/wiki/ai-providers/">AI providers and models</a>.</li>
+<li><strong>Toggle Strict tool schema</strong> (Settings). Some gateways and local servers handle the strict
+form of structured output badly, and flipping this fixes it outright.</li>
+<li><strong>Try a different model on the same provider.</strong> Some are far better at this than others.</li>
+<li><strong>Check the Diagnostics Log</strong> — it will show you what came back.</li>
+</ul>
+<h2 id="turns-hang-forever">Turns hang forever</h2>
+<p><strong>Turn on Limit AI generation</strong> (Settings). It abandons a generation that has gone silent and
+falls back rather than waiting indefinitely. It watches for silence rather than total time, so it
+will not cut off a slow-but-working model.</p>
+<p>Then: <strong>Cancel</strong> in the time panel always works and leaves the world untouched.</p>
+<p>If it is a local model, it may genuinely be that slow — check whether it is producing tokens at
+all. If it is a cloud model, you may be rate limited.</p>
+<h2 id="rate-limits">Rate limits</h2>
+<p>Symptoms: turns fail intermittently, or stall on long jumps while short ones work.</p>
+<p>Free tiers have per-minute limits that a long jump can exceed. Options: use the smaller/faster
+model in the family (limits are usually more generous), take shorter jumps, or move to a paid
+tier.</p>
+<h2 id="cors-errors-with-a-local-model">CORS errors with a local model</h2>
+<p>The error will name a blocked cross-origin request.</p>
+<ul>
+<li><strong>Ollama</strong> — usually works as-is at <code>http://localhost:11434/v1</code>.</li>
+<li><strong>LM Studio</strong> — make sure the local server is actually started, and check whether it has a
+CORS setting to enable.</li>
+<li><strong>llama.cpp</strong> — <code>llama-server</code> may need to be started with CORS permitted.</li>
+<li><strong>Use the desktop app</strong>, which relays around this automatically. The hosted website cannot.</li>
+<li><strong>Check <code>http</code> vs <code>https</code></strong> and that the port matches.</li>
+</ul>
+<h2 id="everything-is-slow">Everything is slow</h2>
+<ul>
+<li>Turn off <strong>3D Terrain</strong>. It is by far the most expensive thing in the game.</li>
+<li>Turn off the <strong>3D Globe</strong>.</li>
+<li>Turn on <strong>Reduce motion</strong>.</li>
+<li>Turn on <strong>Hide country labels</strong>.</li>
+<li>Zoom out, or switch to a lighter basemap such as Light Gray Canvas.</li>
+<li>On the desktop app, close and reopen it — a long session accumulates map tiles.</li>
+</ul>
+<h2 id="i-lost-my-games">I lost my games</h2>
+<p><strong>In the browser</strong> — clearing site data clears your campaigns. There is no server-side copy
+unless you created an account and enabled sync. Grant persistent storage permission when asked.</p>
+<p><strong>On desktop</strong> — saves are files in the app&#39;s data directory and are still there. If the library
+looks empty, the app may be pointed at a different data directory.</p>
+<p><strong>After installing the beta</strong> — the beta build keeps a <strong>separate library</strong> by design. Your
+stable campaigns are untouched; they are just not visible from the beta app. Open the stable app
+and they are there.</p>
+<h2 id="a-country-is-behaving-incoherently">A country is behaving incoherently</h2>
+<p>The world drifted. Fix it rather than restarting:</p>
+<ul>
+<li><strong>Undo the turn</strong> in the time panel and try different orders.</li>
+<li><strong>Roll Back Turn</strong> in cheats, to go back further.</li>
+<li><strong>Master AI</strong> in cheats — describe what should be true and let it apply the change properly.</li>
+<li><strong>Edit Country</strong> or the <strong>Events</strong> editor, to correct a specific fact.</li>
+</ul>
+<p>See <a href="/wiki/cheats/">cheats and the GM console</a>. Using these is normal; an AI-driven world
+occasionally produces nonsense, and repairing it is part of running a long campaign.</p>
+<h2 id="windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</h2>
+<p>The installer is not code-signed yet. Choose <strong>More info → Run anyway</strong> in SmartScreen.</p>
+<h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
+<p>Also not code-signed. Right-click the app and choose <strong>Open</strong>, then confirm. Once only.</p>
+<h2 id="reporting-a-bug">Reporting a bug</h2>
+<p>Copy the <strong>Diagnostics Log</strong> from the cheats panel and open an issue at
+<a href="https://github.com/Open-Historia/open-historia/issues">GitHub</a>. The
+<a href="https://discord.gg/QaqAK7fQAg">Discord</a> is faster for &quot;is this just me?&quot;.</p>
+<p>Include your platform, your build (stable or beta), your provider and model, and what you were
+doing.</p>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/ai-providers/"><span>← Previous</span><b>AI providers &amp; models</b></a>
+        <span></span>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

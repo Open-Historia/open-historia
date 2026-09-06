@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Giving Orders — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/orders/" />
+  <meta name="description" content="The actions queue: writing orders in plain English, refining them, and how they get resolved." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/orders/" />
+  <meta property="og:title" content="Giving Orders — Open Historia Wiki" />
+  <meta property="og:description" content="The actions queue: writing orders in plain English, refining them, and how they get resolved." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Giving Orders — Open Historia Wiki" />
+  <meta name="twitter:description" content="The actions queue: writing orders in plain English, refining them, and how they get resolved." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Giving Orders",
+      "item": "https://openhistoria.com/wiki/orders/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/" class="on" aria-current="page">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Giving Orders
+    </nav>
+    <h1>Giving Orders</h1>
+    <p class="tagline">The actions queue: writing orders in plain English, refining them, and how they get resolved.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#queuing-an-order">Queuing an order</a></li><li class="d2"><a href="#the-sparkle-refining-a-draft">The ✦ sparkle: refining a draft</a></li><li class="d2"><a href="#ai-suggestions">AI suggestions</a></li><li class="d2"><a href="#writing-orders-that-work">Writing orders that work</a></li><li class="d2"><a href="#what-happens-at-the-jump">What happens at the jump</a></li><li class="d2"><a href="#orders-that-touch-other-systems">Orders that touch other systems</a></li><li class="d2"><a href="#orders-are-not-the-only-lever">Orders are not the only lever</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Orders are how you tell the world what your country is doing. They go in the <strong>✦ Actions</strong> panel
+in the bottom toolbar, they are written in plain English, and they are resolved by the next
+<a href="/wiki/time/">time skip</a>.</p>
+<p>This is the single highest-leverage thing in the game. A campaign is largely decided by how well
+you write these.</p>
+<h2 id="queuing-an-order">Queuing an order</h2>
+<p>Type it into the composer and send. It appears in the queue as <strong>planned</strong> and stays there until
+a turn resolves it.</p>
+<p>You can queue as many as you like, but three or four substantial orders per turn is a sensible
+working number. Beyond that the world has to divide one turn&#39;s worth of attention among all of
+them, and each gets less.</p>
+<p><strong>Delete</strong> removes an order you have changed your mind about. If the order was a troop
+deployment that already showed on the map, deleting it also reverts that.</p>
+<h2 id="the-sparkle-refining-a-draft">The ✦ sparkle: refining a draft</h2>
+<p>Write a rough thought, press the sparkle, and it comes back as a properly formed order. Useful
+when you know what you want but not how to phrase it — and useful for learning what a good order
+looks like, because you can watch what it changes.</p>
+<p>Nothing is committed until you queue it, so you can refine and rewrite freely.</p>
+<h2 id="ai-suggestions">AI suggestions</h2>
+<p><strong>Get AI suggestions</strong> proposes orders based on your actual situation. They arrive as topic
+cards; clicking one queues it.</p>
+<p>Worth doing on a turn where you are not sure what to attend to — the suggestions are derived
+from the real state of your country, so they tend to surface things you have not noticed. They
+are not a to-do list, and following them uncritically produces a passive campaign.</p>
+<h2 id="writing-orders-that-work">Writing orders that work</h2>
+<p><strong>Name the thing.</strong> <em>&quot;Move troops&quot;</em> gives the world almost nothing. <em>&quot;Move the 3rd Armoured
+Division from Poznań to the Belarusian border&quot;</em> gives it something to simulate.</p>
+<p><strong>Say what you want to achieve, not what happens.</strong> You are issuing an instruction, not writing
+the outcome. <em>&quot;Launch an offensive toward Kharkiv&quot;</em> is an order. <em>&quot;Our forces take Kharkiv and
+the enemy collapses&quot;</em> is you trying to write the event, and the world will not simply agree.</p>
+<p><strong>Include the reason when it matters.</strong> <em>&quot;Raise tariffs on steel imports to protect domestic
+mills&quot;</em> and <em>&quot;raise tariffs on steel imports as retaliation for the port closure&quot;</em> lead to
+genuinely different consequences.</p>
+<p><strong>Scale the order to the jump.</strong> A single week will not deliver an industrial programme. If you
+order something that takes years, expect it to appear across several turns rather than complete
+at once.</p>
+<p><strong>Be willing to be specific about method.</strong> <em>&quot;Improve relations with Turkey&quot;</em> is vague.
+<em>&quot;Offer Turkey preferential terms on grain transit in exchange for backing our position at the
+UN&quot;</em> is a policy, and produces a much more interesting reply.</p>
+<p><strong>Don&#39;t over-order.</strong> Six orders in one turn each get a fraction of the world&#39;s attention. Two
+good ones beat six thin ones.</p>
+<h2 id="what-happens-at-the-jump">What happens at the jump</h2>
+<p>When you skip time, your planned orders are read alongside everything else going on in the
+world. The events that come back reference the orders they resolve, so you can see which of your
+instructions actually landed and what came of them.</p>
+<p>An order does <strong>not</strong> guarantee an outcome. On Medium, orders succeed or fail on their merits; on
+Hard and above, a weak or vague order will fail or backfire. See
+<a href="/wiki/new-game/">starting a game</a> for what each difficulty changes.</p>
+<p>Orders that are not resolved this turn stay in the queue and carry forward.</p>
+<h2 id="orders-that-touch-other-systems">Orders that touch other systems</h2>
+<p>Some orders are executed through the game&#39;s mechanical systems rather than just narrated:</p>
+<ul>
+<li><strong>&quot;Deploy a spy in Germany&quot;</strong> runs through the espionage rules — the same caps and rolls as
+the Spy tab. See <a href="/wiki/espionage/">espionage</a>.</li>
+<li><strong>Troop orders</strong> move real units on the map, within era-appropriate ranges. See
+<a href="/wiki/military/">military and combat</a>.</li>
+<li><strong>Territorial outcomes</strong> move actual borders, and are checked against the game&#39;s rules about
+who may transfer what. See <a href="/wiki/territory/">territory</a>.</li>
+</ul>
+<p>This is why phrasing matters mechanically and not just narratively: a clearly-specified order is
+one the game can turn into a concrete change.</p>
+<h2 id="orders-are-not-the-only-lever">Orders are not the only lever</h2>
+<p>Plenty of a campaign happens in <a href="/wiki/diplomacy/">diplomacy</a> rather than the order queue. A
+conversation that talks a neighbour into an alliance does more than an order announcing that you
+want one. Use both.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/time/">Time and turns</a> — resolving the queue.</li>
+<li><a href="/wiki/events/">Events and history</a> — reading the results.</li>
+<li><a href="/wiki/advisor/">The advisor</a> — working out what to order in the first place.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/time/"><span>← Previous</span><b>Time &amp; turns</b></a>
+        <a class="next" href="/wiki/events/"><span>Next →</span><b>Events &amp; history</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>The Interface — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/interface/" />
+  <meta name="description" content="Every panel, button and badge on screen, and what each one is for." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/interface/" />
+  <meta property="og:title" content="The Interface — Open Historia Wiki" />
+  <meta property="og:description" content="Every panel, button and badge on screen, and what each one is for." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="The Interface — Open Historia Wiki" />
+  <meta name="twitter:description" content="Every panel, button and badge on screen, and what each one is for." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "The Interface",
+      "item": "https://openhistoria.com/wiki/interface/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/" class="on" aria-current="page">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> The Interface
+    </nav>
+    <h1>The Interface</h1>
+    <p class="tagline">Every panel, button and badge on screen, and what each one is for.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-edges-at-a-glance">The edges at a glance</a></li><li class="d2"><a href="#the-map-itself">The map itself</a></li><li class="d2"><a href="#the-date-pill-and-time">The date pill and time</a></li><li class="d2"><a href="#the-toolbar">The toolbar</a></li><li class="d3"><a href="#chat">💬 Chat</a></li><li class="d3"><a href="#actions">✦ Actions</a></li><li class="d2"><a href="#the-advisor-drawer">The advisor drawer</a></li><li class="d2"><a href="#settings">Settings</a></li><li class="d2"><a href="#search">Search</a></li><li class="d2"><a href="#cheats">Cheats</a></li><li class="d2"><a href="#the-main-menu">The main menu</a></li><li class="d2"><a href="#if-the-screen-is-blank">If the screen is blank</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Almost the entire screen is map. Everything else sits around the edges and gets out of the way
+when you are not using it.</p>
+<h2 id="the-edges-at-a-glance">The edges at a glance</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Where</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Top left</strong></td>
+<td>Session pill — scenario, country, date — and <strong>⌂ Exit Game</strong>.</td>
+</tr>
+<tr>
+<td><strong>Top right</strong></td>
+<td>The date pill, with <strong>«</strong> history and <strong>»</strong> time skip.</td>
+</tr>
+<tr>
+<td><strong>Bottom left</strong></td>
+<td>The toolbar: <strong>💬 Chat</strong> and <strong>✦ Actions</strong>.</td>
+</tr>
+<tr>
+<td><strong>Right edge</strong></td>
+<td><strong>🧭 Advisor</strong> — opens a drawer with Advisor and Stats.</td>
+</tr>
+<tr>
+<td><strong>Corner</strong></td>
+<td>Settings (<strong>☰</strong>) and search (<strong>🔍</strong>).</td>
+</tr>
+</tbody></table></div>
+<p>Panels overlap in a fixed order, so opening the advisor never buries the thing you were reading,
+and the main menu always comes out on top.</p>
+<h2 id="the-map-itself">The map itself</h2>
+<p>Clicking things is the primary way you interact with the world.</p>
+<ul>
+<li><strong>Click a region</strong> → a popup with the region, who administers it, and buttons to open an
+intelligence briefing, start a chat, or open the owning country&#39;s panel.</li>
+<li><strong>Click a country</strong> → the country dossier: flag, tags, recent events filtered by importance,
+and an AI intelligence briefing on request.</li>
+<li><strong>Click a unit</strong> → an intelligence card describing the formation — what it is, whose it is,
+how strong, and what it appears to be doing.</li>
+<li><strong>Click a city or structure</strong> → its name, population, and what it is.</li>
+</ul>
+<p>Drag to pan, scroll to zoom. See <a href="/wiki/world-map/">the world map</a> for what the colours,
+stripes and labels mean.</p>
+<h2 id="the-date-pill-and-time">The date pill and time</h2>
+<p>Top right, always visible: your country and the current in-game date.</p>
+<ul>
+<li><strong>»</strong> opens the <strong>time skip</strong> panel — fixed jumps from six hours to a year, a custom amount,
+auto-jump, and <strong>Undo turn</strong>.</li>
+<li><strong>«</strong> opens the <strong>event history</strong> — the events from the last jump, replayed one at a time,
+with the map animating as each lands.</li>
+</ul>
+<p>Full detail in <a href="/wiki/time/">time and turns</a>.</p>
+<h2 id="the-toolbar">The toolbar</h2>
+<p>Two buttons, bottom left.</p>
+<h3 id="chat">💬 Chat</h3>
+<p>Diplomacy. Two tabs:</p>
+<ul>
+<li><strong>Diplomacy</strong> — every conversation you are part of. One-to-one threads with a country, or
+group threads with several. Countries open threads with you unprompted, and unread ones are
+badged.</li>
+<li><strong>Spy</strong> — everyone else&#39;s conversations, as far as your intelligence service can read them.
+This is also where you deploy, recall, expel and turn agents.</li>
+</ul>
+<p>See <a href="/wiki/diplomacy/">diplomacy</a> and <a href="/wiki/espionage/">espionage</a>.</p>
+<h3 id="actions">✦ Actions</h3>
+<p>Your order queue for the coming turn. Write orders in plain English, get AI suggestions, refine
+a rough draft into a proper order, and delete anything you change your mind about. Only planned
+orders show; they clear as the turn resolves them. See <a href="/wiki/orders/">giving orders</a>.</p>
+<h2 id="the-advisor-drawer">The advisor drawer</h2>
+<p>The <strong>🧭</strong> button on the right edge opens a drawer you can resize by dragging its left edge. It
+has two tabs.</p>
+<p><strong>Advisor</strong> — a chat with your own analyst. It reads the real game state and answers about it,
+in markdown, sometimes with charts. Ask it anything about your position.</p>
+<p><strong>Stats</strong> — the national stat sheet. Two sub-tabs, <strong>Diplomacy</strong> and <strong>Economy</strong>, covering your
+intelligence rating, strategic indices, stability, population and economic figures. It retargets
+to <strong>whatever country you last clicked</strong>, so it doubles as a way to read anyone.</p>
+<p>See <a href="/wiki/advisor/">the advisor</a> and <a href="/wiki/statistics/">national statistics</a>.</p>
+<h2 id="settings">Settings</h2>
+<p>The <strong>☰</strong> button opens one menu with everything in it: your AI provider and its key and model,
+UI and chat language, fullscreen, the 3D globe and terrain, and a <strong>Map</strong> group holding country
+labels, reduced motion and the camera options. There is also a <strong>📖 Guides</strong> link and the
+community links.</p>
+<p>Full breakdown in <a href="/wiki/settings/">the settings reference</a>.</p>
+<h2 id="search">Search</h2>
+<p>The <strong>🔍</strong> button finds real-world places by name and flies the camera to them. It only moves the
+camera — it does not select or change anything.</p>
+<h2 id="cheats">Cheats</h2>
+<p>The <strong>🧪</strong> cheats panel is the game master&#39;s toolbox: annex territory, edit or create countries,
+author events, roll back turns, switch which country you play, inspect regions, and place map
+features.</p>
+<p>It is also where <strong>manual troop control</strong> lives. On the stable build, deploying and moving units
+by hand is deliberately filed as a cheat — the intended way to move forces is to order it and
+let the world carry it out. See <a href="/wiki/cheats/">cheats and the GM console</a> and
+<a href="/wiki/military/">military and combat</a>.</p>
+<h2 id="the-main-menu">The main menu</h2>
+<p>The session pill&#39;s <strong>⌂ Exit Game</strong> returns you to the library, which has three tabs:</p>
+<ul>
+<li><strong>Games</strong> — your campaigns, by last played and most played.</li>
+<li><strong>Scenarios</strong> — the worlds you can start new games on, plus <strong>Create</strong>.</li>
+<li><strong>Community</strong> — the <a href="/wiki/community-hub/">Community Hub</a>.</li>
+</ul>
+<h2 id="if-the-screen-is-blank">If the screen is blank</h2>
+<p>A full-screen warning means WebGL is unavailable — the map cannot render without it. On a
+desktop this usually means graphics drivers or a browser flag. See
+<a href="/wiki/troubleshooting/">troubleshooting</a>.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/world-map/">The world map</a> — reading what you are looking at.</li>
+<li><a href="/wiki/time/">Time and turns</a> — the button that actually advances the game.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/new-game/"><span>← Previous</span><b>Starting a game</b></a>
+        <a class="next" href="/wiki/world-map/"><span>Next →</span><b>The world map</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

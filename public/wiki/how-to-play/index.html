@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>How to Play — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/how-to-play/" />
+  <meta name="description" content="The core loop: pick a country, write orders in plain English, skip time, and read what the world did in response." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/how-to-play/" />
+  <meta property="og:title" content="How to Play — Open Historia Wiki" />
+  <meta property="og:description" content="The core loop: pick a country, write orders in plain English, skip time, and read what the world did in response." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="How to Play — Open Historia Wiki" />
+  <meta name="twitter:description" content="The core loop: pick a country, write orders in plain English, skip time, and read what the world did in response." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "How to Play",
+      "item": "https://openhistoria.com/wiki/how-to-play/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/" class="on" aria-current="page">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> How to Play
+    </nav>
+    <h1>How to Play</h1>
+    <p class="tagline">The core loop: pick a country, write orders in plain English, skip time, and read what the world did in response.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-loop">The loop</a></li><li class="d2"><a href="#your-first-ten-minutes">Your first ten minutes</a></li><li class="d2"><a href="#writing-orders-that-work">Writing orders that work</a></li><li class="d2"><a href="#choosing-how-far-to-skip">Choosing how far to skip</a></li><li class="d2"><a href="#reading-the-results">Reading the results</a></li><li class="d2"><a href="#made-a-mess-of-it">Made a mess of it?</a></li><li class="d2"><a href="#what-the-ai-is-and-isn39t-doing">What the AI is and isn&amp;#39;t doing</a></li><li class="d2"><a href="#where-to-go-next">Where to go next</a></li></ul></nav>
+    <p>Open Historia works differently from most strategy games. There is no build queue, no research
+tree and no clock ticking down. You have one country, a world full of countries that a language
+model plays, and a button that advances time.</p>
+<h2 id="the-loop">The loop</h2>
+<ol>
+<li><strong>Look at the world.</strong> Click countries to read them. Ask your advisor what it thinks.</li>
+<li><strong>Write down what you intend to do.</strong> Orders go in the actions queue, in plain English.</li>
+<li><strong>Talk to people.</strong> Open a chat with any country and negotiate, threaten, or ask questions.</li>
+<li><strong>Skip time.</strong> Choose how far — six hours, a month, a year.</li>
+<li><strong>Read what happened.</strong> The world hands you back a set of events, revealed one at a time,
+with the map changing as each one lands.</li>
+</ol>
+<p>Then you do it again. That is the whole game. Everything else is detail.</p>
+<p>The important thing to internalise is that <strong>step 4 is where the game happens</strong>. Steps 1–3 are
+you preparing; nothing moves until you skip time. If you sit and stare at the map, the world
+sits and stares back.</p>
+<h2 id="your-first-ten-minutes">Your first ten minutes</h2>
+<p>Pick <strong>Modern Day</strong> — it is the built-in scenario and the most polished. Choose a country you
+know something about; you will write better orders for a country whose situation you can
+picture. Medium difficulty.</p>
+<p>Then, before you do anything else:</p>
+<ul>
+<li><strong>Open the advisor</strong> (🧭 on the right) and ask &quot;what should I be worried about?&quot; It reads your
+actual position and answers about it.</li>
+<li><strong>Click a neighbour</strong> on the map. Read its panel. Ask for an intelligence briefing.</li>
+<li><strong>Open a chat</strong> with someone and say something. They will answer in their leader&#39;s voice.</li>
+</ul>
+<p>Now write one order — something modest, like <em>&quot;begin talks with France about a trade
+agreement&quot;</em> — and skip forward <strong>one month</strong>. Read the events. That is the game.</p>
+<h2 id="writing-orders-that-work">Writing orders that work</h2>
+<p>Orders are free text, and the model reads them as instructions from your head of state. The
+difference between a good and a bad turn is usually the order, not the dice.</p>
+<p><strong>Be specific about what and where.</strong> <em>&quot;Move troops&quot;</em> gives the world nothing to work with.
+<em>&quot;Reinforce the eastern border with two infantry divisions and put the air force on alert&quot;</em>
+gives it a great deal.</p>
+<p><strong>Say why, when it matters.</strong> <em>&quot;Raise tariffs on Chinese steel to protect domestic mills&quot;</em>
+produces a different chain of consequences than <em>&quot;raise tariffs&quot;</em>.</p>
+<p><strong>Ask for things that take time.</strong> A single month will not industrialise a country. Orders that
+span turns get carried forward and referred back to.</p>
+<p><strong>Don&#39;t write fiction.</strong> You are giving orders, not narrating outcomes. <em>&quot;Our army crushes
+theirs and takes the capital&quot;</em> is not an order — it is you trying to write the event. Say
+<em>&quot;launch an offensive toward the capital&quot;</em> and let the world decide how it goes.</p>
+<h2 id="choosing-how-far-to-skip">Choosing how far to skip</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Skip</th>
+<th>Good for</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>6 hours – 3 days</td>
+<td>An unfolding crisis, hour by hour. Ultimatums, coups, the opening of a war.</td>
+</tr>
+<tr>
+<td>1 week – 1 month</td>
+<td>The normal pace. Enough happens to be interesting, not so much that you lose the thread.</td>
+</tr>
+<tr>
+<td>3 – 6 months</td>
+<td>Quiet stretches, long build-ups, waiting for something to mature.</td>
+</tr>
+<tr>
+<td>1 year</td>
+<td>Skipping ahead when nothing needs your attention.</td>
+</tr>
+</tbody></table></div>
+<p>There is also <strong>Auto-jump</strong>, which lets the model choose the distance — it skips to the next
+moment it thinks you would want to be present for.</p>
+<p>Longer skips are not free: the world has to compress more into the same number of events, so
+detail is lost. If something important is in motion, take smaller steps.</p>
+<h2 id="reading-the-results">Reading the results</h2>
+<p>Events arrive as a set and are revealed <strong>one at a time</strong>. The map rolls back to how it looked
+before the jump and each event&#39;s changes are applied as you step through it — so you see the
+border move, the unit appear, the government fall. The camera follows.</p>
+<p>Use <strong>Next event</strong> to step through, or <strong>Skip to end</strong> to jump to the final state.</p>
+<p>You can reopen the history at any time with the <strong>«</strong> button on the date pill.</p>
+<h2 id="made-a-mess-of-it">Made a mess of it?</h2>
+<p><strong>Undo turn</strong> restores the world to how it was before the last time skip. It is right there in
+the time panel. The game keeps several turns of history, so you can step back more than once.</p>
+<p>This is not cheating — it is the main way people play. A time skip is a roll of the dice as much
+as a decision, and rewinding a turn that went absurdly is normal.</p>
+<p>For heavier intervention, the <a href="/wiki/cheats/">cheats panel</a> lets you annex territory, edit
+countries, author events by hand and switch which country you play.</p>
+<h2 id="what-the-ai-is-and-isn39t-doing">What the AI is and isn&#39;t doing</h2>
+<p>The model is not an opponent trying to beat you. It is playing every other country in the world
+according to what those countries want, how they see you, and what has already happened. It also
+narrates the consequences of your own orders.</p>
+<p>That means:</p>
+<ul>
+<li><strong>It will not read your mind.</strong> If your intent is only in your head, it does not exist.</li>
+<li><strong>It remembers.</strong> Leaders recall previous conversations; the world refers back to earlier
+events.</li>
+<li><strong>Difficulty changes how it treats you</strong>, not what it knows. See
+<a href="/wiki/new-game/">starting a game</a> for what the six levels actually do.</li>
+</ul>
+<h2 id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><a href="/wiki/first-campaign/">Your first campaign</a> — the same thing again, but walked through step
+by step with a specific country.</li>
+<li><a href="/wiki/interface/">The interface</a> — what every button does.</li>
+<li><a href="/wiki/orders/">Giving orders</a> — the actions queue in depth.</li>
+<li><a href="/wiki/time/">Time and turns</a> — auto-jump, cancelling, and undo.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/ai-setup/"><span>← Previous</span><b>Connect an AI</b></a>
+        <a class="next" href="/wiki/first-campaign/"><span>Next →</span><b>Your first campaign</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

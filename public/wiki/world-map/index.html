@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>The World Map — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/world-map/" />
+  <meta name="description" content="Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/world-map/" />
+  <meta property="og:title" content="The World Map — Open Historia Wiki" />
+  <meta property="og:description" content="Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="The World Map — Open Historia Wiki" />
+  <meta name="twitter:description" content="Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "The World Map",
+      "item": "https://openhistoria.com/wiki/world-map/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/" class="on" aria-current="page">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> The World Map
+    </nav>
+    <h1>The World Map</h1>
+    <p class="tagline">Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#political-fills">Political fills</a></li><li class="d2"><a href="#striped-regions-mean-a-dispute">Striped regions mean a dispute</a></li><li class="d2"><a href="#labels">Labels</a></li><li class="d2"><a href="#zoom-and-bounds">Zoom and bounds</a></li><li class="d2"><a href="#basemaps">Basemaps</a></li><li class="d2"><a href="#the-3d-globe">The 3D globe</a></li><li class="d2"><a href="#3d-terrain">3D terrain</a></li><li class="d2"><a href="#custom-backgrounds">Custom backgrounds</a></li><li class="d2"><a href="#clicking-things">Clicking things</a></li><li class="d2"><a href="#performance">Performance</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>The map is the game&#39;s main display and its main control. Everything on it is clickable, and the
+way it is coloured tells you who holds what.</p>
+<h2 id="political-fills">Political fills</h2>
+<p>Every region is painted in the colour of whoever administers it, at a constant 72% opacity over
+the basemap, so you can still read the terrain underneath.</p>
+<p>Colours are resolved in a fixed order: the scenario&#39;s own palette first, then any colour set on
+the country, then a match against known aliases, and finally a colour derived from the country&#39;s
+name. That last fallback is why an invented faction always gets <em>a</em> colour even if you never
+picked one — and why two countries occasionally land on similar shades.</p>
+<h2 id="striped-regions-mean-a-dispute">Striped regions mean a dispute</h2>
+<p>A region rendered in <strong>stripes</strong> is claimed by more than one country. The stripes combine the
+colour of whoever actually administers it with the colours of the claimants.</p>
+<p>This is a real mechanic, not decoration — see <a href="/wiki/territory/">territory</a> for the difference
+between holding ground and being acknowledged as its owner.</p>
+<h2 id="labels">Labels</h2>
+<p>Country names scale with the map and fade out as you zoom in, on the assumption that once you
+are looking at one country closely you no longer need it named. Cities appear from about zoom
+3.4 and get more numerous as you go in.</p>
+<p>Scenario authors can set the label font, letter colour and border colour for their world, so a
+custom map may look quite different from Modern Day.</p>
+<p>You can turn country labels off entirely in <strong>Settings → Map</strong>.</p>
+<h2 id="zoom-and-bounds">Zoom and bounds</h2>
+<p>The camera runs from zoom <strong>2.25</strong> (the whole world) to <strong>16</strong> (street level, where the basemap
+supports it). Vertical panning is bounded at roughly 80°S to 85°N — there is no reason to fly off
+the top of the map.</p>
+<h2 id="basemaps">Basemaps</h2>
+<p>The imagery under the political fills. <strong>Settings → Map → Basemap</strong> offers ten:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Satellite</td>
+<td>Photographic imagery</td>
+</tr>
+<tr>
+<td>Streets</td>
+<td>Roads and place names</td>
+</tr>
+<tr>
+<td>Topographic</td>
+<td>Contours and relief</td>
+</tr>
+<tr>
+<td>Terrain</td>
+<td>Physical terrain base</td>
+</tr>
+<tr>
+<td>Shaded Relief</td>
+<td>Hillshading only</td>
+</tr>
+<tr>
+<td>Physical</td>
+<td>Natural-earth style</td>
+</tr>
+<tr>
+<td>National Geographic</td>
+<td>Atlas styling</td>
+</tr>
+<tr>
+<td><strong>Ocean</strong></td>
+<td>The default — bathymetry and a muted land base</td>
+</tr>
+<tr>
+<td>Light Gray Canvas</td>
+<td>Minimal, light</td>
+</tr>
+<tr>
+<td>Dark Gray Canvas</td>
+<td>Minimal, dark</td>
+</tr>
+</tbody></table></div>
+<p>Your choice is stored per browser and overrides whatever the scenario author picked. Clearing it
+hands control back to the scenario.</p>
+<p>Not every basemap has imagery at every zoom — Physical stops at zoom 8, Terrain and Shaded Relief
+at 13. Past that the game upscales the last available tiles rather than showing nothing.</p>
+<h2 id="the-3d-globe">The 3D globe</h2>
+<p><strong>Settings → Map → 3D Globe</strong> swaps the flat projection for a sphere.</p>
+<p>It is not just a projection change. The globe carries a real day/night terminator computed from
+the actual subsolar point, a starfield, and a sun sprite — the lighting corresponds to the real
+world clock, refreshed every minute. Left alone, the globe rotates slowly, a full turn every ten
+minutes.</p>
+<p>Both the idle rotation and the general motion can be switched off — <strong>Disable idle globe
+rotation</strong>, or <strong>Reduce motion</strong> as an umbrella setting.</p>
+<h2 id="3d-terrain">3D terrain</h2>
+<p><strong>Settings → Map → 3D Terrain</strong>, labelled &quot;Very Experimental&quot; and honestly so. It raises real
+elevation with a heavy 15× exaggeration so that mountain ranges actually read at world scale,
+plus light hillshading.</p>
+<p>It only applies on the flat map — terrain and the globe are mutually exclusive, and a scenario
+with a custom background image disables it too.</p>
+<h2 id="custom-backgrounds">Custom backgrounds</h2>
+<p>A scenario can replace Earth entirely, either with an image pinned to a geographic extent or
+with its own vector artwork. This is how fantasy maps work: the political layer sits on top of a
+world that has nothing to do with this planet.</p>
+<h2 id="clicking-things">Clicking things</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Click</th>
+<th>You get</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>A region</strong></td>
+<td>Who administers it, an intelligence briefing, a shortcut to open a chat, and a link to the owner&#39;s dossier.</td>
+</tr>
+<tr>
+<td><strong>A country</strong></td>
+<td>Its dossier: flag, tags, recent events filtered by importance, and an AI briefing on request.</td>
+</tr>
+<tr>
+<td><strong>A unit</strong></td>
+<td>An intelligence card — what the formation is, whose, how strong, what it appears to be doing. Not a command panel.</td>
+</tr>
+<tr>
+<td><strong>A city or structure</strong></td>
+<td>Name, population, whether it is a capital, and what kind of thing it is.</td>
+</tr>
+</tbody></table></div>
+<h2 id="performance">Performance</h2>
+<p>If the map is slow:</p>
+<ul>
+<li><strong>Turn off 3D terrain.</strong> It is the most expensive thing on the list by a wide margin.</li>
+<li><strong>Turn off the globe.</strong> The flat map is cheaper.</li>
+<li><strong>Reduce motion</strong>, which quiets several animations at once.</li>
+<li>Zoom out. Fewer tiles, fewer labels.</li>
+</ul>
+<p>The map caches a bounded number of tiles deliberately, to avoid running a browser tab out of
+memory on a long campaign.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/territory/">Territory</a> — what the stripes actually mean.</li>
+<li><a href="/wiki/cities/">Cities and structures</a> — the things drawn on top.</li>
+<li><a href="/wiki/settings/">Settings</a> — every map option in one place.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/interface/"><span>← Previous</span><b>The interface</b></a>
+        <a class="next" href="/wiki/time/"><span>Next →</span><b>Time &amp; turns</b></a>
+      </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>
