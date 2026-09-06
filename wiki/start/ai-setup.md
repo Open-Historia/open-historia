@@ -17,7 +17,9 @@ key and paste it in.**
 
 Without a provider the game still runs — the map, the editor, saved games and the interface all
 work — but time skips fall back to a small set of canned events and the advisor cannot answer.
-You will see a **Set up your AI provider** prompt when you start a game without one.
+On beta you get an explicit **Set up your AI provider** prompt the first time you open a
+campaign without one. Stable has no such prompt — it simply falls back quietly, so if turns feel
+lifeless on stable, check here first.
 
 ## Where to put the key
 
