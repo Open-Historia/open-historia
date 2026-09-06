@@ -170,10 +170,15 @@ it moves like any other national statistic.</p>
 and caps.</p>
 <p>An active agent reports: it feeds you the target&#39;s private diplomatic traffic, subject to how
 much of it you can actually read.</p>
+<p><img src="/wiki/img/espionage-deploy.jpg" alt="Choosing a target for an agent">
+<em>The target picker. Countries you already have an agent in are not offered again — one agent per
+country, and never yourself.</em></p>
 <p>You can give an agent a <strong>cover story</strong>, <strong>recall</strong> it at any time, and see everything it has
 sent.</p>
-<p><img src="/wiki/img/espionage-active-agent.jpg" alt="An agent in the field">
-<em>An agent in Germany. Both services are shown, because the gap between them is what the detection roll turns on.</em></p>
+<p><img src="/wiki/img/espionage-states.jpg" alt="The Spy tab with agents in several states">
+<em>Every state at once: an agent running in Germany, one flagged <strong>possibly compromised</strong>, a line
+recording one Belarus expelled, and a German agent caught inside Poland waiting on your decision —
+expel it, or turn it and write what it reports home.</em></p>
 <h2 id="getting-caught">Getting caught</h2>
 <p>Every jump, each of your agents is rolled against the target&#39;s service.</p>
 <p>The chance of detection is driven mostly by the <strong>gap</strong> between the two services:</p>
@@ -254,6 +259,9 @@ both services:</p>
 <pre><code>clarity = 0.12 + (yours/100) × 0.88 − (theirs/100) × 0.35
           clamped to between 6% and 100%
 </code></pre>
+<p><img src="/wiki/img/espionage-intercept.jpg" alt="An intercepted exchange, partly redacted">
+<em>An intercept read at 39% clarity. The formula above gives exactly that for a service of 55
+reading one of 61: <code>0.12 + 0.55×0.88 − 0.61×0.35</code>. Punctuation survives; the words do not.</em></p>
 <p>Unreadable words are blanked out, but punctuation and sentence rhythm survive, so you can often
 tell the shape of what was said even when you cannot read it. Raising your intelligence rating
 only ever reveals <em>more</em> of a message you have already seen — it never re-hides anything.</p>

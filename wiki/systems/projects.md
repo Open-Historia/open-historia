@@ -8,7 +8,9 @@ This is also where research and technology live. There is no tech tree; there is
 programme with milestones that either progresses or stalls.
 
 ![The Projects and Operations board](/wiki/img/beta-projects.jpg)
-*A fresh board. The empty state states the rule: entries are opened by your advisor and by what happens in the world — you never add them by hand.*
+*A board on a campaign that has been running a while. Note the counts — **Mine (4)**,
+**Foreign (2)** — the tag chips, the priority control on each card, and that an **ongoing** effort
+carries no target date and so can never run late.*
 
 ## Projects and operations
 

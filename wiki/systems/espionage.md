@@ -41,11 +41,18 @@ and caps.
 An active agent reports: it feeds you the target's private diplomatic traffic, subject to how
 much of it you can actually read.
 
+![Choosing a target for an agent](/wiki/img/espionage-deploy.jpg)
+*The target picker. Countries you already have an agent in are not offered again — one agent per
+country, and never yourself.*
+
+
 You can give an agent a **cover story**, **recall** it at any time, and see everything it has
 sent.
 
-![An agent in the field](/wiki/img/espionage-active-agent.jpg)
-*An agent in Germany. Both services are shown, because the gap between them is what the detection roll turns on.*
+![The Spy tab with agents in several states](/wiki/img/espionage-states.jpg)
+*Every state at once: an agent running in Germany, one flagged **possibly compromised**, a line
+recording one Belarus expelled, and a German agent caught inside Poland waiting on your decision —
+expel it, or turn it and write what it reports home.*
 
 ## Getting caught
 
@@ -139,6 +146,10 @@ both services:
 clarity = 0.12 + (yours/100) × 0.88 − (theirs/100) × 0.35
           clamped to between 6% and 100%
 ```
+
+![An intercepted exchange, partly redacted](/wiki/img/espionage-intercept.jpg)
+*An intercept read at 39% clarity. The formula above gives exactly that for a service of 55
+reading one of 61: `0.12 + 0.55×0.88 − 0.61×0.35`. Punctuation survives; the words do not.*
 
 Unreadable words are blanked out, but punctuation and sentence rhythm survive, so you can often
 tell the shape of what was said even when you cannot read it. Raising your intelligence rating
