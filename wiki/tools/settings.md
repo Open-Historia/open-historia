@@ -9,6 +9,9 @@ same options, but they are organised differently and reached differently. The be
 alongside the stable app, so it is entirely possible to have both on one machine.</p>
 
 ### Stable — one flat menu
+![The stable settings menu](/wiki/img/settings-menu.jpg)
+*The stable build's settings: one scrolling list, no tabs. Your API key is stored locally and shown masked.*
+
 
 Press **☰** and everything is in a single scrolling list, top to bottom:
 

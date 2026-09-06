@@ -5,6 +5,9 @@ button, and only as far as you tell it to.
 Open the time panel with **»** on the date pill, top right.
 
 ## Fixed jumps
+![The time skip panel](/wiki/img/time-skip-panel.jpg)
+*Each preset shows the date you will land on.*
+
 
 | Jump | Days |
 |---|---|

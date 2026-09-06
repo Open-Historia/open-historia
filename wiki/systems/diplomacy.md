@@ -6,6 +6,9 @@ Find it in the **💬 Chat** panel, **Diplomacy** tab, or from the popup when yo
 on the map.
 
 ## Talking to a country
+![The diplomacy tab](/wiki/img/diplomacy-threads.jpg)
+*Threads you are part of. Germany opened this one unprompted after a time skip.*
+
 
 Every country is played by its leader, in that leader's voice, shaped by their country's
 situation and by how they see you. Ask questions, make offers, issue threats, propose terms.
@@ -45,6 +48,9 @@ Group threads are where multi-party diplomacy actually happens: mediating betwee
 assembling a coalition, or being ganged up on.
 
 ## They contact you
+![A diplomatic exchange](/wiki/img/diplomacy-thread.jpg)
+*Germany's opening message, in its government's voice and grounded in what the world had just done.*
+
 
 Countries open conversations with you on their own initiative, in three ways:
 

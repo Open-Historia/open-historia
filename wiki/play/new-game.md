@@ -1,5 +1,8 @@
 A new game needs three things: a scenario to play on, a country to play as, and a difficulty.
 
+![The Scenarios tab](/wiki/img/new-game-scenarios.jpg)
+*The Scenarios tab. Modern Day is the only built-in one; everything else comes from the Community Hub.*
+
 ## Scenarios
 
 A **scenario** is a world — its map, its borders, who owns what, the starting date, which troop
@@ -29,6 +32,9 @@ card. Updating is safe — games already in progress keep working on the version
 Selecting **New Game** on a scenario opens the picker. It has two tabs.
 
 ### Country
+![The country picker](/wiki/img/new-game-country-picker.jpg)
+*Pick a country, or switch to the Faction tab to invent one.*
+
 
 A map and a searchable list of every country in the scenario. Click one on the map or pick it
 from the list.
@@ -51,6 +57,9 @@ This is where you invent a country that does not exist. You give it:
 The regions you take are carved out of whoever held them, and that country will notice.
 
 ## Difficulty
+![The difficulty grid](/wiki/img/new-game-difficulty.jpg)
+*Six levels. Medium is the honest one.*
+
 
 Six levels. Difficulty does not give the AI secret information or extra resources — it changes
 how the world *treats* you: whether your plans succeed on their merits, how competent your

@@ -5,6 +5,9 @@ when you are not using it.
 menus considerably and adds a Projects button to the toolbar — see
 <a href="/wiki/settings/">the settings reference</a> for a side-by-side of the two menu systems.</p>
 
+![The in-game HUD](/wiki/img/interface-hud.jpg)
+*The session pill and date pill top, the toolbar bottom left, the advisor on the right edge. Everything else is map.*
+
 ## The edges at a glance
 
 | Where | What |

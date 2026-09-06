@@ -17,6 +17,9 @@ object, so the world can never tell you one thing and do another — an event de
 territory has to ship the border change with it.
 
 ## The staged reveal
+![The event history panel](/wiki/img/events-history.jpg)
+*Events are revealed one at a time, with the map changing as each lands.*
+
 
 Events are revealed **one at a time**, not dumped as a list.
 

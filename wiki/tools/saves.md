@@ -1,6 +1,9 @@
 Open Historia saves continuously. There is no save button, and there is no way to lose an hour
 of play to a crash.
 
+![The games library](/wiki/img/saves-library.jpg)
+*Each campaign card carries its country, date and round, with Clone and Archive alongside.*
+
 ## Games and scenarios
 
 Two different things, and the distinction matters:

@@ -5,6 +5,9 @@ population and a set of economic figures. Open it from the **Stats** tab of the 
 It retargets to **whatever country you last clicked on the map**, so it works as a dossier on
 anyone, not just yourself.
 
+![A country stat sheet](/wiki/img/statistics-sheet.jpg)
+*Poland's sheet. Note the intelligence service at 40 — the default for a country nobody has assessed.*
+
 ## National stability
 
 A single 0–100 figure for how firmly the government holds the country together, with a colour

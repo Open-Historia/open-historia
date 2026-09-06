@@ -6,6 +6,9 @@ This is the single highest-leverage thing in the game. A campaign is largely dec
 you write these.
 
 ## Queuing an order
+![The actions panel](/wiki/img/orders-actions.jpg)
+*The order queue. Orders are plain English and resolve on the next time skip.*
+
 
 Type it into the composer and send. It appears in the queue as **planned** and stays there until
 a turn resolves it.

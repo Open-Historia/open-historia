@@ -12,7 +12,7 @@
 // threading the generator through every build path.
 //
 // Run: node scripts/build-wiki.mjs   (also runs as the first stage of `npm run build:site`)
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, statSync, cpSync } from "node:fs";
 import path from "node:path";
 import { Marked } from "marked";
 
@@ -42,6 +42,15 @@ const slugify = (s) => String(s)
   .slice(0, 60) || "section";
 
 const stripTags = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+
+// marked has already HTML-escaped the heading text by the time the renderer sees it, so the
+// stored form must be decoded back to plain text — otherwise esc() runs over it a second time
+// and an apostrophe reaches the contents list as a literal "&#39;".
+const decodeEntities = (s) => String(s)
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+  .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
 
 // ---------------------------------------------------------------- load the nav
 
@@ -96,7 +105,7 @@ const marked = new Marked({
       // markdown would be a duplicate, so only h2/h3 get ids and TOC entries.
       if (depth === 1) return `<h1>${text}</h1>\n`;
       const id = slugify(stripTags(text));
-      if (depth === 2 || depth === 3) headings.push({ depth, id, text: stripTags(text) });
+      if (depth === 2 || depth === 3) headings.push({ depth, id, text: decodeEntities(stripTags(text)) });
       return `<h${depth} id="${id}">${text}</h${depth}>\n`;
     },
   },
@@ -353,6 +362,11 @@ const broken = internalLinks.filter((l) => !known.has(l.to.endsWith("/") ? l.to 
 if (broken.length > 0) {
   for (const b of broken) console.error(`Broken wiki link in ${b.from}: ${b.to}`);
   process.exit(1);
+}
+
+const imgSrc = path.join(srcDir, "img");
+if (existsSync(imgSrc)) {
+  cpSync(imgSrc, path.join(outDir, "img"), { recursive: true });
 }
 
 writeFileSync(path.join(outDir, "search-index.json"), JSON.stringify(searchIndex), "utf8");
