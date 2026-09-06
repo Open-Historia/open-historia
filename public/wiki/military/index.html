@@ -431,12 +431,78 @@ which is not the same as who owns the ground beneath it. Building a base in an a
 does not annex it. See <a href="/wiki/cities/">cities and structures</a>.</p>
 <h2 id="the-beta-unit-system">The beta unit system</h2>
 <p class="beta-note"><b>Beta channel only.</b> Everything above describes the stable build's
-classic system.</p><p>The beta channel replaces hands-on control with an AI-driven system: units carry postures and
-standing orders, the engine advances them at era-appropriate speeds across multiple turns, and
-the model adjudicates combat rather than the local resolver. Saves are compatible in both
-directions.</p>
-<p>It is not in the stable release. See <a href="/wiki/war/">relations, treaties and war</a> for the other
-half of the beta military model.</p>
+classic system.</p><p>The beta channel replaces hands-on control with an AI-driven system. The model owns movement;
+you state intent and the engine carries it out over however many turns it takes.</p>
+<p><strong>Strength is 1–100 on beta</strong>, not 1–1000. Old saves are converted on load by dividing by ten,
+so a campaign moved between builds keeps its proportions.</p>
+<p><strong>Postures</strong> say what a formation is doing, and are what make the map readable at a glance:</p>
+<p><code>holding</code> · <code>massing</code> · <code>patrol</code> · <code>transit</code> · <code>exercise</code> · <code>blockade</code> · <code>withdrawing</code> · <code>assaulting</code></p>
+<p><code>assaulting</code> is the only one that also changes lifecycle — arriving units become engaged.</p>
+<p><strong>Standing orders</strong> carry a unit across turns. A <code>move</code> is minted automatically when the
+distance exceeds what the unit could cross in the elapsed days; a <code>patrol</code> works a station until
+a given round. Orders prune themselves once the unit is within about 60 km of its destination.</p>
+<p>Sustained travel runs at a post-1945 baseline, scaled by era:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>km/day</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Garrison</td>
+<td>0 — it does not travel</td>
+</tr>
+<tr>
+<td>Artillery</td>
+<td>35</td>
+</tr>
+<tr>
+<td>Infantry</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Armor</td>
+<td>90</td>
+</tr>
+<tr>
+<td>Naval</td>
+<td>600</td>
+</tr>
+<tr>
+<td>Air</td>
+<td>2000</td>
+</tr>
+</tbody></table></div>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Period</th>
+<th>Factor</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Before 1500</td>
+<td>×0.35</td>
+</tr>
+<tr>
+<td>1500 – 1849</td>
+<td>×0.5</td>
+</tr>
+<tr>
+<td>1850 – 1944</td>
+<td>×0.75</td>
+</tr>
+<tr>
+<td>1945 onward</td>
+<td>×1.0</td>
+</tr>
+</tbody></table></div>
+<p>So infantry in 1200 AD cover about 14 km a day. A march across a continent is a campaign, not a
+turn.</p>
+<p>Saves are compatible both ways, and the setting is stored per save rather than per browser, so a
+campaign keeps playing the way it was set up. See
+<a href="/wiki/war/">relations, treaties and war</a> for the other half of the beta military model.</p>
 <h2 id="next">Next</h2>
 <ul>
 <li><a href="/wiki/territory/">Territory</a> — what winning actually transfers.</li>

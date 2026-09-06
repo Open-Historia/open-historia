@@ -166,13 +166,46 @@ does not annex it. See [cities and structures](/wiki/cities/).
 <p class="beta-note"><b>Beta channel only.</b> Everything above describes the stable build's
 classic system.</p>
 
-The beta channel replaces hands-on control with an AI-driven system: units carry postures and
-standing orders, the engine advances them at era-appropriate speeds across multiple turns, and
-the model adjudicates combat rather than the local resolver. Saves are compatible in both
-directions.
+The beta channel replaces hands-on control with an AI-driven system. The model owns movement;
+you state intent and the engine carries it out over however many turns it takes.
 
-It is not in the stable release. See [relations, treaties and war](/wiki/war/) for the other
-half of the beta military model.
+**Strength is 1–100 on beta**, not 1–1000. Old saves are converted on load by dividing by ten,
+so a campaign moved between builds keeps its proportions.
+
+**Postures** say what a formation is doing, and are what make the map readable at a glance:
+
+`holding` · `massing` · `patrol` · `transit` · `exercise` · `blockade` · `withdrawing` · `assaulting`
+
+`assaulting` is the only one that also changes lifecycle — arriving units become engaged.
+
+**Standing orders** carry a unit across turns. A `move` is minted automatically when the
+distance exceeds what the unit could cross in the elapsed days; a `patrol` works a station until
+a given round. Orders prune themselves once the unit is within about 60 km of its destination.
+
+Sustained travel runs at a post-1945 baseline, scaled by era:
+
+| Type | km/day |
+|---|---|
+| Garrison | 0 — it does not travel |
+| Artillery | 35 |
+| Infantry | 40 |
+| Armor | 90 |
+| Naval | 600 |
+| Air | 2000 |
+
+| Period | Factor |
+|---|---|
+| Before 1500 | ×0.35 |
+| 1500 – 1849 | ×0.5 |
+| 1850 – 1944 | ×0.75 |
+| 1945 onward | ×1.0 |
+
+So infantry in 1200 AD cover about 14 km a day. A march across a continent is a campaign, not a
+turn.
+
+Saves are compatible both ways, and the setting is stored per save rather than per browser, so a
+campaign keeps playing the way it was set up. See
+[relations, treaties and war](/wiki/war/) for the other half of the beta military model.
 
 ## Next
 

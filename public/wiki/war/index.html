@@ -211,8 +211,10 @@ whole turn.</p>
 world from claiming two countries are &quot;cordial&quot; while their score says otherwise.</p>
 <p>A pair with no entry is <strong>unknown</strong>, which is not the same as neutral — it means these two
 countries have no tracked relationship yet, not that they are indifferent to each other.</p>
-<p>Relations move for concrete reasons. Having a spy ring publicly exposed in someone else&#39;s
-country, for instance, costs that pair 20 points.</p>
+<p>Relations move for concrete reasons rather than drifting. A ring of yours exposed publicly in
+someone else&#39;s country sours that pair; so does breaking an agreement, and so does backing their
+rival. The size of each move is the simulation&#39;s to decide — there is no fixed tariff per
+offence.</p>
 <h2 id="agreements">Agreements</h2>
 <p>A register of what has actually been signed:</p>
 <div class="table-scroll"><table>
@@ -276,7 +278,7 @@ events. A storyline is a thing that is <em>developing</em> — a rivalry sharpen
 unravelling, a succession crisis building.</p>
 <p>Each carries a status (<code>active</code>, <code>dormant</code>, <code>resolved</code>), a <strong>pressure</strong> and <strong>momentum</strong> value
 from 0 to 100, and a date at which it is next due attention. Every live war gets a mirrored
-storyline.</p>
+storyline. At most <strong>96</strong> are kept.</p>
 <p>Storylines are why a beta campaign has continuity between turns that nothing in the event log
 explains: something has been building for six turns and is now due.</p>
 <h2 id="what-this-changes-to-play">What this changes to play</h2>

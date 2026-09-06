@@ -110,9 +110,18 @@ not have one.
 <p class="beta-note"><b>Beta channel only.</b> The stable release generates a sheet when you ask
 for one.</p>
 
-The beta channel adds persistent, tracked statistics: sheets stored per country over time,
-automatic refresh on an interval you choose, up to eight countries tracked simultaneously, and a
-history you can chart. That turns the stat sheet from a snapshot into a time series.
+The beta channel adds persistent, tracked statistics — the sheet becomes a time series rather
+than a snapshot.
+
+| | |
+|---|---|
+| **Refresh interval** | Manual only, or every **3, 6, 12 or 24 months** of game time |
+| **Countries tracked at once** | **8** |
+| **History kept** | Up to **1200** samples |
+
+Set an interval and the sheet re-generates itself as the campaign runs, so you can watch a
+country's debt climb or its energy autonomy recover across a decade instead of re-reading a
+number. Your own country is always included once an interval is set.
 
 ## Next
 

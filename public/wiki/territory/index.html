@@ -187,9 +187,34 @@ exile, movements, organisations. You can play one. See
 <p class="beta-note"><b>Beta channel only.</b> The stable release has control and claims. The
 beta channel adds a third layer between them.</p><p>Beta separates <strong>control</strong> (who administers the ground) from <strong>sovereignty</strong> (who lawfully owns
 it), so occupation, exiled governments and unrecognised annexations are all representable:
-&quot;control is not sovereignty&quot;. It comes with explicit operations for contesting and restoring
-control, transferring lawful sovereignty separately from administration, and a Region Inspector
-that shows all three layers and their provenance.</p>
+&quot;control is not sovereignty&quot;.</p>
+<p>Sovereignty is stored sparsely — ordinary territory has no entry, because control and sovereignty
+agree. A row appears only where they diverge, which is exactly the interesting case.</p>
+<p>Three explicit operations move control without touching who lawfully owns the ground:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Operation</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>contest</code></td>
+<td>Mark the ground as fought over</td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td>Hand de-facto administration to someone</td>
+</tr>
+<tr>
+<td><code>clear_contest</code></td>
+<td>Settle it again</td>
+</tr>
+</tbody></table></div>
+<p>Each can be applied to a single region or to a country&#39;s whole territory at once. Transferring
+lawful <strong>sovereignty</strong> is a separate act — that is what a treaty does, and it is why an
+occupation can run for years without the map ever conceding the point.</p>
+<p>A Region Inspector shows all three layers for any region, plus how each came to be that way.</p>
 <p>On the stable build, that distinction is narrative — an occupation is an occupation because the
 events say so, not because the data models it separately.</p>
 <h2 id="next">Next</h2>

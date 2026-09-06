@@ -58,8 +58,10 @@ world from claiming two countries are "cordial" while their score says otherwise
 A pair with no entry is **unknown**, which is not the same as neutral — it means these two
 countries have no tracked relationship yet, not that they are indifferent to each other.
 
-Relations move for concrete reasons. Having a spy ring publicly exposed in someone else's
-country, for instance, costs that pair 20 points.
+Relations move for concrete reasons rather than drifting. A ring of yours exposed publicly in
+someone else's country sours that pair; so does breaking an agreement, and so does backing their
+rival. The size of each move is the simulation's to decide — there is no fixed tariff per
+offence.
 
 ## Agreements
 
@@ -92,7 +94,7 @@ unravelling, a succession crisis building.
 
 Each carries a status (`active`, `dormant`, `resolved`), a **pressure** and **momentum** value
 from 0 to 100, and a date at which it is next due attention. Every live war gets a mirrored
-storyline.
+storyline. At most **96** are kept.
 
 Storylines are why a beta campaign has continuity between turns that nothing in the event log
 explains: something has been building for six turns and is now due.

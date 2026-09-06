@@ -85,9 +85,24 @@ beta channel adds a third layer between them.</p>
 
 Beta separates **control** (who administers the ground) from **sovereignty** (who lawfully owns
 it), so occupation, exiled governments and unrecognised annexations are all representable:
-"control is not sovereignty". It comes with explicit operations for contesting and restoring
-control, transferring lawful sovereignty separately from administration, and a Region Inspector
-that shows all three layers and their provenance.
+"control is not sovereignty".
+
+Sovereignty is stored sparsely — ordinary territory has no entry, because control and sovereignty
+agree. A row appears only where they diverge, which is exactly the interesting case.
+
+Three explicit operations move control without touching who lawfully owns the ground:
+
+| Operation | |
+|---|---|
+| `contest` | Mark the ground as fought over |
+| `control` | Hand de-facto administration to someone |
+| `clear_contest` | Settle it again |
+
+Each can be applied to a single region or to a country's whole territory at once. Transferring
+lawful **sovereignty** is a separate act — that is what a treaty does, and it is why an
+occupation can run for years without the map ever conceding the point.
+
+A Region Inspector shows all three layers for any region, plus how each came to be that way.
 
 On the stable build, that distinction is narrative — an occupation is an occupation because the
 events say so, not because the data models it separately.
