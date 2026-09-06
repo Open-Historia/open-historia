@@ -12,6 +12,11 @@
 // threading the generator through every build path.
 //
 // Run: node scripts/build-wiki.mjs   (also runs as the first stage of `npm run build:site`)
+//
+// Wondering whether the wiki is out of date? `npm run wiki:check` diffs the commits recorded in
+// wiki/provenance.json against the current tips of main and beta and tells you which pages cite
+// files that have changed since. Update provenance.json when you finish a pass, or the next
+// person will trust a stale answer.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, statSync, cpSync } from "node:fs";
 import path from "node:path";
 import { Marked } from "marked";
