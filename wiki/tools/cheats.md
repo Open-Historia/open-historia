@@ -10,6 +10,9 @@ Open it from the settings menu.
 *On beta, cheats and the timeline are one click away on the quick menu's Tools tab.*
 
 
+![The cheats panel](/wiki/img/cheats-tools.jpg)
+*Fourteen tools. Master AI is the one to reach for first.*
+
 ## Master AI — the GM console
 
 The most useful tool on the list. Describe a change in plain English and it is planned into a

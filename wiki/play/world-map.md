@@ -11,6 +11,9 @@ the country, then a match against known aliases, and finally a colour derived fr
 name. That last fallback is why an invented faction always gets *a* colour even if you never
 picked one — and why two countries occasionally land on similar shades.
 
+![The 3D globe](/wiki/img/world-map-globe.jpg)
+*The globe, with the real day/night terminator falling across Africa and the starfield behind it. Western Sahara is striped even at this angle.*
+
 ## Striped regions mean a dispute
 
 A region rendered in **stripes** is claimed by more than one country. The stripes combine the

@@ -4,6 +4,9 @@ explicit system in the game — the rolls are real numbers, and they are determi
 
 Find it in the **💬 Chat** panel, **Spy** tab.
 
+![The Spy tab](/wiki/img/espionage-spy-tab.jpg)
+*The Spy tab before anything is deployed — your service rating, and the three slots you have to spend.*
+
 ## Intelligence rating
 
 Every country has an intelligence rating from **0 to 100**. It is the single number that decides
@@ -40,6 +43,9 @@ much of it you can actually read.
 
 You can give an agent a **cover story**, **recall** it at any time, and see everything it has
 sent.
+
+![An agent in the field](/wiki/img/espionage-active-agent.jpg)
+*An agent in Germany. Both services are shown, because the gap between them is what the detection roll turns on.*
 
 ## Getting caught
 

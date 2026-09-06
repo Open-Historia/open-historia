@@ -3,12 +3,19 @@ and it is where every scenario except Modern Day comes from — including the of
 
 You will also see it called the **Scenario Hub**; they are the same thing.
 
+![The Community Hub](/wiki/img/community-hub.jpg)
+*The hub's shelves. Install counts and likes are real, and a purple title with a ✓ OFFICIAL badge marks a verified official post.*
+
 ## Browsing
 
 The tab is laid out in shelves:
 
 - **📌 Pinned** — the official and featured scenarios. Only hub collaborators can pin something,
   so this shelf is curated rather than gamed.
+
+A scenario with a **purple title and a ✓ OFFICIAL badge** is a verified official post. Anything
+without one is community work, which is most of the hub and where the more inventive scenarios
+tend to be.
 - **Most installed** — by real install counts.
 - **Most liked** — by reactions on the post.
 - **Most recent** — newest first.
@@ -27,7 +34,11 @@ Click any scenario for its detail view: description, cover image, what it contai
 | New World | 1650 |
 | Bronze Age | 1200 BC |
 
-All pinned, all one click to import.
+That list is not exhaustive — Modern Day and a Fantasy World preset carry the official badge on
+the hub as well, and the pinned shelf changes as new work is featured. Treat the hub itself as
+the authority rather than this table.
+
+All one click to import.
 
 ## Importing
 

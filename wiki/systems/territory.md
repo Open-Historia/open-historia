@@ -16,6 +16,9 @@ change are the same object.
 You can also move control by hand from the [cheats panel](/wiki/cheats/), which is the
 game-master route rather than the gameplay one.
 
+![Disputed territory on the map](/wiki/img/world-map-search.jpg)
+*Western Sahara, top left, renders in diagonal stripes — a region more than one country claims.*
+
 ## Claims and disputes
 
 A region can carry a list of **claimants** — up to **four** countries that assert it is theirs.

@@ -5,6 +5,9 @@ on what you made.
 Open it from any scenario's editor drawer via **🗺️ Open Map Editor**, or go straight to the
 standalone editor at **`/?editor=1`**.
 
+![The map editor](/wiki/img/map-editor.jpg)
+*The standalone editor. The status bar counts regions, features and region types — two by default, Land and Coastal.*
+
 ## The tools
 
 | Tool | |
