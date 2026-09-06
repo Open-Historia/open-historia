@@ -95,6 +95,22 @@ world that has nothing to do with this planet.
 | **A unit** | An intelligence card — what the formation is, whose, how strong, what it appears to be doing. Not a command panel. |
 | **A city or structure** | Name, population, whether it is a capital, and what kind of thing it is. |
 
+## Two renderers
+
+<p class="beta-note"><b>Beta channel only.</b></p>
+
+The beta build is developing a new renderer, <b>Map vNext</b>, which is the default there. It
+dissolves each polity into a single surface with stitched frontiers and curved labels, instead of
+filling every region separately. It is a work in progress, and it takes noticeably longer to draw
+when a campaign opens.
+
+You can switch back to the older look at **Settings → Map → Renderer → "Legacy map renderer"** —
+and you should **restart the app afterwards**, because the change does not fully take effect
+until you do. Nothing about your save changes either way; it is purely how the map is drawn. See
+[the settings reference](/wiki/settings/).
+
+The stable build has one renderer and no setting for it, which is what this page describes.
+
 ## Performance
 
 If the map is slow:

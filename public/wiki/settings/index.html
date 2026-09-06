@@ -121,8 +121,8 @@
     <h1>Settings Reference</h1>
     <p class="tagline">Every option in the game, what it does, and which ones are worth changing first.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
-    <p>Settings live behind the <strong>☰</strong> button — but <em>what you find there depends on which build you are
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#the-map-renderer">The map renderer</a></li><li class="d3"><a href="#restart-the-app-after-switching">Restart the app after switching</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Settings live behind the settings button — <strong>⋮</strong> on stable, <strong>☰</strong> on beta — but <em>what you find there depends on which build you are
 running</em>, and the two are laid out very differently. Work out which one you have first;
 everything below is easier once you know.</p>
 <h2 id="which-menu-am-i-looking-at">Which menu am I looking at?</h2>
@@ -131,8 +131,8 @@ same options, but they are organised differently and reached differently. The be
 alongside the stable app, so it is entirely possible to have both on one machine.</p><h3 id="stable-one-flat-menu">Stable — one flat menu</h3>
 <p><img src="/wiki/img/settings-menu.jpg" alt="The stable settings menu">
 <em>The stable build&#39;s settings: one scrolling list, no tabs. Your API key is stored locally and shown masked.</em></p>
-<p>Press <strong>☰</strong> and everything is in a single scrolling list, top to bottom:</p>
-<pre><code>☰ ─────────────────────────────────────────
+<p>Press <strong>⋮</strong> and everything is in a single scrolling list, top to bottom:</p>
+<pre><code>⋮ ─────────────────────────────────────────
   AI provider              ▾
   API key / model / endpoint
   Custom parameters (JSON)
@@ -153,6 +153,8 @@ alongside the stable app, so it is entirely possible to have both on one machine
 </code></pre>
 <p>No tabs, no sections, no search. Scroll to what you want.</p>
 <h3 id="beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</h3>
+<p><img src="/wiki/img/beta-quick-settings.jpg" alt="Beta quick menu, Settings tab">
+<em>Beta&#39;s quick menu, Settings tab — the four sections open a full-screen workspace.</em></p>
 <p>Press <strong>☰</strong> and you get a small <strong>quick menu</strong> with four tabs:</p>
 <pre><code>☰ ┌── Game ──┬── Tools ──┬── Settings ──┬── Help ──┐
   │                                                │
@@ -214,27 +216,27 @@ are buried on stable, such as cheats and the timeline, are one click from the qu
 </thead>
 <tbody><tr>
 <td>Set my API key</td>
-<td>☰ → top of the list</td>
+<td>⋮ → top of the list</td>
 <td>☰ → Settings → <strong>AI</strong></td>
 </tr>
 <tr>
 <td>Change language</td>
-<td>☰ → UI language</td>
+<td>⋮ → UI language</td>
 <td>☰ → Settings → <strong>General</strong></td>
 </tr>
 <tr>
 <td>Turn off the globe</td>
-<td>☰ → 3D Globe</td>
+<td>⋮ → 3D Globe</td>
 <td>☰ → Settings → <strong>Map</strong></td>
 </tr>
 <tr>
 <td>Open cheats</td>
-<td>☰ → 🧪 Cheats</td>
+<td>⋮ → 🧪 Cheats</td>
 <td>☰ → <strong>Tools</strong> → Cheats</td>
 </tr>
 <tr>
 <td>Read the wiki</td>
-<td>☰ → 📖 Wiki</td>
+<td>⋮ → 📖 Wiki</td>
 <td>☰ → <strong>Help</strong> → Guides</td>
 </tr>
 <tr>
@@ -366,6 +368,29 @@ are therefore <strong>per device and per install</strong>, not per save — movi
 does not carry your API key with it, which is deliberate.</p>
 <p>It also means <strong>the beta build keeps entirely separate settings from the stable one</strong>. Installing
 beta does not inherit your stable API key; you will need to paste it in again.</p>
+<h2 id="the-map-renderer">The map renderer</h2>
+<p class="beta-note"><b>Beta channel only.</b> The stable build has one renderer and no setting
+for it.</p><p><img src="/wiki/img/beta-renderer-setting.jpg" alt="The Legacy map renderer toggle">
+<em>Settings → Map → Renderer on beta. Note that the description mentions only a redraw — restart anyway.</em></p>
+<p>Beta is developing a new map renderer — <strong>Map vNext</strong> — and ships it as the default. It draws
+dissolved polity surfaces, stitched frontiers and curved polity labels, rather than filling each
+region separately.</p>
+<p>It is a work in progress. If you would rather have the older look, or vNext is giving you
+trouble, you can switch back:</p>
+<p><strong>Settings → Map → Renderer → &quot;Legacy map renderer&quot;</strong></p>
+<p>Off by default. On, you get the renderer the game used before vNext — per-region fills and the
+older country labels. This is a <strong>rendering choice only</strong>: no world state, save data or geometry
+differs between them, and you can switch back and forth as often as you like without touching
+your campaign.</p>
+<h3 id="restart-the-app-after-switching">Restart the app after switching</h3>
+<p>The map redraws when you flip the toggle, but <strong>the change does not fully take effect until you
+restart Open Historia</strong>. Switch it, then close the app and reopen it. Until you do, expect the
+map to be only partly converted.</p>
+<p>The in-app description does not currently mention this — it says only that switching redraws the
+map. Restart anyway.</p>
+<p>Also worth knowing: <strong>vNext takes noticeably longer to draw when a campaign opens</strong>, because it
+dissolves every polity&#39;s surface before revealing the map. A long &quot;drawing borders and labels&quot;
+pause on open is normal for vNext, not a hang. The legacy renderer opens faster.</p>
 <h2 id="beta-only-options">Beta-only options</h2>
 <p class="beta-note"><b>Beta channel only.</b> These have no equivalent on stable.</p><p>Under <strong>Settings → AI</strong> and <strong>Settings → Advanced</strong>:</p>
 <ul>

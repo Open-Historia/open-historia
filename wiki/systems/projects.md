@@ -7,6 +7,9 @@ Open it from the toolbar alongside Chat and Actions.
 This is also where research and technology live. There is no tech tree; there is a research
 programme with milestones that either progresses or stalls.
 
+![The Projects and Operations board](/wiki/img/beta-projects.jpg)
+*A fresh board. The empty state states the rule: entries are opened by your advisor and by what happens in the world — you never add them by hand.*
+
 ## Projects and operations
 
 Two kinds:

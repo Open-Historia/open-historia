@@ -103,6 +103,9 @@ rather than breaking the game.
 measures silence rather than elapsed time. Recommended with local models.
 
 ## What the beta adds
+![The beta AI debug console](/wiki/img/beta-debug-console.jpg)
+*Beta's debug console: every call with its task, model, token counts and latency. These two are idleDiplomacy firing on its own.*
+
 
 <p class="beta-note"><b>Beta channel only.</b></p>
 

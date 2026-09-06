@@ -16,7 +16,7 @@ menus considerably and adds a Projects button to the toolbar — see
 | **Top right** | The date pill, with **«** history and **»** time skip. |
 | **Bottom left** | The toolbar: **💬 Chat** and **✦ Actions**. |
 | **Right edge** | **🧭 Advisor** — opens a drawer with Advisor and Stats. |
-| **Corner** | Settings (**☰**) and search (**🔍**). |
+| **Corner** | Settings (**⋮**) and search (**🔍**). |
 
 Panels overlap in a fixed order, so opening the advisor never buries the thing you were reading,
 and the main menu always comes out on top.
@@ -86,12 +86,12 @@ See [the advisor](/wiki/advisor/) and [national statistics](/wiki/statistics/).
 
 ## Settings
 
-On stable, the **☰** button opens **one flat menu** with everything in it: your AI provider and
+On stable, the **⋮** button opens **one flat menu** with everything in it: your AI provider and
 its key and model, UI and chat language, fullscreen, the 3D globe and terrain, a **Map** group
 holding country labels, reduced motion and the camera options, plus **🧪 Cheats**, a **📖 Wiki**
 link and the community links. No tabs, no sections — scroll to what you want.
 
-On beta the same button opens a **quick menu** with Game / Tools / Settings / Help tabs, and
+On beta the equivalent button is **☰**, and it opens a **quick menu** with Game / Tools / Settings / Help tabs, and
 settings themselves live in a separate four-section workspace.
 
 Both are laid out side by side in [the settings reference](/wiki/settings/).

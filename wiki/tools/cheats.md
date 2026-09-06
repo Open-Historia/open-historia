@@ -6,6 +6,9 @@ Calling it "cheats" undersells it. Most of these are how you keep a long campaig
 when the simulation drifts, or how you author a world deliberately.
 
 Open it from the settings menu.
+![Beta quick menu, Tools tab](/wiki/img/beta-quick-tools.jpg)
+*On beta, cheats and the timeline are one click away on the quick menu's Tools tab.*
+
 
 ## Master AI — the GM console
 

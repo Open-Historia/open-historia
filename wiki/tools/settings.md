@@ -1,4 +1,4 @@
-Settings live behind the **☰** button — but *what you find there depends on which build you are
+Settings live behind the settings button — **⋮** on stable, **☰** on beta — but *what you find there depends on which build you are
 running*, and the two are laid out very differently. Work out which one you have first;
 everything below is easier once you know.
 
@@ -13,10 +13,10 @@ alongside the stable app, so it is entirely possible to have both on one machine
 *The stable build's settings: one scrolling list, no tabs. Your API key is stored locally and shown masked.*
 
 
-Press **☰** and everything is in a single scrolling list, top to bottom:
+Press **⋮** and everything is in a single scrolling list, top to bottom:
 
 ```
-☰ ─────────────────────────────────────────
+⋮ ─────────────────────────────────────────
   AI provider              ▾
   API key / model / endpoint
   Custom parameters (JSON)
@@ -39,6 +39,9 @@ Press **☰** and everything is in a single scrolling list, top to bottom:
 No tabs, no sections, no search. Scroll to what you want.
 
 ### Beta — a quick menu, then a workspace
+![Beta quick menu, Settings tab](/wiki/img/beta-quick-settings.jpg)
+*Beta's quick menu, Settings tab — the four sections open a full-screen workspace.*
+
 
 Press **☰** and you get a small **quick menu** with four tabs:
 
@@ -77,11 +80,11 @@ are buried on stable, such as cheats and the timeline, are one click from the qu
 
 | I want to… | Stable | Beta |
 |---|---|---|
-| Set my API key | ☰ → top of the list | ☰ → Settings → **AI** |
-| Change language | ☰ → UI language | ☰ → Settings → **General** |
-| Turn off the globe | ☰ → 3D Globe | ☰ → Settings → **Map** |
-| Open cheats | ☰ → 🧪 Cheats | ☰ → **Tools** → Cheats |
-| Read the wiki | ☰ → 📖 Wiki | ☰ → **Help** → Guides |
+| Set my API key | ⋮ → top of the list | ☰ → Settings → **AI** |
+| Change language | ⋮ → UI language | ☰ → Settings → **General** |
+| Turn off the globe | ⋮ → 3D Globe | ☰ → Settings → **Map** |
+| Open cheats | ⋮ → 🧪 Cheats | ☰ → **Tools** → Cheats |
+| Read the wiki | ⋮ → 📖 Wiki | ☰ → **Help** → Guides |
 | Switch campaign | Exit to the main menu | ☰ → **Game** |
 | See what the AI cost | *(not available)* | ☰ → **Tools** → AI debug console |
 
@@ -162,6 +165,41 @@ does not carry your API key with it, which is deliberate.
 
 It also means **the beta build keeps entirely separate settings from the stable one**. Installing
 beta does not inherit your stable API key; you will need to paste it in again.
+
+## The map renderer
+
+<p class="beta-note"><b>Beta channel only.</b> The stable build has one renderer and no setting
+for it.</p>
+
+![The Legacy map renderer toggle](/wiki/img/beta-renderer-setting.jpg)
+*Settings → Map → Renderer on beta. Note that the description mentions only a redraw — restart anyway.*
+
+Beta is developing a new map renderer — **Map vNext** — and ships it as the default. It draws
+dissolved polity surfaces, stitched frontiers and curved polity labels, rather than filling each
+region separately.
+
+It is a work in progress. If you would rather have the older look, or vNext is giving you
+trouble, you can switch back:
+
+**Settings → Map → Renderer → "Legacy map renderer"**
+
+Off by default. On, you get the renderer the game used before vNext — per-region fills and the
+older country labels. This is a **rendering choice only**: no world state, save data or geometry
+differs between them, and you can switch back and forth as often as you like without touching
+your campaign.
+
+### Restart the app after switching
+
+The map redraws when you flip the toggle, but **the change does not fully take effect until you
+restart Open Historia**. Switch it, then close the app and reopen it. Until you do, expect the
+map to be only partly converted.
+
+The in-app description does not currently mention this — it says only that switching redraws the
+map. Restart anyway.
+
+Also worth knowing: **vNext takes noticeably longer to draw when a campaign opens**, because it
+dissolves every polity's surface before revealing the map. A long "drawing borders and labels"
+pause on open is normal for vNext, not a hang. The legacy renderer opens faster.
 
 ## Beta-only options
 

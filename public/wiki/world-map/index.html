@@ -121,7 +121,7 @@
     <h1>The World Map</h1>
     <p class="tagline">Reading the map: political fills, striped disputes, labels, the 3D globe, terrain and basemaps.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#political-fills">Political fills</a></li><li class="d2"><a href="#striped-regions-mean-a-dispute">Striped regions mean a dispute</a></li><li class="d2"><a href="#labels">Labels</a></li><li class="d2"><a href="#zoom-and-bounds">Zoom and bounds</a></li><li class="d2"><a href="#basemaps">Basemaps</a></li><li class="d2"><a href="#the-3d-globe">The 3D globe</a></li><li class="d2"><a href="#3d-terrain">3D terrain</a></li><li class="d2"><a href="#custom-backgrounds">Custom backgrounds</a></li><li class="d2"><a href="#clicking-things">Clicking things</a></li><li class="d2"><a href="#performance">Performance</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#political-fills">Political fills</a></li><li class="d2"><a href="#striped-regions-mean-a-dispute">Striped regions mean a dispute</a></li><li class="d2"><a href="#labels">Labels</a></li><li class="d2"><a href="#zoom-and-bounds">Zoom and bounds</a></li><li class="d2"><a href="#basemaps">Basemaps</a></li><li class="d2"><a href="#the-3d-globe">The 3D globe</a></li><li class="d2"><a href="#3d-terrain">3D terrain</a></li><li class="d2"><a href="#custom-backgrounds">Custom backgrounds</a></li><li class="d2"><a href="#clicking-things">Clicking things</a></li><li class="d2"><a href="#two-renderers">Two renderers</a></li><li class="d2"><a href="#performance">Performance</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>The map is the game&#39;s main display and its main control. Everything on it is clickable, and the
 way it is coloured tells you who holds what.</p>
 <h2 id="political-fills">Political fills</h2>
@@ -244,6 +244,16 @@ world that has nothing to do with this planet.</p>
 <td>Name, population, whether it is a capital, and what kind of thing it is.</td>
 </tr>
 </tbody></table></div>
+<h2 id="two-renderers">Two renderers</h2>
+<p class="beta-note"><b>Beta channel only.</b></p><p>The beta build is developing a new renderer, <b>Map vNext</b>, which is the default there. It
+dissolves each polity into a single surface with stitched frontiers and curved labels, instead of
+filling every region separately. It is a work in progress, and it takes noticeably longer to draw
+when a campaign opens.</p>
+<p>You can switch back to the older look at <strong>Settings → Map → Renderer → &quot;Legacy map renderer&quot;</strong> —
+and you should <strong>restart the app afterwards</strong>, because the change does not fully take effect
+until you do. Nothing about your save changes either way; it is purely how the map is drawn. See
+<a href="/wiki/settings/">the settings reference</a>.</p>
+<p>The stable build has one renderer and no setting for it, which is what this page describes.</p>
 <h2 id="performance">Performance</h2>
 <p>If the map is slow:</p>
 <ul>

@@ -21,7 +21,7 @@ You will see a **Set up your AI provider** prompt when you start a game without 
 
 ## Where to put the key
 
-**Settings (☰) → AI → Provider.** Pick a provider, paste your key, optionally set a model, and
+**Settings → AI → Provider.** (The settings button is **⋮** on the stable build and **☰** on beta.) Pick a provider, paste your key, optionally set a model, and
 close the panel. That is the whole setup.
 
 Your key is stored in your browser's local storage, or in the desktop app's own profile. It is
