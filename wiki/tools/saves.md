@@ -65,8 +65,9 @@ the beta cannot touch your stable campaigns, and vice versa.
 Scenarios export and import cleanly — as a `.zip` bundle carrying the map, cities, colours,
 flags and any custom basemap, or as plain `.json`.
 
-Use **Import** in the library's Scenarios tab, or the **Download** buttons in a scenario's editor
-drawer. This is also how you [publish to the Community Hub](/wiki/community-hub/).
+Use **Import JSON** in the library header, or the **Download** buttons in a scenario's editor
+drawer. **Create Scenario** in the Scenarios tab starts a blank one from the base template and
+drops you straight into its editor. This is also how you [publish to the Community Hub](/wiki/community-hub/).
 
 Games are less portable by design: a game is a running playthrough, tied to the scenario it
 started from. To carry a *situation* to another machine, the practical route is to export the
@@ -85,8 +86,9 @@ Your API key is never synced. Provider settings are per device.
 
 ## Archiving
 
-Games can be archived rather than deleted, which takes them out of the main library view without
-throwing them away. Useful once you have accumulated a dozen half-finished campaigns.
+**Archive** takes a game out of the main library view without throwing it away, and the same
+button becomes **Unarchive** to bring it back. Useful once you have accumulated a dozen
+half-finished campaigns.
 
 ## What a save contains
 

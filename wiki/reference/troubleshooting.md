@@ -105,6 +105,15 @@ The world drifted. Fix it rather than restarting:
 See [cheats and the GM console](/wiki/cheats/). Using these is normal; an AI-driven world
 occasionally produces nonsense, and repairing it is part of running a long campaign.
 
+## "Server stopped"
+
+A full-screen **Server stopped** overlay means the local server the desktop app runs alongside
+itself is no longer answering. Restart the app. If it happens repeatedly, the diagnostics log in
+the cheats panel will usually name the cause — most often a port already in use, or the server
+being shut down by something else.
+
+The browser build never shows this: it has no server to lose.
+
 ## Windows says the installer is unsafe
 
 The installer is not code-signed yet. Choose **More info → Run anyway** in SmartScreen.

@@ -9,59 +9,27 @@ same options, but they are organised differently and reached differently. The be
 alongside the stable app, so it is entirely possible to have both on one machine.</p>
 
 ### Stable — one flat menu
+
 ![The stable settings menu](/wiki/img/settings-menu.jpg)
 *The stable build's settings: one scrolling list, no tabs. Your API key is stored locally and shown masked.*
 
-
-Press **⋮** and everything is in a single scrolling list, top to bottom:
-
-```
-⋮ ─────────────────────────────────────────
-  AI provider              ▾
-  API key / model / endpoint
-  Custom parameters (JSON)
-  UI language              ▾
-  AI chat language         ▾
-  Fullscreen               [ ]
-  3D Globe                 [ ]
-  3D Terrain               [ ]
-  MAP
-    Hide country labels             [ ]
-    Reduce motion                   [ ]
-    Disable idle globe rotation     [ ]
-    Disable camera movement         [ ]
-  Limit AI generation      [ ]
-  🧪 Cheats
-  📖 Wiki
-  Discord · Reddit · GitHub
-```
+Press **⋮** and everything is in a single scrolling list. In order, top to bottom: the **AI
+provider** and its key, model and endpoint; **custom parameters**; **UI language** and **AI chat
+language**; **Fullscreen**, **3D Globe** and **3D Terrain**; a **Map** group holding country
+labels, reduced motion and the two camera options; **Limit AI generation**; then **🧪 Cheats**, a
+**📖 Wiki** link and the community links.
 
 No tabs, no sections, no search. Scroll to what you want.
 
 ### Beta — a quick menu, then a workspace
+
 ![Beta quick menu, Settings tab](/wiki/img/beta-quick-settings.jpg)
 *Beta's quick menu, Settings tab — the four sections open a full-screen workspace.*
 
-
-Press **☰** and you get a small **quick menu** with four tabs:
-
-```
-☰ ┌── Game ──┬── Tools ──┬── Settings ──┬── Help ──┐
-  │                                                │
-  │ Game      current campaign · switch ·          │
-  │           duplicate · import · manage          │
-  │                                                │
-  │ Tools     🧪 Cheats                            │
-  │           Events / Timeline                    │
-  │           AI debug console                     │
-  │                                                │
-  │ Settings  ◫ General      ◇ Map                 │
-  │           ✦ AI           ⌘ Advanced            │
-  │                                                │
-  │ Help      Guides · Report a Bug ·              │
-  │           Discord · Reddit · GitHub            │
-  └────────────────────────────────────────────────┘
-```
+Press **☰** and you get a small **quick menu** with four tabs — **Game**, **Tools**, **Settings**
+and **Help**. Game holds the current campaign and the switch, duplicate, import and manage
+actions. Tools puts cheats, the events timeline and the AI debug console one click away. Help has
+the guides, bug reporting and the community links.
 
 Choosing one of the four **Settings** tiles opens a full-screen **workspace** with that section
 selected:

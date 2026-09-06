@@ -121,7 +121,7 @@
     <h1>Troubleshooting</h1>
     <p class="tagline">Blank maps, greyed-out AI, slow turns, CORS errors and the other things that go wrong.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-map-is-blank">The map is blank</a></li><li class="d2"><a href="#the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</a></li><li class="d2"><a href="#turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</a></li><li class="d2"><a href="#turns-hang-forever">Turns hang forever</a></li><li class="d2"><a href="#rate-limits">Rate limits</a></li><li class="d2"><a href="#cors-errors-with-a-local-model">CORS errors with a local model</a></li><li class="d2"><a href="#everything-is-slow">Everything is slow</a></li><li class="d2"><a href="#i-lost-my-games">I lost my games</a></li><li class="d2"><a href="#a-country-is-behaving-incoherently">A country is behaving incoherently</a></li><li class="d2"><a href="#windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</a></li><li class="d2"><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li><li class="d2"><a href="#reporting-a-bug">Reporting a bug</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#the-map-is-blank">The map is blank</a></li><li class="d2"><a href="#the-ai-is-greyed-out-or-does-nothing">The AI is greyed out or does nothing</a></li><li class="d2"><a href="#turns-fail-or-always-fall-back-to-canned-events">Turns fail, or always fall back to canned events</a></li><li class="d2"><a href="#turns-hang-forever">Turns hang forever</a></li><li class="d2"><a href="#rate-limits">Rate limits</a></li><li class="d2"><a href="#cors-errors-with-a-local-model">CORS errors with a local model</a></li><li class="d2"><a href="#everything-is-slow">Everything is slow</a></li><li class="d2"><a href="#i-lost-my-games">I lost my games</a></li><li class="d2"><a href="#a-country-is-behaving-incoherently">A country is behaving incoherently</a></li><li class="d2"><a href="#quotserver-stoppedquot">&quot;Server stopped&quot;</a></li><li class="d2"><a href="#windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</a></li><li class="d2"><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li><li class="d2"><a href="#reporting-a-bug">Reporting a bug</a></li></ul></nav>
     <p>The common failures, and what actually fixes them.</p>
 <p>Before anything else: the <a href="/wiki/cheats/">cheats panel</a> has a <strong>Diagnostics Log</strong> showing errors,
 API failures and the exact context the model was given. It usually explains the problem
@@ -207,6 +207,12 @@ and they are there.</p>
 </ul>
 <p>See <a href="/wiki/cheats/">cheats and the GM console</a>. Using these is normal; an AI-driven world
 occasionally produces nonsense, and repairing it is part of running a long campaign.</p>
+<h2 id="quotserver-stoppedquot">&quot;Server stopped&quot;</h2>
+<p>A full-screen <strong>Server stopped</strong> overlay means the local server the desktop app runs alongside
+itself is no longer answering. Restart the app. If it happens repeatedly, the diagnostics log in
+the cheats panel will usually name the cause — most often a port already in use, or the server
+being shut down by something else.</p>
+<p>The browser build never shows this: it has no server to lose.</p>
 <h2 id="windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</h2>
 <p>The installer is not code-signed yet. Choose <strong>More info → Run anyway</strong> in SmartScreen.</p>
 <h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
