@@ -9,6 +9,8 @@
 //
 // Run: npm run wiki:check        (add --fetch to update the remote refs first)
 //
+// The runbook this belongs to is docs/wiki.md.
+//
 // It exits 0 when the wiki is current and 1 when pages need review, so CI could gate on it, but
 // it is written to be read by a person: the useful output is the list, not the exit code.
 import { readFileSync, existsSync } from "node:fs";

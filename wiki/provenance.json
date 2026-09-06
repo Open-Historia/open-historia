@@ -2,6 +2,8 @@
   "_comment": [
     "What the wiki was last checked against, and which source files each page's claims come from.",
     "",
+    "The full maintenance runbook is docs/wiki.md. This file is the machine-readable half of it.",
+    "",
     "This exists so that 'the wiki needs updating' is an answerable question rather than a re-read",
     "of the whole game. `npm run wiki:check` fetches upstream, diffs these two commits against the",
     "current tips of main and beta, and maps the changed files onto the pages that cite them — so",

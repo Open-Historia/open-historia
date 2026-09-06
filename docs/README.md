@@ -37,4 +37,5 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Android App (Embedded Server)](mobile.md) — The Capacitor + nodejs-mobile Android app: boot shell, first-run map fetch, self-update, the `android` release channel, and build pipeline.
 
 ### Delivery
+- [The Player Wiki](wiki.md) — Maintaining openhistoria.com/wiki/: the markdown-to-HTML generator, `npm run wiki:check` for spotting when it has gone stale, the screenshot harness, and the main-vs-beta rules.
 - [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the four workflows, `build:site`, the admin-panel deploy engine, and the Workers.

@@ -13,6 +13,9 @@
 //
 // Run: node scripts/build-wiki.mjs   (also runs as the first stage of `npm run build:site`)
 //
+// The maintenance runbook is docs/wiki.md — editing rules, the screenshot harness and its
+// pitfalls, how the URL redirects work, and how to add a page.
+//
 // Wondering whether the wiki is out of date? `npm run wiki:check` diffs the commits recorded in
 // wiki/provenance.json against the current tips of main and beta and tells you which pages cite
 // files that have changed since. Update provenance.json when you finish a pass, or the next
