@@ -64,6 +64,19 @@ for (const file of pages) {
   // The search index is fetched by absolute path at runtime; make that relative too.
   html = html.replace(/fetch\("\/wiki\/search-index\.json"\)/g, `fetch("${up}search-index.json")`);
 
+  // Strip analytics. Every page carries the project's live GA property, and a preview hosted
+  // anywhere else would report its traffic into the real site's statistics — inventing pageviews
+  // for a domain that is not openhistoria.com. A review copy must not touch production numbers.
+  html = html.replace(/\s*<!-- Google tag \(gtag\.js\) -->[\s\S]*?gtag\('config'[^<]*<\/script>/g, "");
+
+  // Say what this is, on every page. A preview that looks exactly like the live site is one
+  // screenshot away from someone quoting it as though it were published.
+  html = html.replace(/<body>/,
+    `<body>
+<div style="background:#8a2331;color:#fbf3dc;font:600 0.85rem/1.4 system-ui,sans-serif;padding:0.5rem 1rem;text-align:center">` +
+    `Preview build — not the live site. The published wiki is at ` +
+    `<a href="${LIVE}/wiki/" style="color:#ffe9b8">openhistoria.com/wiki/</a>.</div>`);
+
   if (html !== before) rewritten += 1;
   writeFileSync(file, html, "utf8");
 }

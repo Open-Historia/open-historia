@@ -70,6 +70,19 @@ It matters because the real wiki addresses everything absolutely — `/wiki.css`
 about 1,500 references — which is correct when served from the site root and breaks completely on
 a subpath. This is the fix.
 
+Two things the preview build does on purpose, because a review copy must not be mistaken for
+the real one:
+
+* **Analytics are stripped.** Every generated page carries the project's live GA property, and
+  a preview hosted elsewhere would report its traffic into the real site's statistics —
+  inventing pageviews for a domain that is not `openhistoria.com`.
+* **Every page gets a "Preview build — not the live site" banner**, linking to the published
+  wiki. A copy that looks identical to the live site is one screenshot away from being quoted
+  as though it were published.
+
+`<link rel="canonical">` and `og:url` still point at `openhistoria.com/wiki/` — that is
+deliberate, so a search engine does not index the preview as duplicate content.
+
 Where to put it:
 
 | | |
