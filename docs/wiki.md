@@ -20,6 +20,7 @@ This page is for maintaining it. For what it *says*, read the wiki.
 | `public/wiki.css` | The stylesheet. `public/guides.css` is a one-line `@import` shim for old links. |
 | `scripts/build-wiki.mjs` | The generator. |
 | `scripts/check-wiki-freshness.mjs` | Tells you what needs updating. |
+| `scripts/build-wiki-preview.mjs` | Builds a relocatable copy for sharing without touching the live site. |
 
 It lives in `public/` rather than `site/` for the same reason the old guides did (see the comment
 at the top of `assemble-site.mjs`): a local desktop install serves `public/` at *its* root, so the
@@ -41,6 +42,7 @@ npm run build:wiki      # regenerate public/wiki/ from wiki/
 npm run wiki:check      # what has changed upstream that the wiki cites?
 npm run build:site      # full site build (runs build:wiki first)
 npm run preview:site    # serve dist-site/ at localhost:4173
+npm run wiki:preview    # relocatable copy in dist-wiki-preview/, for sharing
 ```
 
 The generator fails the build rather than shipping something broken. It refuses to run if an
@@ -50,7 +52,39 @@ or if a `.md` under `wiki/` is not referenced by `nav.json`. It also regenerates
 
 ---
 
-## 3. Answering "does the wiki need updating?"
+## 3. Showing it to people without touching the live site
+
+`openhistoria.com` deploys from `main` through a Cloudflare Pages project that not everyone has
+access to. To circulate the wiki for review without going near it:
+
+```
+npm run wiki:preview
+```
+
+That writes `dist-wiki-preview/` — the same pages with every internal link rewritten **relative**,
+so the folder works from a domain root, a GitHub Pages subpath, a shared drive, or opened straight
+off disk. Links that belong to the game rather than the wiki (Play, Download, the landing page)
+point at the live site, since they are not in the bundle.
+
+It matters because the real wiki addresses everything absolutely — `/wiki.css`, `/wiki/img/…`,
+about 1,500 references — which is correct when served from the site root and breaks completely on
+a subpath. This is the fix.
+
+Where to put it:
+
+| | |
+|---|---|
+| **Netlify Drop** | Drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop). Instant URL, no account needed for a quick share. |
+| **GitHub Pages on your own fork** | Push `dist-wiki-preview/` to a `gh-pages` branch of your fork and enable Pages. Serves at a subpath, which the relative rewrite handles. Entirely separate from upstream. |
+| **Your own Cloudflare Pages project** | `wrangler pages deploy dist-wiki-preview --project-name <something-else>`. Same platform, different project — it cannot affect `open-historia`. |
+| **A zip** | It is ~3 MB and self-contained, with a README.txt inside explaining what it is. |
+
+Do **not** deploy it to the `open-historia` Cloudflare project or push to `upstream/main` to
+preview — both publish to the live site.
+
+---
+
+## 4. Answering "does the wiki need updating?"
 
 ```
 npm run wiki:check --fetch
@@ -73,7 +107,7 @@ wrong page.
 
 ---
 
-## 4. Editing rules
+## 5. Editing rules
 
 **Two builds, kept distinct.** `main` and `beta` differ substantially — `gameplay.js` is 2,800
 lines on main and 12,000 on beta. Anything that exists only on beta must be marked, either with a
@@ -94,7 +128,7 @@ describe it in prose. Code blocks are for commands and formulas.
 
 ---
 
-## 5. Screenshots
+## 6. Screenshots
 
 Captured by driving the real app with Electron, which is already a dependency.
 
@@ -140,7 +174,7 @@ maintainer knows to replace them from a real campaign.
 
 ---
 
-## 6. Adding a page
+## 7. Adding a page
 
 1. Write `wiki/<section>/<slug>.md`. Start at `##` — the `#` title comes from `nav.json`.
 2. Add an entry to `wiki/nav.json` in reading order, with `slug`, `file`, `nav`, `title` and
@@ -153,7 +187,7 @@ Slugs are permanent — they are the public URL. Changing one breaks inbound lin
 
 ---
 
-## 7. URL history
+## 8. URL history
 
 The wiki absorbed the old guides. `/get-started/`, `/how-to-play/`, `/ai-setup/`, `/self-hosting/`
 and `/guides/` now 301 to their `/wiki/…` homes via `site/_redirects`, **and** keep stub pages
@@ -168,7 +202,7 @@ makes Cloudflare discard **the entire file**. Keep paths exact.
 
 ---
 
-## 8. Known gaps
+## 9. Known gaps
 
 Kept current in `wiki/provenance.json` and printed by `npm run wiki:check`. At the time of
 writing: no Map vNext screenshot for a side-by-side against the legacy renderer; no screenshot of
