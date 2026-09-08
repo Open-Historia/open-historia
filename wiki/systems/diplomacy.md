@@ -119,6 +119,11 @@ The beta channel adds explicit ledgers: numeric relation scores between every pa
 a formal register of treaties and their status, and a war ledger that is the single authority on
 who is fighting whom. See [relations, treaties and war](/wiki/war/).
 
+You read them from the **🤝 Diplomacy** block on any country's
+[stat sheet](/wiki/statistics/#the-diplomacy-block) — every bilateral score that country holds,
+its treaty register and its current wars, for anyone you click on the map. Checking a country's
+existing friendships before you open a thread with them changes how you play.
+
 ## Next
 
 - [Espionage](/wiki/espionage/) — reading what is said when you are not in the room.

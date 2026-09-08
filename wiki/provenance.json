@@ -16,89 +16,348 @@
     "`sources` is deliberately coarse. A page lists the files whose behaviour it describes, not",
     "every file it touches — the goal is 'this page probably needs a look', not a build graph."
   ],
-
   "verifiedAgainst": {
     "main": "c3efe872747317b1afa86669b9e31738dd85295c",
     "beta": "e8c6632da32649d0cc921de4a027a603889b19e5",
     "date": "2026-09-06",
-    "note": "Written from source and from driving both builds. Beta was verified by reading source and exercising its menus, not by playing a campaign through turns."
+    "note": "Written from source and from driving both builds. Beta was verified by reading source and exercising its menus, not by playing a campaign through turns. Six pages carry a newer per-page record in pageVerified — see that field."
   },
-
   "pages": {
-    "index.md":                  ["README.md"],
-    "start/install.md":          ["site/index.html", "package.json", ".github/workflows/desktop-installer.yml", "scripts/fetch-map-assets.mjs"],
-    "start/ai-setup.md":         ["src/Game/AI/providerConfig.js", "src/Game/AI/main.jsx", "src/Game/GameUI/apiSetupPrompt.jsx"],
-    "start/how-to-play.md":      ["src/Game/GameUI/main.jsx", "src/Game/GameUI/time.jsx", "src/Game/GameUI/actions.jsx"],
-    "start/first-campaign.md":   ["src/Game/GameUI/libraryBar.jsx", "src/Game/GameUI/time.jsx", "src/runtime/difficulty.js"],
-
-    "play/new-game.md":          ["src/Game/GameUI/libraryBar.jsx", "src/Game/GameUI/FactionCreator.jsx", "src/Game/GameUI/CountryPickerMap.jsx", "src/runtime/difficulty.js"],
-    "play/interface.md":         ["src/Game/GameUI/main.jsx", "src/Game/GameUI/chat.jsx", "src/Game/GameUI/settings.jsx", "src/Game/Selection"],
-    "play/world-map.md":         ["src/Game/Map/World.jsx", "src/Game/Map/Nations.jsx", "src/Game/Map/GlobeEffects.jsx", "src/runtime/assets.js", "src/runtime/mapSettings.js"],
-    "play/time.md":              ["src/Game/GameUI/time.jsx", "src/Game/AI/gameplay.js", "src/runtime/mapSettings.js"],
-    "play/orders.md":            ["src/Game/GameUI/actions.jsx", "src/Game/AI/gameplay.js"],
-    "play/events.md":            ["src/Game/GameUI/time.jsx", "src/Game/AI/gameplay.js", "src/runtime/eventTags.js", "src/Game/Selection/CountryPanel.jsx"],
-
-    "systems/diplomacy.md":      ["src/Game/GameUI/chat.jsx", "src/Game/AI/main.jsx", "src/Game/AI/gameplay.js", "src/Game/AI/nativeDiplomaticDirector.js"],
-    "systems/war.md":            ["src/Game/AI/nativeWarLedger.js", "src/Game/AI/nativeDiplomaticDirector.js", "src/Game/AI/nativeWorldDirector.js"],
-    "systems/territory.md":      ["src/runtime/gameState.js", "src/Game/Selection/Regions.jsx", "src/Game/AI/nativeTerritoryDirector.js"],
-    "systems/military.md":       ["src/Game/Map/unitCombat.js", "src/Game/GameUI/forces.jsx", "src/runtime/unitMotion.js", "src/Game/Map/unitsController.js"],
-    "systems/espionage.md":      ["src/runtime/spycraft.js", "src/runtime/spySeal.js", "src/Game/GameUI/chat.jsx"],
-    "systems/projects.md":       ["src/runtime/projects.js", "src/Game/GameUI/projects.jsx", "src/runtime/gameState.js"],
-    "systems/statistics.md":     ["src/Game/GameUI/stats.jsx", "src/runtime/countryStats.js"],
-    "systems/countries.md":      ["src/runtime/gameState.js", "src/runtime/countryTags.js", "src/runtime/polityIdentity.js", "src/runtime/countryFlags.js"],
-    "systems/cities.md":         ["src/Game/Map/Cities.jsx", "src/Game/Map/MarkersLayer.jsx", "src/runtime/cityFeatures.js"],
-    "systems/advisor.md":        ["src/Game/GameUI/advisor.jsx", "src/Game/GameUI/advisorBlocks.js", "src/Game/GameUI/advisorDrafts.js"],
-
-    "tools/settings.md":         ["src/Game/GameUI/settings.jsx", "src/runtime/mapSettings.js", "src/runtime/debugLog.js", "src/Game/AI/providerConfig.js"],
-    "tools/cheats.md":           ["src/Game/GameUI/cheats.jsx", "src/Game/GameUI/forces.jsx"],
-    "tools/saves.md":            ["src/runtime/gameState.js", "src/runtime/library.js", "src/Game/GameUI/libraryBar.jsx", "server/libraryStore.js"],
-    "tools/editor.md":           ["src/Editor"],
-
-    "hosting/community-hub.md":  ["src/Game/GameUI/communityHub.jsx", "hub-templates"],
-    "hosting/self-hosting.md":   ["server/server.js", "server/dataDir.js", "server/security.js", "README.md"],
-    "hosting/mobile.md":         ["mobile", "src/runtime/appUpdate.js"],
-
-    "reference/ai-providers.md": ["src/Game/AI/providerConfig.js", "src/Game/AI/main.jsx", "src/Game/GameUI/settings.jsx"],
-    "reference/troubleshooting.md": ["src/Game/GameUI/advisor.jsx", "src/Game/GameUI/chat.jsx", "src/Game/GameUI/time.jsx", "src/Game/AI/gameplay.js", "src/runtime/debugLog.js"]
+    "index.md": [
+      "README.md"
+    ],
+    "start/install.md": [
+      "site/index.html",
+      "package.json",
+      ".github/workflows/desktop-installer.yml",
+      "scripts/fetch-map-assets.mjs",
+      "src/runtime/web/account.js"
+    ],
+    "start/ai-setup.md": [
+      "src/Game/AI/providerConfig.js",
+      "src/Game/AI/main.jsx",
+      "src/Game/GameUI/apiSetupPrompt.jsx"
+    ],
+    "start/how-to-play.md": [
+      "src/Game/GameUI/main.jsx",
+      "src/Game/GameUI/time.jsx",
+      "src/Game/GameUI/actions.jsx"
+    ],
+    "start/first-campaign.md": [
+      "src/Game/GameUI/libraryBar.jsx",
+      "src/Game/GameUI/time.jsx",
+      "src/runtime/difficulty.js"
+    ],
+    "play/new-game.md": [
+      "src/Game/GameUI/libraryBar.jsx",
+      "src/Game/GameUI/FactionCreator.jsx",
+      "src/Game/GameUI/CountryPickerMap.jsx",
+      "src/runtime/difficulty.js"
+    ],
+    "play/interface.md": [
+      "src/Game/GameUI/main.jsx",
+      "src/Game/GameUI/chat.jsx",
+      "src/Game/GameUI/settings.jsx",
+      "src/Game/Selection"
+    ],
+    "play/world-map.md": [
+      "src/Game/Map/World.jsx",
+      "src/Game/Map/Nations.jsx",
+      "src/Game/Map/GlobeEffects.jsx",
+      "src/runtime/assets.js",
+      "src/runtime/mapSettings.js"
+    ],
+    "play/time.md": [
+      "src/Game/GameUI/time.jsx",
+      "src/Game/AI/gameplay.js",
+      "src/runtime/mapSettings.js"
+    ],
+    "play/orders.md": [
+      "src/Game/GameUI/actions.jsx",
+      "src/Game/AI/gameplay.js"
+    ],
+    "play/events.md": [
+      "src/Game/GameUI/time.jsx",
+      "src/Game/AI/gameplay.js",
+      "src/runtime/eventTags.js",
+      "src/Game/Selection/CountryPanel.jsx"
+    ],
+    "systems/diplomacy.md": [
+      "src/Game/GameUI/chat.jsx",
+      "src/Game/AI/main.jsx",
+      "src/Game/AI/gameplay.js",
+      "src/Game/AI/nativeDiplomaticDirector.js"
+    ],
+    "systems/war.md": [
+      "src/Game/AI/nativeWarLedger.js",
+      "src/Game/AI/nativeDiplomaticDirector.js",
+      "src/Game/AI/nativeWorldDirector.js"
+    ],
+    "systems/territory.md": [
+      "src/runtime/gameState.js",
+      "src/Game/Selection/Regions.jsx",
+      "src/Game/AI/nativeTerritoryDirector.js"
+    ],
+    "systems/military.md": [
+      "src/Game/Map/unitCombat.js",
+      "src/Game/GameUI/forces.jsx",
+      "src/runtime/unitMotion.js",
+      "src/Game/Map/unitsController.js"
+    ],
+    "systems/espionage.md": [
+      "src/runtime/spycraft.js",
+      "src/runtime/spySeal.js",
+      "src/Game/GameUI/chat.jsx"
+    ],
+    "systems/projects.md": [
+      "src/runtime/projects.js",
+      "src/Game/GameUI/projects.jsx",
+      "src/runtime/gameState.js"
+    ],
+    "systems/statistics.md": [
+      "src/Game/GameUI/stats.jsx",
+      "src/runtime/countryStats.js"
+    ],
+    "systems/countries.md": [
+      "src/runtime/gameState.js",
+      "src/runtime/countryTags.js",
+      "src/runtime/polityIdentity.js",
+      "src/runtime/countryFlags.js"
+    ],
+    "systems/cities.md": [
+      "src/Game/Map/Cities.jsx",
+      "src/Game/Map/MarkersLayer.jsx",
+      "src/runtime/cityFeatures.js"
+    ],
+    "systems/advisor.md": [
+      "src/Game/GameUI/advisor.jsx",
+      "src/Game/GameUI/advisorBlocks.js",
+      "src/Game/GameUI/advisorDrafts.js"
+    ],
+    "tools/settings.md": [
+      "src/Game/GameUI/settings.jsx",
+      "src/runtime/mapSettings.js",
+      "src/runtime/debugLog.js",
+      "src/Game/AI/providerConfig.js"
+    ],
+    "tools/cheats.md": [
+      "src/Game/GameUI/cheats.jsx",
+      "src/Game/GameUI/forces.jsx"
+    ],
+    "tools/saves.md": [
+      "src/runtime/gameState.js",
+      "src/runtime/library.js",
+      "src/Game/GameUI/libraryBar.jsx",
+      "server/libraryStore.js",
+      "src/runtime/web/account.js",
+      "src/runtime/web/sync.js",
+      "src/runtime/web/accountWidget.js"
+    ],
+    "tools/editor.md": [
+      "src/Editor"
+    ],
+    "hosting/community-hub.md": [
+      "src/Game/GameUI/communityHub.jsx",
+      "hub-templates"
+    ],
+    "hosting/self-hosting.md": [
+      "server/server.js",
+      "server/dataDir.js",
+      "server/security.js",
+      "README.md"
+    ],
+    "hosting/mobile.md": [
+      "mobile",
+      "src/runtime/appUpdate.js"
+    ],
+    "reference/ai-providers.md": [
+      "src/Game/AI/providerConfig.js",
+      "src/Game/AI/main.jsx",
+      "src/Game/GameUI/settings.jsx"
+    ],
+    "reference/troubleshooting.md": [
+      "src/Game/GameUI/advisor.jsx",
+      "src/Game/GameUI/chat.jsx",
+      "src/Game/GameUI/time.jsx",
+      "src/Game/AI/gameplay.js",
+      "src/runtime/debugLog.js"
+    ]
   },
-
   "images": {
     "_comment": "build: which channel the shot came from. staged: the state was authored into a scratch save rather than played into, so re-take it from a real campaign if one is available.",
-    "new-game-scenarios.jpg":      { "build": "main", "staged": false },
-    "new-game-country-picker.jpg": { "build": "main", "staged": false },
-    "new-game-difficulty.jpg":     { "build": "main", "staged": false },
-    "interface-hud.jpg":           { "build": "main", "staged": false },
-    "world-map-globe.jpg":         { "build": "main", "staged": false },
-    "world-map-search.jpg":        { "build": "main", "staged": false },
-    "time-skip-panel.jpg":         { "build": "main", "staged": false },
-    "orders-actions.jpg":          { "build": "main", "staged": false },
-    "events-history.jpg":          { "build": "main", "staged": false },
-    "diplomacy-threads.jpg":       { "build": "main", "staged": false },
-    "diplomacy-thread.jpg":        { "build": "main", "staged": false },
-    "diplomacy-group-picker.jpg":  { "build": "beta", "staged": false },
-    "advisor-reply.jpg":           { "build": "main", "staged": false },
-    "statistics-sheet.jpg":        { "build": "main", "staged": false },
-    "settings-menu.jpg":           { "build": "main", "staged": false },
-    "saves-library.jpg":           { "build": "main", "staged": false },
-    "cheats-tools.jpg":            { "build": "main", "staged": false },
-    "community-hub.jpg":           { "build": "main", "staged": false },
-    "map-editor.jpg":              { "build": "main", "staged": false },
-    "espionage-spy-tab.jpg":       { "build": "main", "staged": false },
-    "espionage-deploy.jpg":        { "build": "main", "staged": false },
-    "espionage-states.jpg":        { "build": "main", "staged": true,  "note": "spy records authored into the scratch save: real rolls would need a very long campaign" },
-    "espionage-intercept.jpg":     { "build": "main", "staged": true,  "note": "intercepts authored in plain text; clarity 39% is genuinely computed from the two ratings" },
-    "beta-quick-tools.jpg":        { "build": "beta", "staged": false },
-    "beta-quick-settings.jpg":     { "build": "beta", "staged": false },
-    "beta-renderer-setting.jpg":   { "build": "beta", "staged": false },
-    "beta-debug-console.jpg":      { "build": "beta", "staged": false },
-    "beta-projects.jpg":           { "build": "beta", "staged": true,  "note": "board authored into the scratch save; a real board needs a dozen turns of events" },
-    "retry-advisor.jpg":           { "build": "beta", "staged": true,  "note": "failure forced with a rejected API key" },
-    "retry-diplomacy.jpg":         { "build": "beta", "staged": true,  "note": "failure forced with a rejected API key" }
+    "new-game-scenarios.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "new-game-country-picker.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "new-game-difficulty.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "interface-hud.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "world-map-globe.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "world-map-search.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "time-skip-panel.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "orders-actions.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "events-history.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "diplomacy-threads.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "diplomacy-thread.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "diplomacy-group-picker.jpg": {
+      "build": "beta",
+      "staged": false
+    },
+    "advisor-reply.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "statistics-sheet.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "settings-menu.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "saves-library.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "cheats-tools.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "community-hub.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "map-editor.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "espionage-spy-tab.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "espionage-deploy.jpg": {
+      "build": "main",
+      "staged": false
+    },
+    "espionage-states.jpg": {
+      "build": "main",
+      "staged": true,
+      "note": "spy records authored into the scratch save: real rolls would need a very long campaign"
+    },
+    "espionage-intercept.jpg": {
+      "build": "main",
+      "staged": true,
+      "note": "intercepts authored in plain text; clarity 39% is genuinely computed from the two ratings"
+    },
+    "beta-quick-tools.jpg": {
+      "build": "beta",
+      "staged": false
+    },
+    "beta-quick-settings.jpg": {
+      "build": "beta",
+      "staged": false
+    },
+    "beta-renderer-setting.jpg": {
+      "build": "beta",
+      "staged": false
+    },
+    "beta-debug-console.jpg": {
+      "build": "beta",
+      "staged": false
+    },
+    "beta-projects.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "board authored into the scratch save; a real board needs a dozen turns of events"
+    },
+    "retry-advisor.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "failure forced with a rejected API key"
+    },
+    "retry-diplomacy.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "failure forced with a rejected API key"
+    },
+    "advisor-actions-projects.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "advisor reply with actionsSummary/projectsSummary authored into a scratch save; the cards are the real components rendering real field shapes"
+    },
+    "stats-diplomacy.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "world.relations authored into a scratch save; the scores, badges and meters are all derived by the game from them"
+    },
+    "stats-agreements.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "world.agreements authored into a scratch save"
+    },
+    "stats-advanced.jpg": {
+      "build": "beta",
+      "staged": true,
+      "note": "countryStatsHistory authored into a scratch save; the sheet itself passes the game's own countryStatSheet validator"
+    }
   },
-
   "knownGaps": [
     "No screenshot of Map vNext for a side-by-side against the legacy renderer.",
     "No screenshot of a held time-skip segment or a held Projects board: both live in in-memory pending state and cannot be authored into a save.",
     "Beta was verified from source and by driving its menus, not by playing a campaign through turns."
-  ]
+  ],
+  "pageVerified": {
+    "_comment": "Pages re-verified against a commit NEWER than verifiedAgainst. wiki:check skips a page for a channel whose recorded commit here is at or past the current tip. Only add a page you actually re-read.",
+    "systems/advisor.md": {
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    },
+    "systems/statistics.md": {
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    },
+    "systems/diplomacy.md": {
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    },
+    "tools/saves.md": {
+      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    },
+    "start/install.md": {
+      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    },
+    "reference/troubleshooting.md": {
+      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
+      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
+    }
+  }
 }

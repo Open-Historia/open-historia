@@ -121,7 +121,7 @@
     <h1>The Advisor</h1>
     <p class="tagline">Your in-game analyst: asking questions about your real position, reading charts, and turning advice into orders.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#what-it-is-good-for">What it is good for</a></li><li class="d2"><a href="#charts">Charts</a></li><li class="d2"><a href="#what-it-is-not">What it is not</a></li><li class="d2"><a href="#clearing-it">Clearing it</a></li><li class="d2"><a href="#where-it-sits">Where it sits</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#what-it-is-good-for">What it is good for</a></li><li class="d2"><a href="#charts">Charts</a></li><li class="d2"><a href="#what-it-is-not">What it is not</a></li><li class="d2"><a href="#asking-it-to-do-the-paperwork">Asking it to do the paperwork</a></li><li class="d2"><a href="#clearing-it">Clearing it</a></li><li class="d2"><a href="#where-it-sits">Where it sits</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>The advisor is an analyst that can see your actual game state. Ask it anything about your
 position and it answers about <em>your</em> position, not about grand strategy in general.</p>
 <p>Open it with the <strong>🧭</strong> button on the right edge. Drag the drawer&#39;s left edge to resize it; the
@@ -161,11 +161,45 @@ better than the information available to you allows.</p>
 <p><strong>It is not privileged intelligence.</strong> For what other countries are actually saying in private,
 you need <a href="/wiki/espionage/">espionage</a>. The advisor works from the public picture and your own
 records.</p>
-<p><strong>It does not act.</strong> Advice is advice. Nothing the advisor says changes the world until you put
-it in the order queue or say it in a conversation.</p>
+<p><strong>It does not act on the world.</strong> Nothing the advisor says moves a border, signs a treaty or
+resolves a war until a time skip does it. On the beta channel it <em>can</em> write to your order queue
+and your projects board on your behalf — see <a href="#asking-it-to-do-the-paperwork">asking it to do the paperwork</a>
+below — but even then it is filling in your plans, not executing them.</p>
 <p><strong>It is only as good as your model.</strong> The advisor is one of the most reasoning-heavy things in
 the game. On a small local model its answers get noticeably thinner. See
 <a href="/wiki/ai-providers/">AI providers and models</a>.</p>
+<h2 id="asking-it-to-do-the-paperwork">Asking it to do the paperwork</h2>
+<p class="beta-note"><b>Beta channel only.</b> On the stable release the advisor only ever
+replies with text.</p><p>On the beta channel the advisor can write straight into your <strong>order queue</strong> and your
+<strong>projects board</strong>. Ask it in plain language:</p>
+<blockquote>
+<p><em>&quot;Draft me the orders for a phased withdrawal from the eastern border.&quot;</em></p>
+<p><em>&quot;Open a project for the rail modernisation we discussed, and close the one on port
+dredging — that finished last year.&quot;</em></p>
+</blockquote>
+<p>Its reply arrives as normal, and underneath it you get a receipt card for each thing it touched:
+a purple <strong>📋 Actions</strong> card and a green <strong>🏗 Projects</strong> card, each listing exactly what changed
+with a button through to the panel itself.</p>
+<p><img src="/wiki/img/advisor-actions-projects.jpg" alt="The advisor&#39;s receipt cards">
+<em>Three orders queued, one rewritten, a project opened and another updated — each card lists
+exactly what changed and links to the panel. The amber line is the one thing it would not do
+itself.</em></p>
+<p>A few things worth knowing about how this behaves:</p>
+<ul>
+<li><strong>It applies immediately.</strong> There is no confirm step. The card is a receipt of what already
+happened, not a proposal waiting for your approval.</li>
+<li><strong>Orders are queued, not executed.</strong> Anything it adds lands in the queue as <strong>planned</strong>,
+exactly like an order you typed yourself, and waits for the next time skip. You can edit or
+delete it first. See <a href="/wiki/orders/">giving orders</a>.</li>
+<li><strong>It can remove and rewrite, not just add.</strong> The cards distinguish <em>added</em>, <em>updated</em> and
+<em>removed</em> so you can see which it did.</li>
+<li><strong>It cannot itself finish a project that would change the world.</strong> Completing something that
+moves a border or renames a country is the simulation&#39;s job. The card says so —
+<em>&quot;Awaiting the simulation … this one changes the world, so the next time skip enacts it&quot;</em> —
+rather than quietly doing nothing or claiming it finished.</li>
+</ul>
+<p>The habit that makes this useful is treating it as dictation. Talk through the situation, then
+ask it to write up what you both concluded — and read the cards before you skip.</p>
 <h2 id="clearing-it">Clearing it</h2>
 <p>The <strong>🗑</strong> button clears the conversation. Worth doing when you move into a genuinely new phase
 of a campaign and the old thread is no longer the context you want.</p>
@@ -183,6 +217,10 @@ interpret them on the other. See <a href="/wiki/statistics/">national statistics
         <a class="prev" href="/wiki/cities/"><span>← Previous</span><b>Cities &amp; structures</b></a>
         <a class="next" href="/wiki/settings/"><span>Next →</span><b>Settings</b></a>
       </nav>
+    <p class="wiki-stale">Open Historia is under active development on two channels, and this
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      here does not match what you see in the game, trust the game and
+      <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>
 </div>
 

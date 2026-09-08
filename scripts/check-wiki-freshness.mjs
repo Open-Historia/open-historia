@@ -75,6 +75,10 @@ for (const channel of ["main", "beta"]) {
   console.log(`  ${changed.length} file${changed.length === 1 ? "" : "s"} changed`);
 
   for (const [page, sources] of Object.entries(prov.pages || {})) {
+    // A page re-read against a newer commit than the global record is not stale for this
+    // channel, even though files it cites changed. That is the whole point of a partial pass:
+    // updating five pages should not require re-reading the other twenty-five to clear the list.
+    if (prov.pageVerified?.[page]?.[channel] === now) continue;
     const hits = changed.filter((f) => sources.some((s) => touches(f, s)));
     if (hits.length === 0) continue;
     if (!affected.has(page)) affected.set(page, new Set());
@@ -85,6 +89,16 @@ for (const channel of ["main", "beta"]) {
     console.log(dim("  recent commits:"));
     for (const c of commits.slice(0, 12)) console.log(dim(`    ${c}`));
     if (commits.length > 12) console.log(dim(`    …and ${commits.length - 12} more`));
+  }
+}
+
+const partial = Object.entries(prov.pageVerified || {}).filter(([page]) => !page.startsWith("_"));
+if (partial.length > 0) {
+  console.log(`
+${bold("Verified ahead of the global record")} ${dim("(pageVerified in provenance.json)")}`);
+  for (const [page, refs] of partial) {
+    const which = Object.entries(refs).map(([c, sha]) => `${c} ${String(sha).slice(0, 8)}`).join(" · ");
+    console.log(`  ${page} ${dim(which)}`);
   }
 }
 

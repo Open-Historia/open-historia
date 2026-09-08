@@ -80,8 +80,10 @@ What is different in the browser:
   clears your campaigns. The game will ask for persistent storage permission — grant it.
 - The map is served by community-run content nodes rather than downloaded whole. If no node is
   reachable you get a blank map; see [Troubleshooting](/wiki/troubleshooting/).
-- You can optionally create an account to sync games between devices. Everything is encrypted
-  in your browser first, so the server only ever holds ciphertext.
+- You can optionally sign in — by emailed magic link or with Google — to sync games and
+  scenarios between devices. They are encrypted in your browser before upload, so the server
+  only ever holds ciphertext. See [saves and rollback](/wiki/saves/) for what that does and does
+  not protect.
 - Providers that refuse direct browser requests need a relay, which the browser build does not
   have. Gemini and Anthropic work directly; see [AI providers](/wiki/ai-providers/).
 

@@ -147,7 +147,7 @@ The error will name a blocked cross-origin request.
 ## I lost my games
 
 **In the browser** — clearing site data clears your campaigns. There is no server-side copy
-unless you created an account and enabled sync. Grant persistent storage permission when asked.
+unless you signed in, which syncs them. Grant persistent storage permission when asked.
 
 **On desktop** — saves are files in the app's data directory and are still there. If the library
 looks empty, the app may be pointed at a different data directory.

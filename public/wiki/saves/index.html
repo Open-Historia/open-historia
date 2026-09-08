@@ -174,11 +174,28 @@ drops you straight into its editor. This is also how you <a href="/wiki/communit
 started from. To carry a <em>situation</em> to another machine, the practical route is to export the
 scenario and start there.</p>
 <h2 id="syncing-between-devices">Syncing between devices</h2>
-<p>Only in the browser build. You can create an account, and games and scenarios sync between
-devices.</p>
-<p>Everything is encrypted <strong>in your browser</strong> before it is uploaded, with a key derived from your
-account. The server stores ciphertext and cannot read your campaigns. Sync reconciles by
-comparing both sides in full, so it is safe to play on two devices and let them catch up.</p>
+<p>Only in the browser build at <a href="/play/">openhistoria.com/play/</a>, and only if you sign in. The
+desktop app and a self-hosted server do not sync — they keep files on disk.</p>
+<p><strong>Signing in.</strong> There is no password. Use the sign-in chip in the top-right corner and either
+enter an email address to be sent a magic link, or sign in with Google. Both land you in the
+same account.</p>
+<p><strong>What syncs.</strong> Your games and your scenarios, with the library listings that order them.
+Map-editor documents and custom basemaps do <em>not</em> sync yet. Sync runs on sign-in, then every 20
+seconds, and again whenever you switch away from the tab.</p>
+<p><strong>How the encryption works.</strong> On your first ever sign-in the browser generates a random
+encryption key, and every game and scenario is encrypted with it <em>before</em> it is uploaded. The
+server only ever receives ciphertext — it never sees a save in the clear.</p>
+<p>That key is then held by the server in wrapped form, which is what lets you sign in on a second
+device and read your own campaigns there. So this is not a zero-knowledge system: it protects
+your saves in transit and at rest, and it means a database leak is useless on its own, but the
+service can obtain the key. Do not treat it as a secret vault.</p>
+<p><strong>The one thing that can lose work.</strong> If the same game is edited on two devices without syncing
+in between, the copy already on the server wins and the local one is replaced. There is no merge
+and no prompt. In practice: let a device finish syncing before you pick up the same campaign
+somewhere else. Playing different games on different devices is entirely safe.</p>
+<p><strong>Large scenarios may not upload.</strong> A scenario carrying its own map data can exceed the current
+size limit and is skipped, with a warning in the browser console, until larger blob storage is
+switched on. Its games still sync.</p>
 <p>Your API key is never synced. Provider settings are per device.</p>
 <h2 id="archiving">Archiving</h2>
 <p><strong>Archive</strong> takes a game out of the main library view without throwing it away, and the same
@@ -201,6 +218,10 @@ history and intercepts, and the map geometry.</p>
         <a class="prev" href="/wiki/cheats/"><span>← Previous</span><b>Cheats &amp; GM console</b></a>
         <a class="next" href="/wiki/editor/"><span>Next →</span><b>The map editor</b></a>
       </nav>
+    <p class="wiki-stale">Open Historia is under active development on two channels, and this
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      here does not match what you see in the game, trust the game and
+      <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>
 </div>
 

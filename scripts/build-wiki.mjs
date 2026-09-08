@@ -39,6 +39,19 @@ const esc = (s) => String(s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+// The game is under active development on two channels at once, so any page here can be
+// overtaken between one release and the next. Rather than a vague "may be out of date", every
+// page carries the date and the two commits the wiki was last checked against — the same record
+// wiki:check reads, so the note cannot drift from the truth and cannot be forgotten.
+const prov = JSON.parse(readFileSync(path.join(srcDir, "provenance.json"), "utf8"));
+const verified = prov.verifiedAgainst || {};
+const verifiedNote = [
+  verified.date ? `Last checked against the game on <b>${esc(verified.date)}</b>` : "Last checked against the game",
+  verified.main ? `main <code>${esc(verified.main.slice(0, 8))}</code>` : null,
+  verified.beta ? `beta <code>${esc(verified.beta.slice(0, 8))}</code>` : null,
+].filter(Boolean).join(" · ");
+
+
 // Heading ids double as the on-page TOC anchors and as the fragment in a shared link, so they
 // have to stay stable across rebuilds — derived from the text alone, never from position.
 const slugify = (s) => String(s)
@@ -262,6 +275,10 @@ ${breadcrumbJsonLd(page)}
     ${toc}
     ${body}
     ${pagerHtml(index)}
+    <p class="wiki-stale">Open Historia is under active development on two channels, and this
+      wiki is written by hand — a page can fall behind a release. ${verifiedNote}. If something
+      here does not match what you see in the game, trust the game and
+      <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>
 </div>
 

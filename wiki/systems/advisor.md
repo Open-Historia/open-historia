@@ -47,12 +47,53 @@ better than the information available to you allows.
 you need [espionage](/wiki/espionage/). The advisor works from the public picture and your own
 records.
 
-**It does not act.** Advice is advice. Nothing the advisor says changes the world until you put
-it in the order queue or say it in a conversation.
+**It does not act on the world.** Nothing the advisor says moves a border, signs a treaty or
+resolves a war until a time skip does it. On the beta channel it *can* write to your order queue
+and your projects board on your behalf — see [asking it to do the paperwork](#asking-it-to-do-the-paperwork)
+below — but even then it is filling in your plans, not executing them.
 
 **It is only as good as your model.** The advisor is one of the most reasoning-heavy things in
 the game. On a small local model its answers get noticeably thinner. See
 [AI providers and models](/wiki/ai-providers/).
+
+## Asking it to do the paperwork
+
+<p class="beta-note"><b>Beta channel only.</b> On the stable release the advisor only ever
+replies with text.</p>
+
+On the beta channel the advisor can write straight into your **order queue** and your
+**projects board**. Ask it in plain language:
+
+> *"Draft me the orders for a phased withdrawal from the eastern border."*
+>
+> *"Open a project for the rail modernisation we discussed, and close the one on port
+> dredging — that finished last year."*
+
+Its reply arrives as normal, and underneath it you get a receipt card for each thing it touched:
+a purple **📋 Actions** card and a green **🏗 Projects** card, each listing exactly what changed
+with a button through to the panel itself.
+
+![The advisor's receipt cards](/wiki/img/advisor-actions-projects.jpg)
+*Three orders queued, one rewritten, a project opened and another updated — each card lists
+exactly what changed and links to the panel. The amber line is the one thing it would not do
+itself.*
+
+A few things worth knowing about how this behaves:
+
+- **It applies immediately.** There is no confirm step. The card is a receipt of what already
+  happened, not a proposal waiting for your approval.
+- **Orders are queued, not executed.** Anything it adds lands in the queue as **planned**,
+  exactly like an order you typed yourself, and waits for the next time skip. You can edit or
+  delete it first. See [giving orders](/wiki/orders/).
+- **It can remove and rewrite, not just add.** The cards distinguish *added*, *updated* and
+  *removed* so you can see which it did.
+- **It cannot itself finish a project that would change the world.** Completing something that
+  moves a border or renames a country is the simulation's job. The card says so —
+  *"Awaiting the simulation … this one changes the world, so the next time skip enacts it"* —
+  rather than quietly doing nothing or claiming it finished.
+
+The habit that makes this useful is treating it as dictation. Talk through the situation, then
+ask it to write up what you both concluded — and read the cards before you skip.
 
 ## Clearing it
 

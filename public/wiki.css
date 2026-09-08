@@ -500,3 +500,21 @@ footer .globe { font-size: 1.05rem; }
   .wiki-pager a.next { text-align: left; margin-left: 0; }
   pre { font-size: 0.9em; padding: 0.8rem; }
 }
+
+/* Every page ends with the date and commits the wiki was last checked against, stamped from
+   wiki/provenance.json by the generator. Quiet by design: it is a caveat, not a warning, and a
+   reader who never notices it has lost nothing. */
+.wiki-stale {
+  margin: 2rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(120, 90, 50, 0.22);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--sepia);
+}
+.wiki-stale code {
+  font-size: 0.9em;
+  background: rgba(120, 90, 50, 0.1);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}

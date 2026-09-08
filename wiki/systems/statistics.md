@@ -107,11 +107,18 @@ not have one.
 
 ## The beta version
 
-<p class="beta-note"><b>Beta channel only.</b> The stable release generates a sheet when you ask
-for one.</p>
+<p class="beta-note"><b>Beta channel only.</b> Everything in this section is beta. On the stable
+release the sheet is a snapshot generated when you ask for one, with no history, no charts and
+no diplomacy block.</p>
 
-The beta channel adds persistent, tracked statistics — the sheet becomes a time series rather
-than a snapshot.
+The beta channel turns the stat sheet from a snapshot into a record, and splits it into two
+tabs — **🤝 Diplomacy** and **📈 Economy**. Everything on the stable sheet is under Economy;
+Diplomacy is entirely new.
+
+### Tracked history
+
+The sheet re-generates itself as the campaign runs, so you can watch a country's debt climb or
+its energy autonomy recover across a decade instead of re-reading a number.
 
 | | |
 |---|---|
@@ -119,9 +126,67 @@ than a snapshot.
 | **Countries tracked at once** | **8** |
 | **History kept** | Up to **1200** samples |
 
-Set an interval and the sheet re-generates itself as the campaign runs, so you can watch a
-country's debt climb or its energy autonomy recover across a decade instead of re-reading a
-number. Your own country is always included once an interval is set.
+Your own country is always included once an interval is set. Everything else you add yourself
+from the tracked-countries list; there is a **✕** on each to stop tracking it again.
+
+### Advanced Statistics
+
+Once there is history to draw, **Advanced statistics** at the foot of the Economy tab opens a
+full-screen chart over it. Pick a metric and it plots every snapshot taken, dated in game time:
+
+| Group | Metrics |
+|---|---|
+| **Headline economy** | GDP · GDP per capita · Population |
+| **Economic conditions** | GDP growth · Inflation · Unemployment · Public debt · Budget balance |
+| **Strategic indices** | National stability, and all six indices above |
+| **GDP sectors** | Agriculture · Industry · Services, as a share of GDP |
+
+![Advanced statistics](/wiki/img/stats-advanced.jpg)
+*Six years of British GDP, with the 2020 collapse and the rebound. The range buttons narrow it to
+the last year, five or ten.*
+
+You can put up to **four** metrics on one chart, as long as they share a scale — tick a metric on
+a different scale and the chart switches to it rather than drawing a meaningless second axis. The
+range buttons across the top limit it to the last **1, 5 or 10 years** of game time.
+
+Money is charted in a **2026-EUR equivalent** so that countries with different currencies can be
+compared on one axis. Ancient scenarios chart correctly too — BC dates run backwards through the
+missing year zero, so a campaign starting in 218 BC plots in the right order.
+
+### The diplomacy block
+
+Every sheet now carries a **🤝 Diplomacy** section, which is where beta's
+[relation ledgers](/wiki/war/) actually become visible. Three counts across the top — relations,
+active agreements, conflicts — and then the detail:
+
+**Bilateral relations.** Every tracked relationship this country has, scored **−100 to +100**,
+each with a one-line summary, a meter, and a badge the game derives from the score — friendly,
+cordial, cautious, hostile. This is the single most useful screen in the game for working out
+who someone's real friends are before you approach them.
+
+![Bilateral relations on the stat sheet](/wiki/img/stats-diplomacy.jpg)
+*The United Kingdom's relations, sorted best to worst. The summary line is why the number is
+what it is.*
+
+**Formal agreements** and **current conflicts** follow underneath: the treaty register with each
+agreement's type, parties, status and the date it last changed, and then who this country is
+currently fighting, taken from the war ledger.
+
+![The treaty register](/wiki/img/stats-agreements.jpg)
+*Agreements are listed active first. A suspended treaty stays on the register rather than
+disappearing — the relationship still has a history.*
+
+An empty list means no record exists, which is **not** the same as neutrality — a pair of
+countries that have never interacted simply has nothing written down yet.
+
+### Also on beta
+
+**Countries with overseas territories** get a per-capita figure twice: for the core and
+integrated territory, and for the **whole polity** including dependencies. The two can differ
+sharply, and the sheet shows both rather than picking one.
+
+**Landless polities work.** A government-in-exile, a rebel movement or an organisation with no
+mapped territory used to fail to produce a sheet at all. They now get a valid one.
 
 ## Next
 

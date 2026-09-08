@@ -75,12 +75,34 @@ scenario and start there.
 
 ## Syncing between devices
 
-Only in the browser build. You can create an account, and games and scenarios sync between
-devices.
+Only in the browser build at [openhistoria.com/play/](/play/), and only if you sign in. The
+desktop app and a self-hosted server do not sync — they keep files on disk.
 
-Everything is encrypted **in your browser** before it is uploaded, with a key derived from your
-account. The server stores ciphertext and cannot read your campaigns. Sync reconciles by
-comparing both sides in full, so it is safe to play on two devices and let them catch up.
+**Signing in.** There is no password. Use the sign-in chip in the top-right corner and either
+enter an email address to be sent a magic link, or sign in with Google. Both land you in the
+same account.
+
+**What syncs.** Your games and your scenarios, with the library listings that order them.
+Map-editor documents and custom basemaps do *not* sync yet. Sync runs on sign-in, then every 20
+seconds, and again whenever you switch away from the tab.
+
+**How the encryption works.** On your first ever sign-in the browser generates a random
+encryption key, and every game and scenario is encrypted with it *before* it is uploaded. The
+server only ever receives ciphertext — it never sees a save in the clear.
+
+That key is then held by the server in wrapped form, which is what lets you sign in on a second
+device and read your own campaigns there. So this is not a zero-knowledge system: it protects
+your saves in transit and at rest, and it means a database leak is useless on its own, but the
+service can obtain the key. Do not treat it as a secret vault.
+
+**The one thing that can lose work.** If the same game is edited on two devices without syncing
+in between, the copy already on the server wins and the local one is replaced. There is no merge
+and no prompt. In practice: let a device finish syncing before you pick up the same campaign
+somewhere else. Playing different games on different devices is entirely safe.
+
+**Large scenarios may not upload.** A scenario carrying its own map data can exceed the current
+size limit and is skipped, with a warning in the browser console, until larger blob storage is
+switched on. Its games still sync.
 
 Your API key is never synced. Provider settings are per device.
 
