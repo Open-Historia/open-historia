@@ -1,4 +1,4 @@
-/*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";

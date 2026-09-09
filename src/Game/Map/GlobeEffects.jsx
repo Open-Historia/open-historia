@@ -1,4 +1,4 @@
-/*! Open Historia — globe celestial rendering, day/night lighting + orbit © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — globe celestial rendering, day/night lighting + orbit © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useEffect } from "react";
 import { useMap } from "react-map-gl/maplibre";
 import {

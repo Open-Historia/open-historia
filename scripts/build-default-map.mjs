@@ -1,6 +1,6 @@
 /*!
  * Open Historia — default scenario tier-2 map generator
- * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
 // Converts the built-in "default" (modern day) scenario to a tier-2 custom map so

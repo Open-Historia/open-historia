@@ -1,4 +1,4 @@
-/*! Open Historia — client-side diagnostic logging © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — client-side diagnostic logging © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Ships page-side events to the server's log file (server/logStore.js), which is
 // the one place the whole app writes to.
 //

@@ -1,4 +1,4 @@
-/*! Open Historia — content-node populator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — content-node populator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Fills a content node's directory with hash-named, verified copies of the map
 // assets listed in scripts/map-assets.json. Each file is copied to
 // <content-dir>/<sha256> only after its SHA-256 is confirmed, so a node can only

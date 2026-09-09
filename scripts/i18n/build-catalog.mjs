@@ -1,4 +1,4 @@
-/*! Open Historia — language-pack catalog builder © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — language-pack catalog builder © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Collects the English strings that seed the shipped language packs
 // (public/lang/<code>.json): every country name, the preset scenarios'
 // card text, difficulty levels, and the interface's fixed strings.
