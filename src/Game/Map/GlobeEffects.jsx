@@ -29,7 +29,9 @@ const INTERACTION_GRACE_MS = 3000;
 // 60 times a second, forever, even with the phone just sitting on a table.
 const CELESTIAL_FRAME_MS_ACTIVE = 1000 / 25;
 const CELESTIAL_FRAME_MS_IDLE = 1000 / 15;
-const LIGHTING_FRAME_MS_ACTIVE = 1000 / 15;
+// Redraw lighting on every frame during camera movement to avoid visible lag. 
+// Uses the cheap immediate: true draw path during interaction, throttling only when idle.
+const LIGHTING_FRAME_MS_ACTIVE = 0;
 const LIGHTING_FRAME_MS_IDLE = 1000 / 15;
 // Idle auto-rotation itself doesn't need a fresh jumpTo() every animation
 // frame either — updating the camera 15x/sec still reads as smooth rotation
