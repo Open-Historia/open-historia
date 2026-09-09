@@ -1,4 +1,4 @@
-/*! Open Historia — zip bundle helpers © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — zip bundle helpers © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Thin wrappers over JSZip for the community hub's "one file to upload" bundles.
 // A scenario that carries a custom basemap ships as a single .zip (scenario JSON +

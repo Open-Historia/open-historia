@@ -1,4 +1,4 @@
-/*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode IndexedDB primitives © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode IndexedDB primitives © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Minimal promise-based IndexedDB wrapper (no external dependency). Backs the
 // web-mode store that replaces the local Express server's file stores. Only ever
 // bundled into the web build (dynamically imported behind import.meta.env.VITE_OH_WEB).
