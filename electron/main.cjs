@@ -1,4 +1,4 @@
-/*! Open Historia — desktop app shell © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — desktop app shell © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The desktop app used to be a .bat file: it made the player install Node, ran
 // `npm install`, built the client with Vite ON THEIR MACHINE, and left a console
 // window open for the whole session. This replaces all of that. The client is

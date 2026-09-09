@@ -1,4 +1,4 @@
-/*! Open Historia — unit combat resolution © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit combat resolution © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Deterministic, reproducible unit combat.
 //
 // A seeded PRNG (xmur3 hash -> mulberry32) derives outcomes from

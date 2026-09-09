@@ -1,4 +1,4 @@
-/*! Open Historia — React error boundary (recoverable render-crash fallback) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — React error boundary (recoverable render-crash fallback) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
 
 import { flushDebugLog, logDebugEvent } from "./debugLog.js";

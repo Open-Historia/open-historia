@@ -1,4 +1,4 @@
-/*! Open Historia — preset region catalog loader © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — preset region catalog loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Region-catalog loader for the preset generator.
 //
 // Reuses the exact PMTiles decode path the runtime uses (src/runtime/assets.js:

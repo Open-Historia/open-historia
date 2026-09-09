@@ -78,7 +78,7 @@ Commit under **your own GitHub-linked identity** (use your GitHub `noreply` emai
 
 ### License-banner authorship is separate from Git authorship
 
-The **file-header license banners** (§5) credit **Nicholas Krol** because they mark the portions covered by the map-editor MIT license — that is a *licensing* statement, not a claim of Git authorship. Don't remove or rewrite an existing banner when you edit a file; leave the attribution intact.
+The **file-header license banners** (§5) credit **Nicholas Krol** because they mark the portions he authored — that is a *licensing* statement, not a claim of Git authorship. Don't remove or rewrite an existing banner when you edit a file; leave the attribution intact.
 
 ---
 
@@ -86,22 +86,22 @@ The **file-header license banners** (§5) credit **Nicholas Krol** because they 
 
 ### License banners on source files
 
-Almost every source file (~111 across `src/`, `server/`, `scripts/`) opens with a one-line (or short block) MIT banner pointing at `src/Editor/LICENSE`. Two forms are in use:
+Almost every source file (~111 across `src/`, `server/`, `scripts/`) opens with a one-line (or short block) AGPL banner pointing at `LICENSE`. Two forms are in use:
 
 ```js
-/*! Open Historia — portions (short description of what this file does) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (short description of what this file does) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 ```
 
 ```js
 /*!
  * Open Historia Map Editor
- * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 ```
 
 Even config, workflows, and `.gitattributes` carry the banner (`.github/workflows/*.yml:1`, `vite.config.ts:1`, `eslint.config.js` excepted). **When you add a new file, add a banner** in the same style with a short parenthetical describing the file's role. When you edit an existing file, keep its banner.
 
-Licensing is split by directory: the map editor and its tooling — the contents of `src/Editor/`, `scripts/extract-regions.mjs`, and `server/mapEditorStore.js` — are MIT © Nicholas Krol per `src/Editor/LICENSE`; the project as a whole is MIT © "Developers of the Open-Historia Project" per the top-level `LICENSE`.
+The whole project — including the map editor and its tooling — is licensed **AGPL-3.0-or-later** under the top-level `LICENSE`. The previous MIT carve-out for `src/Editor/`, `scripts/extract-regions.mjs`, and `server/mapEditorStore.js` was retired when the project relicensed; `src/Editor/LICENSE` no longer exists. Third-party code retains its own license — Azgaar's Fantasy Map Generator, vendored into `fmg/dist`, is MIT.
 
 ### Verbose, explanatory comments (the house style)
 
@@ -265,7 +265,7 @@ Related gitignored-but-not-in-LFS runtime artifacts you also shouldn't commit: `
 |--------------|---------|
 | Change the server API / routes | `server/server.js`, `server/*Store.js`, [Server](server.md) |
 | Touch security guards | `server/security.js` (+ `security.test.js`) |
-| Edit the map editor | `src/Editor/` (separately licensed — `src/Editor/LICENSE`) |
+| Edit the map editor | `src/Editor/` (covered by the top-level `LICENSE`) |
 | Edit the game map / UI | `src/Game/` — see [Game map](game-map.md), [Game UI](game-ui.md) |
 | World-state fields & flow | [World state](world-state.md) |
 | AI prompts / schemas | [AI overview](ai-overview.md), [AI schemas](ai-schemas.md) |

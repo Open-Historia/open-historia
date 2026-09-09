@@ -1,4 +1,4 @@
-/*! Open Historia — portions (shared save-library lock tests) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (shared save-library lock tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The guard that stops the fork's beta and the official app writing one save
 // library at the same time. Worth testing directly: the failure it prevents is a
 // corrupted campaign, and it only shows up with two installs and a specific

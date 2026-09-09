@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode encrypted sync engine © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode encrypted sync engine © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Reconciles the browser's games + scenarios (and their catalog manifests) with
 // the registry Worker's encrypted blob store. Everything is AES-256-GCM encrypted
 // client-side (account.js) before it leaves the device, so the blob store holds

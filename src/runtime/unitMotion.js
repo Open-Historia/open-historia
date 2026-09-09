@@ -1,4 +1,4 @@
-/*! Open Historia — unit motion, reach & detection math © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit motion, reach & detection math © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Deterministic movement for map units — the reason a fleet sent to the
 // Atlantic visibly crosses it over several turns instead of teleporting, and
 // keeps working its station afterwards, without costing a single token.

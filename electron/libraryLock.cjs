@@ -1,4 +1,4 @@
-/*! Open Historia — shared save-library lock © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — shared save-library lock © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Two desktop builds, ONE save library.
 //
 // The fork's beta installs alongside the official app and deliberately shares its

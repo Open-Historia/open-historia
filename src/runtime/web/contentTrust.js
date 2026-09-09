@@ -1,4 +1,4 @@
-/*! Open Historia — content-node trust + verified fetch © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — content-node trust + verified fetch © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Fetches heavy content (map pmtiles) from the vetted node swarm and verifies
 // EVERY byte against the content manifest's SHA-256 before trusting it. Integrity
 // comes from the hash, not from trusting the node — a malicious or broken node

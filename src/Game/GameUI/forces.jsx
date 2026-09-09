@@ -1,4 +1,4 @@
-/*! Open Historia — Forces panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Forces panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useState } from "react";
 import {
   subscribeUnits,

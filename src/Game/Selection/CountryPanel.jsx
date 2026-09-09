@@ -1,4 +1,4 @@
-/*! Open Historia — country info panel © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — country info panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";

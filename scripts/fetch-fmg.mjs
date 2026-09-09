@@ -1,4 +1,4 @@
-/*! Open Historia — vendor Azgaar's Fantasy Map Generator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — vendor Azgaar's Fantasy Map Generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Vendors Azgaar's Fantasy Map Generator (MIT) into ./fmg/dist, served same-origin
 // at /fmg/ so the map editor's "Generate" console can run it headlessly and read

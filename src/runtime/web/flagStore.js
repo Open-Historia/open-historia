@@ -1,4 +1,4 @@
-/*! Open Historia — web flag library store © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web flag library store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Browser port of server/flagStore.js. Backs /api/flags* in web mode so the editor's
 // "My flags" shelf works identically on the website and the download.

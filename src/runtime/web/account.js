@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode accounts + client crypto © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode accounts + client crypto © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Client half of the accounts + sync feature (web build only). Handles the
 // magic-link session, the per-account data key (DEK), and AES-256-GCM
 // encrypt/decrypt of records before they leave the browser.

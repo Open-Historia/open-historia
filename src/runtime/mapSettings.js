@@ -1,4 +1,4 @@
-/*! Open Historia — portions (map interaction/display settings) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (map interaction/display settings) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Map interaction/display settings — localStorage-backed, same getter/setter
 // pattern as src/Game/AI/providerConfig.js. Consumers subscribe via
 // useMapSetting() below instead of receiving these as props threaded through

@@ -1,4 +1,4 @@
-/*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (mobile country/date row) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";

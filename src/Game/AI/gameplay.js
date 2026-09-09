@@ -1,4 +1,4 @@
-/*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { callAI, sendDiplomaticMessageOnceOff } from "./main.jsx";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";

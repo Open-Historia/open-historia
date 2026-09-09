@@ -1,4 +1,4 @@
-/*! Open Historia - distant globe starfield renderer (c) 2026 Nicholas Krol, MIT. */
+/*! Open Historia - distant globe starfield renderer (c) 2026 Nicholas Krol, AGPL-3.0-or-later. */
 import { projectCelestialDirection } from "./globeSunMath.js";
 
 const STAR_COUNT = 1800;

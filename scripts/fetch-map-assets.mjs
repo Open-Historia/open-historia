@@ -1,4 +1,4 @@
-/*! Open Historia — downloads the large world-map assets from the GitHub Release © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — downloads the large world-map assets from the GitHub Release © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The big map binaries (pmtiles, geojson, city seeds) used to live in Git LFS.
 // GitHub's free LFS *bandwidth* is only 1 GB/month shared across the whole org,
 // and a full checkout pulls ~200 MB — so a handful of installs exhausted it and

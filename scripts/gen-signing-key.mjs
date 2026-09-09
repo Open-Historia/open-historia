@@ -1,4 +1,4 @@
-/*! Open Historia — root signing-key generator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — root signing-key generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Generates the project's Ed25519 ROOT signing key. Run this ONCE on an offline
 // machine. The private key (trust/oh-root.key.pem) must stay offline and is
 // git-ignored; the public key is printed so you can pin it in trust/pinned-key.js

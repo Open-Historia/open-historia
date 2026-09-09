@@ -1,4 +1,4 @@
-/*! Open Historia — client country tables © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — client country tables © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Emits the two tables the CLIENT needs to talk about countries by name, both
 // derived from server/country-names.json:
 //

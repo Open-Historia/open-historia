@@ -1,4 +1,4 @@
-/*! Open Historia — timeline event de-dup tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — timeline event de-dup tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/eventDedup.test.js
 
 import test from "node:test";

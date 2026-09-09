@@ -1,4 +1,4 @@
-/*! Open Historia — unprompted-note echo guard © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unprompted-note echo guard © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Why this exists: the idle-diplomacy note is generated from a one-line-per-chat
 // SUMMARY, whose last entry for a thread is often the player's own message. Asked

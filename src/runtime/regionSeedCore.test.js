@@ -1,4 +1,4 @@
-/*! Open Historia — portions (region seed coarsening tests) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (region seed coarsening tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Runs in a BARE CHECKOUT (no node_modules): regionSeedCore.js is import-free on
 // purpose, because it also has to run inside a Worker. Keep it that way.
 import test from "node:test";

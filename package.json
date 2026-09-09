@@ -1,6 +1,7 @@
 {
   "name": "open-historia",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "version": "0.0.0",
   "type": "module",
   "engines": {
@@ -85,6 +86,7 @@
     "appId": "io.github.arkniem.openhistoria",
     "productName": "Open Historia",
     "files": [
+      "LICENSE",
       "dist/**",
       "server/**",
       "electron/**",

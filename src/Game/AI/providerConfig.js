@@ -1,4 +1,4 @@
-/*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 
 export const DEFAULT_PROVIDER = "gemini";

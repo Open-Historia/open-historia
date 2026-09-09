@@ -1,4 +1,4 @@
-/*! Open Historia — provider token accounting © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — provider token accounting © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Reading how many tokens a call actually cost, out of whichever shape the
 // provider reports it in.
 //

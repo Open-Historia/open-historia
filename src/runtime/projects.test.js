@@ -1,4 +1,4 @@
-/*! Open Historia — portions (projects board derived-state tests) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (projects board derived-state tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Runs in a BARE CHECKOUT (no node_modules): projects.js is import-free on
 // purpose, the same as unitMotion.js and eventFocus.js. Keep it that way —
 // `node --test src/runtime/projects.test.js` is the whole point.

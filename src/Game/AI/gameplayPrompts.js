@@ -1,4 +1,4 @@
-/*! Open Historia — portions (troop & era prompt additions) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (troop & era prompt additions) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import DEFAULT_PROMPTS from "./defaultPrompts.json";
 const normalizeString = (value) => String(value ?? "").trim();
 

@@ -1,4 +1,4 @@
-/*! Open Historia — portions (project op application tests) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (project op application tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Needs node_modules: gameState.js reaches assets.js, which imports maplibre-gl.
 // Run with `npm ci && node --test src/runtime/projectOps.test.js`. The pure
 // derived-state helpers are tested separately in projects.test.js, which stays

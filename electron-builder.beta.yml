@@ -38,6 +38,7 @@ appId: io.github.seventhdread.openhistoria.sdbeta
 productName: Open Historia SeventhDread Beta
 
 files:
+  - LICENSE
   - dist/**
   - server/**
   - electron/**

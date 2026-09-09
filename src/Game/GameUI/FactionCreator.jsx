@@ -1,4 +1,4 @@
-/*! Open Historia — new-game faction creator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — new-game faction creator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The "Create faction" tab of the new-game country picker. Lets a player invent
 // the power they want to lead — name, flag, colour, lore — and either claim a set
 // of starting regions or begin LANDLESS (a government-in-exile, a movement with no

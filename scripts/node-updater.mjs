@@ -1,4 +1,4 @@
-/*! Open Historia — node auto-updater (TUF-style) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — node auto-updater (TUF-style) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Keeps a content node's software up to date and tamper-proof. It polls a signed
 // update manifest + a short-lived signed timestamp, verifies both against the
 // pinned root key, and only applies an update that is: validly signed, for this

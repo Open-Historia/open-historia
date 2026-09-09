@@ -1,4 +1,4 @@
-/*! Open Historia — Scenario Hub (community tab) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Scenario Hub (community tab) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // The Community tab of the scenario library, Netflix-style: a Pinned shelf at
 // the top (hub posts labeled "pinned" — the official/featured scenarios), then

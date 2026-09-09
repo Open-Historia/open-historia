@@ -1,4 +1,4 @@
-/*! Open Historia — spycraft tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — spycraft tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import assert from "node:assert/strict";
 import test from "node:test";
 

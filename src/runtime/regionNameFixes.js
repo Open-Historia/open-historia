@@ -1,4 +1,4 @@
-/*! Open Historia — GADM region-name corrections © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — GADM region-name corrections © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A handful of GADM level-1 regions ship with no usable NAME_1. The value is not an
 // abbreviation — it is the literal string "NA" (R's missing-value marker, which GADM
 // is exported from) or "?", and it flows straight through to the map panel and to the

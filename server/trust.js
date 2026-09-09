@@ -1,4 +1,4 @@
-/*! Open Historia — node-side signature verification © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — node-side signature verification © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Verifies project-signed artifacts (the node-software update manifest +
 // timestamp) against the pinned root public key, using Node's built-in crypto
 // (no extra dependency). A node applies an update ONLY when the manifest is

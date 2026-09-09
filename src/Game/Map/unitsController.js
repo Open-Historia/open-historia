@@ -1,4 +1,4 @@
-/*! Open Historia — unit deployment & intel controller © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit deployment & intel controller © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared unit interaction state + the mutations the player owns.
 //
 // There are TWO unit systems here, chosen by the betaUnits setting and pinned for

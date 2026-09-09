@@ -1,4 +1,4 @@
-/*! Open Historia — content node © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — content node © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A stateless, content-addressed node that anyone can run to expand the network.
 // It serves ONLY hash-verified, read-only bytes — never player games, never AI
 // keys, never the client code. Files in the content directory are named by their
