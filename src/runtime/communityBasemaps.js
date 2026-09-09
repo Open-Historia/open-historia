@@ -1,4 +1,4 @@
-/*! Open Historia — community basemaps client © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — community basemaps client © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Browse + install + publish basemaps shared through the community hub. Mirrors
 // the scenario hub (src/Game/GameUI/communityHub.jsx): each community basemap is

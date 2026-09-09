@@ -1,4 +1,4 @@
-/*! Open Historia — spy intercepts at rest © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — spy intercepts at rest © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // An intercept is stored ENCRYPTED. Redaction happens at render time from the
 // player's intelligence stat, which means the whole text has to be on the device
 // — and if it sat there as plain JSON, opening intercepts.json (or the network

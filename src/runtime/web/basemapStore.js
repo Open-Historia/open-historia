@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode basemap store © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode basemap store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Browser (IndexedDB) port of server/basemapStore.js. Backs /api/basemaps* in
 // web mode. meta and payload are split across two object stores (as on disk),
 // and the content hash is RECOMPUTED locally with the exact canonicalization the

@@ -1,4 +1,4 @@
-/*! Open Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import mapLibreGl from "maplibre-gl";
 import { mergeCountryOverrides } from "./countryList.js";
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";

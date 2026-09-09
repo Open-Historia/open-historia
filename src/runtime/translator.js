@@ -1,4 +1,4 @@
-/*! Open Historia — AI-powered UI translator (pre-translating) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — AI-powered UI translator (pre-translating) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Translates the game into the player's language using whatever AI provider
 // is configured. Two layers:

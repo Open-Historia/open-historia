@@ -1,4 +1,4 @@
-/*! Open Historia Map Editor — custom background loaders © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia Map Editor — custom background loaders © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Turns a user-uploaded map background into an OpenLayers layer (or, for a plain
 // image, a descriptor the editor places with drag handles). Georeferenced
 // formats carry their own coordinates and slot straight onto the EPSG:3857 map;

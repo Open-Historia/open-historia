@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode store utilities © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode store utilities © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared helpers for the web-mode store handlers. Mirrors the small utilities in
 // server/libraryStore.js / mapEditorStore.js / basemapStore.js so the browser
 // port produces byte-compatible ids, hashes and response envelopes.

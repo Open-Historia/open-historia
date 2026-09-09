@@ -1,4 +1,4 @@
-/*! Open Historia — language setting & top-50 language catalog © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — language setting & top-50 language catalog © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // UI language: chosen in Settings, stored on the SERVER (shared by every
 // device that plays through it — desktop browser and the Android app see the

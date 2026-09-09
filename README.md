@@ -1,4 +1,4 @@
-<!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). -->
+<!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). -->
 <h1 align="center">Open Historia</h1>
 
 <div align="center">
@@ -20,8 +20,8 @@
   </a>
   <!-- License -->
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square"
-      alt="License: MIT" />
+    <img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=flat-square"
+      alt="License: AGPL-3.0" />
   </a>
   <!-- Status -->
   <a href="#">

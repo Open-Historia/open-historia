@@ -1,4 +1,4 @@
-/*! Open Historia — in-app update-check helpers © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — in-app update-check helpers © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Pure, dependency-free so the version comparison is unit-tested without a browser
 // or a running server. The banner (AppUpdateBanner.jsx) is the only consumer.
