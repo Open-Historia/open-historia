@@ -1,4 +1,4 @@
-/*! Open Historia — portions (projects & operations board panel) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (projects & operations board panel) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The Projects & Operations board: every long-running effort the player has going
 // — research and industrial programmes, construction projects, military and
 // covert operations — plus whatever their services have learned of other powers'.

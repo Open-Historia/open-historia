@@ -1,4 +1,4 @@
-/*! Open Historia — legacy map world-state selectors © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — legacy map world-state selectors © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // useWorldCities and useWorldMarkers as the legacy map components expect them.
 //
 // Both were their own subscriptions to the world store on Seventh-Dread-Beta.

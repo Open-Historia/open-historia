@@ -1,4 +1,4 @@
-/*! Open Historia — map scene composition © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — map scene composition © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { Suspense, lazy } from "react";
 import Nations from "./Nations";
 import Cities from "./Cities";

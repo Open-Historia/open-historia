@@ -1,4 +1,4 @@
-/*! Open Historia — idle deadline for AI tasks © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — idle deadline for AI tasks © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // "Limit AI generation" measures SILENCE, not elapsed time.
 //
 // The setting used to be a stopwatch started when the request was sent: five

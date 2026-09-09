@@ -1,4 +1,4 @@
-/*! Open Historia — in-game diagnostics log © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — in-game diagnostics log © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The log a player can paste into a bug report.
 //
 // Before this, the only diagnostics the game could hand out were per-incident:

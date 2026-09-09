@@ -1,4 +1,4 @@
-/*! Open Historia — SSE stream reassembly for buffered/tool calls © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — SSE stream reassembly for buffered/tool calls © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Turning a streamed response back into the buffered envelope the extractors in
 // main.jsx already understand, so a call can stream WITHOUT the rest of the code
 // learning that it did.

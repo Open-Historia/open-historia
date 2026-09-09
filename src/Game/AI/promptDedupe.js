@@ -1,4 +1,4 @@
-/*! Open Historia — call-time directive de-duplication © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — call-time directive de-duplication © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Deciding whether a call-time directive still needs to be appended, or whether
 // the rendered prompt already says it.
 //

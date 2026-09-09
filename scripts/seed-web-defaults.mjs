@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode default-scenario seed generator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode default-scenario seed generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Bundles the built-in "default" scenario (server/seed/default) into a single
 // JS module the WEB build imports so a fresh browser can seed its IndexedDB
 // library with a playable scenario. Runs only from `npm run build:web` (and

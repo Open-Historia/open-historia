@@ -1,4 +1,4 @@
-/*! Open Historia — structured-output mode tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — structured-output mode tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/structuredMode.test.js
 //
 // Runs without node_modules: structuredMode.js is import-free.

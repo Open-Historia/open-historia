@@ -1,4 +1,4 @@
-/*! Open Historia — clipboard write with a legacy fallback © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — clipboard write with a legacy fallback © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // One copy-to-clipboard for every "paste this into a bug report" button.
 //
 // navigator.clipboard needs a SECURE CONTEXT. The packaged desktop app has one

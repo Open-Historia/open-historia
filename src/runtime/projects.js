@@ -1,6 +1,6 @@
 import { addGameDays, compareGameDates, diffGameDays, formatGameDate, gameDateDaysInMonth, parseGameDate, shiftGameYear } from "./gameDates.js";
 
-/*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Everything the Projects & Operations board can work out for ITSELF, with no AI
 // turn involved.
 //

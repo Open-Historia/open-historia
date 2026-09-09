@@ -1,4 +1,4 @@
-/*! Open Historia — the jump's read-only view of the Projects & Operations board © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — the jump's read-only view of the Projects & Operations board © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Import-free on purpose: runs under node --test without a build.
 //
 // The board is bookkeeping kept by its own pass after the jump

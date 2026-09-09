@@ -1,4 +1,4 @@
-/*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { markPolitiesReady } from "../../runtime/mapReadiness.js";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";

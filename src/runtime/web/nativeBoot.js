@@ -1,4 +1,4 @@
-/*! Open Historia — Android boot screen © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Android boot screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The Android app is this same web bundle packaged with Capacitor, and it used to
 // inherit the WEBSITE's entry screen: a marketing card — badge, tagline, "a
 // community-hosted alternative to Pax Historia" — with an "Enter Open Historia"

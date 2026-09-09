@@ -1,4 +1,4 @@
-/*! Open Historia — province outline regression tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — province outline regression tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPropertyExpression, latest, validateStyleMin } from "@maplibre/maplibre-gl-style-spec";

@@ -1,4 +1,4 @@
-/*! Open Historia — diplomatic chat visibility tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — diplomatic chat visibility tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/chatVisibility.test.js
 //
 // Runs without node_modules: chatVisibility.js is import-free.

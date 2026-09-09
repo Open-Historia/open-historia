@@ -1,4 +1,4 @@
-/*! Open Historia — JSON Schema to Gemini function-declaration schema © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — JSON Schema to Gemini function-declaration schema © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Gemini's functionDeclarations take an OpenAPI 3.0 SUBSET, not JSON Schema, and
 // it rejects the whole request — 400 "Request contains an invalid argument" — for
 // anything outside that subset. Nothing in the reply says which field was wrong,

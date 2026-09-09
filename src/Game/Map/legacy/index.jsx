@@ -1,4 +1,4 @@
-/*! Open Historia — legacy renderer entry © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — legacy renderer entry © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The one module MapScene lazy-loads for the legacy renderer, so nothing under
 // legacy/ is fetched, parsed or evaluated until the setting is on. Both exports
 // come from this file on purpose: one specifier, one chunk.

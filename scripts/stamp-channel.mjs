@@ -1,4 +1,4 @@
-/*! Open Historia — release-channel stamp © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — release-channel stamp © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Writes electron/channel.json, which is how the packaged desktop app knows
 // whether it is the stable build or the beta one. Same pattern as the build id
 // the release workflow stamps into electron/build-id.json: a generated file the

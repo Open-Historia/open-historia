@@ -1,4 +1,4 @@
-/*! Open Historia — regions.geojson single-pass indexer © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — regions.geojson single-pass indexer © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Pure, dependency-free single pass over a scenario's regions FeatureCollection
 // that produces everything the map needs: the owner/provenance index for every
 // region (tile fills, click resolution, labels), the authored shapes for

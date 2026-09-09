@@ -1,4 +1,4 @@
-/*! Open Historia — Map vNext presentation policy © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Map vNext presentation policy © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Map vNext keeps canonical world objects independent from their cartographic
 // representation. These categories are intentionally few: shape communicates

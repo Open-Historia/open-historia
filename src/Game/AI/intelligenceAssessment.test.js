@@ -1,4 +1,4 @@
-/*! Open Historia — first-reading intelligence assessment tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — first-reading intelligence assessment tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/intelligenceAssessment.test.js
 //
 // Every service used to sit on DEFAULT_INTELLIGENCE until a turn happened to

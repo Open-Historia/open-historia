@@ -1,4 +1,4 @@
-/*! Open Historia — Android boot screen tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Android boot screen tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/web/nativeBoot.test.js
 //
 // The boot screen stands between the player and their games, so the two ways it

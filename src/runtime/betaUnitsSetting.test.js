@@ -1,4 +1,4 @@
-/*! Open Historia — per-save unit-system setting tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — per-save unit-system setting tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: npm ci && node --test src/runtime/betaUnitsSetting.test.js
 //
 // Needs a full install: gameState.js -> assets.js -> maplibre-gl.

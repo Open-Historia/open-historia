@@ -39,6 +39,7 @@ productName: Open Historia Beta
 # (server/data/scenarios/default), which the app needs on first run; the ~170MB of
 # map archives are NOT packaged — the app fetches them on first launch.
 files:
+  - LICENSE
   - dist/**
   - server/**
   - electron/**

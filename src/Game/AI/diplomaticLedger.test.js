@@ -1,4 +1,4 @@
-/*! Open Historia — canonical diplomacy ledger tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — canonical diplomacy ledger tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/diplomaticLedger.test.js
 
 import test from "node:test";
