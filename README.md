@@ -1,3 +1,9 @@
+## License & Copyright
+
+Copyright (C) 2026 Open Historia
+
+This project is licensed under the terms of the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See the [LICENSE](LICENSE) file for details.
+
 <!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). -->
 <h1 align="center">Open Historia</h1>
 
