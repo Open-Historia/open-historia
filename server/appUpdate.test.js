@@ -1,4 +1,4 @@
-/*! Open Historia — desktop self-update route tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — desktop self-update route tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The desktop app updates itself through these three routes. They read the updater
 // off globalThis, which the Electron main process publishes and nothing else does —
 // so the same server binary is inert in the zip build and live inside the app, and

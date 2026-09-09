@@ -1,4 +1,4 @@
-/*! Open Historia — owner migration tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — owner migration tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: npm test
 //
 // The fixtures below are TRANSCRIBED FROM THE REAL SHIPPED DATA, not invented.

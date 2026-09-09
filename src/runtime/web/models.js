@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode store models © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode store models © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Faithful browser mirror of the constants + pure helpers in
 // server/libraryStore.js (meta defaults/readers, country canonicalization, seed
 // builders, snapshot detection, asset-key sets). Web build only.

@@ -1,4 +1,4 @@
-/*! Open Historia — Fantasy Map Generator console © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Fantasy Map Generator console © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Right-edge drawer for the map editor: a tab that expands into a console where
 // you enter a few values (seed, template, size, #states…) and hit Generate. It

@@ -1,4 +1,4 @@
-/*! Open Historia — campaign write guard © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — campaign write guard © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A turn reads a campaign's whole state when it starts, spends minutes in the
 // model, and writes it back at the end — through the runtime endpoints, which
 // switching campaigns in the library has already repointed at the new save. So a

@@ -1,4 +1,4 @@
-# Open Historia — Android APK BETA (embedded node server) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — Android APK BETA (embedded node server) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
 name: Build Android APK (Beta)
 
 # Builds the EXPERIMENTAL embedded-node-server app from the `alpha` branch and

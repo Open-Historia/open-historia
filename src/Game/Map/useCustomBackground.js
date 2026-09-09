@@ -1,4 +1,4 @@
-/*! Open Historia — custom map background loader © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — custom map background loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useWorldBackground } from "./useWorldState.js";

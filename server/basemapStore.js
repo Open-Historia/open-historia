@@ -1,6 +1,6 @@
 /*!
  * Open Historia — basemap library store.
- * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
 // Persistence for the user's basemap library ("Your basemaps" in the editor's

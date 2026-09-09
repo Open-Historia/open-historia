@@ -1,4 +1,4 @@
-/*! Open Historia — region seed worker © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — region seed worker © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Receives the scenario's regions.geojson in its RAW stored form and does the
 // expensive part off the main thread: the 55-220 MB JSON.parse plus the
 // single-pass index. Only the small seed result crosses back.

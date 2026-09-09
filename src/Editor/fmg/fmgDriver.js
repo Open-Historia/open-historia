@@ -1,4 +1,4 @@
-/*! Open Historia — Fantasy Map Generator driver © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Fantasy Map Generator driver © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Runs Azgaar's Fantasy Map Generator (pinned v1.109, vendored at /fmg/) headlessly
 // in a hidden same-origin iframe, drives a generation from a few inputs, and pulls

@@ -1,4 +1,4 @@
-/*! Open Historia — setup-window preload bridge © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — setup-window preload bridge © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The setup window shows download progress and nothing else, so it gets the
 // narrowest possible bridge: two listeners in, one action out. Context isolation
 // stays on (the default) — the page never sees ipcRenderer itself.

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode UI settings + language packs © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode UI settings + language packs © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Mirrors the server's /api/ui-settings and /api/lang endpoints (server/server.js:150-236)
 // for the web build. Shipped language packs (public/lang/<code>.json — copied to the
 // deployed site by Vite) are merged UNDER the browser's IndexedDB overlay of
