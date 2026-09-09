@@ -1,4 +1,4 @@
-/*! Open Historia — intelligence-rating pipeline tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — intelligence-rating pipeline tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/intelligenceRating.test.js
 //
 // Reported: a player built spy training academies and researched the tech for a

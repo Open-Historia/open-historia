@@ -1,4 +1,4 @@
-/*! Open Historia — campaign write guard tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — campaign write guard tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/campaignGuard.test.js
 //
 // Reported 2026-09-04: a Modern Day jump was still generating when the player

@@ -1,4 +1,4 @@
-/*! Open Historia — region ownership vocabulary for AI prompts © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — region ownership vocabulary for AI prompts © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Why this exists: the jump prompt tells the model the map description contains
 // "every polity, region ... separated by a comma ... ANALYZE THIS INCREDIBLY

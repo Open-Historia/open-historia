@@ -1,4 +1,4 @@
-/*! Open Historia — release signer © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — release signer © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Signs manifests with the offline root private key (trust/oh-root.key.pem),
 // writing a detached base64 signature next to each (<file>.sig). Run on the
 // offline signing machine. For JSON manifests, --stamp injects keyid + issued +

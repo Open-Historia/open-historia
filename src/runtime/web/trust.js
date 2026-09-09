@@ -1,4 +1,4 @@
-/*! Open Historia — client-side signature verification © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — client-side signature verification © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Verifies project-signed manifests (content manifest, node directory) against
 // the pinned root public key before the client trusts them. Web build only.
 // A manifest that is unsigned, mis-signed, keyid-unknown, or expired is NOT

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode account widget © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode account widget © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A small self-contained sign-in / sync-status control injected into the page
 // (web build only — never touches the game's React tree or the local download).
 // Email → magic link → signed in → games/scenarios sync (account.js + sync.js).
