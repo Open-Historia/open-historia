@@ -1,4 +1,4 @@
-/*! Open Historia — owner-name canonicalisation © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — owner-name canonicalisation © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A polity is identified EVERYWHERE by its full country name — "Spain", never "ESP".
 // Ownership, colours, flags, tags and the AI's own vocabulary are all keyed that way
 // (see server/ownerMigration.js, which migrated stored worlds to it). GADM's three

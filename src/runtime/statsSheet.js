@@ -1,4 +1,4 @@
-/*! Open Historia — per-scenario stat sheet definition © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — per-scenario stat sheet definition © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Which strategic indices a scenario's country sheets carry. The economy block
 // (GDP, inflation, debt) is the same question in every era, but the indices are
 // not: "Energy autonomy" is a modern concern, and a post-apocalyptic or ancient

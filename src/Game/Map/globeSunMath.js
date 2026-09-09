@@ -1,4 +1,4 @@
-/*! Open Historia — globe sun projection helpers © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — globe sun projection helpers © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 
 const DEG_TO_RAD = Math.PI / 180;
 export const CELESTIAL_RADIUS = 64;

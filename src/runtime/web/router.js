@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode API router (fetch interceptor) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode API router (fetch interceptor) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // In the web build there is no Express server. This installs a fetch()
 // interceptor that answers the client's same-origin /api/* calls from the
 // IndexedDB stores, so all the existing client code (library.js, assets.js,

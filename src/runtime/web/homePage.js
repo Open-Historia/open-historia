@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode home / connect screen © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode home / connect screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The website's entry screen: it automatically connects the player to the best
 // available content node (lowest latency + free capacity), lets them sign in
 // (Google), and enters the game. Styled to match the project's GitHub Pages site

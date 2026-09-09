@@ -1,4 +1,4 @@
-/*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_INDEX_ROWS, loadIndexRows } from "../../runtime/statsSheet.js";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
