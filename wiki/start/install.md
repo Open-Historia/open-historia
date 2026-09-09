@@ -41,7 +41,7 @@ Right-click the app and choose **Open**, then confirm. You only have to do this 
 On Debian, Ubuntu and derivatives, install the `.deb`:
 
 ```
-sudo apt install ./open-historia_amd64.deb
+sudo apt install ./Open-Historia-amd64.deb
 ```
 
 It lands in your applications menu like any other program. The `.deb` is the better choice
