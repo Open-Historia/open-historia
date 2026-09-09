@@ -1,4 +1,4 @@
-/*! Open Historia — stage the web build into the Android shell © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — stage the web build into the Android shell © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The Android app IS the web build. It used to be a thin WebView that asked for
 // the address of a server the player had to run themselves — Termux on the same
 // phone, or a machine on their network — and then navigated to it. Now it ships

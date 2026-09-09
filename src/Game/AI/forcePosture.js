@@ -1,4 +1,4 @@
-/*! Open Historia — force posture digest for AI prompts © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — force posture digest for AI prompts © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // What every power's forces are doing, written out so the advisor can answer
 // "Russian units are getting very close to Ukraine's border, what do you think?"
 // from facts rather than from geography it has to infer out of bare lat/lng.

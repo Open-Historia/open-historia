@@ -1,4 +1,4 @@
-/*! Open Historia — Map vNext live polity-surface dissolve © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Map vNext live polity-surface dissolve © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import polygonClipping from "polygon-clipping";
 import { toCountryName } from "../../../runtime/ownerNames.js";
 

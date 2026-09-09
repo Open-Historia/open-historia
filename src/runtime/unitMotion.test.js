@@ -1,4 +1,4 @@
-/*! Open Historia — unit motion tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit motion tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/unitMotion.test.js
 //
 // unitMotion.js is deliberately import-free, so this file runs in a bare

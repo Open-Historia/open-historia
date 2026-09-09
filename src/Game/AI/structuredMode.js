@@ -1,4 +1,4 @@
-/*! Open Historia — structured-output mode selection © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — structured-output mode selection © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // WHICH WAY to ask a model for structured data, and learning which way actually
 // works for the endpoint in front of you.
 //

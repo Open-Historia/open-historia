@@ -1,4 +1,4 @@
-/*! Open Historia — spycraft: intelligence stat, spies both ways, discovery, double agents, redaction © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — spycraft: intelligence stat, spies both ways, discovery, double agents, redaction © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Espionage runs in both directions. The player plants spies in other polities
 // and reads their private diplomacy; other polities plant spies in the player
 // and read theirs. Every spy can be discovered by the target's service, and a

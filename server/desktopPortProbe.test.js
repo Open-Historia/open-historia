@@ -1,4 +1,4 @@
-/*! Open Historia — desktop free-port probe tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — desktop free-port probe tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test server/desktopPortProbe.test.js
 //
 // Reported 2026-09-04: the beta would not launch on a laptop running Docker

@@ -1,4 +1,4 @@
-/*! Open Historia — basemap library client © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — basemap library client © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Client for the server-side basemap library ("Your basemaps"). Kept free of any
 // OpenLayers/MapLibre deps so it stays light; the editor converts a library

@@ -1,4 +1,4 @@
-/*! Open Historia — unit counter flag icons © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit counter flag icons © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Turns a unit's owner into a round flag icon sitting inside its counter.
 //
 // MapLibre can only draw an icon that is already in the style's image atlas, so

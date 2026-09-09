@@ -1,4 +1,4 @@
-/*! Open Historia — beta packaging consistency tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — beta packaging consistency tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test server/betaPackaging.test.js
 //
 // The beta desktop build is described in four places that have to agree and that

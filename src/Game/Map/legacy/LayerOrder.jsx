@@ -1,4 +1,4 @@
-/*! Open Historia — map layer stacking order © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — map layer stacking order © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Keeps the map stacked in MAP_LAYER_ORDER. Renders nothing.
 //
 // This is the ONLY thing on the map allowed to reorder layers. Two components

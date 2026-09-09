@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode map-editor store © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode map-editor store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Browser (IndexedDB) port of server/mapEditorStore.js. Backs
 // /api/mapeditor/documents* in web mode. Faithful to the server's id/merge
 // semantics and summary projection (see the spec in mapEditorStore.js).

@@ -1,4 +1,4 @@
-/*! Open Historia — flag library store © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — flag library store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // The map-maker's own saved flags — the "My flags" shelf in the editor's flag
 // picker, reusable across every map, exactly like "Your basemaps".

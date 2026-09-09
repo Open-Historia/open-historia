@@ -1,4 +1,4 @@
-/*! Open Historia — national stats pane © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { JSON_URLS, getNationFlags, readJson, reportPerfOperation } from "../../runtime/assets.js";

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode node connection manager © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode node connection manager © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Picks the best content node for this player (lowest latency + free capacity)
 // from the signed directory, "connects" to it (a heartbeat that counts toward the
 // node's live user count until they leave), and makes content fetches prefer it.

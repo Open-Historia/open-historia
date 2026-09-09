@@ -1,4 +1,4 @@
-/*! Open Historia — territory outlines for force-posture prompts © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — territory outlines for force-posture prompts © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Where a point is, politically: which polity's territory it sits inside, and how
 // far it is from whose border. This is what lets the advisor answer "Russian
 // units are getting very close to Ukraine's border" instead of being handed bare

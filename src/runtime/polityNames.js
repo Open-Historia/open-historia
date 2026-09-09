@@ -1,4 +1,4 @@
-/*! Open Historia — country display-name resolver © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — country display-name resolver © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Codes ("RUS", "KHAL") are load-bearing identifiers everywhere in the data,
 // but the PLAYER should only ever see full names. This resolves a code to the
 // era polity name (world.polityOverrides) or the base country name, with the

@@ -1,4 +1,4 @@
-/*! Open Historia — model-output JSON salvage tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — model-output JSON salvage tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/jsonSalvage.test.js
 //
 // Runs without node_modules: jsonSalvage.js is import-free.

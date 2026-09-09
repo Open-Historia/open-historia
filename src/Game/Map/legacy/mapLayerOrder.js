@@ -1,4 +1,4 @@
-/*! Open Historia — map layer stacking order © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — map layer stacking order © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The one place that decides what sits above what on the game map.
 //
 // Nothing that adds a layer to this map passes a beforeId: <Nations>, <Cities>,

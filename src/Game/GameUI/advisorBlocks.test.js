@@ -1,4 +1,4 @@
-/*! Open Historia — portions (advisor fenced-block extraction tests) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (advisor fenced-block extraction tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Runs in a BARE CHECKOUT: advisorBlocks.js is import-free on purpose.
 import test from "node:test";
 import assert from "node:assert/strict";

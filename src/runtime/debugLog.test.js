@@ -1,4 +1,4 @@
-/*! Open Historia — diagnostics log tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — diagnostics log tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/debugLog.test.js
 //
 // A fake localStorage is installed BEFORE the module is imported, because the

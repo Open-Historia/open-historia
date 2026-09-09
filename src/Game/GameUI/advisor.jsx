@@ -1,4 +1,4 @@
-/*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";

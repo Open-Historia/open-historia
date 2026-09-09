@@ -1,4 +1,4 @@
-/*! Open Historia — troop/unit map layer © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — troop/unit map layer © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Units are the map's way of showing what the events say, so they have to read
 // as forces in motion rather than counters that blink from place to place.
 //

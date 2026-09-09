@@ -1,4 +1,4 @@
-/*! Open Historia — force posture digest tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — force posture digest tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/forcePosture.test.js
 //
 // Runs without node_modules: forcePosture.js imports only runtime/unitMotion.js,

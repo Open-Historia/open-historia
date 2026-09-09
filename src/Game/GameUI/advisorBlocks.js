@@ -1,4 +1,4 @@
-/*! Open Historia — portions (advisor fenced-block extraction & JSON recovery) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (advisor fenced-block extraction & JSON recovery) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Pulling the machine-readable fences out of an advisor reply, and getting usable
 // JSON out of them even when the model's is not quite valid.
 //

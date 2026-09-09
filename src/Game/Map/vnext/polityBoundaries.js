@@ -1,4 +1,4 @@
-/*! Open Historia — Map vNext polity-boundary derivation © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Map vNext polity-boundary derivation © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { toCountryName } from "../../../runtime/ownerNames.js";
 
 // Coordinates are quantized to 0.000005° (about half a metre). That is finer than

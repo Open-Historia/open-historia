@@ -1,4 +1,4 @@
-/*! Open Historia — projectOps schema contract tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — projectOps schema contract tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/projectOpSchema.test.js
 //
 // The six-variant anyOf that used to describe impacts.projectOps was 41.5 KB
