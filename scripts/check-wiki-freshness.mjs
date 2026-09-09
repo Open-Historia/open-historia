@@ -1,4 +1,4 @@
-/*! Open Historia — wiki freshness check © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — wiki freshness check © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 // Answers "what in the wiki needs updating?" without anyone re-reading the game.
 //
 // wiki/provenance.json records the two commits the wiki was last verified against and, per page,

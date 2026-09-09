@@ -1,4 +1,4 @@
-/*! Open Historia — wiki generator © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — wiki generator © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 // Renders wiki/*.md into public/wiki/<slug>/index.html, one directory per page.
 //
 // It lives in public/ rather than site/ for the same reason the guides do (see the comment in
@@ -284,7 +284,7 @@ ${breadcrumbJsonLd(page)}
 
 <footer>
   <div class="wrap">
-    <span class="globe">🏛️</span> <b>Open Historia</b> · MIT licensed ·
+    <span class="globe">🏛️</span> <b>Open Historia</b> · AGPL-3.0 licensed ·
     <a href="/">Home</a> ·
     <a href="/wiki/">Wiki</a> ·
     <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·

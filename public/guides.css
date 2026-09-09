@@ -1,4 +1,4 @@
-/*! Open Historia — compatibility shim © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — compatibility shim © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 /* The guides moved into the wiki and the stylesheet moved to /wiki.css with them. This file
    stays because things outside this repo still link it: older desktop installs, cached pages,
    and any bookmark of an old guide URL that reaches a redirect stub before the redirect fires.

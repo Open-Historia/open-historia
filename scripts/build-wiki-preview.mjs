@@ -1,4 +1,4 @@
-/*! Open Historia — relocatable wiki preview © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — relocatable wiki preview © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 // Builds dist-wiki-preview/: the wiki as a self-contained folder that works from ANY location —
 // a domain root, a GitHub Pages subpath, a shared drive, even opened straight off disk.
 //

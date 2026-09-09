@@ -66,7 +66,7 @@ greyed-out AI, turns that take forever, and CORS errors from a local model. Beyo
 [Discord](https://discord.gg/QaqAK7fQAg) is the fastest place to get help, and bugs go to
 [GitHub issues](https://github.com/Open-Historia/open-historia/issues).
 
-Open Historia is MIT licensed and built by
+Open Historia is AGPL-3.0 licensed and built by
 [contributors](https://github.com/Open-Historia/open-historia/graphs/contributors). If you want
 to work on it rather than play it, the developer documentation lives in
 [`docs/`](https://github.com/Open-Historia/open-historia/tree/main/docs).
