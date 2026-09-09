@@ -1,4 +1,4 @@
-/*! Open Historia — language pack generator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — language pack generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Fills public/lang/<code>.json from public/lang/catalog-en.json using any
 // OpenAI-compatible chat endpoint.
 //

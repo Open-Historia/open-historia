@@ -1,4 +1,4 @@
-/*! Open Historia — country picker list tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — country picker list tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Reported: every country listed three times in the diplomacy and spy pickers;
 // searching a country sometimes did not show it; clicking a country listed it as
 // selected without highlighting it. All of that follows from duplicate NAMES in

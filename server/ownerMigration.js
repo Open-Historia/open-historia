@@ -1,4 +1,4 @@
-/*! Open Historia — owner code → country name migration © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — owner code → country name migration © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Rewrites a legacy record whose owners are GADM codes ("RUS") into one whose
 // owners are country names ("Russia"). Everything the game keys by owner —
 // colours, flags, tags, polities, ownership, units, reputation — moves with it.

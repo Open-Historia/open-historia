@@ -1,4 +1,4 @@
-/*! Open Historia — content-manifest builder © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — content-manifest builder © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Derives public/content-manifest.json (the asset → SHA-256 map the browser uses
 // to verify bytes fetched from a content node) from scripts/map-assets.json, the
 // single source of truth for the large map binaries. Run this whenever the map

@@ -1,4 +1,4 @@
-/*! Open Historia — country name registry generator © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — country name registry generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Emits server/country-names.json (code -> display name) from the countries
 // archive. The server uses it to let scenario/map authors write FULL NAMES
 // anywhere a country is referenced; names canonicalize to codes internally.

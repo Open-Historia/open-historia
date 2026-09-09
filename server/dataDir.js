@@ -1,4 +1,4 @@
-/*! Open Historia — writable data-dir resolver © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — writable data-dir resolver © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // The single writable data root, shared by every server store (games, scenarios,
 // basemaps, flags, map-editor docs, ui-settings, lang packs, hub cache, import

@@ -1,4 +1,4 @@
-/*! Open Historia - frame-synced worker-backed globe lighting (c) 2026 Nicholas Krol, MIT. */
+/*! Open Historia - frame-synced worker-backed globe lighting (c) 2026 Nicholas Krol, AGPL-3.0-or-later. */
 import {
   buildGlobeLightingWorkerSource,
   renderGlobeLightingPixels,

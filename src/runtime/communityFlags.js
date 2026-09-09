@@ -1,4 +1,4 @@
-/*! Open Historia — community flags client © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — community flags client © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Flags shared by other people, read straight from the hub repo's issues.
 //

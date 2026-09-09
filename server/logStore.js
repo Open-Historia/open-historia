@@ -1,4 +1,4 @@
-/*! Open Historia — diagnostic log store © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — diagnostic log store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // One append-only JSONL file the whole app writes to: the Electron main process,
 // this server, the page, and the AI layer. Bug reports arrive as "it broke" with
 // nothing to go on, and the interesting state — which prompt was sent, what the

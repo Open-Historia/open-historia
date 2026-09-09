@@ -1,4 +1,4 @@
-/*! Open Historia — combined site assembler © 2026 Nicholas Krol, MIT. */
+/*! Open Historia — combined site assembler © 2026 Nicholas Krol, AGPL-3.0-or-later. */
 // Builds dist-site/: the marketing landing page (site/) at the root, and the web
 // game (dist-web/, built with `--base /play/`) under /play/. Deploy dist-site to
 // Cloudflare Pages so openhistoria.com serves the landing page and its "Play"
