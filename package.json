@@ -80,6 +80,7 @@
     "appId": "io.github.arkniem.openhistoria",
     "productName": "Open Historia",
     "files": [
+      "LICENSE",
       "dist/**",
       "server/**",
       "electron/**",
