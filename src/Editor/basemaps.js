@@ -1,4 +1,4 @@
-/*! Open Historia Map Editor — ESRI basemap presets © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia Map Editor — ESRI basemap presets © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // ESRI / ArcGIS Online basemaps (public, token-free) shown behind the editor's
 // regions so you can see where you're drawing. Kept local to the editor so it
 // doesn't pull the game's runtime/assets.js (and its maplibre/pmtiles module

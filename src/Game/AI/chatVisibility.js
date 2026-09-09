@@ -1,4 +1,4 @@
-/*! Open Historia — diplomatic chat visibility © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — diplomatic chat visibility © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Who is allowed to have read which conversation.
 //
 // THE BUG THIS EXISTS TO FIX. The `leader` prompt renders

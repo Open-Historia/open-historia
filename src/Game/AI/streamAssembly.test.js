@@ -1,4 +1,4 @@
-/*! Open Historia — SSE stream reassembly tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — SSE stream reassembly tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/streamAssembly.test.js
 //
 // Runs without node_modules: streamAssembly.js is import-free.

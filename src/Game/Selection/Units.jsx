@@ -1,4 +1,4 @@
-/*! Open Historia — unit intel popup © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unit intel popup © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // What the player sees when they click a formation.
 //
 // This used to be a command panel — Move, Attack, Disband. It is now an

@@ -1,4 +1,4 @@
-/*! Open Historia — segmented timeline jump tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — segmented timeline jump tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/jumpSegments.test.js
 //
 // Runs without node_modules: jumpSegments.js is import-free.

@@ -1,4 +1,4 @@
-/*! Open Historia — model-output JSON salvage © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — model-output JSON salvage © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Turning whatever a model actually said back into the payload the schema
 // wants. Kept import-free (and separate from gameplay.js, which pulls in the
 // whole browser runtime) so the salvage rules can be unit-tested directly —

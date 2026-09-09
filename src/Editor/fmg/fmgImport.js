@@ -1,4 +1,4 @@
-/*! Open Historia — Fantasy Map Generator import adapter © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Fantasy Map Generator import adapter © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Turns a Fantasy Map Generator (Azgaar, MIT) generation into Open Historia
 // editor pieces: land regions dissolved by province/state, polities + colours

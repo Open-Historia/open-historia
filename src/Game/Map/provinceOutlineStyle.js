@@ -1,4 +1,4 @@
-/*! Open Historia — province outline presentation © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — province outline presentation © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Provinces are local detail, not the political silhouette. Keep the overview
 // free of the administrative grid, then fade it in as country labels yield to

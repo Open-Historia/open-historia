@@ -1,4 +1,4 @@
-/*! Open Historia — unprompted-note echo guard tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — unprompted-note echo guard tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // From a live game: the player wrote "We think you suck!" and the next
 // unprompted note from China was the same sentence, posted into that thread as
 // China's own words. A second note in the same thread ("We appreciate your solar

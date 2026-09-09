@@ -1,6 +1,6 @@
 /*!
  * Open Historia Map Editor — basemap picker overlay.
- * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
 // A Netflix-style overlay (matching the game's Community hub look) for choosing

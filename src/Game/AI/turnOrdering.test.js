@@ -1,4 +1,4 @@
-/*! Open Historia — portions (turn-pipeline ordering guard) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — portions (turn-pipeline ordering guard) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Reads gameplay.js as TEXT rather than importing it, and that is deliberate.
 //
 // applySimulationResult is not exported, and exporting it purely to test it would

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode write serializer © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode write serializer © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Serializes read-modify-write of the web store's records, because in web mode
 // every runtime JSON asset for a game lives inside ONE IndexedDB record.
 //

@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode write serializer tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode write serializer tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Reported: on the website the game date does not progress properly; in the
 // desktop app it always does. Same game code — the difference is the store. The
 // web store keeps every runtime JSON asset of a game in ONE IndexedDB record, so

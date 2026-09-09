@@ -1,4 +1,4 @@
-/*! Open Historia — Map vNext contextual cartographic naming © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — Map vNext contextual cartographic naming © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 const clean = (value) => String(value ?? "").trim();
 const fold = (value) => clean(value).toLocaleLowerCase().replace(/\s+/g, " ");

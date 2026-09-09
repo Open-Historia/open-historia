@@ -1,4 +1,4 @@
-# Open Historia — website build & deploy workflow © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE).
+# Open Historia — website build & deploy workflow © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
 name: Deploy website
 
 # Builds openhistoria.com and publishes it on every push to main, so the site is

@@ -1,4 +1,4 @@
-/*! Open Historia — pinned root public key(s) © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — pinned root public key(s) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The project's ROOT public key(s), compiled into BOTH the client and the node
 // software. The matching private key is offline (never in the repo). Every
 // signed artifact — content manifest, node directory, node-software update

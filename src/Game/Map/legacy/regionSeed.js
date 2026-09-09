@@ -1,4 +1,4 @@
-/*! Open Historia — worker-backed region seed loader © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — worker-backed region seed loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Loads the scenario's regions.geojson WITHOUT ever parsing it on the main
 // thread: the raw payload (bytes, or the web store's own string) is handed to a
 // Web Worker that runs the JSON.parse + single-pass index (regionSeedCore.js)

@@ -1,6 +1,6 @@
 /*!
  * Open Historia — stock world map generator
- * Copyright (c) 2026 Nicholas Krol - MIT License (see src/Editor/LICENSE).
+ * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
 // Builds the STOCK world: the GADM level-1 regions of public/assets/regions-seed.geojson

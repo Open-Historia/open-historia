@@ -1,4 +1,4 @@
-/*! Open Historia — flag library client © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — flag library client © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Thin fetch client for the map-maker's saved flags ("My flags"), mirroring
 // basemapLibrary.js: the same /api/* call works against Express on the download and

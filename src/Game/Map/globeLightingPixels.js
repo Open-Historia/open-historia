@@ -1,4 +1,4 @@
-/*! Open Historia - smooth ray-sphere globe lighting (c) 2026 Nicholas Krol, MIT. */
+/*! Open Historia - smooth ray-sphere globe lighting (c) 2026 Nicholas Krol, AGPL-3.0-or-later. */
 
 export const renderGlobeLightingPixels = ({
   matrix,

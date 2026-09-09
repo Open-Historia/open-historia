@@ -1,4 +1,4 @@
-/*! Open Historia — segmented timeline jumps © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — segmented timeline jumps © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Splitting one long time skip into several shorter model calls, and putting the
 // answers back together as the SINGLE round the player asked for.
 //

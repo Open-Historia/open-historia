@@ -1,4 +1,4 @@
-/*! Open Historia — web-mode backend entry © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — web-mode backend entry © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Single entry point the web build boots before rendering. Installs the /api
 // fetch interceptor and seeds the default library.
 //

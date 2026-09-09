@@ -1,4 +1,4 @@
-/*! Open Historia — country picker list assembly © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — country picker list assembly © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Merges the AI's polity overrides onto the country list read from the tiles.
 //

@@ -1,4 +1,4 @@
-/*! Open Historia — runtime JSON shape-guard tests © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — runtime JSON shape-guard tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The write path refuses a body of the wrong shape, so a PUT that never parsed
 // (express.json hands the route {}) cannot overwrite a game's event log with an
 // empty object. The expectation used to be "storage or runtime-only means an

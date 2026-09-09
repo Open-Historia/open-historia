@@ -1,4 +1,4 @@
-/*! Open Historia — event camera focus © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — event camera focus © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Where the camera goes when an event is revealed.
 //
 // This used to live inline in time.jsx and it aimed at the wrong country far more

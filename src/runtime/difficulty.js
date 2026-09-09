@@ -1,4 +1,4 @@
-/*! Open Historia — difficulty levels & AI directives © 2026 Nicholas Krol, MIT (see src/Editor/LICENSE). */
+/*! Open Historia — difficulty levels & AI directives © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // Difficulty 2.0 doctrine:
 // - difficulty changes how uncertainty, opposition, mistakes, and bargaining are resolved;
