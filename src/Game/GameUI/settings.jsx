@@ -11,6 +11,7 @@ import {
     getReasoningEnabled,
     getRecentModels,
     getSavedPresets,
+    isPresetActive,
     providerSupportsModelDiscovery,
     savePreset,
     setProviderField,
@@ -650,7 +651,13 @@ const PresetManager = ({ provider, settings, onSettingChange }) => {
         {presets.length === 0 ? (
             <div style={{ ...helperStyle, marginTop: 0 }}>No profiles yet. Save the current endpoint and model as one to switch back to it later.</div>
         ) : presets.map((preset) => {
-            const active = (preset.settings?.endpoint ?? "") === currentEndpoint && (preset.settings?.model ?? "") === currentModel;
+            // Custom params count too: two profiles on one endpoint used to both
+            // read ACTIVE and neither offered Apply (#718). See isPresetActive.
+            const active = isPresetActive(preset, {
+                endpoint: currentEndpoint,
+                model: currentModel,
+                customParams: settings[`${prefix}CustomParams`] ?? "",
+            });
             return (
                 <div key={preset.id} style={profileCardStyle}>
                 <div style={{ minWidth: 0, flex: 1 }}>
