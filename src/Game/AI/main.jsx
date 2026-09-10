@@ -9,6 +9,7 @@ import {
     setProviderField,
 } from "./providerConfig.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
+import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -639,7 +640,8 @@ async function resolveConfiguredModel(provider, { endpoint = "", headers = {}, f
     const configuredModel = getModelForTask(provider, taskKey).trim();
 
     if (configuredModel) {
-        return provider === "gemini" ? normalizeGeminiModel(configuredModel) : configuredModel;
+        if (provider === "gemini") return normalizeGeminiModel(configuredModel);
+        return matchServedModel(provider, configuredModel, { endpoint, headers, providerLabel, signal });
     }
 
     if (fallbackModel) {
@@ -679,6 +681,64 @@ async function resolveConfiguredModel(provider, { endpoint = "", headers = {}, f
         console.warn(`Could not auto-detect model for ${providerLabel}:`, error);
         throw new Error(`Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`);
     }
+}
+
+// Issue #721. A configured id that names a model FILE (see modelIds.js) is
+// checked against the server's own /models list before it is sent: classic
+// llama-server reports its -m path as the model id, the game remembers and
+// suggests that id, and the same server in router mode only answers to the
+// model's NAME. Exact matches win, so servers whose ids really are paths are
+// untouched; with no list, or no match, the configured id goes out unchanged —
+// exactly what happened before this existed. Every other id skips all of it.
+//
+// Cached per endpoint for a minute: one lookup covers a whole turn's worth of
+// task calls rather than one per call, and a model the player loads into the
+// router mid-session is picked up within the minute.
+const SERVED_MODELS_TTL_MS = 60 * 1000;
+const servedModelsCache = new Map(); // endpoint -> { at, ids }
+// A turn makes many task calls; say it once per model, not on every one of them.
+const warnedServedModels = new Set();
+const warnServedModelOnce = (key, message) => {
+    if (warnedServedModels.has(key)) return;
+    warnedServedModels.add(key);
+    console.warn(message);
+};
+
+async function listServedModelIds(endpoint, headers, signal) {
+    const cached = servedModelsCache.get(endpoint);
+    if (cached && Date.now() - cached.at < SERVED_MODELS_TTL_MS) return cached.ids;
+    const response = await providerFetch(`${endpoint}/models`, { method: "GET", headers, signal });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const ids = (data?.data ?? [])
+        .map((entry) => entry?.id)
+        .filter((id) => typeof id === "string" && id.trim());
+    servedModelsCache.set(endpoint, { at: Date.now(), ids });
+    return ids;
+}
+
+async function matchServedModel(provider, configuredModel, { endpoint = "", headers = {}, providerLabel = provider, signal } = {}) {
+    if (!providerSupportsModelDiscovery(provider) || !looksLikeModelFilePath(configuredModel)) return configuredModel;
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
+    if (!normalizedEndpoint) return configuredModel;
+
+    let served;
+    try {
+        served = await listServedModelIds(normalizedEndpoint, headers, signal);
+    } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error;
+        return configuredModel; // no list, no guess
+    }
+
+    const match = resolveServedModelId(configuredModel, served);
+    if (match && match !== configuredModel) {
+        warnServedModelOnce(`${normalizedEndpoint}|${configuredModel}|${match}`, `[ai] ${providerLabel} does not serve "${configuredModel}"; using "${match}", the same model by name.`);
+        return match;
+    }
+    if (!match && served?.length) {
+        warnServedModelOnce(`${normalizedEndpoint}|${configuredModel}|`, `[ai] ${providerLabel} does not serve "${configuredModel}". It offers: ${served.join(", ")}.`);
+    }
+    return configuredModel;
 }
 
 async function callGemini(systemPrompt, history, {
