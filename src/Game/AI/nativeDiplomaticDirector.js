@@ -914,6 +914,98 @@ const normalizeDuplicateAgreementStarts = (candidate, world) => {
   return { repaired, dropped };
 };
 
+// Which current statuses each lifecycle verb can act on. An ended or expired
+// instrument is never a candidate: it can only be started again.
+const LIFECYCLE_OPS_BY_STATUS = {
+  update: ["active", "suspended"],
+  suspend: ["active"],
+  resume: ["suspended"],
+  end: ["active", "suspended"],
+  expire: ["active", "suspended"],
+};
+
+// The mirror of normalizeDuplicateAgreementStarts: a lifecycle change aimed at
+// an agreement id the ledger has never recorded. The model writes the id from
+// the story — a round that evicted the United States from Bahrain went on to
+// "end" us-bahrain-security-pact-2026, a pact no turn had ever started — and
+// the bounded diplomatic context usually could not have shown it the real id
+// anyway (it lists the player's own agreements). Rejecting the row threw the
+// whole three-month turn to the canned fallback, over a pact that was never
+// on the books.
+//
+// Ending the WRONG treaty is worse than any fallback, so the id is rewritten
+// only when exactly one recorded agreement passes every check:
+// - every named party resolves to a polity (canonicalizeParties silently drops
+//   an unresolved name, which would let "US, Bahrain, Qatarr" shrink to match a
+//   two-party pact, so the count is compared before and after);
+// - the party set is identical — no more, no fewer;
+// - the row names a real type (blank or unknown decodes to "other") and it is
+//   the recorded agreement's type; a guarantee also keeps its direction;
+// - the agreement's status allows the verb (LIFECYCLE_OPS_BY_STATUS).
+// The title is deliberately NOT compared: a lifecycle row's title describes the
+// change ("Termination of Bilateral Security Cooperation"), not the instrument.
+// Anything else — no candidate, two candidates, any doubt — drops the row and
+// keeps the turn: an agreement that was never recorded has nothing to end, and
+// the event and the relation update still carry what happened. A row whose id a
+// `start` in the same response creates is not unknown to the model and is left
+// for validation as before; it must never be re-aimed at an older instrument.
+const normalizeUnknownAgreementLifecycle = (candidate, world) => {
+  if (!candidate || typeof candidate !== "object") return { rewritten: 0, dropped: 0 };
+
+  const wasString = typeof candidate?.agreementUpdates === "string";
+  const updates = decodeAgreementUpdates(candidate?.agreementUpdates);
+  const existing = agreementMapFromWorld(world);
+  const startedHere = new Set(updates.filter((update) => update.op === "start").map((update) => clean(update.id)));
+  const output = [];
+  let rewritten = 0;
+  let dropped = 0;
+
+  for (const update of updates) {
+    const id = clean(update?.id);
+    const allowedStatuses = LIFECYCLE_OPS_BY_STATUS[update?.op];
+    if (!allowedStatuses || existing.has(id) || startedHere.has(id)) {
+      output.push(update);
+      continue;
+    }
+
+    const named = array(update?.parties);
+    const parties = canonicalizeParties(named, world);
+    const type = update?.type;
+    const matches = parties.length >= 2 && parties.length === named.length && type !== "other"
+      ? [...existing.values()].filter((agreement) =>
+        allowedStatuses.includes(agreement?.status) &&
+        agreement?.type === type &&
+        sameCanonicalPartySet(parties, agreement?.parties, world) &&
+        (type !== "guarantee" || (
+          lower(parties[0]) === lower(agreement?.guarantor) &&
+          lower(parties[1]) === lower(agreement?.beneficiary)
+        )))
+      : [];
+
+    if (matches.length === 1) {
+      output.push({ ...update, id: clean(matches[0].id) });
+      rewritten += 1;
+      console.warn(
+        `[OH diplomacy lifecycle repair] ${update.op} named unknown agreement ${id}; ` +
+        `re-aimed at ${matches[0].id}, the only recorded ${type} between ${parties.join(", ")}.`,
+      );
+      continue;
+    }
+
+    dropped += 1;
+    console.warn(
+      `[OH diplomacy lifecycle repair] dropped ${update.op} for unknown agreement ${id}: ` +
+      (matches.length > 1
+        ? `${matches.length} recorded agreements fit it equally, and guessing could change the wrong one.`
+        : "no recorded agreement matches its exact parties and type, so there is nothing to change.") +
+      " The turn and its events stand.",
+    );
+  }
+
+  candidate.agreementUpdates = wasString ? encodeAgreementUpdates(output) : output;
+  return { rewritten, dropped };
+};
+
 export const validateDiplomaticLedgerPayload = (
   candidate,
   {
@@ -934,6 +1026,9 @@ export const validateDiplomaticLedgerPayload = (
         `${lifecycleRepair.dropped} redundant start(s) dropped.`,
       );
     }
+    // The GM/admin preview (allowNativeBinding false) stays fail-closed: an
+    // administrator naming an agreement that does not exist should be told so.
+    normalizeUnknownAgreementLifecycle(candidate, world);
   }
 
   // A declared status that contradicts the absolute score is the model writing
