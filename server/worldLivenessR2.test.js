@@ -370,3 +370,48 @@ test("a low-pressure programme may ease while its event 'deploys' hardware; a cr
   assert.equal(validate(18), "", "a programme at pressure 18 easing to 14 is not crisis pressure being erased");
   assert.match(validate(65), /lowers pressure/i, "the same drop on a crisis-level storyline is still refused");
 });
+
+// The same player's round-53 answer wrote every storyline record two empty
+// fields short — seven separators where the contract has nine — so each state
+// landed in participantsCSV and the jump fell back on "record 1 must describe
+// the process state". Two of its lines, verbatim.
+test("a storyline record two or three empty fields short keeps its state", async () => {
+  const mod = await import("../src/Game/AI/nativeWorldDirector.js");
+  const decode = (line) => mod.decodeWorldStorylineUpdates(line)[0];
+
+  const intelligence = decode("iran-intelligence-modernization-2024~active~20~75~2024-01-09~~~Advanced signals intelligence nodes and cryptographic communication links are actively maintained and expanded across regional outposts.");
+  assert.equal(intelligence.state, "Advanced signals intelligence nodes and cryptographic communication links are actively maintained and expanded across regional outposts.");
+  assert.deepEqual(intelligence.participants, []);
+  assert.equal(intelligence.pressure, 20);
+  assert.equal(intelligence.momentum, 75);
+  assert.equal(intelligence.startedDate, "2024-01-09");
+
+  const georgia = decode("iran-georgia-transit-2022~active~15~55~2022-03-12~~~Digital customs clearance protocols maintain steady commercial throughput across Caucasus corridors.");
+  assert.match(georgia.state, /^Digital customs clearance/);
+
+  // Three short: the state sits in the title slot.
+  const titleSlot = decode("storyline-x~active~40~30~2020-01-01~~The junta faces spreading armed resistance and a collapsing economy after the coup.");
+  assert.match(titleSlot.state, /^The junta faces/);
+  assert.equal(titleSlot.title, "");
+
+  // What must NOT move: a short record whose last field really is a list of
+  // names, or a title, keeps it where it is (and its state stays empty for the
+  // validator to report).
+  const names = decode("storyline-y~active~40~30~2020-01-01~crisis~Border Friction~Armenia, Azerbaijan, Russian Federation, United States.");
+  assert.deepEqual(names.participants, ["Armenia", "Azerbaijan", "Russian Federation", "United States."]);
+  assert.equal(names.state, "");
+  const longName = decode("storyline-z~active~40~30~2020-01-01~diplomacy~Channel Talks~United Kingdom of Great Britain and Northern Ireland, France");
+  assert.equal(longName.participants.length, 2);
+  assert.equal(longName.state, "");
+  const title = decode("storyline-t~active~40~30~2020-01-01~crisis~Armenia-Azerbaijan Border Friction After Ceasefire");
+  assert.equal(title.title, "Armenia-Azerbaijan Border Friction After Ceasefire");
+  assert.equal(title.state, "");
+
+  // The one-short shape and a complete record read exactly as before.
+  const oneShort = decode("iran-cyber-sovereignty-2024~active~14~80~~~~~National cyber sovereignty infrastructure achieves advanced operational status.");
+  assert.match(oneShort.state, /^National cyber sovereignty/);
+  const complete = decode("storyline-c~active~40~30~2020-01-01~crisis~Title~Armenia,Azerbaijan~1,2~A settled state.");
+  assert.deepEqual(complete.participants, ["Armenia", "Azerbaijan"]);
+  assert.deepEqual(complete.eventIndexes, [0, 1]);
+  assert.equal(complete.state, "A settled state.");
+});
