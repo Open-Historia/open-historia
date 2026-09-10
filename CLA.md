@@ -87,3 +87,7 @@ If You sign this Agreement on behalf of a legal entity, You represent that You a
 You sign this Agreement electronically through CLA Assistant. When You open a pull request to an Open Historia repository, the CLA Assistant bot posts a link to this Agreement on the pull request; You may also go directly to https://cla-assistant.io/Open-Historia/open-historia. You sign once for the whole Project.
 
 By signing, You confirm that You have read this Agreement, that the details You entered (Your name and e-mail address and, for an entity, the entity's name and Your authority to sign for it) are accurate, and that You agree to be bound by this Agreement. Your GitHub account name, the details You entered, and the date and version of the Agreement You signed are recorded as Your signature.
+
+---
+
+**A note on relicensing.** This Agreement gives the Organisation and its members the right to place Your Contributions, and the Project as a whole, under a new or different licence at any time in the future, including open-source licences other than the one the Project uses today and proprietary or commercial licences, without asking You again and without further obligation to You (Section 2(b)). What the Organisation and its members have already published under the Project's public licence stays available under that licence (Section 5). This note summarises those Sections in plain words; it does not add to or limit them.
