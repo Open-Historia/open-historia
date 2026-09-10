@@ -10,7 +10,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
-import { ensureIntelligenceRated, generateCountryStatSheet } from "../AI/gameplay.js";
+import { ensureIntelligenceRated, generateCountryStatSheet, isSimulationBusy } from "../AI/gameplay.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1383,7 +1383,10 @@ const StatsPaneBody = ({ active }) => {
         const sequence = statsLoadRef.current.sequence + 1;
         statsLoadRef.current = { sequence, controller };
 
-        setState({ status: "loading", sheet: null, error: "" });
+        // `waiting` says why the card may sit for minutes (issue #724): the sheet
+        // now holds off until the world is idle, and a spinner that gives no
+        // reason reads as broken.
+        setState({ status: "loading", sheet: null, error: "", waiting: isSimulationBusy() });
 
         // A country may legitimately take seconds to calculate/generate. Paint the
         // loading card and return control to the map before starting that work.
@@ -1794,7 +1797,7 @@ const StatsPaneBody = ({ active }) => {
 
             {statsView === "economy" && state.status === "loading" && (
                 <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.82rem", marginTop: "1rem" }}>
-                Compiling national statistics…
+                {state.waiting ? "Waiting for the world to finish updating, then compiling national statistics…" : "Compiling national statistics…"}
                 </p>
             )}
 
