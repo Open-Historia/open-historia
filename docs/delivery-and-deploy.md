@@ -71,7 +71,7 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 | `android-beta` | `android-apk-beta.yml` *(off-main, §4.3)* | `workflow_dispatch`, checks out `alpha` | `pax-historia.apk` | **yes** (`--prerelease`) | Experimental in-app-server Android build; isolated from stable |
 | `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
 
-The APK asset name is contractual — it (and the Android `appId`) must not change, because anything holding a fixed release/asset URL keeps pointing at the old name. It WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match). The old asset is still on the `android` release and is now frozen at the 2026-09-03 build, so anything still fetching it by name will never see another update. In practice the in-app check reads `apk` out of `android/latest.json` rather than a fixed filename — and that file does not exist and is written by no workflow, so the in-app Android update is inert either way. Decide which of those two to fix before renaming it again.
+The APK asset name is contractual — it (and the Android `appId`) must not change, because anything holding a fixed release/asset URL keeps pointing at the old name. It WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match). The old asset has since been deleted from the `android` release (only `open-historia.apk` is there, checked 2026-09-10), so anything still fetching it by name gets a 404. In practice the in-app check reads `apk` out of `android/latest.json` rather than a fixed filename — and that file does not exist and is written by no workflow, so the in-app Android update is inert either way. Decide which of those two to fix before renaming it again.
 
 ---
 
@@ -327,7 +327,7 @@ Key asymmetries a newcomer should internalize:
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
-- **The Android `appId` must never change.** The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset is frozen on the release. See §4.2 before doing it again.
+- **The Android `appId` must never change.** The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Assemble the mobile server before `cap sync`** — `android-apk.yml` runs `build-mobile-server.mjs` between `npm run build` and Gradle.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.

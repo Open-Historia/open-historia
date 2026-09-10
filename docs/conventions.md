@@ -209,8 +209,8 @@ These strings are wired into external contracts (release assets players download
 | Identifier | Where | Why it's frozen |
 |-----------|-------|-----------------|
 | **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
-| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:62,66,78` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §4.2 for what that cost. |
-| **`android`** (rolling release tag) | `android-apk.yml:73-75` | The APK is republished to this single rolling release; the app updates itself from it. |
+| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
+| **`android`** (rolling release tag) | `android-apk.yml:74-76` | The APK is republished to this single rolling release; the app updates itself from it. |
 | **`app-stable` / `app-beta`** (release tags) | `app-bundle.yml:57-68` | The `Open-Historia.zip` download tags for the two desktop channels. |
 | **`Open-Historia.zip`** (bundle asset name) | `app-bundle.yml:54,84`; README | The one-download full app; linked by name. |
 | **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
