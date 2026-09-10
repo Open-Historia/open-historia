@@ -14,6 +14,37 @@ const maybeJsonParse = (value) => {
   }
 };
 
+// Some local models write Markdown escapes inside an otherwise complete JSON
+// string (`UNIT\_001`, `*\_emphasis\_*`). JSON permits only a fixed escape
+// alphabet, so those replies fail before the jump validator can identify the
+// actual problem and request a corrected turn. Remove only invalid escapes
+// while walking string content; valid JSON escapes, including `\\` and `\u`,
+// remain byte-for-byte intact.
+const repairInvalidStringEscapes = (value) => {
+  let repaired = "";
+  let inString = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '"') {
+      inString = !inString;
+      repaired += character;
+      continue;
+    }
+    if (inString && character === "\\") {
+      const next = value[index + 1];
+      const validEscape = next && '"\\/bfnrt'.includes(next);
+      const validUnicodeEscape = next === "u" && /^[0-9a-f]{4}$/i.test(value.slice(index + 2, index + 6));
+      if (!validEscape && !validUnicodeEscape && next) {
+        repaired += next;
+        index += 1;
+        continue;
+      }
+    }
+    repaired += character;
+  }
+  return repaired;
+};
+
 // Parse, and when that fails, repair the JSON slips small local models make
 // most: trailing commas before } or ], and curly "smart" quotes as string
 // delimiters. Repairs are only ever attempted AFTER a strict parse failed, so
@@ -24,7 +55,8 @@ const lenientJsonParse = (value) => {
   const repaired = value
     .replace(/[“”]/g, '"')
     .replace(/,\s*([}\]])/g, "$1");
-  return maybeJsonParse(repaired);
+  const repairedEscapes = repairInvalidStringEscapes(repaired);
+  return maybeJsonParse(repairedEscapes);
 };
 
 const closersFor = (stack) => stack

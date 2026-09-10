@@ -20,6 +20,11 @@ test("well-formed output is returned untouched", () => {
   assert.deepEqual(parsed, { stopDate: "2032-11-02", events: [] });
 });
 
+test("Markdown escapes inside JSON strings are repaired for local models", () => {
+  const parsed = extractJsonPayload('{"id":"UNIT\\_001","warId":"WWII\\_Europe"}');
+  assert.deepEqual(parsed, { id: "UNIT_001", warId: "WWII_Europe" });
+});
+
 test("an intact block still wins over a later unterminated one", () => {
   const parsed = extractJsonPayload('{"stopDate":"2032-11-02"} and then {"stopDate":"bad"');
   assert.deepEqual(parsed, { stopDate: "2032-11-02" });
