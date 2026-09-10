@@ -13,6 +13,7 @@ import {
 import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
+import SimulationProgress from "./simulationProgress.jsx";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
@@ -1522,6 +1523,7 @@ const DateWidget = ({
     // the notice falls back to its own wording — and set per segment when a long
     // skip is generated in pieces (AI/jumpSegments.js).
     const [jumpProgress, setJumpProgress] = useState("");
+    const [simulation, setSimulation] = useState(null);
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
     // A turn that is generated and valid but NOT written, because the Projects &
@@ -1727,6 +1729,13 @@ const DateWidget = ({
         setPanel("skip");
         setIsLoading(true);
         setJumpProgress("");
+        setSimulation({
+            days,
+            mode,
+            provider: getStoredProvider(),
+            stage: "Preparing world context",
+            startedAt: Date.now(),
+        });
         setError("");
         setFallbackWarning("");
         // simulateTimelineJump abandons any held turn when it starts, so a notice
@@ -1749,16 +1758,28 @@ const DateWidget = ({
         const controller = new AbortController();
         jumpAbortRef.current = controller;
         try {
+            const onProgress = (progress = {}) => {
+                const segmentLabel = progress.segmentCount > 1
+                    ? `Simulating segment ${progress.segment} of ${progress.segmentCount}`
+                    : "Simulating world";
+                setSimulation((current) => current ? {
+                    ...current,
+                    ...progress,
+                    stage: progress.stage || segmentLabel,
+                } : current);
+                if (progress.segmentCount > 1) {
+                    setJumpProgress(segmentLabel);
+                }
+            };
             const result = mode === "auto"
-            ? await simulateAutoJump({ days, signal: controller.signal })
+            ? await simulateAutoJump({ days, onProgress, signal: controller.signal })
             : await simulateTimelineJump({
                 days,
                 signal: controller.signal,
                 // A long skip is generated in segments (AI/jumpSegments.js) and can
                 // run for many minutes. Without this the spinner says the same
                 // thing throughout and a working turn reads as a frozen one.
-                onProgress: ({ segment, segmentCount }) =>
-                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+                onProgress,
             });
             setGameData(result.game);
             setEvents(result.events);
@@ -1839,6 +1860,7 @@ const DateWidget = ({
             jumpAbortRef.current = null;
             setIsLoading(false);
             setJumpProgress("");
+            setSimulation(null);
             // Between turns, never during one. If the ladder has learned
             // something consistent about this endpoint, offer it now.
             setModeSuggestion(getStructuredModeSuggestion());
@@ -1898,14 +1920,24 @@ const DateWidget = ({
         setIsRetryingSegment(true);
         setSegmentRetries((count) => count + 1);
         setJumpProgress("");
+        setSimulation({
+            days: 0,
+            mode: "jump",
+            provider: getStoredProvider(),
+            stage: "Retrying simulation segment",
+            startedAt: Date.now(),
+        });
         const startedAt = Date.now();
         const controller = new AbortController();
         jumpAbortRef.current = controller;
         try {
             const result = await retryPendingJumpSegment({
                 signal: controller.signal,
-                onProgress: ({ segment, segmentCount }) =>
-                    setJumpProgress(`Simulating… segment ${segment} of ${segmentCount}`),
+                onProgress: ({ segment, segmentCount }) => {
+                    const stage = `Simulating segment ${segment} of ${segmentCount}`;
+                    setJumpProgress(stage);
+                    setSimulation((current) => current ? { ...current, segment, segmentCount, stage } : current);
+                },
             });
             setGameData(result.game);
             setEvents(result.events);
@@ -1943,6 +1975,7 @@ const DateWidget = ({
             jumpAbortRef.current = null;
             setIsRetryingSegment(false);
             setJumpProgress("");
+            setSimulation(null);
         }
     };
 
@@ -2337,7 +2370,7 @@ const DateWidget = ({
         currentDate={currentDate}
         error={error}
         isLoading={isLoading}
-        isOpen={openPanel === "skip"}
+        isOpen={openPanel === "skip" && !simulation}
         isRetryingProjects={isRetryingProjects}
         isRetryingSegment={isRetryingSegment}
         modeSuggestion={modeSuggestion}
@@ -2360,6 +2393,7 @@ const DateWidget = ({
         topOffset={topOffset}
         undoCount={undoCount}
         />
+        {simulation && <SimulationProgress simulation={simulation} onCancel={cancelJump} />}
         <TimelineHistoryPanel
         isOpen={openPanel === "history"}
         onRevealNextEvent={revealNextEvent}

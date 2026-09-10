@@ -9873,8 +9873,8 @@ export const retryPendingJumpSegment = async ({ onProgress, signal } = {}) => {
   }
 };
 
-export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
-  simulateTimelineJump({ days, mode: "auto", signal });
+export const simulateAutoJump = async ({ days = 365, onProgress, signal } = {}) =>
+  simulateTimelineJump({ days, mode: "auto", onProgress, signal });
 
 // ---- GM Console: previewable, revalidated, audited transactions ------------
 // The AI plans a structured transaction; native code validates it against the
