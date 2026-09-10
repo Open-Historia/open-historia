@@ -350,7 +350,7 @@ const RegionPopup = () => {
         >
         <div
         style={{
-            backgroundColor: "rgba(17, 24, 39, 0.95)",
+            backgroundColor: "rgba(24, 24, 27, 0.95)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             borderRadius: "12px",
@@ -361,7 +361,7 @@ const RegionPopup = () => {
             color: "white",
         }}
         >
-        <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(30,42,60,0.6)" }}>
+        <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(41,41,45,0.6)" }}>
         {showFlagImage ? (
             <img
             src={flagState.imageUrl}
@@ -396,7 +396,7 @@ const RegionPopup = () => {
             position: "absolute",
             top: "7px",
             right: "7px",
-            background: "rgba(17,24,39,0.7)",
+            background: "rgba(24,24,27,0.7)",
             backdropFilter: "blur(4px)",
             border: "1px solid rgba(255,255,255,0.12)",
             borderRadius: "6px",
@@ -413,11 +413,11 @@ const RegionPopup = () => {
         }}
         onMouseEnter={(e) => {
             e.currentTarget.style.color = "rgba(255,255,255,0.9)";
-            e.currentTarget.style.background = "rgba(17,24,39,0.9)";
+            e.currentTarget.style.background = "rgba(24,24,27,0.9)";
         }}
         onMouseLeave={(e) => {
             e.currentTarget.style.color = "rgba(255,255,255,0.5)";
-            e.currentTarget.style.background = "rgba(17,24,39,0.7)";
+            e.currentTarget.style.background = "rgba(24,24,27,0.7)";
         }}
         >
         {"\u2715"}
@@ -460,7 +460,7 @@ const RegionPopup = () => {
             height: 0,
             borderLeft: "8px solid transparent",
             borderRight: "8px solid transparent",
-            borderTop: "9px solid rgba(17,24,39,0.95)",
+            borderTop: "9px solid rgba(24,24,27,0.95)",
             margin: "0 auto",
         }}
         />

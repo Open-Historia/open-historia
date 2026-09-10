@@ -436,7 +436,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         <div
         style={{
             backdropFilter: "blur(8px)",
-            backgroundColor: "rgba(17, 24, 39, 0.95)",
+            backgroundColor: "rgba(24, 24, 27, 0.95)",
             border: "1px solid rgba(255,255,255,0.1)",
             borderRadius: "16px",
             bottom: isOpen ? "4.25rem" : "-30rem",
@@ -757,8 +757,8 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
             background: isOpen
             ? "linear-gradient(145deg, rgba(109,40,217,0.4), rgba(76,29,149,0.4))"
             : hovered
-            ? "linear-gradient(145deg, rgba(40,55,80,0.95), rgba(20,30,50,0.95))"
-            : "linear-gradient(145deg, rgba(30,42,65,0.95), rgba(15,22,40,0.95))",
+            ? "linear-gradient(145deg, rgba(54,54,59,0.95), rgba(32,32,35,0.95))"
+            : "linear-gradient(145deg, rgba(43,43,47,0.95), rgba(24,24,27,0.95))",
             border: hovered
             ? "1px solid rgba(255,255,255,0.2)"
             : isOpen

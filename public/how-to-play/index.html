@@ -14,15 +14,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0b1020" />
   <link rel="icon" type="image/jpeg" href="/logo.png" />
-  <title>How to Play Open Historia — Grand Strategy Game Guide | Map Editor, AI Diplomacy &amp; Combat</title>
+  <title>How to Play Open Historia — Grand Strategy Game Guide | Map, AI Diplomacy, Actions &amp; Time Skips</title>
   <link rel="canonical" href="https://openhistoria.com/how-to-play/" />
-  <meta name="description" content="Learn how to play Open Historia, the free open-source grand strategy game. Master the interactive world map, AI diplomacy, troop combat, map editor, scenario hub, and AI advisor. Complete beginner's guide." />
+  <meta name="description" content="Learn how to play Open Historia, the free open-source AI grand strategy game: the interactive world map, chatting with AI leaders, plain-language actions, AI-generated events, the advisor, spies, troops, time skips, the map editor, and the Scenario Hub." />
 
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Open Historia" />
   <meta property="og:url" content="https://openhistoria.com/how-to-play/" />
   <meta property="og:title" content="How to Play Open Historia — Grand Strategy Game Guide" />
-  <meta property="og:description" content="Learn how to play Open Historia, the free open-source grand strategy game. Master the world map, AI diplomacy, troop combat, map editor, scenario hub, and AI advisor." />
+  <meta property="og:description" content="Learn how to play Open Historia, the free open-source AI grand strategy game: the world map, AI diplomacy, actions, events, the advisor, spies, troops, time skips, the map editor, and the Scenario Hub." />
   <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
   <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:width" content="1280" />
@@ -30,7 +30,7 @@
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="How to Play Open Historia — Grand Strategy Game Guide" />
-  <meta name="twitter:description" content="Learn how to play Open Historia, the free open-source grand strategy game. Master the world map, AI diplomacy, troop combat, map editor, scenario hub, and AI advisor." />
+  <meta name="twitter:description" content="Learn how to play Open Historia, the free open-source AI grand strategy game: the world map, AI diplomacy, actions, events, the advisor, spies, troops, time skips, the map editor, and the Scenario Hub." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
 
   <link rel="stylesheet" href="/guides.css" />
@@ -64,40 +64,60 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>How to Play Open Historia</h1>
-    <p class="tagline">Master the free open-source grand strategy game — from your first turn on the interactive world map to commanding AI diplomacy, deploying troops, creating custom scenarios, and sharing them with a global community.</p>
+    <p class="tagline">From your first look at the interactive world map to negotiating with AI leaders, giving orders in plain language, skipping time, building custom worlds in the map editor, and sharing them with the community.</p>
 
     <h2>Overview: What Is Open Historia?</h2>
     <div class="card">
-      <p>Open Historia is a <span class="highlight">free, open-source grand strategy game</span> where you command nations on an interactive world map. You negotiate with AI-powered nations through natural language chat, deploy troops, respond to AI-generated historical events, and shape the world through war, diplomacy, and expansion.</p>
-      <p>It's built as a community-driven alternative to Pax Historia — with a full vector map editor, a scenario hub for sharing custom worlds, and cross-platform support on Windows, macOS, Linux, and Android.</p>
+      <p>Open Historia is a <span class="highlight">free, open-source grand strategy game</span> where you lead one nation on an interactive world map. You give orders in plain language, negotiate with AI-run nations through chat, deploy troops and spies, and then skip time — hours, days, months or a year — while an AI simulates how the rest of the world responds: events, wars, treaties, and borders that actually move.</p>
+      <p>It is built as a community alternative to Pax Historia, with a full vector map editor, a Scenario Hub for sharing custom worlds, a desktop app for Windows, macOS and Linux, an Android app, and a browser demo.</p>
+    </div>
+
+    <div class="card">
+      <h3>The AI Runs the World</h3>
+      <p>There is no scripted simulation underneath. Every time skip is written by a language model from the current state of the world: what happened, who gained or lost territory, how other nations reacted. You bring the model — Gemini, OpenAI, Anthropic, or a local one — and the game sends it your key directly. <strong>Without an AI provider connected the world cannot advance</strong>, so set one up first: see the <a href="/ai-setup/">AI setup guide</a>.</p>
     </div>
 
     <h2>Core Features &amp; Mechanics</h2>
 
     <div class="card">
       <h3>Interactive World Map</h3>
-      <p>The map is your primary interface. Click any nation to select it and open its detail panel. Watch as territory, borders, and nations shift as history unfolds. The map supports pan, zoom, and click-to-inspect — every region, city, and unit is interactive.</p>
+      <p>The map is your primary interface. Pan, zoom, and click any region, city or unit to inspect it. Click a nation to open its panel: the description its map-maker wrote, an AI intelligence briefing on request, and an <strong>Open Diplomacy</strong> button. Watch territory, borders, and nations shift as history unfolds after every time skip.</p>
     </div>
 
     <div class="card">
       <h3>AI Diplomacy</h3>
-      <p>Click any country and start chatting with it — literally. Open Historia's <span class="highlight">AI diplomacy system</span> lets you negotiate with AI-controlled nations through natural language. Declare war, propose alliances, demand territory, threaten, or broker peace — the AI responds dynamically based on your relationship, relative strength, and the current world situation.</p>
-      <p>You can also request an <strong>AI intelligence briefing</strong> on any nation to understand its military strength, economy, allies, and posture before engaging.</p>
+      <p>Open a chat with any nation's leader and talk to them — literally. Propose alliances, demand territory, threaten, broker peace, or just probe their intentions; the leader answers in character, shaped by your relationship, relative strength, and the state of the world. What is agreed in chat feeds into the next time skip.</p>
+      <p>Before engaging, ask for an <strong>AI intelligence briefing</strong> on any nation from its panel to understand its strength, economy, allies, and posture.</p>
+    </div>
+
+    <div class="card">
+      <h3>Actions in Plain Language</h3>
+      <p>The <span class="highlight">Actions</span> panel is where you govern. Type what your nation does — "mobilise the reserves along the northern border", "offer Kenya a trade agreement", "fund a nuclear programme" — and it joins the queue. Queued actions are resolved at the next time skip, when the AI works out what they achieve and how everyone else responds.</p>
     </div>
 
     <div class="card">
       <h3>AI-Generated Events</h3>
-      <p>As you play, the game generates <span class="highlight">dynamic historical events</span> shaped by your decisions and the evolving world state. A booming economy might attract immigration; an aggressive neighbor might provoke a border crisis; a neglected province might rebel. Each event presents choices with real consequences.</p>
+      <p>Each time skip produces <span class="highlight">dynamic events</span> shaped by your decisions and the evolving world: a booming economy attracts investment, an aggressive neighbour provokes a border crisis, a neglected province rebels. Events land on the timeline with dates and consequences; you respond to them with actions, diplomacy, and troops.</p>
     </div>
 
     <div class="card">
       <h3>AI Advisor</h3>
-      <p>Stuck on strategy? Consult your <span class="highlight">AI advisor</span> for strategic guidance, economic analysis, situation summaries, and war planning. The advisor analyzes the current game state and offers actionable recommendations — which nation to ally with, where to deploy troops, how to stabilize a crumbling economy.</p>
+      <p>Stuck on strategy? Consult your <span class="highlight">AI advisor</span> for situation summaries, economic analysis, and war planning. The advisor reads the current game state and offers concrete recommendations — which nation to court, where to position troops, how to steady a crumbling economy.</p>
     </div>
 
     <div class="card">
-      <h3>Troop Deployment &amp; Combat</h3>
-      <p>You deploy, move, and position armies on the map. Deployments are "pending" until the AI resolves them — meaning you set your orders and the AI computes the outcome based on troop strength, terrain, and strategy. Scenarios control which troop types exist in their era (infantry, cavalry, tanks, aircraft, etc.).</p>
+      <h3>Spies</h3>
+      <p>From the chat panel you can <strong>deploy spies</strong> to other nations. Agents in place intercept what their host is saying to other leaders and report back; foreign agents caught in your own country can be expelled or turned into double agents. Espionage carries risk — an exposed operation sours relations.</p>
+    </div>
+
+    <div class="card">
+      <h3>Troops &amp; Combat</h3>
+      <p>You deploy, move, and position armies on the map. Deployments stay <em>pending</em> until the AI resolves them at the next time skip — you set your orders, and the AI decides the outcome from the strength of the forces involved, your other actions, and the wider situation, moving fronts and borders accordingly. Scenarios control which troop types exist in their era (infantry, cavalry, tanks, aircraft, and so on).</p>
+    </div>
+
+    <div class="card">
+      <h3>Time Skips</h3>
+      <p>Click the date at the top of the screen and choose how far to jump: 6 hours, 1 day, 3 days, 1 week, 1 month, 3 months, 6 months, or 1 year. Short skips give fine control during a crisis; long ones let whole eras play out. The AI then resolves your queued actions, plays every other nation, and writes the period's events onto the timeline.</p>
     </div>
 
     <h2>Using the Map Editor</h2>
@@ -106,58 +126,59 @@
       <ul>
         <li><strong>Draw regions:</strong> Create new territories with freehand drawing tools</li>
         <li><strong>Split and merge borders:</strong> Redraw the political map however you want</li>
-        <li><strong>Paint owners:</strong> Assign regions to specific nations</li>
-        <li><strong>Place cities:</strong> Import from the 70k+ city database or place manually</li>
-        <li><strong>Sign your map:</strong> Add creator metadata to your custom worlds</li>
+        <li><strong>Paint owners:</strong> Assign regions to nations, with their colours and flags</li>
+        <li><strong>Place cities:</strong> Search and import from a database of around 70,000 world places, or place them by hand</li>
+        <li><strong>Credit your work:</strong> Name and author your map before you share it</li>
         <li><strong>Apply &amp; Play:</strong> Hit one button to switch from editing to playing on your new map</li>
       </ul>
-      <p>Open the map editor from any scenario by clicking <strong>Open Map Editor</strong>, or visit <code>/?editor=1</code> for the standalone editor.</p>
+      <p>Open the editor from any scenario in the library by clicking <strong>Open Map Editor</strong>, or visit <code>/?editor=1</code> for the standalone editor.</p>
     </div>
 
     <h2>Scenarios &amp; The Scenario Hub</h2>
     <div class="card">
-      <p><strong>Modern Day</strong> is the built-in default scenario. The <span class="highlight">Scenario Hub</span> (accessible from the in-game <strong>Community</strong> tab) hosts community-created scenarios including:</p>
+      <p><strong>Modern Day</strong>, starting on 1 January 2016, is the only built-in scenario. Everything else lives on the <span class="highlight">Scenario Hub</span>, reached from the in-game <strong>Community</strong> tab. The official presets there include:</p>
       <ul>
         <li>World War II — 1939 — global war from the German invasion of Poland</li>
         <li>Medieval — 1200 AD — feudal Europe, crusades, and medieval empires</li>
         <li>Rome — 117 AD — the Roman Empire at its greatest extent</li>
-        <li>Mongol World — 1300 AD — the Mongol Empire and its neighbors</li>
-        <li>New World — 1650 — colonial powers, the Discovery of America, and global trade</li>
+        <li>Mongol World — 1300 AD — the Mongol Empire and its neighbours</li>
+        <li>New World — 1650 — colonial powers and global trade</li>
         <li>Bronze Age — 1200 BC — the Late Bronze Age on the eve of the Collapse</li>
       </ul>
-      <p>Browse scenarios, vote on your favorites, import with one click, and publish your own creations. Each scenario includes its own map, starting conditions, troop types, and historical context.</p>
+      <p>Alongside them are community scenarios such as The Great War — 1911, The Cold War — 1946, Fault Lines — 2014, and the Second Punic War — 218 BC. Browse them sorted by imports, likes, or date, import any with one click, and publish your own from the same tab. Each scenario brings its own map, starting conditions, troop types, and historical context.</p>
     </div>
 
     <h2>Gameplay Loop</h2>
     <div class="card">
-      <p>A typical turn in Open Historia looks like this:</p>
+      <p>A typical round in Open Historia looks like this:</p>
       <ol>
-        <li><strong>Survey:</strong> Review your nation's status — economy, military, diplomacy, and any pending events or threats.</li>
-        <li><strong>Consult the Advisor:</strong> Ask the AI advisor for strategic recommendations based on the current situation.</li>
-        <li><strong>Diplomacy:</strong> Chat with neighboring nations — negotiate, threaten, ally, or gather intelligence.</li>
-        <li><strong>Deploy Troops:</strong> Position armies for defense, offense, or deterrence.</li>
-        <li><strong>Respond to Events:</strong> Make decisions on AI-generated events that arise during the turn.</li>
-        <li><strong>Advance:</strong> End your turn and watch the AI resolve combat, process economic changes, and generate new events.</li>
+        <li><strong>Survey:</strong> Read the latest events on the timeline and check your nation's situation — economy, military, relations.</li>
+        <li><strong>Consult the Advisor:</strong> Ask for a briefing or a plan based on the current situation.</li>
+        <li><strong>Diplomacy:</strong> Chat with the leaders that matter — negotiate, threaten, ally, or gather intelligence.</li>
+        <li><strong>Act:</strong> Queue your nation's actions in plain language and position your troops.</li>
+        <li><strong>Skip time:</strong> Choose how far to jump. The AI resolves your actions, plays the other nations, and writes the events of that period.</li>
+        <li><strong>Repeat:</strong> React to what happened and plan the next move.</li>
       </ol>
     </div>
 
     <h2>Tips for New Players</h2>
     <div class="card">
       <ul>
-        <li><strong>Start with Modern Day:</strong> The default scenario is the most polished and easiest to learn on.</li>
-        <li><strong>Use the AI advisor often:</strong> It's like having a co-pilot that understands the game state.</li>
-        <li><strong>Diplomacy is powerful:</strong> A well-timed alliance can be more valuable than an expensive war.</li>
-        <li><strong>Experiment with scenarios:</strong> Each era has different troop types, economies, and diplomatic dynamics.</li>
-        <li><strong>Try the map editor:</strong> Even if you don't publish, editing maps helps you understand territory and borders.</li>
-        <li><strong>Read AI intelligence briefings:</strong> Before engaging any nation, get a briefing to understand its strength.</li>
+        <li><strong>Start with Modern Day:</strong> The built-in scenario is the most polished and the easiest to learn on.</li>
+        <li><strong>Use a capable model:</strong> The quality of events, diplomacy, and advice is the quality of the model you connect. Small local models struggle with the large answer a time skip needs.</li>
+        <li><strong>Skip short at first:</strong> A few days at a time shows you how the world responds to each action before you commit to a year.</li>
+        <li><strong>Use the AI advisor often:</strong> It reads the whole game state and is the fastest way to understand your position.</li>
+        <li><strong>Diplomacy is powerful:</strong> A well-timed alliance can be worth more than an expensive war.</li>
+        <li><strong>Read the briefings:</strong> Before engaging any nation, get an intelligence briefing to understand its strength.</li>
+        <li><strong>Try the map editor:</strong> Even if you never publish, editing a map teaches you how territory and borders work.</li>
       </ul>
     </div>
 
     <h2>Related Guides</h2>
     <ul>
-      <li><a href="/get-started/">Get Started — installation and setup</a></li>
-      <li><a href="/ai-setup/">Connect an AI Backend — enable AI features</a></li>
-      <li><a href="/self-hosting/">Self-Hosting Guide — run your own server</a></li>
+      <li><a href="/get-started/">Get Started — the desktop app, the Android app, the browser demo, and your first game</a></li>
+      <li><a href="/ai-setup/">Connect an AI provider — the model that runs the world</a></li>
+      <li><a href="/self-hosting/">Self-Hosting Guide — run the server yourself</a></li>
       <li><a href="/pax-historia-alternative/">Pax Historia Alternative — how Open Historia compares</a></li>
     </ul>
 

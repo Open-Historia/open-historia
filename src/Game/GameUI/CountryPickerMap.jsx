@@ -160,7 +160,7 @@ const CountryPickerMap = ({
           fill: new Fill({
             color: isSelected
               ? withAlpha(selectionColorRef.current, 0.6)
-              : isHovered ? "rgba(124,58,237,0.28)" : "rgba(60,65,80,0.3)",
+              : isHovered ? "rgba(124,58,237,0.28)" : "rgba(66,66,70,0.3)",
           }),
           stroke: new Stroke({
             color: isSelected ? withAlpha(selectionColorRef.current, 0.95) : "rgba(150,155,170,0.4)",
@@ -175,7 +175,7 @@ const CountryPickerMap = ({
 
       if (!isPlayable) {
         return new Style({
-          fill: new Fill({ color: "rgba(60,65,80,0.35)" }),
+          fill: new Fill({ color: "rgba(66,66,70,0.35)" }),
           stroke: new Stroke({
             color: "rgba(120,125,140,0.25)",
             width: 0.6,
@@ -321,7 +321,7 @@ const CountryPickerMap = ({
           borderRadius: 12,
           overflow: "hidden",
           border: "1px solid rgba(255,255,255,0.1)",
-          background: "#0a0c15",
+          background: "#0f0f11",
         }}
       />
       <div
@@ -343,7 +343,7 @@ const CountryPickerMap = ({
               background: "rgba(255,255,255,0.06)",
               border: "1px solid rgba(255,255,255,0.08)",
               borderRadius: "999px",
-              color: "rgba(244,246,255,0.92)",
+              color: "rgba(246,246,248,0.92)",
               cursor: "pointer",
               display: "inline-flex",
               fontSize: "0.82rem",

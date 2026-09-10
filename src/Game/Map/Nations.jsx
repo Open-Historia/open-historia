@@ -610,15 +610,22 @@ const WorldMap = ({ isGlobe = false }) => {
     // the modern country as `owner`; the scenario's real owners live in the seed
     // index, so they are stamped on here (the live ownership overrides are applied
     // later, inside buildOwnerLabelCollection).
+    //
+    // A tile region the scenario does not list at all is not this map's land:
+    // the fill paints it neutral unless a live override names an owner
+    // (stockRegionsFillPaint). Its tile copy still carries the modern country as
+    // `owner`, and used to be labelled with it — on a hand-drawn world, whose
+    // regions are all authored, that put "UNITED STATES" under "UNITED STATES OF
+    // AMERICA" and "RUSSIA" under "RUSSIAN FEDERATION" for every modern country.
+    // Blanked here, so the label builder names it only when an override does,
+    // exactly as the fill colours it.
     const base = [];
     for (const feature of stockLabelRegions?.features ?? []) {
       const id = String(feature.properties?.id ?? "");
       if (authoredIds.has(id)) continue;
       const seedOwner = regionSeed.ownersById.get(id);
       if (seedOwner === "") continue; // unowned in this scenario — never labelled
-      base.push(seedOwner === undefined
-        ? feature
-        : { ...feature, properties: { ...feature.properties, owner: seedOwner } });
+      base.push({ ...feature, properties: { ...feature.properties, owner: seedOwner ?? "" } });
     }
     return {
       type: "FeatureCollection",
@@ -1327,11 +1334,27 @@ const WorldMap = ({ isGlobe = false }) => {
           source-layer="regions"
           paint={stockRegionsFillPaint}
         />
+        <Layer
+          id="regions-outline"
+          type="line"
+          source-layer="regions"
+          filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
+          paint={regionsOutlinePaint}
+        />
         {/* Striped fill for disputed GADM regions — the tiles paint at every
-            zoom, so the stripes do too. */}
+            zoom, so the stripes do too.
+
+            Mounted only once a claim exists, which is normally AFTER the labels,
+            cities, markers and units have been added — and a layer added then
+            goes on top of the whole style, so the stripes used to cover every
+            country name and city in a contested region. beforeId slots it under
+            the hairlines instead. It sits after the outline in this tree so that
+            layer already exists when the add runs: MapLibre refuses an add before
+            a layer it cannot find, and react-map-gl does not wait for one. */}
         {disputedTileStops.length > 0 && (
           <Layer
             id="regions-disputed"
+            beforeId="regions-outline"
             type="fill"
             source-layer="regions"
             filter={editedStockIds.length
@@ -1345,13 +1368,6 @@ const WorldMap = ({ isGlobe = false }) => {
             }}
           />
         )}
-        <Layer
-          id="regions-outline"
-          type="line"
-          source-layer="regions"
-          filter={editedStockIds.length ? ["!", ["in", ["get", "GID_1"], ["literal", editedStockIds]]] : ["all"]}
-          paint={regionsOutlinePaint}
-        />
       </Source>
 
       {/* Author-DRAWN / editor-EDITED geometry only — a handful of features
@@ -1370,17 +1386,6 @@ const WorldMap = ({ isGlobe = false }) => {
           filter={AUTHORED_GEOMETRY_FILTER}
           paint={{ "fill-color": customRegionsFillColor, "fill-opacity": customActive ? 0.72 : 0 }}
         />
-        {customDisputedStops.length > 0 && (
-          <Layer
-            id="custom-regions-disputed"
-            type="fill"
-            filter={["all", AUTHORED_GEOMETRY_FILTER, ["in", ["get", "id"], ["literal", customDisputedIds]]]}
-            paint={{
-              "fill-pattern": ["match", ["get", "id"], ...customDisputedStops, customDisputedStops[1]],
-              "fill-opacity": customActive ? 0.72 : 0,
-            }}
-          />
-        )}
         <Layer
           id="custom-regions-outline"
           type="line"
@@ -1398,6 +1403,21 @@ const WorldMap = ({ isGlobe = false }) => {
               : 0,
           }}
         />
+        {/* Disputed stripes over drawn regions — the same late-mount rule as
+            regions-disputed above: after the outline in the tree, slotted under
+            it, so a claim that arrives mid-game never covers the labels. */}
+        {customDisputedStops.length > 0 && (
+          <Layer
+            id="custom-regions-disputed"
+            beforeId="custom-regions-outline"
+            type="fill"
+            filter={["all", AUTHORED_GEOMETRY_FILTER, ["in", ["get", "id"], ["literal", customDisputedIds]]]}
+            paint={{
+              "fill-pattern": ["match", ["get", "id"], ...customDisputedStops, customDisputedStops[1]],
+              "fill-opacity": customActive ? 0.72 : 0,
+            }}
+          />
+        )}
       </Source>
 
       <Source id="country-curved-label-source" type="geojson" data={activeCurvedLabelData}>

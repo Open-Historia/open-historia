@@ -11,6 +11,7 @@ import {
     loadRegionCatalog,
 } from "../../runtime/assets.js";
 import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import { jumpTargetDate } from "../../runtime/jumpDates.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -56,7 +57,7 @@ const ensureTimelineStyles = () => {
     }
 
     .timeline-markdown em {
-        color: rgba(216,227,255,0.78);
+        color: rgba(230,230,233,0.78);
     }
 
     .timeline-markdown ul,
@@ -71,13 +72,13 @@ const ensureTimelineStyles = () => {
 
     .timeline-markdown blockquote {
         border-left: 2px solid rgba(96,165,250,0.55);
-        color: rgba(214,226,255,0.68);
+        color: rgba(229,229,232,0.68);
         margin: 0.55rem 0;
         padding-left: 0.8rem;
     }
 
     .timeline-markdown code {
-        background: rgba(15,23,42,0.55);
+        background: rgba(20,20,23,0.55);
         border-radius: 4px;
         padding: 0.05rem 0.32rem;
     }
@@ -136,7 +137,7 @@ const ChevronDownIcon = () => (
 );
 
 const panelSurface = {
-    backgroundColor: "rgba(17, 24, 39, 0.95)",
+    backgroundColor: "rgba(24, 24, 27, 0.95)",
     backdropFilter: "blur(8px)",
     border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: "16px",
@@ -152,7 +153,7 @@ const panelSurface = {
 const widgetSurface = {
     alignItems: "center",
     backdropFilter: "blur(4px)",
-    backgroundColor: "rgba(17, 24, 39, 0.95)",
+    backgroundColor: "rgba(24, 24, 27, 0.95)",
     border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: "12px",
     boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
@@ -564,7 +565,7 @@ const MetricPill = ({ children, icon = null, tone = "default" }) => {
         default: {
             background: "rgba(148,163,184,0.12)",
             border: "1px solid rgba(148,163,184,0.18)",
-            color: "rgba(226,232,240,0.84)",
+            color: "rgba(232,232,234,0.84)",
         },
         accent: {
             background: "rgba(96,165,250,0.12)",
@@ -608,7 +609,7 @@ const TagPill = ({ children }) => (
         background: "rgba(255,255,255,0.04)",
                                    border: "1px solid rgba(255,255,255,0.08)",
                                    borderRadius: "999px",
-                                   color: "rgba(226,228,240,0.74)",
+                                   color: "rgba(230,230,233,0.74)",
                                    display: "inline-flex",
                                    fontSize: "0.68rem",
                                    fontWeight: 600,
@@ -689,7 +690,7 @@ const EventCard = ({ event, footer = null, lookups }) => {
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(221,228,240,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
             <ReactMarkdown>{event.description}</ReactMarkdown>
             </div>
         )}
@@ -707,7 +708,7 @@ const EmptyPanelState = ({ text }) => (
         background: "rgba(255,255,255,0.03)",
                                        border: "1px dashed rgba(255,255,255,0.1)",
                                        borderRadius: "16px",
-                                       color: "rgba(214,226,255,0.48)",
+                                       color: "rgba(229,229,232,0.48)",
                                        display: "flex",
                                        fontSize: "0.78rem",
                                        fontStyle: "italic",
@@ -817,6 +818,11 @@ const PanelChrome = ({
     );
 };
 
+// The date a skip of `days` lands on, as the timeline buttons print it. Computed
+// with the jump's own rule (runtime/jumpDates.js); currentDate is always a
+// YYYY-MM-DD by the time it gets here, so dayjs only formats it.
+const jumpLandingLabel = (from, days) => dayjs(jumpTargetDate(from, days)).format("M/D/YYYY");
+
 const JumpNode = ({ isLoading, opt, onJump }) => {
     const [hovered, setHovered] = useState(false);
 
@@ -876,15 +882,24 @@ const TimelineSkipPanel = ({
         if (!Number.isFinite(amount) || amount <= 0 || isLoading) return;
         onJump(amount * (unitToDays[customUnit] ?? 1));
     };
+    // Where a custom jump would land, shown under the row the way every preset
+    // shows its date (#718): 31 days from 1 January is 2/1, which "1 month" (30
+    // days) is not. Seen before pressing Go, not after a turn is spent.
+    const customDays = Number(customValue) * (unitToDays[customUnit] ?? 1);
+    const customLanding = Number.isFinite(customDays) && customDays > 0
+        ? jumpLandingLabel(currentDate, customDays)
+        : "";
     const jumpOptions = [
-        { label: "6 hours", sublabel: dayjs(currentDate).format("M/D/YYYY"), days: 0.25 },
-        { label: "1 day", sublabel: dayjs(currentDate).add(1, "day").format("M/D/YYYY"), days: 1 },
-        { label: "3 days", sublabel: dayjs(currentDate).add(3, "day").format("M/D/YYYY"), days: 3 },
-        { label: "1 week", sublabel: dayjs(currentDate).add(7, "day").format("M/D/YYYY"), days: 7 },
-        { label: "1 month", sublabel: dayjs(currentDate).add(1, "month").format("M/D/YYYY"), days: 30 },
-        { label: "3 months", sublabel: dayjs(currentDate).add(3, "month").format("M/D/YYYY"), days: 90 },
-        { label: "6 months", sublabel: dayjs(currentDate).add(6, "month").format("M/D/YYYY"), days: 180 },
-        { label: "1 year", sublabel: dayjs(currentDate).add(1, "year").format("M/D/YYYY"), days: 365 },
+        // Each label is the date the jump actually lands on (#718). These used to be
+        // calendar arithmetic, so "1 month" read 2/1 while the jump went 30 days, to 1/31.
+        { label: "6 hours", sublabel: jumpLandingLabel(currentDate, 0.25), days: 0.25 },
+        { label: "1 day", sublabel: jumpLandingLabel(currentDate, 1), days: 1 },
+        { label: "3 days", sublabel: jumpLandingLabel(currentDate, 3), days: 3 },
+        { label: "1 week", sublabel: jumpLandingLabel(currentDate, 7), days: 7 },
+        { label: "1 month", sublabel: jumpLandingLabel(currentDate, 30), days: 30 },
+        { label: "3 months", sublabel: jumpLandingLabel(currentDate, 90), days: 90 },
+        { label: "6 months", sublabel: jumpLandingLabel(currentDate, 180), days: 180 },
+        { label: "1 year", sublabel: jumpLandingLabel(currentDate, 365), days: 365 },
     ];
 
     return (
@@ -1055,6 +1070,11 @@ const TimelineSkipPanel = ({
         Go
         </button>
         </div>
+        {customLanding && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", marginTop: "0.3rem", textAlign: "center", width: "12.5rem" }}>
+            Lands on {customLanding}
+            </div>
+        )}
         </div>
 
         {isLoading && (

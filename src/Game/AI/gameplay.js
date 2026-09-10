@@ -7,6 +7,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
+import { addIsoDays, jumpDayStep, jumpTargetDate, parseIsoDate } from "../../runtime/jumpDates.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -109,29 +110,7 @@ const cloneValue = (value) => {
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
-const parseIsoDate = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizeString(value));
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year < 1 || month < 1 || month > 12) return null;
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day >= 1 && day <= daysInMonth[month - 1] ? { day, month, year } : null;
-};
-
-const addIsoDays = (value, days) => {
-  const parsed = parseIsoDate(value);
-  if (!parsed) return "";
-  const date = new Date(0);
-  date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-  date.setUTCDate(date.getUTCDate() + days);
-  const year = date.getUTCFullYear();
-  if (!Number.isFinite(date.getTime()) || year < 1 || year > 9999) return "";
-  return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-};
+// parseIsoDate and addIsoDays live in runtime/jumpDates.js (imported above), next to the rule for where a time skip lands.
 
 export const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requireAdvance = false }) => {
   const stopDate = normalizeString(candidate?.stopDate);
@@ -833,6 +812,19 @@ let activeSimulations = 0;
 const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
 export const isSimulationBusy = () => activeSimulations > 0;
+
+// Out-of-turn writers wait for the simulation to go idle before they read the
+// world or call the model. A jump, or the pregame backstory, reads the world,
+// works for minutes and writes it back; anything computed alongside it either
+// describes a world that is about to change or races its write. Ported from
+// beta, where the intelligence and stat-sheet first readings already use it.
+const waitForSimulationIdle = async ({ timeoutMs = 10 * 60 * 1000 } = {}) => {
+  const startedAt = Date.now();
+  while (isSimulationBusy()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error("The simulation stayed busy.");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+};
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
@@ -2126,6 +2118,11 @@ export const refreshSpyIntercepts = async () => {
 // Structured national stat sheet for the Stats tab, grounded in the same
 // campaign context as the intelligence briefing.
 export const generateCountryStatSheet = async ({ code, name } = {}) => {
+  // Issue #724: wait out any running simulation before reading the world.
+  // The Stats pane calls this directly, so on a fresh game it used to run a
+  // second AI call beside the pregame backstory, and build the sheet from a
+  // world with no history in it yet.
+  await waitForSimulationIdle();
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
   const target = name || code || "the polity";
@@ -2431,9 +2428,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   if (safeDays <= 0) {
     throw new Error("Choose a time-skip amount greater than zero.");
   }
-  const dateStep = Math.max(0, Math.round(safeDays));
+  // One rule for where a skip lands, shared with the timeline's button labels
+  // (runtime/jumpDates.js), so a button never promises a date the jump misses.
+  const dateStep = jumpDayStep(safeDays);
   const originDate = normalizeString(bundle.game.gameDate);
-  const targetDate = dateStep >= 1 ? (addIsoDays(originDate, dateStep) || originDate) : originDate;
+  const targetDate = jumpTargetDate(originDate, safeDays);
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
@@ -2624,16 +2623,22 @@ const validatePregameEvents = (candidate, { startDate, strict }) => {
 // writes doubles as the done-marker, so it can never run twice.
 export const maybeGeneratePregameHistory = async () => {
   if (isSimulationBusy()) return null;
-  const bundle = await readGameStateBundle({ force: true });
-  const briefing = normalizeString(bundle.world.startingTimelineText);
-  if (!briefing) return null;
-  if (normalizeEvents(bundle.events).length > 0) return null;
-  if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
-  const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
-  if (!startDate) return null;
-
+  // Issue #724: take the lock before the first read, not after it. It used to
+  // be taken only once the bundle had been read and checked, so for the length
+  // of that read the backstory was under way while the lock still said idle —
+  // and a Stats pane already open as a fresh game loaded started its own AI
+  // call in the gap. The "nothing to do" returns below all pass through the
+  // finally, which is what makes holding the lock across them safe.
   beginSimulation();
   try {
+    const bundle = await readGameStateBundle({ force: true });
+    const briefing = normalizeString(bundle.world.startingTimelineText);
+    if (!briefing) return null;
+    if (normalizeEvents(bundle.events).length > 0) return null;
+    if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
+    const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
+    if (!startDate) return null;
+
     const variables = await buildTemplateVariables(bundle);
     const { payload } = await runJsonTask("pregameHistory", {
       timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,

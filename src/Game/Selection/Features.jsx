@@ -205,7 +205,7 @@ const FeaturePopup = () => {
     >
       <div
         style={{
-          backgroundColor: "rgba(17, 24, 39, 0.96)",
+          backgroundColor: "rgba(24, 24, 27, 0.96)",
           backdropFilter: "blur(4px)",
           WebkitBackdropFilter: "blur(4px)",
           borderRadius: "12px",
@@ -228,7 +228,7 @@ const FeaturePopup = () => {
           <button
             onClick={() => _dismiss?.()}
             style={{
-              background: "rgba(17,24,39,0.7)",
+              background: "rgba(24,24,27,0.7)",
               border: "1px solid rgba(255,255,255,0.12)",
               borderRadius: "6px",
               width: "20px",

@@ -254,7 +254,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     return (
         <>
         {clickMode && (
-            <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(17,24,39,0.97)", border: "1px solid rgba(139,92,246,0.5)", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,0.5)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24,24,27,0.97)", border: "1px solid rgba(139,92,246,0.5)", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,0.5)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
             <span>{clickMode.label}</span>
             <button type="button" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
             </div>
@@ -262,7 +262,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
 
         <div
         style={{
-            background: "rgba(17, 24, 39, 0.96)",
+            background: "rgba(24, 24, 27, 0.96)",
             backdropFilter: "blur(8px)",
             border: "1px solid rgba(255,255,255,0.1)",
             borderRadius: 16,

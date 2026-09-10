@@ -8,17 +8,17 @@ import { syncNow, startSync, stopSync } from "./sync.js";
 
 const css = `
 .oh-acct{position:fixed;top:4.25rem;right:10px;z-index:9997;font:13px/1.4 system-ui,sans-serif}
-.oh-acct-btn{display:flex;align-items:center;gap:6px;background:rgba(15,17,23,.82);color:#e6e8ee;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:5px 11px;cursor:pointer;backdrop-filter:blur(6px);max-width:220px}
+.oh-acct-btn{display:flex;align-items:center;gap:6px;background:rgba(17,17,18,.82);color:#e8e8ea;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:5px 11px;cursor:pointer;backdrop-filter:blur(6px);max-width:220px}
 .oh-acct-btn:hover{border-color:rgba(255,255,255,.3)}
 .oh-acct-dot{width:8px;height:8px;border-radius:50%;background:#6b7280;flex:0 0 auto}
 .oh-acct-dot.ok{background:#3ddc84}.oh-acct-dot.syncing{background:#f0b429}.oh-acct-dot.error{background:#f0506e}
 .oh-acct-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.oh-acct-panel{position:absolute;top:38px;right:0;width:270px;background:#171a22;border:1px solid #262b36;border-radius:12px;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
-.oh-acct-panel h4{margin:0 0 4px;font-size:14px;color:#e6e8ee}
+.oh-acct-panel{position:absolute;top:38px;right:0;width:270px;background:#1a1a1c;border:1px solid #2a2a2d;border-radius:12px;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.oh-acct-panel h4{margin:0 0 4px;font-size:14px;color:#e8e8ea}
 .oh-acct-panel p{margin:0 0 10px;color:#9aa2b1;font-size:12px}
-.oh-acct-panel input{width:100%;box-sizing:border-box;background:#0f1117;border:1px solid #262b36;color:#e6e8ee;border-radius:8px;padding:8px 10px;margin-bottom:8px}
+.oh-acct-panel input{width:100%;box-sizing:border-box;background:#111112;border:1px solid #2a2a2d;color:#e8e8ea;border-radius:8px;padding:8px 10px;margin-bottom:8px}
 .oh-acct-panel button{width:100%;font:inherit;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:8px;padding:8px 10px}
-.oh-acct-panel button.ghost{background:transparent;border-color:#262b36;color:#e6e8ee;margin-top:6px}
+.oh-acct-panel button.ghost{background:transparent;border-color:#2a2a2d;color:#e8e8ea;margin-top:6px}
 .oh-acct-msg{color:#9aa2b1;font-size:12px;margin-top:8px}
 .oh-acct-msg a{color:#9ab0ff;word-break:break-all}
 `;

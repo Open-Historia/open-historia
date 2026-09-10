@@ -8,7 +8,7 @@ import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlag
 
 const baseStyle = {
     position: "fixed",
-    backgroundColor: "rgba(17, 24, 39, 0.9)",
+    backgroundColor: "rgba(24, 24, 27, 0.9)",
     backdropFilter: "blur(4px)",
     zIndex: 9999,
     display: "flex",
@@ -30,7 +30,7 @@ const FallbackBadge = ({ label }) => (
     title={label}
     style={{
         alignItems: "center",
-        backgroundColor: "rgba(75, 85, 99, 0.9)",
+        backgroundColor: "rgba(85, 85, 91, 0.9)",
         borderRadius: "50%",
         color: "white",
         display: "flex",
