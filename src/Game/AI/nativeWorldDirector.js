@@ -2125,10 +2125,25 @@ export const validateWorldStorylinePayload = (
     // claim that several weeks passed while its status, numeric trajectory,
     // visible milestones, AND semantic state all remained unchanged.
     const prior = existingById.get(id) || normalizeStorylineForDirector(selected);
+    const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
 
     // Hidden numeric direction must agree with the linked visible development.
     // Failed talks + renewed threats cannot quietly lower crisis pressure unless
     // the same event establishes a concrete de-escalatory fact.
+    //
+    // Only for a storyline that is actually a crisis: pressure already at the
+    // high-pressure threshold, or a war. The cue list is plain keywords, and on
+    // a quiet programme they fire on ordinary words — a player's Iranian cyber
+    // programme at pressure 18 lost a whole jump to the canned fallback because
+    // its event "deploys" new cryptographic hardware and it eased from 18 to 14.
+    // A low-pressure process drifting a few points lower is not crisis pressure
+    // being quietly erased. "Crisis" is judged from the numbers the engine keeps,
+    // not from the storyline's kind label: the model writes that label freely
+    // and could call a hardware rollout a crisis.
+    const crisisStoryline =
+      activeWar ||
+      normalizeString(prior?.kind).toLowerCase() === "war" ||
+      clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD;
     const linkedEventText = normalizeArray(update?.eventIndexes)
       .map((eventIndex) => normalizeArray(candidate?.events)[eventIndex])
       .filter(Boolean)
@@ -2139,6 +2154,7 @@ export const validateWorldStorylinePayload = (
     const pressureDelta =
       clampPercent(update?.pressure) - clampPercent(prior?.pressure);
     if (
+      crisisStoryline &&
       pressureDelta <= -4 &&
       STORYLINE_ESCALATION_OR_FAILURE_RE.test(linkedEventText) &&
       !STORYLINE_DEESCALATION_RE.test(linkedEventText)
@@ -2155,7 +2171,6 @@ export const validateWorldStorylinePayload = (
     }
 
     const stagnationAgeAtStop = storylineStagnationAgeDays(prior, stopDate);
-    const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
     if (
       enforceAntiStasis &&
       normalizeString(prior?.status).toLowerCase() === "active" &&

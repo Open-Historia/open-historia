@@ -319,3 +319,54 @@ test("failed talks cannot lower crisis pressure without an actual de-escalatory 
 
   assert.match(error, /lowers pressure/i);
 });
+
+// A player's Iran game fell back to canned events over this: its cyber
+// programme sat at pressure 18, eased to 14, and the one event bound to it
+// "deploys" hardware — a keyword the escalation cue list counts. The event and
+// the record are transcribed from the player's debug report; the prior pressure
+// of 18 is what the report's "lowers pressure by 4" implies.
+test("a low-pressure programme may ease while its event 'deploys' hardware; a crisis may not", async () => {
+  const mod = await import("../src/Game/AI/nativeWorldDirector.js");
+  const candidate = () => ({
+    events: [{
+      id: "segment-1-event-8",
+      date: "2026-08-30",
+      kind: "world",
+      title: "National Cyber Operations Center Deploys Next-Generation Cryptographic Hardening",
+      description: "The National Signals Intelligence and Cyber Operations Center deploys next-generation cryptographic hardware security modules and sovereign routing nodes across critical ministry networks, reinforcing national cyber sovereignty and intelligence defenses.",
+    }],
+    storylineUpdates: "iran-cyber-sovereignty-2024~active~14~80~~~~~National cyber sovereignty infrastructure achieves advanced operational status with upgraded hardware security modules deployed across all critical ministry networks.",
+  });
+  const storyline = (pressure) => ({
+    id: "iran-cyber-sovereignty-2024",
+    kind: "security",
+    title: "Iranian Cyber Sovereignty Programme",
+    participants: ["Iran"],
+    status: "active",
+    pressure,
+    momentum: 80,
+    startedDate: "2024-01-09",
+    state: "Sovereign network hardening is under way across the ministries.",
+  });
+  const validate = (pressure) => {
+    const payload = candidate();
+    // The jump binds events to storylines natively before judging them; the
+    // record's own event field is blank, exactly as the model sent it.
+    mod.normalizeWorldStorylineEventLinks(payload, { world: {} });
+    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [0], "the deploys event binds to the programme");
+    const storylines = [storyline(pressure)];
+    return mod.validateWorldStorylinePayload(payload, {
+      existingStorylines: storylines,
+      selectedStorylines: storylines,
+      deferredStorylines: [],
+      originDate: "2026-06-27",
+      stopDate: "2026-09-25",
+      enforceAntiStasis: false,
+      enforceSelectedCoverage: false,
+      world: {},
+    });
+  };
+
+  assert.equal(validate(18), "", "a programme at pressure 18 easing to 14 is not crisis pressure being erased");
+  assert.match(validate(65), /lowers pressure/i, "the same drop on a crisis-level storyline is still refused");
+});
