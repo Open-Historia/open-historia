@@ -7,6 +7,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
+import { addIsoDays, jumpDayStep, jumpTargetDate, parseIsoDate } from "../../runtime/jumpDates.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -109,29 +110,7 @@ const cloneValue = (value) => {
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
-const parseIsoDate = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizeString(value));
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year < 1 || month < 1 || month > 12) return null;
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day >= 1 && day <= daysInMonth[month - 1] ? { day, month, year } : null;
-};
-
-const addIsoDays = (value, days) => {
-  const parsed = parseIsoDate(value);
-  if (!parsed) return "";
-  const date = new Date(0);
-  date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-  date.setUTCDate(date.getUTCDate() + days);
-  const year = date.getUTCFullYear();
-  if (!Number.isFinite(date.getTime()) || year < 1 || year > 9999) return "";
-  return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-};
+// parseIsoDate and addIsoDays live in runtime/jumpDates.js (imported above), next to the rule for where a time skip lands.
 
 export const validateTimelineDates = ({ candidate, mode, originDate, targetDate, requireAdvance = false }) => {
   const stopDate = normalizeString(candidate?.stopDate);
@@ -2431,9 +2410,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   if (safeDays <= 0) {
     throw new Error("Choose a time-skip amount greater than zero.");
   }
-  const dateStep = Math.max(0, Math.round(safeDays));
+  // One rule for where a skip lands, shared with the timeline's button labels
+  // (runtime/jumpDates.js), so a button never promises a date the jump misses.
+  const dateStep = jumpDayStep(safeDays);
   const originDate = normalizeString(bundle.game.gameDate);
-  const targetDate = dateStep >= 1 ? (addIsoDays(originDate, dateStep) || originDate) : originDate;
+  const targetDate = jumpTargetDate(originDate, safeDays);
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
