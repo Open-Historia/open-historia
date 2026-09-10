@@ -55,7 +55,7 @@ export default function SimulationProgress({ simulation, onCancel }) {
                 {simulation.attempt > 1 && <><dt>Attempt</dt><dd>{simulation.attempt} of 2</dd></>}
             </dl>
             <div className="simulation-progress-footer">
-                <span>{seconds >= 60 ? "Still running. Complex turns can take a few minutes." : "The world is advancing."}</span>
+                <span>The world is advancing.</span>
                 <button type="button" disabled={cancelling || simulation.saving} onClick={() => {
                     setCancelling(true);
                     onCancel();

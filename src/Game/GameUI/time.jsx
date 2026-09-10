@@ -1733,7 +1733,7 @@ const DateWidget = ({
             days,
             mode,
             provider: getStoredProvider(),
-            stage: "Preparing world context",
+            stage: "Simulating world",
             startedAt: Date.now(),
         });
         setError("");
