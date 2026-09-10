@@ -4,7 +4,7 @@ Copyright (C) 2026 Open Historia
 
 This project is licensed under the terms of the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See the [LICENSE](LICENSE) file for details.
 
-Contributions are accepted under the [Contributor License Agreement](CLA.md), which assigns them to Open Historia. CLA Assistant asks you to sign it on your first pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are accepted under the [Contributor License Agreement](CLA.md): contributors keep their copyright and grant Open Historia an exclusive licence to use and relicense their work. CLA Assistant asks you to sign it on your first pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 <!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). -->
 <h1 align="center">Open Historia</h1>
