@@ -8686,6 +8686,13 @@ export const ensureCountryAssessed = (target, options = {}) =>
 // Structured national stat sheet for the Stats tab, grounded in the same
 // campaign context as the intelligence briefing.
 export const generateCountryStatSheet = async ({ code, name, forceReassess = false, signal } = {}) => {
+  // Issue #724: wait out any running simulation before reading the world.
+  // The Stats pane calls this directly, not through ensureCountryStatSheet, so
+  // it skipped the idle wait every other out-of-turn writer takes — on a fresh
+  // game that was a second AI call beside the pregame backstory, and a baseline
+  // built from a world with no history in it yet, which then became campaign
+  // canon. Ahead of the perf timer, so waiting is not reported as preparation.
+  await waitForSimulationIdle({ signal });
   const statsStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   // Stats is a read-mostly panel. Use the already-canonical runtime bundle cache
   // rather than forcing every underlying state resource back through storage on each
@@ -11811,16 +11818,22 @@ const validatePregameCanonicalBootstrap = (
 // writes doubles as the done-marker, so it can never run twice.
 export const maybeGeneratePregameHistory = async () => {
   if (isSimulationBusy()) return null;
-  const bundle = await readGameStateBundle({ force: true });
-  const briefing = normalizeString(bundle.world.startingTimelineText);
-  if (!briefing) return null;
-  if (normalizeEvents(bundle.events).length > 0) return null;
-  if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
-  const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
-  if (!startDate) return null;
-
+  // Issue #724: take the lock before the first read, not after it. It used to
+  // be taken only once the bundle had been read and checked, so for the length
+  // of that read the backstory was under way while the lock still said idle —
+  // and a Stats pane already open as a fresh game loaded started its own AI
+  // call in the gap. The "nothing to do" returns below all pass through the
+  // finally, which is what makes holding the lock across them safe.
   beginSimulation();
   try {
+    const bundle = await readGameStateBundle({ force: true });
+    const briefing = normalizeString(bundle.world.startingTimelineText);
+    if (!briefing) return null;
+    if (normalizeEvents(bundle.events).length > 0) return null;
+    if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
+    const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
+    if (!startDate) return null;
+
     // The backstory now doubles as the round-zero bootstrap of the war and
     // diplomacy ledgers: a campaign that opens mid-war starts with that war on
     // the books, and a standing alliance is a fact from day one.
