@@ -105,3 +105,52 @@ test("recent models: newest first, no duplicates, capped at ten", () => {
   assert.equal(recent[0], "model-11");
   assert.deepEqual(config.getRecentModels("gemini"), []);
 });
+
+// Issue #718: two profiles on one local endpoint, no model set, differing only
+// in custom params. Both read ACTIVE, and since the Apply button is hidden on an
+// active profile, neither could be applied from the list.
+test("a profile is active only when its custom params match too", () => {
+  const endpoint = "http://localhost:50000/v1";
+  const timeSkip = { settings: { endpoint, model: "", customParams: '{"max_tokens": 20480}' } };
+  const other = { settings: { endpoint, model: "", customParams: '{"max_tokens": 4096}' } };
+  const loaded = { endpoint, model: "", customParams: '{"max_tokens": 4096}' };
+  assert.equal(config.isPresetActive(other, loaded), true);
+  assert.equal(config.isPresetActive(timeSkip, loaded), false, "the bug: this one read ACTIVE too");
+});
+
+test("custom params are compared by meaning, not by text", () => {
+  const endpoint = "http://localhost:50000/v1";
+  const preset = { settings: { endpoint, model: "m", customParams: '{"a":1,"b":{"y":2,"x":[1,2]}}' } };
+  // Reordered keys, pretty-printed — the same request.
+  const reformatted = '{\n  "b": { "x": [1, 2], "y": 2 },\n  "a": 1\n}';
+  assert.equal(config.isPresetActive(preset, { endpoint, model: "m", customParams: reformatted }), true);
+  // Array order is meaning, though.
+  const swapped = '{"a":1,"b":{"y":2,"x":[2,1]}}';
+  assert.equal(config.isPresetActive(preset, { endpoint, model: "m", customParams: swapped }), false);
+  // A blank field and {} send the same thing.
+  const blank = { settings: { endpoint, model: "m", customParams: "" } };
+  assert.equal(config.isPresetActive(blank, { endpoint, model: "m", customParams: "{}" }), true);
+  assert.equal(config.isPresetActive(blank, { endpoint, model: "m", customParams: "   " }), true);
+});
+
+test("unparseable params are compared as text, not treated as empty", () => {
+  const endpoint = "http://localhost:11434/v1";
+  const typo = { settings: { endpoint, model: "", customParams: '{"max_tokens": }' } };
+  assert.equal(config.isPresetActive(typo, { endpoint, model: "", customParams: "" }), false);
+  assert.equal(config.isPresetActive(typo, { endpoint, model: "", customParams: '{"max_tokens": }' }), true);
+});
+
+test("endpoint whitespace and a trailing slash do not make a different profile", () => {
+  const preset = { settings: { endpoint: "http://localhost:50000/v1", model: "q", customParams: "" } };
+  assert.equal(config.isPresetActive(preset, { endpoint: " http://localhost:50000/v1/ ", model: "q", customParams: "" }), true);
+  assert.equal(config.isPresetActive(preset, { endpoint: "http://localhost:50001/v1", model: "q", customParams: "" }), false);
+  assert.equal(config.isPresetActive(preset, { endpoint: "http://localhost:50000/v1", model: "other", customParams: "" }), false);
+});
+
+test("the API key never decides whether a profile is active", () => {
+  // A profile saved without a key keeps the current key when applied, so it has
+  // to read as active afterwards even though the loaded key differs.
+  const keyless = { settings: { endpoint: "https://openrouter.ai/api/v1", apiKey: "", model: "x", customParams: "" } };
+  assert.equal(config.isPresetActive(keyless, { endpoint: "https://openrouter.ai/api/v1", apiKey: "sk-live", model: "x", customParams: "" }), true);
+  assert.equal(config.isPresetActive(null, { endpoint: "", model: "", customParams: "" }), true, "a settings-less profile is the empty one");
+});

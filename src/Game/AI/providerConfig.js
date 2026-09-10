@@ -448,6 +448,53 @@ export function deletePreset(id) {
     return true;
 }
 
+// Whether a saved profile is the one currently loaded — what the settings list
+// marks ACTIVE, and hides the Apply button for.
+//
+// Endpoint and model alone are not enough. Issue #718: two profiles on the same
+// local endpoint with no model set, differing only in their custom params (one
+// with a small max_tokens for ordinary tasks, one with a large one for time
+// skips), BOTH read ACTIVE — so neither showed Apply, and switching between them
+// from the list was impossible. The params are compared by meaning, not by
+// text: key order and whitespace do not make two identical requests different,
+// and a blank field sends exactly what "{}" sends.
+//
+// The API key is deliberately NOT compared. A profile saved without one keeps
+// whatever key is already entered when applied (see apply() in settings.jsx),
+// so a keyless profile must still read as active after being applied.
+const comparableEndpoint = (value) => String(value ?? "").trim().replace(/\/+$/, "");
+
+const canonicalJson = (value) => {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value && typeof value === "object") {
+        return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+};
+
+// Invalid JSON is compared as its text rather than as "{}". The request would
+// send nothing either way (main.jsx ignores unparseable params), but a profile
+// with a typo in it is still not the empty profile, and the badge exists to say
+// which one is loaded.
+const comparableCustomParams = (raw) => {
+    const trimmed = String(raw ?? "").trim();
+    if (!trimmed) return "{}";
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return canonicalJson(parsed);
+    } catch {
+        // fall through to the text
+    }
+    return `text:${trimmed}`;
+};
+
+export function isPresetActive(preset, current) {
+    const saved = preset?.settings ?? {};
+    return comparableEndpoint(saved.endpoint) === comparableEndpoint(current?.endpoint)
+        && String(saved.model ?? "").trim() === String(current?.model ?? "").trim()
+        && comparableCustomParams(saved.customParams) === comparableCustomParams(current?.customParams);
+}
+
 // --- Recent models ---
 //
 // The last ten models each provider actually ran with, newest first, offered

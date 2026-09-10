@@ -816,6 +816,14 @@ const TimelineSkipPanel = ({
         if (!Number.isFinite(amount) || amount <= 0 || isLoading) return;
         onJump(amount * (unitToDays[customUnit] ?? 1));
     };
+    // Where a custom jump would land, shown under the row the way every preset
+    // shows its date (#718). "1 month" is 30 days, so from 1 January it lands on
+    // the 31st; a player aiming for the 1st of the next month can now see that
+    // before pressing Go instead of after a turn has been spent finding out.
+    const customDays = Number(customValue) * (unitToDays[customUnit] ?? 1);
+    const customLanding = Number.isFinite(customDays) && customDays > 0
+        ? jumpLandingLabel(currentDate, customDays)
+        : "";
     const jumpOptions = [
         { label: "6 hours", sublabel: jumpLandingLabel(currentDate, 0.25), days: 0.25 },
         { label: "1 day", sublabel: jumpLandingLabel(currentDate, 1), days: 1 },
@@ -995,6 +1003,11 @@ const TimelineSkipPanel = ({
         Go
         </button>
         </div>
+        {customLanding && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", marginTop: "0.3rem", textAlign: "center", width: "12.5rem" }}>
+            Lands on {customLanding}
+            </div>
+        )}
         </div>
 
         {isLoading && (
