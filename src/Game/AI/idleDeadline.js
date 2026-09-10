@@ -57,6 +57,16 @@ export const AI_IDLE_TIMEOUT_MS = 300000;
 // own OH_RELAY_TIMEOUT_MS, 10 minutes by default, which reaches it first.
 export const AI_FIRST_BYTE_TIMEOUT_MS = 900000;
 
+// The world repairs (motion and breadth) get their own, tighter windows, and get
+// them whatever "Limit AI generation" says. The setting guards the turn itself:
+// off means the player would rather wait than get canned events. A repair is not
+// the turn — it is optional follow-up work on a small prompt, and a failed one
+// only leaves a storyline overdue for the next pass — so waiting on it forever
+// buys nothing. Before this they passed a stopwatch "deadline" that nothing ever
+// aborted on, and one stalled repair could hold a finished turn indefinitely.
+export const AI_REPAIR_IDLE_TIMEOUT_MS = 120000;
+export const AI_REPAIR_FIRST_BYTE_TIMEOUT_MS = 300000;
+
 // `onExpire` is called at most once: `firstByteMs` after start() if nothing ever
 // arrives, or `idleMs` after the last note() if something did. Never after
 // cancel(), and never twice.
