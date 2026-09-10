@@ -1817,6 +1817,23 @@ const storylineMateriallyEvolved = (prior, update) => {
   return normalizeArray(update.eventIndexes).length > 0;
 };
 
+// The smallest numeric movement the anti-stasis backstop accepts as real hidden
+// evolution. Exported so the motion repair's prompt states the same numbers the
+// validator enforces.
+export const ANTI_STASIS_MIN_PRESSURE_DELTA = 4;
+export const ANTI_STASIS_MIN_MOMENTUM_DELTA = 6;
+
+// Whether a storyline is past its anti-stasis backstop at stopDate: an active
+// war or high-pressure process with no visible milestone for
+// STAGNATION_BACKSTOP_DAYS. The one test behind the repair detector, the
+// validator, and the repair prompt, so the three cannot drift apart.
+export const storylineAtAntiStasisBackstop = (prior, stopDate, world = null) => {
+  if (!prior || normalizeString(prior?.status).toLowerCase() !== "active") return false;
+  const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
+  if (!activeWar && clampPercent(prior?.pressure) < HIGH_PRESSURE_STAGNATION_THRESHOLD) return false;
+  return storylineStagnationAgeDays(prior, stopDate) >= STAGNATION_BACKSTOP_DAYS;
+};
+
 // Stronger than storylineMateriallyEvolved: this deliberately ignores prose-only
 // state rewording. At the 45-day anti-stasis backstop, the model must either link
 // a real event, change status, or move pressure/momentum enough to represent an
@@ -1825,8 +1842,8 @@ const storylineHasObjectiveEvolution = (prior, update, candidate = null) => {
   if (!prior || !update) return true;
   const nextStatus = normalizeString(update.status).toLowerCase();
   if (nextStatus && nextStatus !== normalizeString(prior.status).toLowerCase()) return true;
-  if (Math.abs(clampPercent(update.pressure) - clampPercent(prior.pressure)) >= 4) return true;
-  if (Math.abs(clampPercent(update.momentum) - clampPercent(prior.momentum)) >= 6) return true;
+  if (Math.abs(clampPercent(update.pressure) - clampPercent(prior.pressure)) >= ANTI_STASIS_MIN_PRESSURE_DELTA) return true;
+  if (Math.abs(clampPercent(update.momentum) - clampPercent(prior.momentum)) >= ANTI_STASIS_MIN_MOMENTUM_DELTA) return true;
 
   const eventIndexes = normalizeArray(update.eventIndexes);
   return Boolean(
@@ -1891,6 +1908,9 @@ export const findWorldStorylineAntiStasisIssues = (
     const update = updateById.get(id);
     const stagnationAgeAtStop = storylineStagnationAgeDays(prior, stopDate);
     const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
+    // The repair's own validator enforces the backstop on either kind of issue,
+    // so the repair prompt has to know when the numeric rule applies.
+    const requiresObjectiveDelta = storylineAtAntiStasisBackstop(prior, stopDate, world);
 
     if (!update) {
       issues.push({
@@ -1899,17 +1919,14 @@ export const findWorldStorylineAntiStasisIssues = (
         update: null,
         activeWar,
         kind: "missing-update",
+        requiresObjectiveDelta,
         stagnationAgeDays: stagnationAgeAtStop,
         reason: `Native-attention storyline ${id} was omitted from the main pass and needs a local semantic repair through ${stopDate || "the pass horizon"}.`,
       });
       continue;
     }
-    const protectedProcess =
-      normalizeString(prior?.status).toLowerCase() === "active" &&
-      (activeWar || clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD);
     if (
-      protectedProcess &&
-      stagnationAgeAtStop >= STAGNATION_BACKSTOP_DAYS &&
+      requiresObjectiveDelta &&
       !storylineHasObjectiveEvolution(prior, update, candidate)
     ) {
       issues.push({
@@ -1918,6 +1935,7 @@ export const findWorldStorylineAntiStasisIssues = (
         update,
         activeWar,
         kind: "anti-stasis",
+        requiresObjectiveDelta,
         stagnationAgeDays: stagnationAgeAtStop,
         reason: `${activeWar ? "Active-war" : "High-pressure"} storyline ${id} has gone ${stagnationAgeAtStop} day(s) without a visible milestone and still has no objective evolution.`,
       });
@@ -1925,6 +1943,149 @@ export const findWorldStorylineAntiStasisIssues = (
   }
 
   return issues;
+};
+
+// ---- Motion repair, judged once per skip ------------------------------------
+// The repair used to run after every segment with no memory: a 92-day segment
+// is longer than the 21-day review and 45-day backstop, so every segment
+// re-flagged the same protected storylines, and a four-segment skip could make
+// 32 unbounded calls on the same few processes. Segments are a transport
+// detail, so the skip is judged as the one round it is: after the last segment,
+// each storyline selected at any point is checked once, from where it stood
+// before the skip to its last update in it.
+
+// A storyline selected by any segment, first sighting kept: the earliest copy
+// is the one closest to the state the skip started from. Deduped by id, so the
+// skip-level check sees each storyline once however many segments chose it.
+export const mergeSkipAttentionStorylines = (existing = [], incoming = []) => {
+  const seen = new Set(normalizeArray(existing).map((entry) => normalizeString(entry?.id)));
+  const merged = [...normalizeArray(existing)];
+  for (const entry of normalizeArray(incoming)) {
+    const id = normalizeString(entry?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(entry);
+  }
+  return merged;
+};
+
+// The skip's storylines as one pass: the last update each storyline received in
+// any segment stands for its end state (its numbers are what the ledger ends
+// on), and its event links are rebuilt from the skip's events, which carry
+// storylineIds once each segment is screened — per-segment eventIndexes point
+// into that segment's own events and mean nothing across the skip.
+export const findSkipStorylineMotionIssues = ({
+  events = [],
+  storylineUpdates = [],
+  existingStorylines = [],
+  selectedStorylines = [],
+  originDate = "",
+  stopDate = "",
+  world = null,
+} = {}) => {
+  const skipEvents = normalizeArray(events);
+  const lastUpdateById = new Map();
+  for (const update of decodeWorldStorylineUpdates(storylineUpdates)) {
+    const id = normalizeString(update?.id);
+    if (id) lastUpdateById.set(id, update);
+  }
+  const netUpdates = [...lastUpdateById.entries()].map(([id, update]) => ({
+    ...update,
+    eventIndexes: skipEvents.reduce((indexes, event, index) => {
+      if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) indexes.push(index);
+      return indexes;
+    }, []),
+  }));
+  return findWorldStorylineAntiStasisIssues(
+    { events: skipEvents, storylineUpdates: netUpdates },
+    { existingStorylines, selectedStorylines, originDate, stopDate, world },
+  );
+};
+
+// Limits on what the skip's one repair pass may spend. A skipped repair is
+// handled exactly like a failed one (the storyline stays overdue for the main
+// pass), so these cost staleness, never the turn.
+
+// The most one pass has ever needed: every attention storyline repaired once.
+export const MAX_MOTION_REPAIRS_PER_JUMP = MAX_ATTENTION_STORYLINES;
+// No new repair starts once repairs have used this much of one skip.
+export const MAX_MOTION_REPAIR_MS_PER_JUMP = 600000;
+// A storyline whose repair failed is left to the main pass for this many
+// rounds, unless it changes in the meantime.
+export const MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS = 3;
+const MAX_REMEMBERED_MOTION_REPAIR_FAILURES = 64;
+
+export const createMotionRepairBudget = () => ({
+  calls: 0,
+  ms: 0,
+});
+
+// What a failed repair saw. Anything that moves the storyline (a main-pass
+// update, a newly linked event) changes it and makes the storyline eligible again.
+export const storylineRepairFingerprint = (storyline) => {
+  const normalized = normalizeStorylineForDirector(storyline);
+  if (!normalized) return "";
+  return JSON.stringify([
+    normalized.status,
+    normalized.pressure,
+    normalized.momentum,
+    normalized.accountedThroughDate,
+    normalized.lastUpdatedDate,
+    normalized.lastVisibleEventDate,
+    normalized.state,
+  ]);
+};
+
+const motionRepairFailureKey = (campaignId, id) =>
+  `${normalizeString(campaignId)}::${normalizeString(id)}`;
+
+// "" when the issue may be repaired now, otherwise why not.
+export const motionRepairSkipReason = (
+  issue,
+  { budget = null, failures = null, campaignId = "", round = 0 } = {},
+) => {
+  const id = normalizeString(issue?.id);
+  const currentRound = Number(round) || 0;
+
+  // Only a failure from this round or the few before it counts. A round EARLIER
+  // than the failure means the player rewound (undo, or an older save of the same
+  // campaign): that failure belongs to a future that no longer exists.
+  const failure = failures?.get?.(motionRepairFailureKey(campaignId, id));
+  if (
+    failure &&
+    failure.fingerprint === storylineRepairFingerprint(issue?.prior) &&
+    currentRound >= failure.round &&
+    currentRound < failure.round + MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS
+  ) {
+    return "failed-recently";
+  }
+
+  if (budget && budget.calls >= MAX_MOTION_REPAIRS_PER_JUMP) return "call-cap";
+  if (budget && budget.ms >= MAX_MOTION_REPAIR_MS_PER_JUMP) return "time-budget";
+  return "";
+};
+
+// Counted whatever the outcome: a failed attempt still spent a call and its time.
+export const recordMotionRepairAttempt = (budget, ms = 0) => {
+  if (!budget) return;
+  budget.calls += 1;
+  budget.ms += Math.max(0, Number(ms) || 0);
+};
+
+export const recordMotionRepairOutcome = (
+  failures,
+  { campaignId = "", id = "", fingerprint = "", round = 0, ok = false } = {},
+) => {
+  if (!failures) return;
+  const key = motionRepairFailureKey(campaignId, id);
+  failures.delete(key);
+  if (ok) return;
+  failures.set(key, { fingerprint, round: Number(round) || 0 });
+  // Map iteration is insertion order, and the delete above re-inserts a
+  // refreshed failure at the end, so the first key is always the oldest.
+  while (failures.size > MAX_REMEMBERED_MOTION_REPAIR_FAILURES) {
+    failures.delete(failures.keys().next().value);
+  }
 };
 
 // Surgical salvage for deferred-storyline bookkeeping mistakes.
@@ -2158,9 +2319,7 @@ export const validateWorldStorylinePayload = (
     const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
     if (
       enforceAntiStasis &&
-      normalizeString(prior?.status).toLowerCase() === "active" &&
-      (activeWar || clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD) &&
-      stagnationAgeAtStop >= STAGNATION_BACKSTOP_DAYS &&
+      storylineAtAntiStasisBackstop(prior, stopDate, world) &&
       !storylineHasObjectiveEvolution(prior, update, candidate)
     ) {
       return `${activeWar ? "Active-war" : "High-pressure"} storyline ${id} has gone ${stagnationAgeAtStop} day(s) without a visible milestone and reached the ${STAGNATION_BACKSTOP_DAYS}-day anti-stasis backstop. Do not copy the same equilibrium forward again: link a material endogenous/external event, materially change pressure or momentum, or move the process toward a different status.`;
