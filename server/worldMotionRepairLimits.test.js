@@ -8,7 +8,9 @@ import {
   MAX_MOTION_REPAIR_MS_PER_JUMP,
   MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS,
   createMotionRepairBudget,
+  findSkipStorylineMotionIssues,
   findWorldStorylineAntiStasisIssues,
+  mergeSkipAttentionStorylines,
   motionRepairSkipReason,
   recordMotionRepairAttempt,
   recordMotionRepairOutcome,
@@ -40,54 +42,124 @@ const STOP = "1916-07-11";
 const issueFor = (id, prior = { ...stalled, id }) => ({ id, prior, kind: "missing-update" });
 const ids = (count, prefix = "storyline-") => Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`);
 
-// Runs one segment's repairs the way repairAntiStasisStorylines does.
-const runSegment = (issueIds, { budget, failures = null, campaignId = "c1", round = 1, ms = 1000 }) => {
-  const attempted = [];
-  const skipped = [];
-  for (const id of issueIds) {
-    const issue = issueFor(id);
-    const reason = motionRepairSkipReason(issue, { budget, failures, campaignId, round });
-    if (reason) {
-      skipped.push({ id, reason });
-      continue;
-    }
-    recordMotionRepairAttempt(budget, id, ms);
-    attempted.push(id);
+// A four-segment, year-long skip: the case the per-segment check got wrong.
+const SKIP_ORIGIN = "1916-06-11";
+const SKIP_STOP = "1917-06-11";
+const SEGMENTS = 4;
+// Every segment of a skip selects the stalled storyline again.
+const skipAttention = () => {
+  let attention = [];
+  for (let segment = 0; segment < SEGMENTS; segment += 1) {
+    attention = mergeSkipAttentionStorylines(attention, [{ ...stalled }]);
   }
-  return { attempted, skipped };
+  return attention;
 };
+const skipIssues = (storylineUpdates, events = []) =>
+  findSkipStorylineMotionIssues({
+    events,
+    storylineUpdates,
+    existingStorylines: [stalled],
+    selectedStorylines: skipAttention(),
+    originDate: SKIP_ORIGIN,
+    stopDate: SKIP_STOP,
+  });
 
-test("a storyline is repaired at most once per skip", () => {
-  const budget = createMotionRepairBudget();
-  const first = runSegment(["storyline-a"], { budget });
-  const second = runSegment(["storyline-a"], { budget });
-  assert.deepEqual(first.attempted, ["storyline-a"]);
-  assert.deepEqual(second.skipped, [{ id: "storyline-a", reason: "already-attempted-this-skip" }]);
+test("a storyline every segment selects is judged once for the whole skip", () => {
+  assert.equal(skipAttention().length, 1);
+
+  const issues = skipIssues([]);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].kind, "missing-update");
 });
 
-test("a four-segment skip flagging the same storylines makes one round of calls, not four", () => {
+test("movement in any segment counts for the whole skip", () => {
+  // Segment 1 moves the storyline; segments 2-4 carry its new numbers forward.
+  // Per segment, 2-4 each looked like a stalled copy-forward and paid a repair.
+  const moved = { ...stalled, pressure: stalled.pressure + 5, state: "Reserves arrive on both sides." };
+  const updates = Array.from({ length: SEGMENTS }, () => ({ ...moved, eventIndexes: [] }));
+  assert.deepEqual(skipIssues(updates), []);
+});
+
+test("a skip that never moves a stalled storyline is flagged once, not once per segment", () => {
+  const copyForward = Array.from({ length: SEGMENTS }, (_, segment) => ({
+    ...stalled,
+    state: `The stalemate holds (segment ${segment + 1}).`,
+    eventIndexes: [],
+  }));
+  const issues = skipIssues(copyForward);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].kind, "anti-stasis");
+  assert.equal(issues[0].requiresObjectiveDelta, true);
+});
+
+test("a visible development in a later segment counts, whatever that segment's own indexes said", () => {
+  // Stalled (no visible milestone since January), high pressure: past the backstop.
+  const korea = {
+    id: "storyline-korean-peninsula-crisis",
+    kind: "crisis",
+    title: "Korean Peninsula Security Crisis",
+    participants: ["Republic of Korea", "United States of America", "Democratic People's Republic of Korea"],
+    status: "active",
+    pressure: 72,
+    momentum: 63,
+    startedDate: "2019-08-14",
+    accountedThroughDate: "2020-05-22",
+    lastUpdatedDate: "2020-05-22",
+    lastVisibleEventDate: "2020-01-05",
+    nextReviewDate: "2020-06-01",
+    state: "North Korean missile testing and allied military readiness sustain a dangerous regional confrontation.",
+  };
+  const filler = (date) => ({
+    date,
+    title: "Ghana Opens New Agricultural Export Terminal",
+    description: "The terminal begins commercial operations.",
+    storylineIds: [],
+  });
+  const noImpacts = { actionIds: [], createdChats: [], markerOps: [], polityChanges: [], regionClaims: [], regionTransfers: [], unitOps: [] };
+  // Segment 2's standoff, already tagged by its segment's screen. It is event 3
+  // of the skip but event 0 of its own segment.
+  const standoff = {
+    date: "2020-09-05",
+    importance: "major",
+    kind: "military",
+    title: "Naval Standoff in the Yellow Sea Heightens Korean Peninsula Tensions",
+    description:
+      "North Korean patrol vessels cross the Northern Limit Line, prompting an immediate tactical deployment of Republic of Korea naval forces and allied reconnaissance aircraft before the vessels withdraw after tense maneuvering.",
+    storylineIds: [korea.id],
+    impacts: noImpacts,
+  };
+  const events = [filler("2020-06-10"), filler("2020-07-10"), filler("2020-08-10"), standoff];
+  const updates = [
+    { ...korea, eventIndexes: [] },
+    { ...korea, eventIndexes: [0] }, // segment-local: 0 is the filler, skip-wide
+  ];
+
+  const issues = findSkipStorylineMotionIssues({
+    events,
+    storylineUpdates: updates,
+    existingStorylines: [korea],
+    selectedStorylines: [korea],
+    originDate: "2020-05-22",
+    stopDate: "2020-11-22",
+    world: {},
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("a skip makes at most the capped number of repair calls", () => {
   const budget = createMotionRepairBudget();
-  const flagged = ids(MAX_MOTION_REPAIRS_PER_JUMP);
-  let calls = 0;
-  for (let segment = 0; segment < 4; segment += 1) {
-    // A storyline first flagged in segment 3 arrives after the cap is spent.
-    const segmentIds = segment === 2 ? [...flagged, "storyline-new"] : flagged;
-    const { attempted, skipped } = runSegment(segmentIds, { budget });
-    calls += attempted.length;
-    if (segment > 0) {
-      assert.ok(skipped.filter((entry) => flagged.includes(entry.id)).every((entry) => entry.reason === "already-attempted-this-skip"));
-    }
-    if (segment === 2) {
-      assert.deepEqual(skipped.find((entry) => entry.id === "storyline-new"), { id: "storyline-new", reason: "call-cap" });
-    }
-  }
-  assert.equal(calls, MAX_MOTION_REPAIRS_PER_JUMP);
-  assert.equal(budget.calls, MAX_MOTION_REPAIRS_PER_JUMP);
+  const reasons = ids(MAX_MOTION_REPAIRS_PER_JUMP + 1).map((id) => {
+    const reason = motionRepairSkipReason(issueFor(id), { budget });
+    if (!reason) recordMotionRepairAttempt(budget, 1000);
+    return reason;
+  });
+  assert.equal(reasons.filter((reason) => reason === "").length, MAX_MOTION_REPAIRS_PER_JUMP);
+  assert.equal(reasons.at(-1), "call-cap");
 });
 
 test("no new repair starts once the skip's repair time is spent", () => {
   const budget = createMotionRepairBudget();
-  recordMotionRepairAttempt(budget, "storyline-slow", MAX_MOTION_REPAIR_MS_PER_JUMP);
+  recordMotionRepairAttempt(budget, MAX_MOTION_REPAIR_MS_PER_JUMP);
   assert.equal(motionRepairSkipReason(issueFor("storyline-next"), { budget }), "time-budget");
 });
 
@@ -100,9 +172,15 @@ test("a failed repair waits out its cooldown unless the storyline changes", () =
   const reasonAt = (round, extra = {}) =>
     motionRepairSkipReason({ ...issue, ...extra }, { budget: createMotionRepairBudget(), failures, campaignId: "c1", round });
 
+  assert.equal(reasonAt(10), "failed-recently");
   assert.equal(reasonAt(11), "failed-recently");
   assert.equal(reasonAt(10 + MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS - 1), "failed-recently");
   assert.equal(reasonAt(10 + MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS), "");
+
+  // A rewind (undo, or an older save of the campaign) to before the failure:
+  // that failure is from a future that no longer exists, so it never blocks.
+  assert.equal(reasonAt(9), "");
+  assert.equal(reasonAt(4), "");
 
   // A newly linked event moves the storyline, so it is eligible at once.
   assert.equal(reasonAt(11, { prior: { ...stalled, lastVisibleEventDate: "1916-07-01" } }), "");

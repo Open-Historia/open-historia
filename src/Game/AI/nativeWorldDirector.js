@@ -1945,15 +1945,68 @@ export const findWorldStorylineAntiStasisIssues = (
   return issues;
 };
 
-// ---- Motion repair limits ---------------------------------------------------
+// ---- Motion repair, judged once per skip ------------------------------------
 // The repair used to run after every segment with no memory: a 92-day segment
-// re-selects the same protected storylines each time, and a failed repair
-// leaves them overdue, so a four-segment skip could make 32 unbounded calls on
-// the same few processes. A skipped repair is handled exactly like a failed one
-// (the storyline stays overdue for the main pass), so these limits cost
-// staleness, never the turn.
+// is longer than the 21-day review and 45-day backstop, so every segment
+// re-flagged the same protected storylines, and a four-segment skip could make
+// 32 unbounded calls on the same few processes. Segments are a transport
+// detail, so the skip is judged as the one round it is: after the last segment,
+// each storyline selected at any point is checked once, from where it stood
+// before the skip to its last update in it.
 
-// The worst case of a single-call skip: every selected storyline repaired once.
+// A storyline selected by any segment, first sighting kept: the earliest copy
+// is the one closest to the state the skip started from. Deduped by id, so the
+// skip-level check sees each storyline once however many segments chose it.
+export const mergeSkipAttentionStorylines = (existing = [], incoming = []) => {
+  const seen = new Set(normalizeArray(existing).map((entry) => normalizeString(entry?.id)));
+  const merged = [...normalizeArray(existing)];
+  for (const entry of normalizeArray(incoming)) {
+    const id = normalizeString(entry?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(entry);
+  }
+  return merged;
+};
+
+// The skip's storylines as one pass: the last update each storyline received in
+// any segment stands for its end state (its numbers are what the ledger ends
+// on), and its event links are rebuilt from the skip's events, which carry
+// storylineIds once each segment is screened — per-segment eventIndexes point
+// into that segment's own events and mean nothing across the skip.
+export const findSkipStorylineMotionIssues = ({
+  events = [],
+  storylineUpdates = [],
+  existingStorylines = [],
+  selectedStorylines = [],
+  originDate = "",
+  stopDate = "",
+  world = null,
+} = {}) => {
+  const skipEvents = normalizeArray(events);
+  const lastUpdateById = new Map();
+  for (const update of decodeWorldStorylineUpdates(storylineUpdates)) {
+    const id = normalizeString(update?.id);
+    if (id) lastUpdateById.set(id, update);
+  }
+  const netUpdates = [...lastUpdateById.entries()].map(([id, update]) => ({
+    ...update,
+    eventIndexes: skipEvents.reduce((indexes, event, index) => {
+      if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) indexes.push(index);
+      return indexes;
+    }, []),
+  }));
+  return findWorldStorylineAntiStasisIssues(
+    { events: skipEvents, storylineUpdates: netUpdates },
+    { existingStorylines, selectedStorylines, originDate, stopDate, world },
+  );
+};
+
+// Limits on what the skip's one repair pass may spend. A skipped repair is
+// handled exactly like a failed one (the storyline stays overdue for the main
+// pass), so these cost staleness, never the turn.
+
+// The most one pass has ever needed: every attention storyline repaired once.
 export const MAX_MOTION_REPAIRS_PER_JUMP = MAX_ATTENTION_STORYLINES;
 // No new repair starts once repairs have used this much of one skip.
 export const MAX_MOTION_REPAIR_MS_PER_JUMP = 600000;
@@ -1963,7 +2016,6 @@ export const MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS = 3;
 const MAX_REMEMBERED_MOTION_REPAIR_FAILURES = 64;
 
 export const createMotionRepairBudget = () => ({
-  attemptedIds: new Set(),
   calls: 0,
   ms: 0,
 });
@@ -1993,13 +2045,17 @@ export const motionRepairSkipReason = (
   { budget = null, failures = null, campaignId = "", round = 0 } = {},
 ) => {
   const id = normalizeString(issue?.id);
-  if (budget?.attemptedIds?.has(id)) return "already-attempted-this-skip";
+  const currentRound = Number(round) || 0;
 
+  // Only a failure from this round or the few before it counts. A round EARLIER
+  // than the failure means the player rewound (undo, or an older save of the same
+  // campaign): that failure belongs to a future that no longer exists.
   const failure = failures?.get?.(motionRepairFailureKey(campaignId, id));
   if (
     failure &&
     failure.fingerprint === storylineRepairFingerprint(issue?.prior) &&
-    (Number(round) || 0) < failure.round + MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS
+    currentRound >= failure.round &&
+    currentRound < failure.round + MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS
   ) {
     return "failed-recently";
   }
@@ -2010,9 +2066,8 @@ export const motionRepairSkipReason = (
 };
 
 // Counted whatever the outcome: a failed attempt still spent a call and its time.
-export const recordMotionRepairAttempt = (budget, id, ms = 0) => {
+export const recordMotionRepairAttempt = (budget, ms = 0) => {
   if (!budget) return;
-  budget.attemptedIds.add(normalizeString(id));
   budget.calls += 1;
   budget.ms += Math.max(0, Number(ms) || 0);
 };

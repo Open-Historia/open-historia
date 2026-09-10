@@ -15,7 +15,8 @@ import {
   buildWorldInitiativeContext,
   createMotionRepairBudget,
   decodeWorldStorylineUpdates,
-  findWorldStorylineAntiStasisIssues,
+  findSkipStorylineMotionIssues,
+  mergeSkipAttentionStorylines,
   motionRepairSkipReason,
   normalizeWorldStorylineEventLinks,
   recordMotionRepairAttempt,
@@ -155,13 +156,7 @@ import {
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
-import {
-  AI_FIRST_BYTE_TIMEOUT_MS,
-  AI_IDLE_TIMEOUT_MS,
-  AI_REPAIR_FIRST_BYTE_TIMEOUT_MS,
-  AI_REPAIR_IDLE_TIMEOUT_MS,
-  createIdleDeadline,
-} from "./idleDeadline.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { isProviderConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
@@ -681,8 +676,9 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0 }) 
 // of deferred storylines are stripped, serious visible history must bite into a
 // canonical owner, and the records are checked against the storyline ledger as
 // the earlier segments left it. A stale selected storyline, or one whose update
-// was omitted, is repaired LOCALLY after acceptance (repairAntiStasisStorylines)
-// so one overdue process never discards a segment's other events.
+// was omitted, is repaired LOCALLY once the whole skip is in hand
+// (repairSkipStorylineMotion) so one overdue process never discards a segment's
+// other events.
 const validateSegmentStorylines = (candidate, {
   world,
   analysis,
@@ -5533,10 +5529,10 @@ const buildWorldInitiativeContextBackground = async (bundle, options = {}, signa
 // Both repairs used to hand callAI a stopwatch "deadline", which callAI only
 // reads to decide whether a busy-retry still fits — nothing ever aborted on it,
 // so a stalled repair could hold a finished turn forever. This one aborts on
-// silence, like runJsonTask, but on the repairs' own always-on windows
-// (idleDeadline.js explains why they ignore "Limit AI generation"). The abort is
-// on a local controller: the caller's `signal` stays un-aborted, so its catch
-// sees an ordinary failure, while the player's Cancel still cancels.
+// silence with runJsonTask's two windows, but always on (idleDeadline.js
+// explains why repairs ignore "Limit AI generation"). The abort is on a local
+// controller: the caller's `signal` stays un-aborted, so its catch sees an
+// ordinary failure, while the player's Cancel still cancels.
 const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled } = {}) => {
   const controller = new AbortController();
   if (signal) {
@@ -5545,7 +5541,7 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
   }
   const timeoutError = new Error(`AI task "${taskKey}" timed out: the model stopped answering.`);
   const idle = createIdleDeadline(
-    { idleMs: AI_REPAIR_IDLE_TIMEOUT_MS, firstByteMs: AI_REPAIR_FIRST_BYTE_TIMEOUT_MS },
+    { idleMs: AI_IDLE_TIMEOUT_MS, firstByteMs: AI_FIRST_BYTE_TIMEOUT_MS },
     () => controller.abort(timeoutError),
   );
   const now = () =>
@@ -5583,11 +5579,11 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
 };
 
 // ---- Storyline motion repair (Continuum 07.2) -----------------------------
-// A selected storyline that the accepted segment still left objectively
-// unchanged past its anti-stasis backstop, or omitted from storylineUpdates,
-// is repaired on its own: one narrow AI call that may only return that
-// storyline's semantic movement. Unrelated events are never discarded, and a
-// failed repair just leaves the process overdue for the next turn.
+// A selected storyline that the finished skip still left objectively unchanged
+// past its anti-stasis backstop, or never updated, is repaired on its own: one
+// narrow AI call that may only return that storyline's semantic movement.
+// Unrelated events are never discarded, and a failed repair just leaves the
+// process overdue for the next turn.
 const WORLD_MOTION_REPAIR_HISTORY_LIMIT = 8;
 
 const compactStorylineRepairHistory = (bundle, storyline) => {
@@ -5838,32 +5834,53 @@ const runTargetedWorldMotionRepair = async ({
   }
 };
 
-const repairAntiStasisStorylines = async ({
-  payload,
-  bundle,
-  analysis,
-  originDate,
-  targetDate,
-  passMaxEvents,
-  signal,
-  // The skip's repair budget (createMotionRepairBudget), shared by every segment
-  // of one skip; failed-repair memory across turns; and what keys it.
-  budget = null,
-  failures = null,
-  campaignId = "",
-  round = 0,
-} = {}) => {
-  const issues = findWorldStorylineAntiStasisIssues(payload, {
-    existingStorylines: bundle?.world?.storylines,
-    selectedStorylines: analysis?.attentionStorylines,
-    originDate,
-    stopDate: normalizeString(payload?.stopDate) || targetDate,
-    world: bundle?.world,
-  });
-  if (!issues.length) return { repaired: 0, failed: 0, skipped: [], issues: [] };
+// The skip's one motion repair pass, run once its last segment is in hand (see
+// findSkipStorylineMotionIssues for how the skip is judged as a single round).
+// Its results are written into the segment payloads, so they reach the ledger
+// through the same merge as everything else.
+const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
+  const { bundle, campaignId, originDate, targetDate } = context;
+  const payloads = normalizeArray(state?.segmentPayloads);
+  const none = { repaired: 0, failed: 0, skipped: [], issues: [] };
+  if (!payloads.length) return none;
+  // A canned fallback means the model is not answering; repair calls to the same
+  // provider would only fail again after costing their wait.
+  if (normalizeString(state?.generation?.source) === "fallback") return none;
 
-  let events = normalizeArray(payload?.events);
-  let updates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+  // ONE stop date for detecting the issues, prompting the repair and validating
+  // it: the merged one the round is applied at. (Detecting at one date and
+  // validating at another could tell the model a prose-only stalemate was fine
+  // and then reject exactly that.)
+  const merged = mergeSegmentPayloads(payloads, { targetDate });
+  const stopDate = normalizeString(merged.stopDate) || targetDate;
+  const events = normalizeArray(merged.events);
+  const baseStorylines = normalizeArray(bundle?.world?.storylines);
+  const world = state.ledgerWorld || bundle.world;
+  const issues = findSkipStorylineMotionIssues({
+    events,
+    storylineUpdates: merged.storylineUpdates,
+    existingStorylines: baseStorylines,
+    selectedStorylines: state.attentionStorylines,
+    originDate,
+    stopDate,
+    world,
+  });
+  if (!issues.length) return none;
+
+  const budget = state.motionRepairBudget;
+  const round = bundle?.game?.round || 0;
+  // The world as the skip left it, for the repair's dossiers and history.
+  const repairBundle = {
+    actions: bundle.actions,
+    chats: bundle.chats,
+    events: normalizeEvents([...normalizeArray(bundle.events), ...events]),
+    game: bundle.game,
+    world,
+  };
+  const repairedUpdates = [];
+  // Storylines whose skip updates this pass replaces (repaired) or withdraws
+  // (failed or skipped).
+  const settledIds = new Set();
   let repaired = 0;
   let failed = 0;
   const skipped = [];
@@ -5881,12 +5898,11 @@ const repairAntiStasisStorylines = async ({
     const issueId = normalizeString(issue?.id);
 
     // Over its limits the issue is treated exactly like a failed repair: the
-    // insufficient copy-forward goes and the storyline stays overdue for the
-    // main pass. Issues arrive in attention order, so the cap keeps the most
-    // urgent ones.
-    const skipReason = motionRepairSkipReason(issue, { budget, failures, campaignId, round });
+    // storyline stays overdue for the main pass. Issues arrive in attention
+    // order, so the cap keeps the most urgent ones.
+    const skipReason = motionRepairSkipReason(issue, { budget, failures: motionRepairFailures, campaignId, round });
     if (skipReason) {
-      updates = updates.filter((entry) => normalizeString(entry?.id) !== issueId);
+      settledIds.add(issueId);
       skipped.push({ id: issueId, reason: skipReason });
       continue;
     }
@@ -5903,58 +5919,62 @@ const repairAntiStasisStorylines = async ({
 
     const repairStartedAt = Date.now();
     const repair = await runTargetedWorldMotionRepair({
-      bundle,
+      bundle: repairBundle,
       issue,
       mainPassEvents: events,
       existingCausalEventIndex,
       originDate,
-      targetDate,
+      targetDate: stopDate,
       signal,
     });
-    recordMotionRepairAttempt(budget, issueId, Date.now() - repairStartedAt);
-    recordMotionRepairOutcome(failures, {
+    recordMotionRepairAttempt(budget, Date.now() - repairStartedAt);
+    recordMotionRepairOutcome(motionRepairFailures, {
       campaignId,
       id: issueId,
       fingerprint: storylineRepairFingerprint(issue?.prior),
       round,
       ok: Boolean(repair),
     });
-
-    // Remove the insufficient copy-forward either way. If repair fails this keeps
-    // the canonical storyline's old accounted/review dates intact, so it remains
-    // immediately overdue next turn instead of being silently pushed forward.
-    updates = updates.filter((entry) => normalizeString(entry?.id) !== normalizeString(issue.id));
+    settledIds.add(issueId);
 
     if (!repair) {
       failed += 1;
       continue;
     }
 
-    if (repair.event) events = [...events, repair.event];
-
-    const repairedEventIndexes =
-      Number.isInteger(repair.existingCausalEventIndex) &&
-      repair.existingCausalEventIndex >= 0 &&
-      repair.existingCausalEventIndex < events.length
-        ? [repair.existingCausalEventIndex]
-        : [];
-
-    updates.push({
-      ...repair.update,
-      eventIndexes: repairedEventIndexes,
-    });
+    // No event index: a causal event already carries this storyline's id (that
+    // is how it was found), and the ledger links storylines to events by id.
+    repairedUpdates.push({ ...repair.update, eventIndexes: [] });
     repaired += 1;
 
     console.info(
       `[OH World Motion Repair] repaired ${issue.id}: ` +
-      `${repairedEventIndexes.length ? "semantic state bound to existing main-pass event" : "hidden objective evolution"}.`,
+      `${existingCausalEventIndex >= 0 ? "semantic state bound to existing main-pass event" : "hidden objective evolution"}.`,
     );
   }
 
-  payload.events = events;
-  // Internal transport may be object records after schema validation; the native
-  // decoder explicitly supports this form and preserves exact event-index offsets.
-  payload.storylineUpdates = updates;
+  // Withdraw the skip's insufficient copy-forwards for every settled storyline
+  // that existed before the skip. A failed or skipped one then keeps its old
+  // accounted/review dates and stays overdue next turn instead of being silently
+  // pushed forward; a repaired one ends on its repair. A storyline BORN in this
+  // skip keeps its updates — withdrawing them would erase it.
+  const preSkipIds = new Set(baseStorylines.map((entry) => normalizeString(entry?.id)).filter(Boolean));
+  const withdrawIds = new Set([...settledIds].filter((id) => preSkipIds.has(id)));
+  if (withdrawIds.size) {
+    for (const payload of payloads) {
+      // Internal transport may be object records after schema validation; the
+      // native decoder supports that form and preserves event-index offsets.
+      const updates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+      if (!updates.some((entry) => withdrawIds.has(normalizeString(entry?.id)))) continue;
+      payload.storylineUpdates = updates.filter((entry) => !withdrawIds.has(normalizeString(entry?.id)));
+    }
+  }
+  // The repairs ride on the last segment, so they are the last word on their
+  // storylines when the merged updates are applied in order.
+  if (repairedUpdates.length) {
+    const last = payloads[payloads.length - 1];
+    last.storylineUpdates = [...decodeWorldStorylineUpdates(last.storylineUpdates), ...repairedUpdates];
+  }
 
   // One line a bug report can carry: what this pass spent and what it left
   // overdue on purpose.
@@ -5967,15 +5987,14 @@ const repairAntiStasisStorylines = async ({
     repaired,
     failed,
     skipped: skippedByReason,
-    skipCalls: budget?.calls ?? null,
-    skipRepairMs: budget ? Math.round(budget.ms) : null,
+    repairMs: budget ? Math.round(budget.ms) : null,
   };
   console.info(
-    `[OH World Motion Repair] ${originDate} → ${targetDate}: attempted ${summary.attempted}, repaired ${repaired}, failed ${failed}` +
+    `[OH World Motion Repair] skip ${originDate} → ${stopDate}: attempted ${summary.attempted}, repaired ${repaired}, failed ${failed}` +
     `${skipped.length ? `, left overdue ${skipped.map((entry) => `${entry.id} (${entry.reason})`).join(", ")}` : ""}` +
-    `${budget ? `; this skip so far ${budget.calls} call(s), ${Math.round(budget.ms / 1000)}s` : ""}.`,
+    `${budget ? `; ${Math.round(budget.ms / 1000)}s of repair time` : ""}.`,
   );
-  logDebugEvent("turn", "World motion repair pass.", { originDate, targetDate, ...summary });
+  logDebugEvent("turn", "World motion repair pass.", { originDate, stopDate, ...summary });
 
   return { repaired, failed, skipped, issues };
 };
@@ -9626,23 +9645,6 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
         variables: segmentVariables,
       });
 
-      // The accepted segment keeps its events. A selected storyline that is
-      // objectively stale, or was omitted from storylineUpdates, gets one small
-      // targeted repair call; a failed repair leaves the process overdue. The
-      // budget belongs to the whole skip, not the segment (and a retried held
-      // segment keeps it), so each storyline is repaired at most once per skip.
-      await repairAntiStasisStorylines({
-        payload,
-        bundle: segmentBundle,
-        analysis: worldInitiative.analysis,
-        originDate: state.segmentOrigin,
-        targetDate: segmentTarget,
-        signal,
-        budget: state.motionRepairBudget,
-        failures: motionRepairFailures,
-        campaignId: context.campaignId,
-        round: bundle.game.round,
-      });
       screenSegmentPayload(payload, {
         analysis: worldInitiative.analysis,
         priorEvents: segmentBundle.events,
@@ -9657,6 +9659,13 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
       });
 
       state.segmentPayloads.push(payload);
+      // What this segment asked the model to move, for the skip's one motion
+      // repair pass. Recorded only with the committed segment, so a failed
+      // attempt's selection never lingers into its retry.
+      state.attentionStorylines = mergeSkipAttentionStorylines(
+        state.attentionStorylines,
+        worldInitiative.analysis?.attentionStorylines,
+      );
       state.ledgerWorld = advanceLedgerWorld(ledgerWorld, payload, {
         stopDate: normalizeString(payload?.stopDate) || segmentTarget,
         round: (bundle.game.round || 1) + 1,
@@ -9709,6 +9718,13 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
       segmentIndex,
     });
   }
+
+  // Every segment is in hand. A selected storyline the skip left objectively
+  // stale, or never updated, gets one small targeted repair call — judged once
+  // for the whole skip, never per segment; a failed repair leaves it overdue.
+  // Outside the try on purpose: nothing here may hold the turn as a failed
+  // segment, and a repair never throws except on the player's Cancel.
+  await repairSkipStorylineMotion({ context, state, signal });
 };
 
 // Merge the segments into the one round the player asked for and write it.
@@ -9917,7 +9933,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     ledgerWorld: bundle.world,
     // One exploration audit per segment; the quietest is re-searched after curation.
     breadthRepairContexts: [],
-    // What the storyline motion repair may still spend on this skip.
+    // Every storyline any segment selected, and what the skip's one motion
+    // repair pass may spend (repairSkipStorylineMotion).
+    attentionStorylines: [],
     motionRepairBudget: createMotionRepairBudget(),
   };
 
