@@ -35,7 +35,8 @@ import { setWorldStateOverride } from "../Map/useWorldState.js";
 import { setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { MAP_SETTING_KEYS, isBetaUnits, useMapSetting } from "../../runtime/mapSettings.js";
-import { addGameDays, formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
+import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
+import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 
 dayjs.extend(advancedFormat);
 
@@ -213,10 +214,13 @@ const formatDate = (value, pattern = "MMM D, YYYY") => {
     return parsed.isValid() ? parsed.format(pattern) : String(value);
 };
 
-// Where a jump of `days` from `from` lands, as the widget shows it.
+// Where a jump of `days` from `from` lands, as the widget shows it — through
+// jumpTargetDate, the rule the jump itself uses, so a part-day skip rounds the
+// same way here as there (12 hours is tomorrow). addGameDays alone truncates:
+// the custom row read today for a 12-hour skip that landed on tomorrow.
 const jumpLandingLabel = (from, days) =>
-    formatGameDateReadable(addGameDays(from, days), "M/D/YYYY")
-    || dayjs(from).add(Math.trunc(days), "day").format("M/D/YYYY");
+    formatGameDateReadable(jumpTargetDate(from, days), "M/D/YYYY")
+    || dayjs(from).add(jumpDayStep(days), "day").format("M/D/YYYY");
 
 const formatRange = (fromDate, toDate) => {
     if (!fromDate && !toDate) {
