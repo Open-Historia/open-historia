@@ -74,7 +74,7 @@ If You sign this Agreement on behalf of a legal entity, You represent that You a
 
 (e) If any provision of this Agreement is held to be unenforceable, it will be enforced to the maximum extent permitted, and the remaining provisions will stay in force.
 
-(f) This Agreement is governed by the laws of [GOVERNING JURISDICTION], without regard to its conflict-of-laws rules. The courts of [GOVERNING JURISDICTION] have exclusive jurisdiction over any dispute arising out of or relating to this Agreement, except that the Owner may seek injunctive or other equitable relief in any court of competent jurisdiction.
+(f) This Agreement is governed by the laws of the State of Ohio, United States of America, without regard to its conflict-of-laws rules. The state and federal courts located in the State of Ohio have exclusive jurisdiction over any dispute arising out of or relating to this Agreement, and You consent to their personal jurisdiction, except that the Owner may seek injunctive or other equitable relief in any court of competent jurisdiction.
 
 (g) Notices to the Owner may be sent through the contact details published for the Open-Historia GitHub organization at https://github.com/Open-Historia.
 

@@ -25,7 +25,7 @@ You sign once, for the whole Project, and it covers pull requests you have alrea
 
 If you contribute for an employer or another organization, that organization signs the Agreement itself (choose "On behalf of a legal entity" when signing, and make sure you are authorized to sign for it) and names its contributors. If you are unsure whether your employer holds rights in what you write, ask them before you open the pull request.
 
-The text at [CLA.md](CLA.md) is the canonical copy. The Gist that CLA Assistant shows you mirrors it; if the two ever differ, the version you signed governs your contributions.
+The text at [CLA.md](CLA.md) is the canonical copy. The [Gist that CLA Assistant shows you](https://gist.github.com/Arkniem/f872c1b70ee0e762d87f927c199e6c9d) mirrors it; if the two ever differ, the version you signed governs your contributions.
 
 ## Pull requests
 
