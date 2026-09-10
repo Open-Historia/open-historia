@@ -1,0 +1,41 @@
+.simulation-progress {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9998;
+    box-sizing: border-box;
+    width: min(26.25rem, calc(100vw - 1rem));
+    max-height: calc(100dvh - 9rem);
+    overflow: auto;
+    padding: 1rem 1.1rem;
+    border: 1px solid oklch(40% .025 295);
+    border-radius: 16px;
+    background: oklch(20% .008 295);
+    color: oklch(93% .008 295);
+    box-shadow: 0 8px 24px oklch(10% .008 295 / .3);
+    font: .78rem/1.5 sans-serif;
+}
+.simulation-progress-heading { display: flex; align-items: center; gap: .7rem; }
+.simulation-progress-title { min-width: 0; flex: 1; }
+.simulation-progress h2 { margin: 0; font-size: .95rem; font-weight: 700; }
+.simulation-progress p { margin: .1rem 0 0; color: oklch(77% .04 295); }
+.simulation-progress time { margin-left: auto; flex-shrink: 0; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.simulation-progress-orbit { width: 32px; height: 32px; flex-shrink: 0; color: oklch(77% .12 295); animation: simulation-orbit 5s linear infinite; }
+.simulation-progress dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .4rem 1.25rem; margin: 1rem 0; padding: .8rem 0; border-block: 1px solid oklch(35% .015 295); }
+.simulation-progress dt { color: oklch(73% .015 295); }
+.simulation-progress dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.simulation-progress-footer { display: flex; align-items: center; gap: 1rem; }
+.simulation-progress-footer span { color: oklch(73% .015 295); font-size: .72rem; flex: 1; }
+.simulation-progress button { border: 1px solid oklch(48% .025 295); border-radius: 8px; background: transparent; color: inherit; padding: .35rem .7rem; font: inherit; cursor: pointer; }
+.simulation-progress button:hover:not(:disabled) { background: oklch(30% .025 295); }
+.simulation-progress button:focus-visible { outline: 2px solid oklch(77% .12 295); outline-offset: 3px; }
+.simulation-progress button:disabled { opacity: .55; cursor: default; }
+.simulation-progress .simulation-progress-toggle { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; }
+.simulation-progress-minimized { top: auto; bottom: 4.9rem; transform: translateX(-50%); width: min(24rem, calc(100vw - 1rem)); padding: .65rem .8rem; border-radius: 12px; }
+.simulation-progress-minimized h2 { font-size: .8rem; }
+.simulation-progress-minimized p { font-size: .7rem; }
+.simulation-progress-minimized .simulation-progress-orbit { width: 24px; height: 24px; }
+.simulation-progress-minimized .simulation-progress-heading { gap: .5rem; }
+@keyframes simulation-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .simulation-progress-orbit { animation: none; } }

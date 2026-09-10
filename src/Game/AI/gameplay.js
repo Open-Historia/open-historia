@@ -437,6 +437,7 @@ const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of leve
 
 const runJsonTask = async (taskKey, {
   fallback,
+  onProgress,
   signal,
   timeoutMs = getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 120000 : 0,
   userMessage,
@@ -581,6 +582,7 @@ const runJsonTask = async (taskKey, {
         // answerable from the log rather than by re-deriving it.
         systemPrompt,
       });
+      onProgress?.({ stage: outputAttempt === 1 ? "Simulating world" : "Refining simulation", attempt: outputAttempt });
       const response = await callAI(systemPrompt, history, {
         // No output-token cap. A long/action-heavy turn's JSON must not be truncated
         // mid-response — a cut-off response won't parse, so runJsonTask fell back to
@@ -591,6 +593,7 @@ const runJsonTask = async (taskKey, {
         signal: controller.signal,
         tool,
       });
+      onProgress?.({ stage: "Checking world changes", attempt: outputAttempt });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       const parsed = response?.toolInput ?? extractJsonPayload(rawText);
       // A single mistyped optional field must not discard the whole turn to the
@@ -2418,7 +2421,7 @@ const formatDurationLabel = (days) => {
   return pluralize(whole, "day");
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {}) => {
+export const simulateTimelineJump = async ({ days, mode = "jump", signal, onProgress } = {}) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -2437,6 +2440,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
+  onProgress?.({ stage: "Preparing world context" });
   const variables = await buildTemplateVariables(bundle, { targetDate });
   const durationLabel = formatDurationLabel(safeDays);
   let [minEvents, maxEvents] = eventCountRangeForDays(safeDays);
@@ -2449,6 +2453,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   }
   const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
     fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
+    onProgress,
     signal,
     // The jump IS the game — by default generation waits as long as the model
     // needs (0 disables the deadline in runJsonTask), so the canned fallback is
@@ -2500,7 +2505,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     generation,
   };
 
-  return applySimulationResult({
+  onProgress?.({ stage: "Applying world changes", saving: true });
+  return await applySimulationResult({
     campaignId,
     baseActions: bundle.actions,
     baseChats: bundle.chats,
@@ -2515,8 +2521,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
   }
 };
 
-export const simulateAutoJump = async ({ days = 365, signal } = {}) =>
-  simulateTimelineJump({ days, mode: "auto", signal });
+export const simulateAutoJump = async ({ days = 365, signal, onProgress } = {}) =>
+  simulateTimelineJump({ days, mode: "auto", signal, onProgress });
 
 export const applyGameMasterCommand = async (requestText) => {
   beginSimulation();

@@ -11,6 +11,8 @@ import {
     loadRegionCatalog,
 } from "../../runtime/assets.js";
 import { loadRollbackSnapshots, maybeGeneratePregameHistory, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
+import SimulationProgress from "./simulationProgress.jsx";
+import { getStoredProvider } from "../AI/providerConfig.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -1242,6 +1244,7 @@ const DateWidget = ({
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
+    const [simulation, setSimulation] = useState(null);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     // Mirrors the latest applied turn (round + date) so the 5s refresh poll can tell a
@@ -1393,17 +1396,19 @@ const DateWidget = ({
             return;
         }
 
-        setPanel("skip");
+        setPanel(null);
+        setSimulation({ startedAt: Date.now(), provider: getStoredProvider(), days, mode, stage: "Preparing world context" });
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
 
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        const onProgress = (progress) => setSimulation((current) => current ? { ...current, ...progress } : current);
         try {
             const result = mode === "auto"
-            ? await simulateAutoJump({ days, signal: controller.signal })
-            : await simulateTimelineJump({ days, signal: controller.signal });
+            ? await simulateAutoJump({ days, signal: controller.signal, onProgress })
+            : await simulateTimelineJump({ days, signal: controller.signal, onProgress });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -1420,7 +1425,9 @@ const DateWidget = ({
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
             }
+            setPanel("skip");
         } finally {
+            setSimulation(null);
             jumpAbortRef.current = null;
             setIsLoading(false);
         }
@@ -1634,12 +1641,13 @@ const DateWidget = ({
 
     return (
         <>
+        {simulation && <SimulationProgress simulation={simulation} onCancel={cancelJump} />}
         <TimelineSkipPanel
         canUndo={undoCount > 0}
         currentDate={currentDate}
         error={error}
         isLoading={isLoading}
-        isOpen={openPanel === "skip"}
+        isOpen={openPanel === "skip" && !simulation}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
@@ -1649,7 +1657,7 @@ const DateWidget = ({
         undoCount={undoCount}
         />
         <TimelineHistoryPanel
-        isOpen={openPanel === "history"}
+        isOpen={openPanel === "history" && !simulation}
         onRevealNextEvent={revealNextEvent}
         onRevealAll={revealAllEvents}
         lookups={lookups}
