@@ -7,8 +7,6 @@ import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
 import {
-  ANTI_STASIS_MIN_MOMENTUM_DELTA,
-  ANTI_STASIS_MIN_PRESSURE_DELTA,
   applyWorldStorylineUpdates,
   assessRecentWorldConsequenceLiveness,
   bindNewStorylineEvents,
@@ -16,13 +14,14 @@ import {
   buildWorldInitiativeContext,
   createMotionRepairBudget,
   decodeWorldStorylineUpdates,
+  describeAntiStasisObjectiveRule,
   findSkipStorylineMotionIssues,
   mergeSkipAttentionStorylines,
   motionRepairSkipReason,
+  motionRepairTimeRemainingMs,
   normalizeWorldStorylineEventLinks,
-  recordMotionRepairAttempt,
-  recordMotionRepairOutcome,
-  storylineRepairFingerprint,
+  settleMotionRepairCall,
+  settleSkipStorylineUpdates,
   stripQuietDeferredStorylineUpdates,
   validateWorldEventConsequencePayload,
   validateWorldStorylinePayload,
@@ -158,6 +157,7 @@ import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnP
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, isBetaUnits } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { isProviderConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
@@ -5529,39 +5529,33 @@ const buildWorldInitiativeContextBackground = async (bundle, options = {}, signa
 // ---- Bounded call for the world repairs ------------------------------------
 // Both repairs used to hand callAI a stopwatch "deadline", which callAI only
 // reads to decide whether a busy-retry still fits — nothing ever aborted on it,
-// so a stalled repair could hold a finished turn forever. This one aborts on
-// silence with runJsonTask's two windows, but always on (idleDeadline.js
-// explains why repairs ignore "Limit AI generation"). The abort is on a local
-// controller: the caller's `signal` stays un-aborted, so its catch sees an
+// so a stalled repair could hold a finished turn forever. runBoundedRepairCall
+// (repairCall.js) aborts on silence with runJsonTask's two windows, always on
+// (idleDeadline.js explains why repairs ignore "Limit AI generation"), and at
+// `hardLimitMs` when the caller has a time budget to keep. The abort is on a
+// local controller: the caller's `signal` stays un-aborted, so its catch sees an
 // ordinary failure, while the player's Cancel still cancels.
-const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled } = {}) => {
-  const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort(signal.reason);
-    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  }
-  const timeoutError = new Error(`AI task "${taskKey}" timed out: the model stopped answering.`);
-  const idle = createIdleDeadline(
-    { idleMs: AI_IDLE_TIMEOUT_MS, firstByteMs: AI_FIRST_BYTE_TIMEOUT_MS },
-    () => controller.abort(timeoutError),
-  );
+const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs } = {}) => {
   const now = () =>
     typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
       : Date.now();
   const startedAt = now();
-  idle.start();
   try {
-    const response = await callAI(systemPrompt, [
-      { role: "user", parts: [{ text: userMessage }] },
-    ], {
-      deadline: idle.deadline,
-      onActivity: idle.note,
-      ...(reasoningEnabled === undefined ? {} : { reasoningEnabled }),
-      signal: controller.signal,
-      taskKey,
-      tool,
-    });
+    const response = await runBoundedRepairCall(
+      ({ signal: callSignal, deadline, onActivity }) =>
+        callAI(systemPrompt, [
+          { role: "user", parts: [{ text: userMessage }] },
+        ], {
+          deadline,
+          onActivity,
+          ...(reasoningEnabled === undefined ? {} : { reasoningEnabled }),
+          signal: callSignal,
+          taskKey,
+          tool,
+        }),
+      { taskKey, signal, hardLimitMs },
+    );
     recordTurnPerfAiAttempt({ taskKey, attempt: 1, ms: Math.max(0, now() - startedAt) });
     return response;
   } catch (error) {
@@ -5571,11 +5565,7 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
       ms: Math.max(0, now() - startedAt),
       error: normalizeString(error?.message || error),
     });
-    // callAI may surface the abort as a generic AbortError; name the stall.
-    if (controller.signal.reason === timeoutError && !signal?.aborted) throw timeoutError;
     throw error;
-  } finally {
-    idle.cancel();
   }
 };
 
@@ -5616,6 +5606,11 @@ const runTargetedWorldMotionRepair = async ({
   originDate,
   targetDate,
   signal,
+  // The rest of the skip's repair time; the call is stopped when it runs out.
+  hardLimitMs,
+  // Filled in on failure, so the pass can tell a repair stopped by its time
+  // budget from one that failed (repairSkipStorylineMotion).
+  outcome = null,
 } = {}) => {
   const prior = issue?.prior;
   const attempted = issue?.update;
@@ -5670,8 +5665,7 @@ const runTargetedWorldMotionRepair = async ({
   // the same way every segment.
   const motionRule = issue?.requiresObjectiveDelta
     ? `HARD RULE — this process is past its anti-stasis backstop, so a rewritten state with the same numbers is REJECTED. ` +
-      `Compared with the authoritative storyline below, you MUST do at least one of: change status; ` +
-      `move pressure by ${ANTI_STASIS_MIN_PRESSURE_DELTA} or more points; move momentum by ${ANTI_STASIS_MIN_MOMENTUM_DELTA} or more points. ` +
+      `Compared with the authoritative storyline below, you MUST ${describeAntiStasisObjectiveRule({ withEvent: false })}. ` +
       `A stalemate is still legal, but it must show in the numbers — for example pressure rising as readiness, logistics, or domestic strain builds, ` +
       `or momentum falling as a front freezes or restraint takes hold.\n\n`
     : `Stalemate is legal when the state materially evolves in another dimension: readiness, logistics, command, morale, domestic politics, diplomacy, strategic objectives, preparation, restraint, or de-escalation.\n\n`;
@@ -5751,6 +5745,7 @@ const runTargetedWorldMotionRepair = async ({
       userMessage,
       reasoningEnabled: false,
       signal,
+      hardLimitMs,
       taskKey: "worldMotionRepair",
       tool: getGameplayTool("worldMotionRepair"),
     });
@@ -5826,6 +5821,7 @@ const runTargetedWorldMotionRepair = async ({
         ? signal.reason
         : new DOMException("Timeline jump cancelled.", "AbortError");
     }
+    if (outcome) outcome.error = error;
     console.warn(
       `[OH World Motion Repair] ${storylineId} failed: ` +
       `${normalizeString(error?.message || error) || "unknown error"}. ` +
@@ -5919,6 +5915,7 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
     })();
 
     const repairStartedAt = Date.now();
+    const repairOutcome = {};
     const repair = await runTargetedWorldMotionRepair({
       bundle: repairBundle,
       issue,
@@ -5927,16 +5924,26 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
       originDate,
       targetDate: stopDate,
       signal,
+      // What is left of the skip's repair time: the call is stopped when it
+      // runs out, so the budget caps the pass, not only when repairs start.
+      hardLimitMs: motionRepairTimeRemainingMs(budget),
+      outcome: repairOutcome,
     });
-    recordMotionRepairAttempt(budget, Date.now() - repairStartedAt);
-    recordMotionRepairOutcome(motionRepairFailures, {
+    const settledAs = settleMotionRepairCall(issue, {
+      budget,
+      failures: motionRepairFailures,
       campaignId,
-      id: issueId,
-      fingerprint: storylineRepairFingerprint(issue?.prior),
       round,
+      ms: Date.now() - repairStartedAt,
       ok: Boolean(repair),
+      stoppedAtTimeBudget: repairOutcome.error?.repairStop === REPAIR_STOP_TIME_BUDGET,
     });
     settledIds.add(issueId);
+
+    if (settledAs === "stopped-at-time-budget") {
+      skipped.push({ id: issueId, reason: settledAs });
+      continue;
+    }
 
     if (!repair) {
       failed += 1;
@@ -5954,28 +5961,18 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
     );
   }
 
-  // Withdraw the skip's insufficient copy-forwards for every settled storyline
-  // that existed before the skip. A failed or skipped one then keeps its old
-  // accounted/review dates and stays overdue next turn instead of being silently
-  // pushed forward; a repaired one ends on its repair. A storyline BORN in this
-  // skip keeps its updates — withdrawing them would erase it.
-  const preSkipIds = new Set(baseStorylines.map((entry) => normalizeString(entry?.id)).filter(Boolean));
-  const withdrawIds = new Set([...settledIds].filter((id) => preSkipIds.has(id)));
-  if (withdrawIds.size) {
-    for (const payload of payloads) {
-      // Internal transport may be object records after schema validation; the
-      // native decoder supports that form and preserves event-index offsets.
-      const updates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
-      if (!updates.some((entry) => withdrawIds.has(normalizeString(entry?.id)))) continue;
-      payload.storylineUpdates = updates.filter((entry) => !withdrawIds.has(normalizeString(entry?.id)));
+  // Withdraw the skip's copy-forwards for every settled storyline that existed
+  // before the skip, and put the repairs on the last segment — see
+  // settleSkipStorylineUpdates, which is where this is tested.
+  const settledUpdates = settleSkipStorylineUpdates(
+    payloads.map((payload) => payload?.storylineUpdates),
+    { settledIds, preSkipIds: baseStorylines.map((entry) => entry?.id), repairedUpdates },
+  );
+  payloads.forEach((payload, index) => {
+    if (payload && payload.storylineUpdates !== settledUpdates[index]) {
+      payload.storylineUpdates = settledUpdates[index];
     }
-  }
-  // The repairs ride on the last segment, so they are the last word on their
-  // storylines when the merged updates are applied in order.
-  if (repairedUpdates.length) {
-    const last = payloads[payloads.length - 1];
-    last.storylineUpdates = [...decodeWorldStorylineUpdates(last.storylineUpdates), ...repairedUpdates];
-  }
+  });
 
   // One line a bug report can carry: what this pass spent and what it left
   // overdue on purpose.

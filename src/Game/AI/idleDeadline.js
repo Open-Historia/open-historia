@@ -66,8 +66,10 @@ export const AI_FIRST_BYTE_TIMEOUT_MS = 900000;
 // a reasoning model goes silent while it thinks, and a buffered endpoint sends
 // nothing until it is done. (Before this they passed a stopwatch "deadline" that
 // nothing ever aborted on, so one stalled repair could hold a finished turn
-// indefinitely.) What bounds a repair pass's total cost is its per-skip budget
-// in nativeWorldDirector.js, not these windows.
+// indefinitely.) A motion repair pass's total time is capped by its per-skip
+// budget in nativeWorldDirector.js, which repairCall.js enforces while a call
+// runs as well as before one starts — so the last repair stops at the budget,
+// not one of these windows past it.
 
 // `onExpire` is called at most once: `firstByteMs` after start() if nothing ever
 // arrives, or `idleMs` after the last note() if something did. Never after

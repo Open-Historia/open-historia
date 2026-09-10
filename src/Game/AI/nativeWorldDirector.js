@@ -1823,6 +1823,15 @@ const storylineMateriallyEvolved = (prior, update) => {
 export const ANTI_STASIS_MIN_PRESSURE_DELTA = 4;
 export const ANTI_STASIS_MIN_MOMENTUM_DELTA = 6;
 
+// The backstop's rule in words, built from the same constants the validator
+// (storylineHasObjectiveEvolution) enforces, so no prompt can promise the model
+// something the validator then rejects. The main pass, the validator's
+// rejection and the motion repair all read it. `withEvent` names the one way
+// out only the main pass has: linking a material event, which the repair may
+// not manufacture.
+export const describeAntiStasisObjectiveRule = ({ withEvent = true } = {}) =>
+  `${withEvent ? "link a material event, " : ""}change status, move pressure by ${ANTI_STASIS_MIN_PRESSURE_DELTA} or more points, or move momentum by ${ANTI_STASIS_MIN_MOMENTUM_DELTA} or more points`;
+
 // Whether a storyline is past its anti-stasis backstop at stopDate: an active
 // war or high-pressure process with no visible milestone for
 // STAGNATION_BACKSTOP_DAYS. The one test behind the repair detector, the
@@ -2008,10 +2017,15 @@ export const findSkipStorylineMotionIssues = ({
 
 // The most one pass has ever needed: every attention storyline repaired once.
 export const MAX_MOTION_REPAIRS_PER_JUMP = MAX_ATTENTION_STORYLINES;
-// No new repair starts once repairs have used this much of one skip.
+// What repairs may use of one skip in total. None starts once it is spent, and
+// the one still running when it runs out is stopped (repairCall.js), so this
+// caps the pass rather than only saying when repairs may start.
 export const MAX_MOTION_REPAIR_MS_PER_JUMP = 600000;
 // A storyline whose repair failed is left to the main pass for this many
-// rounds, unless it changes in the meantime.
+// rounds, unless it changes in the meantime. The main pass is told the same
+// numeric rule the repair is (describeAntiStasisObjectiveRule), so it can move
+// the storyline itself; until it does, the storyline's copy-forwards are
+// withdrawn and it stays overdue.
 export const MOTION_REPAIR_FAILURE_COOLDOWN_ROUNDS = 3;
 const MAX_REMEMBERED_MOTION_REPAIR_FAILURES = 64;
 
@@ -2086,6 +2100,69 @@ export const recordMotionRepairOutcome = (
   while (failures.size > MAX_REMEMBERED_MOTION_REPAIR_FAILURES) {
     failures.delete(failures.keys().next().value);
   }
+};
+
+// How long the next repair may run before the skip's repair time is spent.
+// The repair call is stopped at this (repairCall.js), so the budget holds
+// while a call runs as well as before one starts.
+export const motionRepairTimeRemainingMs = (budget) =>
+  Math.max(0, MAX_MOTION_REPAIR_MS_PER_JUMP - Math.max(0, Number(budget?.ms) || 0));
+
+// What one repair call means for the pass and for the failure memory. Its
+// time always counts against the skip's budget. A repair stopped because the
+// PASS ran out of time is not the storyline failing: it is left overdue like
+// any issue past the budget and starts no cooldown, so the next skip may try
+// it again. Returns "repaired", "failed" or "stopped-at-time-budget".
+export const settleMotionRepairCall = (
+  issue,
+  { budget = null, failures = null, campaignId = "", round = 0, ms = 0, ok = false, stoppedAtTimeBudget = false } = {},
+) => {
+  recordMotionRepairAttempt(budget, ms);
+  if (!ok && stoppedAtTimeBudget) return "stopped-at-time-budget";
+  recordMotionRepairOutcome(failures, {
+    campaignId,
+    id: normalizeString(issue?.id),
+    fingerprint: storylineRepairFingerprint(issue?.prior),
+    round,
+    ok,
+  });
+  return ok ? "repaired" : "failed";
+};
+
+// Each segment's storylineUpdates once the skip's motion repair pass has
+// settled. The skip's copy-forwards are withdrawn for every settled storyline
+// (repaired, failed or skipped) that existed before the skip: a failed or
+// skipped one then keeps its old accounted/review dates and stays overdue next
+// turn instead of being silently pushed forward, and a repaired one ends on its
+// repair. A storyline BORN in the skip keeps its updates — withdrawing them
+// would erase it. The repairs ride on the last segment, after its own updates,
+// so they are the last word on their storylines when the merged updates are
+// applied in order.
+//
+// One entry per segment, index for index. An entry nothing touched comes back
+// as it went in (internal transport may be object records after schema
+// validation, and the native decoder accepts that form), so an untouched
+// segment is never rewritten.
+export const settleSkipStorylineUpdates = (
+  segmentUpdates = [],
+  { settledIds = [], preSkipIds = [], repairedUpdates = [] } = {},
+) => {
+  const preSkip = new Set([...(preSkipIds ?? [])].map((id) => normalizeString(id)).filter(Boolean));
+  const withdraw = new Set(
+    [...(settledIds ?? [])].map((id) => normalizeString(id)).filter((id) => id && preSkip.has(id)),
+  );
+  const settled = (Array.isArray(segmentUpdates) ? segmentUpdates : []).map((raw) => {
+    if (!withdraw.size) return raw;
+    const updates = decodeWorldStorylineUpdates(raw);
+    if (!updates.some((entry) => withdraw.has(normalizeString(entry?.id)))) return raw;
+    return updates.filter((entry) => !withdraw.has(normalizeString(entry?.id)));
+  });
+  const repairs = normalizeArray(repairedUpdates);
+  if (repairs.length && settled.length) {
+    const last = settled.length - 1;
+    settled[last] = [...decodeWorldStorylineUpdates(settled[last]), ...repairs];
+  }
+  return settled;
 };
 
 // Surgical salvage for deferred-storyline bookkeeping mistakes.
@@ -2322,7 +2399,7 @@ export const validateWorldStorylinePayload = (
       storylineAtAntiStasisBackstop(prior, stopDate, world) &&
       !storylineHasObjectiveEvolution(prior, update, candidate)
     ) {
-      return `${activeWar ? "Active-war" : "High-pressure"} storyline ${id} has gone ${stagnationAgeAtStop} day(s) without a visible milestone and reached the ${STAGNATION_BACKSTOP_DAYS}-day anti-stasis backstop. Do not copy the same equilibrium forward again: link a material endogenous/external event, materially change pressure or momentum, or move the process toward a different status.`;
+      return `${activeWar ? "Active-war" : "High-pressure"} storyline ${id} has gone ${stagnationAgeAtStop} day(s) without a visible milestone and reached the ${STAGNATION_BACKSTOP_DAYS}-day anti-stasis backstop. Do not copy the same equilibrium forward again — reworded prose with the same numbers is rejected. You must ${describeAntiStasisObjectiveRule()}.`;
     }
   }
 
@@ -3458,10 +3535,16 @@ export const buildWorldInitiativeContext = (
 
     const stagnationAge = storylineStagnationAgeDays(storyline, horizonDate);
 
+    // The same test the detector and the validator use, so an active war below
+    // the high-pressure line is warned here too. It used to be flagged by the
+    // repair pass afterwards without ever having been told.
+    const atBackstop = storylineAtAntiStasisBackstop(storyline, horizonDate, bundle?.world);
+    const backstopSubject = activeCanonicalWarForStoryline(storyline, bundle?.world)
+      ? "active war"
+      : "active high-pressure process";
     const stagnationReappraisal =
-      storyline.pressure >= HIGH_PRESSURE_STAGNATION_THRESHOLD &&
-      stagnationAge >= STAGNATION_BACKSTOP_DAYS
-        ? `ANTI-STASIS BACKSTOP: this active high-pressure process reaches ${stagnationAge} day(s) without a visible milestone by the pass horizon. Simulate its actors and internal conditions now. The border may remain unchanged, but do NOT copy the same semantic equilibrium forward: produce a material event, materially shift pressure/momentum, cool/de-escalate, or move toward dormant/resolution.`
+      atBackstop
+        ? `ANTI-STASIS BACKSTOP: this ${backstopSubject} reaches ${stagnationAge} day(s) without a visible milestone by the pass horizon. Simulate its actors and internal conditions now. The border may remain unchanged, but do NOT copy the same semantic equilibrium forward — reworded prose with the same numbers is rejected. You must ${describeAntiStasisObjectiveRule()}. Cooling or de-escalation counts when it shows in those numbers or as a move to dormant or resolved.`
         : storyline.pressure >= HIGH_PRESSURE_STAGNATION_THRESHOLD &&
           stagnationAge >= STAGNATION_REAPPRAISAL_DAYS
           ? `ENDOGENOUS REAPPRAISAL REQUIRED: this active high-pressure process reaches ${stagnationAge} day(s) without a visible milestone by the pass horizon. Re-simulate actor objectives, manpower/resources, supply, command, morale, politics, diplomacy, weather, tactics, and opportunities from INSIDE the process. A genuine equilibrium may still hold; do not force a card.`
@@ -3594,7 +3677,7 @@ export const buildWorldInitiativeContext = (
     "For every selected active war/crisis/high-pressure process, actually SIMULATE the actors during this interval before deciding the state is unchanged. Ask: what is each side trying to accomplish; what can it afford; what opportunities/constraints exist; what does the opponent do; what succeeds, partially succeeds, or fails; and what military, political, economic, diplomatic, command, morale, supply, or social consequence follows?",
     "Do not treat relative country size or historical expectation as a deterministic winner. A smaller power may hold, counterattack, recover ground, exploit overextension, force negotiations, or suffer collapse depending on current capabilities and decisions. A larger power may fail locally. Branch from THIS campaign.",
     "WWI-era/trench warfare may produce long stretches with little territorial movement. That is legal. But a static border does not mean a dead process: offensives can fail, casualties/attrition can matter, commanders can change, supply can tighten, morale/politics can move, tactical adaptation can occur, negotiations can emerge, or both sides can deliberately reorganize. Only a material consequence deserves a card.",
-    `At ${STAGNATION_REAPPRAISAL_DAYS}+ days without a visible milestone, a high-pressure active process gets mandatory endogenous reappraisal. At ${STAGNATION_BACKSTOP_DAYS}+ days, it may not simply copy materially the same equilibrium forward again: link a material event, materially move pressure/momentum, change status, or establish a genuinely different hidden operational/political state reflected in those fields. This is an anti-stasis rule, NOT an event quota.`,
+    `At ${STAGNATION_REAPPRAISAL_DAYS}+ days without a visible milestone, a high-pressure active process gets mandatory endogenous reappraisal. At ${STAGNATION_BACKSTOP_DAYS}+ days, an active war or high-pressure process may not copy the same equilibrium forward again: it must ${describeAntiStasisObjectiveRule()}. A genuinely different hidden operational or political state counts only when it shows in those numbers — reworded prose with the same numbers is rejected. This is an anti-stasis rule, NOT an event quota.`,
     "",
     "RISK, MISCALCULATION, AND CONSEQUENT DIVERGENCE",
     conflictRiskLine,
