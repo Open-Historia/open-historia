@@ -8,7 +8,7 @@ import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
-import { generateCountryStatSheet } from "../AI/gameplay.js";
+import { generateCountryStatSheet, isSimulationBusy } from "../AI/gameplay.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
@@ -232,7 +232,10 @@ const StatsPane = ({ active }) => {
                 return;
             }
         }
-        setState({ status: "loading", sheet: null, error: "" });
+        // `waiting` says why the card may sit for minutes (issue #724): the sheet
+        // now holds off until the world is idle, and a spinner that gives no
+        // reason reads as broken.
+        setState({ status: "loading", sheet: null, error: "", waiting: isSimulationBusy() });
         try {
             const generated = await generateCountryStatSheet({ code, name: displayName || code });
             const validation = validateGameplayPayload("countryStatSheet", generated);
@@ -356,7 +359,7 @@ const StatsPane = ({ active }) => {
 
             {state.status === "loading" && (
                 <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.82rem", marginTop: "1rem" }}>
-                Compiling the stat sheet…
+                {state.waiting ? "Waiting for the world to finish updating, then compiling the stat sheet…" : "Compiling the stat sheet…"}
                 </p>
             )}
 

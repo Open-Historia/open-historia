@@ -813,6 +813,19 @@ const beginSimulation = () => { activeSimulations += 1; };
 const endSimulation = () => { activeSimulations = Math.max(0, activeSimulations - 1); };
 export const isSimulationBusy = () => activeSimulations > 0;
 
+// Out-of-turn writers wait for the simulation to go idle before they read the
+// world or call the model. A jump, or the pregame backstory, reads the world,
+// works for minutes and writes it back; anything computed alongside it either
+// describes a world that is about to change or races its write. Ported from
+// beta, where the intelligence and stat-sheet first readings already use it.
+const waitForSimulationIdle = async ({ timeoutMs = 10 * 60 * 1000 } = {}) => {
+  const startedAt = Date.now();
+  while (isSimulationBusy()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error("The simulation stayed busy.");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+};
+
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
     ...mergePolityCatalog(await loadCountryNames(), world),
@@ -2105,6 +2118,11 @@ export const refreshSpyIntercepts = async () => {
 // Structured national stat sheet for the Stats tab, grounded in the same
 // campaign context as the intelligence briefing.
 export const generateCountryStatSheet = async ({ code, name } = {}) => {
+  // Issue #724: wait out any running simulation before reading the world.
+  // The Stats pane calls this directly, so on a fresh game it used to run a
+  // second AI call beside the pregame backstory, and build the sheet from a
+  // world with no history in it yet.
+  await waitForSimulationIdle();
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle);
   const target = name || code || "the polity";
@@ -2605,16 +2623,22 @@ const validatePregameEvents = (candidate, { startDate, strict }) => {
 // writes doubles as the done-marker, so it can never run twice.
 export const maybeGeneratePregameHistory = async () => {
   if (isSimulationBusy()) return null;
-  const bundle = await readGameStateBundle({ force: true });
-  const briefing = normalizeString(bundle.world.startingTimelineText);
-  if (!briefing) return null;
-  if (normalizeEvents(bundle.events).length > 0) return null;
-  if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
-  const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
-  if (!startDate) return null;
-
+  // Issue #724: take the lock before the first read, not after it. It used to
+  // be taken only once the bundle had been read and checked, so for the length
+  // of that read the backstory was under way while the lock still said idle —
+  // and a Stats pane already open as a fresh game loaded started its own AI
+  // call in the gap. The "nothing to do" returns below all pass through the
+  // finally, which is what makes holding the lock across them safe.
   beginSimulation();
   try {
+    const bundle = await readGameStateBundle({ force: true });
+    const briefing = normalizeString(bundle.world.startingTimelineText);
+    if (!briefing) return null;
+    if (normalizeEvents(bundle.events).length > 0) return null;
+    if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
+    const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
+    if (!startDate) return null;
+
     const variables = await buildTemplateVariables(bundle);
     const { payload } = await runJsonTask("pregameHistory", {
       timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 300000 : 0,
