@@ -103,6 +103,23 @@ test("the rest of the unit schema is as strict as before", () => {
   assert.equal(validateGameplayPayload("jumpForward", typo).valid, false, "a misspelled unit field must still be caught");
 });
 
+test("projects: the id the prompt shows as [id …] is accepted as projectId", () => {
+  // Verbatim shape from the field report, which held the turn.
+  const raw = { projectOps: [{ op: "update", id: "project-0-mtuaa589-l1rt3ud", name: "Саммит", eventIndex: 0, progress: 20, status: "active" }] };
+  assert.equal(validateGameplayPayload("projects", raw).valid, false, "the raw payload is the one that failed");
+
+  const normalized = normalizeGameplayPayload("projects", raw);
+  assert.equal(validateGameplayPayload("projects", normalized).valid, true);
+  assert.equal(normalized.projectOps[0].projectId, "project-0-mtuaa589-l1rt3ud");
+  assert.equal("id" in normalized.projectOps[0], false);
+});
+
+test("projects: an explicit projectId wins over a stray id", () => {
+  const normalized = normalizeGameplayPayload("projects", { projectOps: [{ op: "update", id: "wrong", projectId: "right", name: "X" }] });
+  assert.equal(normalized.projectOps[0].projectId, "right");
+  assert.equal(validateGameplayPayload("projects", normalized).valid, true);
+});
+
 const pulse = (fields) => ({ chat: null, unitOps: [], sighting: null, ...fields });
 
 test("idle diplomacy: silence written as a sentence reads as silence", () => {

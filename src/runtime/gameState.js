@@ -1819,6 +1819,15 @@ const patchedAlias = (patch, field) => {
 // If the pre-scan that releases a completion's effects matched a different entry
 // than the applier that stamps the latch, the effects would fire for one project
 // and be marked spent on another — and the next restatement would fire them again.
+//
+// Last, the name as the prompt DISPLAYS it. The board prompt titles each entry
+// `Operation "Standing Watch"` (or `"Operation Standing Watch"` when the label is
+// already part of the name), and a model copies that whole title, label and
+// quotes — translated, even: a Russian game produced `Операция "…"`. Only tried
+// when nothing matched exactly, so a project whose real name carries quotes is
+// still found by that name first.
+const DISPLAYED_PROJECT_TITLE = /^(?:[^\s"«“„]+\s+)?["«“„](.+)["»”“]$/u;
+
 const findProjectIndexForOp = (list, op) => {
   if (op.projectId) {
     const byId = list.findIndex((project) => project.id === op.projectId);
@@ -1826,7 +1835,10 @@ const findProjectIndexForOp = (list, op) => {
   }
   if (!op.name) return -1;
   const wanted = op.name.toLowerCase();
-  return list.findIndex((project) => project.name.toLowerCase() === wanted);
+  const exact = list.findIndex((project) => project.name.toLowerCase() === wanted);
+  if (exact !== -1) return exact;
+  const bare = op.name.trim().match(DISPLAYED_PROJECT_TITLE)?.[1]?.trim().toLowerCase();
+  return bare ? list.findIndex((project) => project.name.toLowerCase() === bare) : -1;
 };
 
 // Fold a project op's owner name onto the polity it actually names, before the op

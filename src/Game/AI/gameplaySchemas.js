@@ -2969,8 +2969,26 @@ const normalizeIdleDiplomacyShape = (value) => {
   return candidate;
 };
 
+// The board prompt lists every running effort as `Operation "Name" [id proj-1]`,
+// and a model reads that label as the field's name: a field report's DeepSeek
+// wrote `"id"` instead of `projectId`, which held the whole turn. The reducer has
+// always read `projectId || id` (gameState.js normalizeProjectOp); only the
+// schema refused it.
+const normalizeProjectsShape = (value) => {
+  if (!isPlainRecord(value) || !Array.isArray(value.projectOps)) return value;
+  return {
+    ...value,
+    projectOps: value.projectOps.map((entry) => {
+      if (!isPlainRecord(entry) || entry.id === undefined) return entry;
+      const { id, ...op } = entry;
+      return op.projectId === undefined ? { ...op, projectId: id } : op;
+    }),
+  };
+};
+
 export const normalizeGameplayPayload = (taskKey, value) => {
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
+  if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   if (!isPlainRecord(value)) return value;
 
