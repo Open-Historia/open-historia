@@ -14,7 +14,9 @@ import assert from "node:assert/strict";
 import {
   DEDUPE_MIN_BLOCK_CHARS,
   UNIT_CONTRACT_MARKER,
+  SIMULATION_RULES_POINTER,
   collapseRepeatedBlock,
+  collapseRepeatedWorldContext,
   templateAlreadySays,
 } from "./promptDedupe.js";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
@@ -129,4 +131,91 @@ test("a short repeated string is left alone", () => {
   assert.ok(placeholder.length < DEDUPE_MIN_BLOCK_CHARS);
   const prompt = `A ${placeholder} B ${placeholder} C`;
   assert.equal(collapseRepeatedBlock(prompt, placeholder, POINTER), prompt);
+});
+
+// ---------------------------------------------------------------------------
+// The briefing and the simulation rules, across every bundled prompt
+//
+// Field report: the Pre-Game History prompt pasted the simulation rules twice,
+// once under its own heading and again inside ${GRAND_MAP_DESCRIPTION_NO_CITY}.
+
+const RULES = `No nuclear weapons exist. ${"Colonial borders follow the 1914 settlement. ".repeat(12)}`;
+
+// Built the way buildWorldSummary (promptContext.js) embeds both.
+const worldSummary = [
+  "Player polity: France",
+  `World before round one: ${BRIEFING}`,
+  `Simulation rules: ${RULES}`,
+  "",
+  "Map ownership:",
+  "- France: Brittany, Normandy",
+].join("\n");
+
+const VARIABLES = {
+  playerPolity: "France",
+  simulationRules: RULES,
+  worldBeforeRoundOne: BRIEFING,
+  worldSummary,
+  worldSummaryNoCity: worldSummary,
+};
+
+// resolveHelperValues and renderTemplate, without promptContext.js's imports.
+const renderBundled = (template) => {
+  const fill = (text, values) => String(text).replace(/\$\{([^}]+)\}/g, (_match, key) => values[key] ?? "");
+  let helpers = {};
+  for (let pass = 0; pass < 2; pass += 1) {
+    helpers = Object.fromEntries(Object.entries(defaultPrompts.helpers)
+      .map(([key, text]) => [key, fill(text, { ...VARIABLES, ...helpers })]));
+  }
+  return fill(template, { ...VARIABLES, ...helpers });
+};
+
+const countOf = (text, block) => text.split(block.trim()).length - 1;
+
+const BUNDLED_PROMPTS = {
+  advisor: defaultPrompts.advisor,
+  leader: defaultPrompts.leader,
+  ...defaultPrompts.tasks,
+};
+
+test("the rules pasted under their own heading and in the world summary collapse to one", () => {
+  const prompt = `Simulation rules for this world:\n${RULES}\n\nThe current political map:\n${worldSummary}`;
+  const out = collapseRepeatedWorldContext(prompt, VARIABLES);
+  assert.equal(countOf(out, RULES), 1);
+  assert.equal(countOf(out, BRIEFING), 1);
+  assert.ok(out.includes(`Simulation rules: ${SIMULATION_RULES_POINTER}`));
+  // The copy under the prompt's own heading is the one that survives.
+  assert.ok(out.startsWith(`Simulation rules for this world:\n${RULES}`));
+});
+
+test("every bundled prompt carries the rules and the briefing at most once", () => {
+  for (const [key, template] of Object.entries(BUNDLED_PROMPTS)) {
+    const rendered = renderBundled(template);
+    const out = collapseRepeatedWorldContext(rendered, VARIABLES);
+    for (const [name, block] of [["rules", RULES], ["briefing", BRIEFING]]) {
+      // Collapsing may never take away the only copy a prompt had.
+      assert.equal(countOf(out, block), Math.min(countOf(rendered, block), 1), `${key}: ${name}`);
+    }
+  }
+});
+
+// The report's prompt, and the two tasks that see the rules only through the
+// world summary: the first must lose its repeat, the others must keep theirs.
+test("pre-game history loses the repeat, and the summary-only tasks keep their copy", () => {
+  const pregame = renderBundled(defaultPrompts.tasks.pregameHistory);
+  assert.equal(countOf(pregame, RULES), 2, "the bundled pre-game prompt no longer repeats the rules");
+  assert.equal(countOf(collapseRepeatedWorldContext(pregame, VARIABLES), RULES), 1);
+  for (const key of ["actions", "idleDiplomacy"]) {
+    const rendered = renderBundled(defaultPrompts.tasks[key]);
+    assert.equal(countOf(rendered, RULES), 1, `${key} now renders the rules on its own`);
+    assert.equal(collapseRepeatedWorldContext(rendered, VARIABLES), rendered);
+  }
+});
+
+// A lazily built task may not construct simulationRules at all; with nothing to
+// match, the prompt goes out as rendered.
+test("missing variables leave the prompt untouched", () => {
+  const prompt = `${RULES}\n${worldSummary}`;
+  assert.equal(collapseRepeatedWorldContext(prompt, {}), prompt);
+  assert.equal(collapseRepeatedWorldContext(prompt, null), prompt);
 });

@@ -52,6 +52,7 @@ import {
     renderTemplate,
     resolveHelperValues,
 } from "./promptContext.js";
+import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
 import { foreignAgentBrief } from "../../runtime/spycraft.js";
 
@@ -2306,7 +2307,12 @@ async function buildAdvisorSystemPrompt() {
     });
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 
-    const rendered = renderTemplate(promptPack.advisor, { ...variables, ...helperValues });
+    // The briefing and the rules also ride inside the world summary; keep one
+    // copy of each, as runJsonTask does for the gameplay tasks.
+    const rendered = collapseRepeatedWorldContext(
+        renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
+        variables,
+    );
     // The forces directive is beta-only — promptContext leaves forcePosture empty
     // in the classic system rather than paying for the territory index, so the
     // heading would introduce a section with nothing under it.
@@ -2384,8 +2390,14 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const agent = foreignAgentBrief(worldData, speakingAs, { playerPolity: playerCountry || gameData?.country || "", material: stolen });
     const espionage = agent ? "\n\n[Your Intelligence]\n" + agent : "";
 
+    // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
+    const rendered = collapseRepeatedWorldContext(
+        renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
+        variables,
+    );
+
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${renderTemplate(promptPack.leader, { ...variables, ...helperValues })}${espionage}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${rendered}${espionage}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];

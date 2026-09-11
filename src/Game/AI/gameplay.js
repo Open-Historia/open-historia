@@ -43,7 +43,7 @@ import {
   planJumpSegments,
   segmentEventRange,
 } from "./jumpSegments.js";
-import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
+import { UNIT_CONTRACT_MARKER, collapseRepeatedWorldContext, templateAlreadySays } from "./promptDedupe.js";
 import { buildJumpProjectsDirective } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { withoutPlayerParticipant } from "./chatVisibility.js";
@@ -1869,17 +1869,14 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     systemPrompt = `${systemPrompt}\n\n${buildSpyOrdersDirective(normalizeString(variables?.playerPolity) || "the player")}`;
   }
 
-  // The scenario briefing arrives twice on eight of the sixteen prompts: once
-  // from the task text's own placeholder and again inside the world summary.
-  // On a real campaign that is ~108k characters sent twice, about a third of a
-  // jump prompt. Collapsed here rather than in the templates because existing
-  // saves carry frozen copies, and two tasks reach the briefing ONLY through the
-  // world summary - removing it there would take it from them entirely.
-  systemPrompt = collapseRepeatedBlock(
-    systemPrompt,
-    variables?.worldBeforeRoundOne,
-    "(The pre-round-one briefing is reproduced in full earlier in this prompt.)",
-  );
+  // The scenario briefing and simulation rules each arrive twice on most
+  // prompts: once from the task text's own placeholder and again inside the
+  // world summary. On a real campaign the briefing alone is ~108k characters
+  // sent twice, about a third of a jump prompt. Collapsed here rather than in
+  // the templates because existing saves carry frozen copies, and some tasks
+  // reach them ONLY through the world summary - removing them there would take
+  // them from those tasks entirely.
+  systemPrompt = collapseRepeatedWorldContext(systemPrompt, variables);
 
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.

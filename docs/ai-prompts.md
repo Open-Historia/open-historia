@@ -402,6 +402,7 @@ Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `crea
 ## 10. Gotchas
 
 - **`worldSummary` and `worldSummaryNoCity` are the same string** — the "no city" name is historical; city coordinates are a separate `citiesSummary`/`${CITY_COORDINATES}`.
+- **`worldSummary` embeds the briefing and the simulation rules**, so a prompt that also renders `${WORLD_BEFORE_ROUND_ONE_TEXT}` or `${HISTORICAL_PRESET_SIMULATION_RULES}` would send them twice. `collapseRepeatedWorldContext` (`promptDedupe.js`) keeps the first copy of each and swaps later copies for a pointer; `runJsonTask` applies it to every task and `main.jsx` to the advisor and leader prompts. Values under 400 characters are left alone. Don't strip them from the summary instead: `actions` and `idleDiplomacy` see the rules only there, and saves carry frozen prompts.
 - **Two output attempts per task**, then a deterministic fallback (or throw). `finalAttempt` comes from `runJsonTask`, never from counting validator calls — attempt-1 schema failures skip `validatePayload` entirely (`gameplay.js:464` comment).
 - **Reputation and military-feasibility reach only the task path** (`buildTemplateVariables`). Advisor/leader use `buildPromptContext` directly and never see them.
 - **`catalystSummary` contains stray embedded "Game Master" text** (§7.9) — the actual GM task is `gameMaster`.
