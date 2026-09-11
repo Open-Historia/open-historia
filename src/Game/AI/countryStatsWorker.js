@@ -197,7 +197,7 @@ self.onmessage = async (event) => {
     const loadedAt =
       typeof performance !== "undefined" ? performance.now() : Date.now();
 
-    const result = prepareCountryStatsKernel({
+    const result = await prepareCountryStatsKernel({
       code: payload.code || "",
       bundle: {
         events: Array.isArray(events) ? events : [],

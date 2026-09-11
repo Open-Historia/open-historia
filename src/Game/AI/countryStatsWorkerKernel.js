@@ -39,6 +39,11 @@ const stableStatsHash = (value) => {
 const STATS_MACRO_MAX_BUCKETS = 12;
 const STATS_MACRO_TARGET_COMPONENTS = 30;
 const STATS_MACRO_SAMPLE_NAMES = 10;
+const STATS_MACRO_PARTIAL_SAMPLE_REGIONS = 4;
+// At or below this many components the model splits a macro bucket between its
+// components semantically; above it (large empires) the native weights do. On the
+// built-in modern map the largest polities have 12 and 195 of 207 have one.
+export const STATS_COMPONENT_SPLIT_MAX_COMPONENTS = 24;
 
 const statsSphericalVector = (lng, lat) => {
   const lon = (Number(lng) || 0) * Math.PI / 180;
@@ -58,6 +63,67 @@ const statsVectorLngLat = (value) => {
     lng: Math.atan2(unit[1], unit[0]) * 180 / Math.PI,
     lat: Math.asin(Math.max(-1, Math.min(1, unit[2]))) * 180 / Math.PI,
   };
+};
+
+// A coordinate, or null when there is none. `Number(null)` is 0, and 0 is
+// finite, so the old `Number.isFinite(Number(value))` test turned every region
+// the map gave no point into a region AT 0°N 0°E: on the built-in maps, which
+// carry no centroid property, that was all of them, and every macro bucket was
+// described to the model as centred off the coast of West Africa.
+const coordinateOrNull = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+// The outer ring's area-weighted centroid (planar lng/lat — regions are small),
+// falling back to the mean of its vertices for a degenerate ring.
+const ringCentroid = (ring) => {
+  const points = normalizeArray(ring).filter((point) =>
+    Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+  if (!points.length) return null;
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [x0, y0] = points[index].map(Number);
+    const [x1, y1] = points[(index + 1) % points.length].map(Number);
+    const cross = x0 * y1 - x1 * y0;
+    twiceArea += cross;
+    cx += (x0 + x1) * cross;
+    cy += (y0 + y1) * cross;
+  }
+  if (Math.abs(twiceArea) > 1e-12) {
+    return { lng: cx / (3 * twiceArea), lat: cy / (3 * twiceArea), area: Math.abs(twiceArea) / 2 };
+  }
+  const sum = points.reduce((acc, point) => [acc[0] + Number(point[0]), acc[1] + Number(point[1])], [0, 0]);
+  return { lng: sum[0] / points.length, lat: sum[1] / points.length, area: 0 };
+};
+
+/**
+ * A point for a region the map gives only as a shape: the centroid of its
+ * largest polygon's outer ring. The largest part rather than an average of all
+ * parts, so an archipelago region sits on its main island and a region split at
+ * the antimeridian is not averaged into the middle of the Pacific.
+ */
+export const geometryCentroid = (geometry) => {
+  if (!geometry || typeof geometry !== "object") return null;
+  if (geometry.type === "Point") {
+    const lng = coordinateOrNull(geometry.coordinates?.[0]);
+    const lat = coordinateOrNull(geometry.coordinates?.[1]);
+    return lng === null || lat === null ? null : { lng, lat };
+  }
+  const polygons = geometry.type === "Polygon"
+    ? [geometry.coordinates]
+    : geometry.type === "MultiPolygon"
+      ? normalizeArray(geometry.coordinates)
+      : [];
+  let best = null;
+  for (const polygon of polygons) {
+    const centroid = ringCentroid(normalizeArray(polygon)[0]);
+    if (centroid && (!best || centroid.area > best.area)) best = centroid;
+  }
+  return best ? { lng: best.lng, lat: best.lat } : null;
 };
 
 const statsRegionHeuristicWeight = ({ tags = [], type = "" } = {}) => {
@@ -83,10 +149,21 @@ const buildStatsMacroPlan = (plannedRows = []) => {
       const lng = Number(row?.lng);
       const lat = Number(row?.lat);
       const hasPoint = hasLng && hasLat && Number.isFinite(lng) && Number.isFinite(lat);
+      const held = normalizeArray(row?.regions);
       return {
         sourceIndex: index,
         index: Number(row?.index) || index + 1,
         geography,
+        // How much of this base geography the polity actually holds. The prompt
+        // must say so: "Ukraine" alone reads as all of Ukraine (see macroMemberLabel).
+        heldRegions: held.length,
+        totalRegions: Math.max(held.length, Math.trunc(Number(row?.total) || 0)),
+        sampleRegionNames: [...held]
+          .sort((a, b) => (Number(b?.weight) || 1) - (Number(a?.weight) || 1) || normalizeString(a?.name).localeCompare(normalizeString(b?.name)))
+          .slice(0, STATS_MACRO_PARTIAL_SAMPLE_REGIONS)
+          .map((region) => normalizeString(region?.name))
+          .filter(Boolean),
+        located: hasPoint,
         lng: hasPoint ? lng : ((index * 137.508) % 360) - 180,
         lat: hasPoint ? lat : 0,
         weight: Math.max(0.1, Number(row?.weight) || 1),
@@ -98,9 +175,17 @@ const buildStatsMacroPlan = (plannedRows = []) => {
     .filter(Boolean);
   if (!rows.length) return [];
 
+  // The golden-angle stand-in positions above keep a FEW unlocated rows from
+  // collapsing onto one point among located ones. When the catalog has no points
+  // at all (the main-thread fallback's catalog carries none), splitting on them
+  // would group components by nothing but their list order — so keep each block
+  // whole, which is what every such plan effectively got while missing points
+  // were all read as 0°N 0°E.
+  const anyLocated = rows.some((row) => row.located);
+
   const clusterSpatially = (subset, bucketCount) => {
     if (!subset.length) return [];
-    const count = Math.max(1, Math.min(bucketCount, subset.length));
+    const count = anyLocated ? Math.max(1, Math.min(bucketCount, subset.length)) : 1;
     if (count === 1) {
       const vector = subset.reduce((sum, row) => [
         sum[0] + row.vector[0] * row.weight,
@@ -259,17 +344,77 @@ const buildStatsMacroPlan = (plannedRows = []) => {
   if (!buckets.length) buckets.push(...clusterSpatially(rows, desired));
 
   buckets.sort((a, b) => b.lat - a.lat || a.lng - b.lng || a.members[0].geography.localeCompare(b.members[0].geography));
-  return buckets.map((bucket, index) => ({ index: index + 1, ...bucket }));
+  // Members in the order the prompt lists them, numbered [C1]..[Cn] across the
+  // whole plan: the id a per-component split row answers with.
+  let componentNumber = 0;
+  return buckets.map((bucket, index) => ({
+    index: index + 1,
+    ...bucket,
+    members: orderMacroMembers(bucket.members).map((member) => ({ ...member, componentId: `C${(componentNumber += 1)}` })),
+  }));
 };
 
-const buildStatsMacroContext = (macroPlan = []) => normalizeArray(macroPlan).map((bucket) => {
-  const center = statsVectorLngLat(statsSphericalVector(bucket?.lng, bucket?.lat));
-  const members = normalizeArray(bucket?.members);
-  const samples = [...members]
-    .sort((a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography))
-    .slice(0, STATS_MACRO_SAMPLE_NAMES)
-    .map((member) => member.geography);
-  return `[M${bucket.index}] ${members.length} live component(s); center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}; representative places: ${samples.join(", ")}`;
+// A component is named by its base geography — the country its map regions
+// originally belong to — which is only the whole story when the polity holds all
+// of it. Russia holding Crimea is the component "Ukraine" with 16 of Ukraine's
+// 144 regions, and a field report's model, shown just "Russia, Ukraine", added the
+// whole of Ukraine: 143.5M + 45.4M = a 188.8M Russia. So every component says how
+// much of it is held, and a partial one names what it is.
+const macroMemberIsPartial = (member) =>
+  Number(member?.totalRegions) > 0 && Number(member?.heldRegions) < Number(member?.totalRegions);
+
+// The one order the members of a bucket are shown and numbered in: partial
+// components first, then by weight, then by name.
+const orderMacroMembers = (members) => {
+  const byWeight = (a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography);
+  return [
+    ...members.filter(macroMemberIsPartial).sort(byWeight),
+    ...members.filter((member) => !macroMemberIsPartial(member)).sort(byWeight),
+  ];
+};
+
+const macroMemberLabel = (member) => {
+  const held = Number(member?.heldRegions) || 0;
+  const total = Number(member?.totalRegions) || 0;
+  if (!total) return member.geography;
+  if (!macroMemberIsPartial(member)) return `${member.geography} (whole, ${total} region${total === 1 ? "" : "s"})`;
+  const names = normalizeArray(member?.sampleRegionNames);
+  const more = held - names.length;
+  return `${member.geography} (PARTIAL: only ${held} of its ${total} regions`
+    + `${names.length ? ` — ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : ""}`
+    + `; count ONLY these, not all of ${member.geography})`;
+};
+
+// Where a bucket is, from the members that have a real point — never from the
+// stand-in positions — or nothing, rather than a made-up 0°N 0°E.
+const macroBucketCenterText = (members) => {
+  const located = members.filter((member) => member.located);
+  if (!located.length) return "";
+  const center = statsVectorLngLat(located.reduce((sum, member) => [
+    sum[0] + member.vector[0] * member.weight,
+    sum[1] + member.vector[1] * member.weight,
+    sum[2] + member.vector[2] * member.weight,
+  ], [0, 0, 0]));
+  return `; center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}`;
+};
+
+// With few components (componentDetail) every one is listed with its [C#] id, so
+// the model can split the bucket between them. A huge empire keeps the bounded
+// "representative places" sample: per-component output would not scale.
+const buildStatsMacroContext = (macroPlan = [], { componentDetail = false } = {}) => normalizeArray(macroPlan).map((bucket) => {
+  const members = orderMacroMembers(normalizeArray(bucket?.members));
+  const head = `[M${bucket.index}] ${members.length} live component(s)${macroBucketCenterText(members)}`;
+  if (componentDetail) {
+    return `${head}; components: ${members.map((member) => `[${member.componentId}] ${macroMemberLabel(member)}`).join("; ")}`;
+  }
+  // Partial components first and never cut, however many whole ones the bucket
+  // has: they are the ones a name alone misrepresents.
+  const partialCount = members.filter(macroMemberIsPartial).length;
+  const shown = members.slice(0, Math.max(partialCount, STATS_MACRO_SAMPLE_NAMES));
+  const unshown = members.length - shown.length;
+  const places = shown.map(macroMemberLabel).join("; ")
+    + (unshown > 0 ? `; and ${unshown} more whole component(s)` : "");
+  return `${head}; representative places: ${places}`;
 }).join("\n");
 
 const statsPolityAliases = (world, canonicalName) => {
@@ -649,7 +794,19 @@ const buildStatsWorkerMiddleContext = ({
   };
 };
 
-export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioCatalog = [], fallbackCatalog = [] } = {}) => {
+// The one implementation of the Stats territorial basis. The worker runs it
+// straight through; the main-thread fallback (gameplay.js, when no worker is
+// available) passes `pause`, an async UI budget awaited inside the per-region
+// loops, because on a 4,848-region map this takes ~850 ms and must not freeze the
+// page. `debug` turns on the full component-plan dump.
+export const buildTargetStatsTerritorialBasisKernel = async ({
+  bundle,
+  code,
+  scenarioCatalog = [],
+  fallbackCatalog = [],
+  pause = null,
+  debug = false,
+} = {}) => {
   const world = bundle?.world || {};
   const target = canonicalStatsPolity(code, world);
   if (!target) {
@@ -705,13 +862,14 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
         countryCode,
         baseGeography,
         baseOwner,
-        lng: Number.isFinite(Number(region?.lng)) ? Number(region.lng) : null,
-        lat: Number.isFinite(Number(region?.lat)) ? Number(region.lat) : null,
+        lng: coordinateOrNull(region?.lng),
+        lat: coordinateOrNull(region?.lat),
         weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       });
     }
 
+    if (pause) await pause();
   }
 
   const mergedCatalog = renderedCatalog.length ? [] : normalizeArray(fallbackCatalog);
@@ -735,16 +893,16 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
       const baseOwner = country || resolvedCodeGeography || mappedCountryCode || "";
 
       const centroid = region?.centroid?.coordinates;
-      const lng = Number(Array.isArray(centroid) ? centroid[0] : region?.lng ?? region?.longitude);
-      const lat = Number(Array.isArray(centroid) ? centroid[1] : region?.lat ?? region?.latitude);
+      const lng = coordinateOrNull(Array.isArray(centroid) ? centroid[0] : region?.lng ?? region?.longitude);
+      const lat = coordinateOrNull(Array.isArray(centroid) ? centroid[1] : region?.lat ?? region?.latitude);
       return {
         id,
         name,
         countryCode: rawCountryCode,
         baseGeography,
         baseOwner,
-        lng: Number.isFinite(lng) ? lng : null,
-        lat: Number.isFinite(lat) ? lat : null,
+        lng,
+        lat,
         weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       };
@@ -813,6 +971,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   };
 
   for (let catalogIndex = 0; catalogIndex < catalog.length; catalogIndex += 1) {
+    if (pause) await pause();
     const region = catalog[catalogIndex];
     const regionId = normalizeString(region?.id);
     const baseGeography = normalizeString(region?.baseGeography) || normalizeString(region?.name) || regionId;
@@ -838,8 +997,8 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
       id: regionId,
       name: normalizeString(region?.name) || regionId,
       sovereign,
-      lng: Number.isFinite(Number(region?.lng)) ? Number(region.lng) : null,
-      lat: Number.isFinite(Number(region?.lat)) ? Number(region.lat) : null,
+      lng: coordinateOrNull(region?.lng),
+      lat: coordinateOrNull(region?.lat),
       weight: Math.max(0.1, Number(region?.weight) || 1),
       adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
     };
@@ -885,6 +1044,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   let lifecycleEstablished = false;
   let foundingTerritoryEstablished = false;
   for (const event of normalizeArray(bundle?.events)) {
+    if (pause) await pause();
     const changes = normalizeArray(event?.impacts?.polityChanges);
     const establishesTarget = changes.some((change) => {
       const operation = normalizeString(change?.operation).toLowerCase();
@@ -1029,12 +1189,12 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   });
 
   const macroPlan = buildStatsMacroPlan(plannedRows);
-  const macroContext = buildStatsMacroContext(macroPlan);
+  const componentDetail = plannedRows.length <= STATS_COMPONENT_SPLIT_MAX_COMPONENTS;
+  const macroContext = buildStatsMacroContext(macroPlan, { componentDetail });
   console.info(
     `[stats 8B.2.18.1] ${target}: ${plannedRows.length} authoritative live component(s) -> ${macroPlan.length} bounded demographic macro bucket(s) (${mode}); AI output no longer scales with province count.`,
   );
-  // eslint-disable-next-line no-constant-condition
-  if (false) {
+  if (debug) {
     console.debug(
       `[stats 8B.2.18.1 debug] ${target}: full authoritative component plan`,
       plannedRows.map((row) => ({
@@ -1125,8 +1285,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
 
   if (referenceLines.length) {
     console.info(`[stats 8B.2.18.1] ${target}: ${referenceLines.length} donor/reference component anchor(s) available.`);
-    // eslint-disable-next-line no-constant-condition
-    if (false) {
+    if (debug) {
       console.debug(`[stats 8B.2.18.1 debug] ${target}: donor/reference component anchors`, referenceLines);
     }
   }
@@ -1149,10 +1308,16 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
       lng: bucket.lng,
       lat: bucket.lat,
       members: bucket.members.map((member) => ({
+        componentId: member.componentId,
         geography: member.geography,
+        // Which slice of the geography a stored split was made for (gameplay.js).
+        heldRegions: member.heldRegions,
         weight: member.weight,
       })),
     })),
+    // Few enough components for the model to split each bucket between them
+    // (gameplay.js decides WHEN a split is asked for).
+    componentDetail,
     fingerprint: `territory-${stableStatsHash(fingerprintSource)}`,
     mode,
     referenceContext: referenceLines.slice(0, 24).join("\n") + (referenceLines.length > 24 ? `\n(+${referenceLines.length - 24} more donor anchors retained natively but omitted from the bounded AI context)` : ""),
@@ -1235,16 +1400,15 @@ export const projectCountryStatsScenarioCatalog = (geojson) => {
     const rawName = props?.name ?? props?.NAME_1 ?? props?.name_1;
     const name = normalizeString(rawName) || id;
     const centroid = props?.centroid?.coordinates;
-    const lng = Number(
-      Array.isArray(centroid)
-        ? centroid[0]
-        : props?.lng ?? props?.longitude
-    );
-    const lat = Number(
-      Array.isArray(centroid)
-        ? centroid[1]
-        : props?.lat ?? props?.latitude
-    );
+    let lng = coordinateOrNull(Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude);
+    let lat = coordinateOrNull(Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude);
+    // The built-in maps carry no point at all, only the shape — which this
+    // worker has already parsed, so a centroid costs the page nothing.
+    if (lng === null || lat === null) {
+      const fromShape = geometryCentroid(feature?.geometry);
+      lng = fromShape?.lng ?? null;
+      lat = fromShape?.lat ?? null;
+    }
 
     entries.push({
       country: props?.country ? String(props.country) : "",
@@ -1270,7 +1434,7 @@ export const projectCountryStatsScenarioCatalog = (geojson) => {
   return entries;
 };
 
-export const prepareCountryStatsKernel = (payload = {}) => {
+export const prepareCountryStatsKernel = async (payload = {}) => {
   const common = {
     bundle: payload.bundle || {},
     code: payload.code || "",
@@ -1278,7 +1442,7 @@ export const prepareCountryStatsKernel = (payload = {}) => {
     fallbackCatalog: payload.fallbackCatalog || [],
   };
 
-  const territorialBasis = buildTargetStatsTerritorialBasisKernel(common);
+  const territorialBasis = await buildTargetStatsTerritorialBasisKernel(common);
   return {
     territorialBasis,
     dossier: buildTargetDossierKernel(common),

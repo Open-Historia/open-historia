@@ -2248,6 +2248,11 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       description:
         "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
     },
+    territorialComponentSplitText: {
+      type: "string",
+      description:
+        "Only when the prompt requires a PER-COMPONENT SPLIT: one row per listed component as componentId~sharePercent~group~gdpPerCapita, where sharePercent is the component's share of its own macro bucket's population (each bucket's rows sum to 100), and group/gdpPerCapita are that component's own. Omit it otherwise.",
+    },
     economy: {
       type: "object",
       properties: {
@@ -2313,6 +2318,20 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
           type: "array",
           maxItems: 64,
           items: nonEmptyTextSchema("Canonical economic event id already incorporated into this stat baseline."),
+        },
+        semanticSplitComponents: {
+          type: "array",
+          maxItems: 64,
+          description: "Components whose share of their macro bucket was set by a per-component split rather than native weights.",
+          items: {
+            type: "object",
+            properties: {
+              geography: nonEmptyTextSchema("Component geography."),
+              regions: { type: "integer", minimum: 0, description: "Map regions the component held when it was split." },
+            },
+            required: ["geography", "regions"],
+            additionalProperties: false,
+          },
         },
       },
       additionalProperties: false,
