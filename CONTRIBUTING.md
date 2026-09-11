@@ -2,12 +2,12 @@
 
 Thanks for helping build Open Historia. This page covers the one legal step every contributor takes once, and the practical shape of a good pull request.
 
-## The Contributor License Agreement
+## The Contributor Copyright Assignment Agreement
 
-Open Historia accepts contributions only under its [Contributor License Agreement](CLA.md). In short:
+Open Historia accepts contributions only under its [Contributor Copyright Assignment Agreement](CLA.md). In short:
 
-- You keep the copyright in your contributions and grant the Open Historia Organisation an exclusive, irrevocable licence to use, change and relicense them in any way, so the Project can be licensed, relicensed and defended as one whole.
-- You keep the right to use your own contributions for your own purposes and to share them under the Project's public licence. Because the licence is exclusive, you may not license them to others on other terms.
+- You assign the copyright and related rights in your contributions to the Open Historia Organisation, so the Project can be licensed, relicensed and defended as one whole. Where a right cannot legally be assigned, you grant an exclusive licence instead.
+- You keep the ideas, techniques and know-how behind your work. The contribution itself you may reproduce or distribute only under the Project's public licence, or with the Organisation's permission.
 - You confirm the work is yours to give, and you tell us about any third-party material in it.
 - Open Historia publishes what it accepts under the Project's public licence (currently AGPL-3.0-or-later), and may license it under other terms as well.
 
