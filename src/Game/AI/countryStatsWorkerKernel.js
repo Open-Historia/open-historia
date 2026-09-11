@@ -61,6 +61,67 @@ const statsVectorLngLat = (value) => {
   };
 };
 
+// A coordinate, or null when there is none. `Number(null)` is 0, and 0 is
+// finite, so the old `Number.isFinite(Number(value))` test turned every region
+// the map gave no point into a region AT 0°N 0°E: on the built-in maps, which
+// carry no centroid property, that was all of them, and every macro bucket was
+// described to the model as centred off the coast of West Africa.
+const coordinateOrNull = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+// The outer ring's area-weighted centroid (planar lng/lat — regions are small),
+// falling back to the mean of its vertices for a degenerate ring.
+const ringCentroid = (ring) => {
+  const points = normalizeArray(ring).filter((point) =>
+    Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+  if (!points.length) return null;
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [x0, y0] = points[index].map(Number);
+    const [x1, y1] = points[(index + 1) % points.length].map(Number);
+    const cross = x0 * y1 - x1 * y0;
+    twiceArea += cross;
+    cx += (x0 + x1) * cross;
+    cy += (y0 + y1) * cross;
+  }
+  if (Math.abs(twiceArea) > 1e-12) {
+    return { lng: cx / (3 * twiceArea), lat: cy / (3 * twiceArea), area: Math.abs(twiceArea) / 2 };
+  }
+  const sum = points.reduce((acc, point) => [acc[0] + Number(point[0]), acc[1] + Number(point[1])], [0, 0]);
+  return { lng: sum[0] / points.length, lat: sum[1] / points.length, area: 0 };
+};
+
+/**
+ * A point for a region the map gives only as a shape: the centroid of its
+ * largest polygon's outer ring. The largest part rather than an average of all
+ * parts, so an archipelago region sits on its main island and a region split at
+ * the antimeridian is not averaged into the middle of the Pacific.
+ */
+export const geometryCentroid = (geometry) => {
+  if (!geometry || typeof geometry !== "object") return null;
+  if (geometry.type === "Point") {
+    const lng = coordinateOrNull(geometry.coordinates?.[0]);
+    const lat = coordinateOrNull(geometry.coordinates?.[1]);
+    return lng === null || lat === null ? null : { lng, lat };
+  }
+  const polygons = geometry.type === "Polygon"
+    ? [geometry.coordinates]
+    : geometry.type === "MultiPolygon"
+      ? normalizeArray(geometry.coordinates)
+      : [];
+  let best = null;
+  for (const polygon of polygons) {
+    const centroid = ringCentroid(normalizeArray(polygon)[0]);
+    if (centroid && (!best || centroid.area > best.area)) best = centroid;
+  }
+  return best ? { lng: best.lng, lat: best.lat } : null;
+};
+
 const statsRegionHeuristicWeight = ({ tags = [], type = "" } = {}) => {
   const lowered = new Set(normalizeArray(tags).map((tag) => normalizeString(tag).toLowerCase()).filter(Boolean));
   const typeKey = normalizeString(type).toLowerCase();
@@ -98,6 +159,7 @@ const buildStatsMacroPlan = (plannedRows = []) => {
           .slice(0, STATS_MACRO_PARTIAL_SAMPLE_REGIONS)
           .map((region) => normalizeString(region?.name))
           .filter(Boolean),
+        located: hasPoint,
         lng: hasPoint ? lng : ((index * 137.508) % 360) - 180,
         lat: hasPoint ? lat : 0,
         weight: Math.max(0.1, Number(row?.weight) || 1),
@@ -109,9 +171,17 @@ const buildStatsMacroPlan = (plannedRows = []) => {
     .filter(Boolean);
   if (!rows.length) return [];
 
+  // The golden-angle stand-in positions above keep a FEW unlocated rows from
+  // collapsing onto one point among located ones. When the catalog has no points
+  // at all (the main-thread fallback's catalog carries none), splitting on them
+  // would group components by nothing but their list order — so keep each block
+  // whole, which is what every such plan effectively got while missing points
+  // were all read as 0°N 0°E.
+  const anyLocated = rows.some((row) => row.located);
+
   const clusterSpatially = (subset, bucketCount) => {
     if (!subset.length) return [];
-    const count = Math.max(1, Math.min(bucketCount, subset.length));
+    const count = anyLocated ? Math.max(1, Math.min(bucketCount, subset.length)) : 1;
     if (count === 1) {
       const vector = subset.reduce((sum, row) => [
         sum[0] + row.vector[0] * row.weight,
@@ -294,8 +364,20 @@ const macroMemberLabel = (member) => {
     + `; count ONLY these, not all of ${member.geography})`;
 };
 
+// Where a bucket is, from the members that have a real point — never from the
+// stand-in positions — or nothing, rather than a made-up 0°N 0°E.
+const macroBucketCenterText = (members) => {
+  const located = members.filter((member) => member.located);
+  if (!located.length) return "";
+  const center = statsVectorLngLat(located.reduce((sum, member) => [
+    sum[0] + member.vector[0] * member.weight,
+    sum[1] + member.vector[1] * member.weight,
+    sum[2] + member.vector[2] * member.weight,
+  ], [0, 0, 0]));
+  return `; center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}`;
+};
+
 const buildStatsMacroContext = (macroPlan = []) => normalizeArray(macroPlan).map((bucket) => {
-  const center = statsVectorLngLat(statsSphericalVector(bucket?.lng, bucket?.lat));
   const members = normalizeArray(bucket?.members);
   const byWeight = (a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography);
   // Partial components first and never cut, however many whole ones the bucket
@@ -306,7 +388,7 @@ const buildStatsMacroContext = (macroPlan = []) => normalizeArray(macroPlan).map
   const unshown = members.length - shown.length;
   const places = shown.map(macroMemberLabel).join("; ")
     + (unshown > 0 ? `; and ${unshown} more whole component(s)` : "");
-  return `[M${bucket.index}] ${members.length} live component(s); center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}; representative places: ${places}`;
+  return `[M${bucket.index}] ${members.length} live component(s)${macroBucketCenterText(members)}; representative places: ${places}`;
 }).join("\n");
 
 const statsPolityAliases = (world, canonicalName) => {
@@ -754,8 +836,8 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
         countryCode,
         baseGeography,
         baseOwner,
-        lng: Number.isFinite(Number(region?.lng)) ? Number(region.lng) : null,
-        lat: Number.isFinite(Number(region?.lat)) ? Number(region.lat) : null,
+        lng: coordinateOrNull(region?.lng),
+        lat: coordinateOrNull(region?.lat),
         weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       });
@@ -785,16 +867,16 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
       const baseOwner = country || resolvedCodeGeography || mappedCountryCode || "";
 
       const centroid = region?.centroid?.coordinates;
-      const lng = Number(Array.isArray(centroid) ? centroid[0] : region?.lng ?? region?.longitude);
-      const lat = Number(Array.isArray(centroid) ? centroid[1] : region?.lat ?? region?.latitude);
+      const lng = coordinateOrNull(Array.isArray(centroid) ? centroid[0] : region?.lng ?? region?.longitude);
+      const lat = coordinateOrNull(Array.isArray(centroid) ? centroid[1] : region?.lat ?? region?.latitude);
       return {
         id,
         name,
         countryCode: rawCountryCode,
         baseGeography,
         baseOwner,
-        lng: Number.isFinite(lng) ? lng : null,
-        lat: Number.isFinite(lat) ? lat : null,
+        lng,
+        lat,
         weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       };
@@ -889,8 +971,8 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
       id: regionId,
       name: normalizeString(region?.name) || regionId,
       sovereign,
-      lng: Number.isFinite(Number(region?.lng)) ? Number(region.lng) : null,
-      lat: Number.isFinite(Number(region?.lat)) ? Number(region.lat) : null,
+      lng: coordinateOrNull(region?.lng),
+      lat: coordinateOrNull(region?.lat),
       weight: Math.max(0.1, Number(region?.weight) || 1),
       adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
     };
@@ -1285,16 +1367,15 @@ export const projectCountryStatsScenarioCatalog = (geojson) => {
     const rawName = props?.name ?? props?.NAME_1 ?? props?.name_1;
     const name = normalizeString(rawName) || id;
     const centroid = props?.centroid?.coordinates;
-    const lng = Number(
-      Array.isArray(centroid)
-        ? centroid[0]
-        : props?.lng ?? props?.longitude
-    );
-    const lat = Number(
-      Array.isArray(centroid)
-        ? centroid[1]
-        : props?.lat ?? props?.latitude
-    );
+    let lng = coordinateOrNull(Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude);
+    let lat = coordinateOrNull(Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude);
+    // The built-in maps carry no point at all, only the shape — which this
+    // worker has already parsed, so a centroid costs the page nothing.
+    if (lng === null || lat === null) {
+      const fromShape = geometryCentroid(feature?.geometry);
+      lng = fromShape?.lng ?? null;
+      lat = fromShape?.lat ?? null;
+    }
 
     entries.push({
       country: props?.country ? String(props.country) : "",
