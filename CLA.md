@@ -42,6 +42,10 @@ The licence in Section 2 is subject to the following rights, which You keep. You
 
 The Open Historia Organisation will make each Contribution that it accepts into the Project available to the public under the Project's public licence in force at the time the Contribution is accepted (at the date of this version of the Agreement, the GNU Affero General Public License, version 3 or any later version). This does not limit the Open Historia Organisation's right under Section 2 to license the Contribution under other terms as well, and it does not oblige the Open Historia Organisation to accept any Contribution or to keep any Contribution in the Project.
 
+## 5A. Trademarks
+
+Nothing in this Agreement grants You any ownership or licence to the Open Historia name, logos, trademarks, or other branding, except as separately permitted by the Project's policies. Copyright and other intellectual property rights in Contributions are separate from trademark rights in the Project's name and branding.
+
 ## 6. Your representations
 
 You represent and warrant that:
