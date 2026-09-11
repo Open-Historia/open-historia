@@ -1,10 +1,10 @@
-# Open Historia Contributor License Agreement
+# Open Historia Contributor Copyright Assignment Agreement
 
 Version 1.0, 10 September 2026
 
-Thank you for your interest in contributing to Open Historia (the "Project"). This Contributor License Agreement (the "Agreement") records the terms on which you contribute to the Project. You keep the copyright in your Contributions and grant the Open Historia Organisation an exclusive, irrevocable licence to use, change and relicense them in any way, so that the Project can be licensed, relicensed, defended and maintained as one whole, while you keep the right to use your own work.
+Thank you for your interest in contributing to Open Historia (the "Project"). This Contributor Copyright Assignment Agreement (the "Agreement") records the terms on which you contribute to the Project. You assign to the Open Historia Organisation the copyright and related rights in your Contributions, so that the Project can be licensed, relicensed, defended and maintained as one whole, while retaining the rights described in Section 4.
 
-Please read it carefully before signing. By signing it, including electronically through CLA Assistant, you accept and agree to the following terms for all Contributions you have submitted and will submit to the Project.
+Please read this Agreement carefully before signing. By signing it, including electronically through the Project's designated contribution agreement system, You accept and agree to the following terms for all Contributions You have submitted and will submit to the Project.
 
 ## 1. Definitions
 
@@ -14,49 +14,51 @@ Please read it carefully before signing. By signing it, including electronically
 
 "You" (or "Your") means the individual or legal entity that signs this Agreement. For a legal entity, the entity signing and all other entities that control, are controlled by, or are under common control with that entity are treated as one contributor.
 
-"Contribution" means any original work of authorship, including source code, documentation, scenarios, data, artwork, translations, configuration, and any modification of or addition to an existing work, that You intentionally submit to the Open Historia Organisation for inclusion in the Project, whether submitted before or after You sign this Agreement. "Submit" means any form of communication sent to the Open Historia Organisation or its representatives for that purpose, including pull requests, patches, issues and messages on any channel managed by or on behalf of the Project, but excluding communication that You conspicuously mark in writing as "Not a Contribution".
+"Contribution" means any original work of authorship, including source code, documentation, scenarios, data, artwork, translations, configuration, and any modification of or addition to an existing work, that You intentionally submit to the Open Historia Organisation for inclusion in the Project, whether submitted before or after You sign this Agreement.
 
-## 2. Licence grant
+"Submit" means intentionally providing material to the Open Historia Organisation or its representatives for consideration for inclusion in the Project, including through pull requests, patches or other designated contribution mechanisms. Ordinary discussions, suggestions, bug reports, feature requests and other communications are not Contributions unless You intentionally submit the material for inclusion in the Project.
 
-(a) You grant the Open Historia Organisation an exclusive (even as to You, subject only to Section 4), perpetual, irrevocable, worldwide, royalty-free, fully paid-up, transferable and sublicensable (through multiple tiers) licence under all copyright and all rights of a similar nature (such as database rights and neighbouring rights) in each Contribution to use, reproduce, modify, adapt, translate, create derivative works of, combine with other works, distribute, publicly display, publicly perform, make available to the public and otherwise exploit the Contribution, in whole or in part, in any medium or form now known or later devised, in any way and for any purpose it chooses. For a Contribution submitted after You sign this Agreement, the licence takes effect at the moment You submit it.
+## 2. Copyright assignment
 
-(b) The licence in Section 2(a) includes the right to license and relicense each Contribution, and any work that includes it, to anyone under any terms the Open Historia Organisation chooses, including under the Project's public licence, under other open-source licences and under proprietary or commercial licences, without any further obligation to You, and to keep doing so after this Agreement ends.
+(a) You hereby assign to the Open Historia Organisation all of Your right, title and interest in and to the copyright and related rights in each Contribution, including all rights to reproduce, modify, adapt, translate, create derivative works of, combine with other works, distribute, publicly display, publicly perform, make available to the public and otherwise exploit the Contribution, in whole or in part, in any medium or form now known or later devised.
 
-(c) You keep the copyright in Your Contributions. Nothing in this Agreement transfers ownership of a Contribution to the Open Historia Organisation. Because the licence is exclusive, You will not grant anyone else any licence or other right in a Contribution that conflicts with it, except as Section 4 allows, and You will not transfer ownership of a Contribution unless the transferee first agrees in writing to be bound by this Agreement.
+(b) The assignment in Section 2(a) includes all rights to license and relicense each Contribution, and any work incorporating a Contribution, under any terms chosen by the Open Historia Organisation, including the Project's public licence, other open-source licences, or proprietary or commercial licences.
 
-(d) The Open Historia Organisation may enforce the licensed rights against anyone who infringes them, in its own name and as it sees fit, and may keep any recovery. At its request and expense, You will join any proceeding as a party where the law requires the copyright owner's participation, and You will not settle or compromise any claim about a Contribution in a way that affects the licensed rights without its written consent.
+(c) The assignment takes effect when You submit the relevant Contribution to the Project, provided that You have the legal capacity to make the assignment. The Open Historia Organisation may exercise the assigned rights without obtaining any further consent from You.
 
-(e) To the extent that any right in a Contribution cannot be licensed exclusively under applicable law, or the exclusivity of the licence in Section 2(a) is held to be ineffective for any reason, You grant the Open Historia Organisation the broadest licence to that right that the law allows, on the other terms of Section 2(a), and You agree not to exercise that right against the Open Historia Organisation or anyone claiming through it.
+(d) To the extent that any copyright or related right cannot legally be assigned, You grant the Open Historia Organisation an exclusive, perpetual, irrevocable, worldwide, royalty-free, fully paid-up, transferable and sublicensable licence to that right, with the same rights described in Sections 2(a) and 2(b).
 
-(f) To the extent permitted by law, You waive, and agree never to assert against the Open Historia Organisation or anyone acting under its authority, any moral rights or similar rights You may hold in a Contribution, including rights of attribution and integrity. Where such rights cannot be waived, You consent to any act or omission by the Open Historia Organisation or its licensees that would otherwise infringe them.
+(e) To the extent permitted by law, You waive, and agree never to assert against the Open Historia Organisation or anyone acting under its authority, any moral rights or similar rights You may hold in a Contribution, including rights of attribution and integrity. Where such rights cannot be waived, You consent to any act or omission by the Open Historia Organisation or its licensees that would otherwise infringe them.
 
 ## 3. Patent licence
 
 You grant the Open Historia Organisation, and every recipient of software distributed by the Open Historia Organisation, a perpetual, worldwide, non-exclusive, royalty-free, fully paid-up and irrevocable (except as stated in this Section) licence under any patent claims that You own or control, now or in the future, and that are necessarily infringed by Your Contribution alone or by the combination of Your Contribution with the Project as it existed when the Contribution was submitted, to make, have made, use, offer to sell, sell, import and otherwise transfer the Contribution and those combinations. If You, or any entity You control, institute patent litigation (including a cross-claim or counterclaim) alleging that the Project, or a Contribution incorporated in it, constitutes direct or contributory patent infringement, every patent licence granted to You under this Agreement or under the Project's licences for that Contribution terminates on the date the litigation is filed.
 
-## 4. Rights You keep
+## 4. Rights You retain
 
-The licence in Section 2 is subject to the following rights, which You keep. You may use, reproduce and modify Your own Contributions, in the form in which You submitted them, for any purpose of Your own, and You may distribute them, and works of Yours that include them, to others under the Project's public licence in force at the time. You may not grant anyone an exclusive licence to a Contribution, license a Contribution to anyone under terms other than the Project's public licence, or otherwise exercise or authorise any right in a Contribution in a way that conflicts with Section 2. These rights cover Your own Contributions only. The rest of the Project remains available to You under the Project's public licence.
+The assignment in Section 2 does not prevent You from using ideas, concepts, techniques, methods or know-how that You independently develop or acquire in connection with Your Contribution, provided that You do not reproduce or distribute the copyrighted Contribution itself except as permitted by the Project's public licence or by the Open Historia Organisation.
+
+The rest of the Project remains available to You under the Project's public licence, subject to that licence's terms.
 
 ## 5. The Open Historia Organisation's undertaking
 
-The Open Historia Organisation will make each Contribution that it accepts into the Project available to the public under the Project's public licence in force at the time the Contribution is accepted (at the date of this version of the Agreement, the GNU Affero General Public License, version 3 or any later version). This does not limit the Open Historia Organisation's right under Section 2 to license the Contribution under other terms as well, and it does not oblige the Open Historia Organisation to accept any Contribution or to keep any Contribution in the Project.
+The Open Historia Organisation will make each Contribution that it accepts into the Project available to the public under the Project's public licence in force at the time the Contribution is accepted (at the date of this version of the Agreement, the GNU Affero General Public License, version 3 or any later version). This does not limit the Open Historia Organisation's right to license the Contribution under other terms as well, and it does not oblige the Open Historia Organisation to accept any Contribution or to keep any Contribution in the Project once included.
 
 ## 5A. Trademarks
 
-Nothing in this Agreement grants You any ownership or licence to the Open Historia name, logos, trademarks, or other branding, except as separately permitted by the Project's policies. Copyright and other intellectual property rights in Contributions are separate from trademark rights in the Project's name and branding.
+Nothing in this Agreement grants You any ownership or licence to the Open Historia name, logos, trademarks or other branding, except as separately permitted by the Project's policies. Copyright and other intellectual-property rights in Contributions are separate from trademark rights in the Project's name and branding.
 
 ## 6. Your representations
 
 You represent and warrant that:
 
-(a) You are legally entitled to enter into this Agreement and to make the licences and waivers in it. If You are below the age of majority where You live, a parent or legal guardian must sign on Your behalf.
+(a) You are legally entitled to enter into this Agreement and to assign the rights described in it. If You are below the age of majority in the jurisdiction applicable to You, the Agreement must be accepted and signed by Your parent or legal guardian on Your behalf, in accordance with the signing procedure specified by the Project.
 
-(b) Each Contribution is Your own original work, and You have not copied any part of it from anyone else, except as disclosed under Section 6(d).
+(b) Each Contribution is Your own original work, and You have the right to assign the copyright and related rights in it to the Open Historia Organisation, except as disclosed under Section 6(d).
 
-(c) If Your employer, or any other person or entity, has rights in intellectual property that You create, for example because You created the Contribution in the course of employment or under a contract, then one of the following is true: that party has signed this Agreement as an entity and named You as an authorized contributor; or that party has given You written permission to make the Contribution on these terms and has waived any rights in it; or the Contribution was created outside the scope of that relationship and that party has no claim to it.
+(c) If Your employer, or any other person or entity, has rights in intellectual property that You create, for example because You created the Contribution in the course of employment or under a contract, then one of the following is true: that party has signed this Agreement as an entity and named You as an authorized contributor; or that party has given You written permission to make the Contribution and assign the relevant rights to the Open Historia Organisation on these terms and has waived any rights in it; or the Contribution was created outside the scope of that relationship and that party has no claim to it.
 
-(d) If any part of a Contribution is not Your original work, for example code, data, images or text from a third party, or material produced with substantial help from an AI tool that may reproduce third-party material, You will identify that part, its source and its licence when You submit the Contribution. You represent that You have the right to submit that part and that its licence permits the Open Historia Organisation's use of it under Section 2. Such third-party parts are excluded from the licence in Section 2 and are instead made available to the Open Historia Organisation under their own licence terms.
+(d) If any part of a Contribution is not Your original work, for example code, data, images or text from a third party, or material produced with substantial help from an AI tool that may reproduce third-party material, You will identify that part, its source and its licence when You submit the Contribution. You represent that You have the right to submit that part and that its licence permits the Open Historia Organisation's use of it under the applicable licence terms. Such third-party parts are excluded from the assignment in Section 2 and are instead made available to the Open Historia Organisation under their applicable licence terms.
 
 (e) To Your knowledge, no Contribution infringes any copyright, patent, trademark, trade secret or other right of any third party, and no Contribution is subject to any licence or obligation (including any copyleft obligation) that would apply to the Project as a whole as a result of its inclusion, other than the Project's own public licence.
 
@@ -72,13 +74,13 @@ If You sign this Agreement on behalf of a legal entity, You represent that You a
 
 ## 9. General
 
-(a) This Agreement covers all Contributions that You submitted to the Project before signing and all Contributions that You submit after signing, until You notify the Open Historia Organisation in writing that You will make no further Contributions. Ending the Agreement in that way does not affect any Contribution submitted before the notice or any licence, right or waiver granted in respect of it, all of which continue in force.
+(a) This Agreement covers all Contributions that You submitted to the Project before signing and all Contributions that You submit after signing, until You notify the Open Historia Organisation in writing that You will make no further Contributions. Ending the Agreement in that way does not affect any Contribution submitted before the notice or any assignment, licence, right or waiver granted in respect of it, all of which continue in force.
 
 (b) This Agreement is the entire agreement between You and the Open Historia Organisation about Your Contributions and replaces any earlier understanding about them. It may be changed only in a writing signed by both You and the Open Historia Organisation. The Open Historia Organisation may publish revised versions of this Agreement for future contributors and may ask You to sign a revised version. Until You do, this version continues to govern Your Contributions.
 
-(c) The Open Historia Organisation may assign this Agreement, and the licences and other rights it holds under it, to any successor owner of the Project. You may not assign this Agreement without the Open Historia Organisation's written consent.
+(c) The Open Historia Organisation may assign this Agreement and the copyright and other rights assigned to it under this Agreement to any successor owner of the Project. You may not assign this Agreement without the Open Historia Organisation's written consent.
 
-(d) At the Open Historia Organisation's request and expense, You will sign any further document and take any further step reasonably necessary to confirm, perfect or record the licences and waivers in this Agreement, including any registration or recordation of the exclusive licence with a copyright office. If You do not do so within a reasonable time after being asked, You appoint the Open Historia Organisation as Your attorney-in-fact to do so on Your behalf.
+(d) At the Open Historia Organisation's request and expense, You will sign any further document and take any further step reasonably necessary to confirm, perfect or record the assignment, transfer and waivers in this Agreement, including any registration or recordation of the copyright assignment with a copyright office. If You do not do so within a reasonable time after being asked, You appoint the Open Historia Organisation as Your attorney-in-fact to do so on Your behalf.
 
 (e) If any provision of this Agreement is held to be unenforceable, it will be enforced to the maximum extent permitted, and the remaining provisions will stay in force.
 
@@ -88,10 +90,10 @@ If You sign this Agreement on behalf of a legal entity, You represent that You a
 
 ## 10. How to sign
 
-You sign this Agreement electronically through CLA Assistant. When You open a pull request to an Open Historia repository, the CLA Assistant bot posts a link to this Agreement on the pull request; You may also go directly to https://cla-assistant.io/Open-Historia/open-historia. You sign once for the whole Project.
+You sign this Agreement electronically through the Project's designated contribution agreement system. When You open a pull request to an Open Historia repository, the designated system may post a link to this Agreement on the pull request; You may also access the Agreement through the contribution agreement page designated by the Project. You sign once for the whole Project.
 
 By signing, You confirm that You have read this Agreement, that the details You entered (Your name and e-mail address and, for an entity, the entity's name and Your authority to sign for it) are accurate, and that You agree to be bound by this Agreement. Your GitHub account name, the details You entered, and the date and version of the Agreement You signed are recorded as Your signature.
 
 ---
 
-**A note on relicensing.** This Agreement gives the Open Historia Organisation the right to place Your Contributions, and the Project as a whole, under a new or different licence at any time in the future, including open-source licences other than the one the Project uses today and proprietary or commercial licences, without asking You again and without further obligation to You (Section 2(b)). What the Open Historia Organisation has already published under the Project's public licence stays available under that licence (Section 5). This note summarises those Sections in plain words; it does not add to or limit them.
+**A note on copyright ownership and relicensing.** This Agreement assigns copyright and related rights in Your Contributions to the Open Historia Organisation. As the copyright owner, the Open Historia Organisation may license and relicense Contributions, and the Project as a whole, under the GNU Affero General Public License or another open-source, proprietary or commercial licence, subject to any rights or obligations that cannot legally be transferred or waived. Contributions that have already been distributed under the Project's public licence remain available under that licence in accordance with its terms. This note summarises Sections 2 and 5 in plain words; it does not add to or limit them.

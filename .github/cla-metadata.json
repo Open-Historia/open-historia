@@ -31,7 +31,7 @@
     "type": "boolean"
   },
   "agreement": {
-    "title": "I have read the Open Historia Contributor License Agreement and agree to be bound by it, including the exclusive licence to my Contributions that Section 2 grants to the Open Historia Organisation.",
+    "title": "I have read the Open Historia Contributor License Agreement and agree to be bound by it, including the assignment of the copyright in my Contributions to the Open Historia Organisation in Section 2.",
     "type": "boolean",
     "required": true
   }
