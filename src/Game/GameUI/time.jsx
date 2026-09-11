@@ -177,7 +177,6 @@ const widgetSurface = {
     justifyContent: "center",
     padding: "0 0.5rem",
     position: "fixed",
-    transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
     width: "min(18rem, calc(100vw - 0.9rem))",
     zIndex: 9999,
 };
@@ -1520,8 +1519,9 @@ const DateWidget = ({
     mapRef,
     onSetPanel = null,
     onTogglePanel = null,
-    rightShift,
-    rightShiftTransition = widgetSurface.transition,
+    // Places the widget beside the advisor drawer: right, transform and
+    // transition (main.jsx).
+    dockStyle = null,
     topOffset = "0.5rem",
 }) => {
     const [gameData, setGameData] = useState(null);
@@ -2383,8 +2383,7 @@ const DateWidget = ({
         <div
         style={{
             ...widgetSurface,
-            right: rightShift,
-            transition: rightShiftTransition,
+            ...dockStyle,
             top: topOffset,
             // The player's country sits beside the date. On phones the standalone
             // pill would cover the date, so stretch the widget; on desktop cap the

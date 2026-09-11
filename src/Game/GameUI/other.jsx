@@ -49,11 +49,10 @@ const FallbackBadge = ({ label }) => (
     </div>
 );
 
-const Other = memo(function Other({
-    rightShift = "0.5rem",
-    rightShiftTransition = "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    embedded = false,
-}) {
+// dockStyle places the standalone badge beside the advisor drawer (main.jsx).
+const DEFAULT_DOCK_STYLE = { right: "0.5rem" };
+
+const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = false }) {
     const { activeGame } = useLibraryState();
     const activeGameId = String(activeGame?.id || "");
     const activeGameCountry = String(activeGame?.country || "").trim();
@@ -175,8 +174,8 @@ const Other = memo(function Other({
             overflow: "hidden",
         } : {
             ...baseStyle,
+            ...dockStyle,
             bottom: "4.75rem",
-            right: rightShift,
             // Rides beside the advisor drawer, so a wide drawer carries it over
             // the Actions/Projects/chat panels (9998); an open panel stays on top.
             zIndex: 9997,
@@ -184,7 +183,6 @@ const Other = memo(function Other({
             width: "2.75rem",
             padding: "0.35rem",
             boxSizing: "border-box",
-            transition: rightShiftTransition,
             overflow: "hidden",
         }}
         >

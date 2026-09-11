@@ -13,6 +13,7 @@ import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
+import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -155,7 +156,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, rightShift, rightShiftTransition, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -163,7 +164,8 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, rightShiftTransition, onTogg
     onClick={onToggle}
     style={{
       ...baseStyle,
-      bottom: "0.5rem", right: rightShift,
+      ...dockStyle,
+      bottom: "0.5rem",
       // Rides beside the advisor drawer, so a wide drawer carries it over the
       // Actions/Projects/chat panels (9998); an open panel stays on top.
       zIndex: 9997,
@@ -172,7 +174,7 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, rightShiftTransition, onTogg
       background: isAdvisorOpen
         ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
         : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
-      transition: `${rightShiftTransition}, background 0.15s ease`,
+      transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
     <AdvisorDockIcon />
@@ -196,7 +198,6 @@ const Main = ({
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
-  const [isAdvisorResizing, setIsAdvisorResizing] = useState(false);
   // A starter message queued for the advisor's input box — set when something
   // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
   // button) opens it wanting to prime the conversation, rather than opening it
@@ -384,14 +385,12 @@ const Main = ({
     document.documentElement.style.setProperty(ADVISOR_WIDTH_VAR, `${w}px`);
   }, []);
 
-  // Committed and saved once, when the drag ends. The state lands in the same
-  // render that turns the HUD's easing back on, and the variable already holds
+  // Committed and saved once, when the drag ends. The variable already holds
   // it, so nothing moves on release.
-  const handleAdvisorResizingChange = useCallback((resizing) => {
-    setIsAdvisorResizing(resizing);
+  const handleAdvisorResizeEnd = useCallback(() => {
     const w = draggedAdvisorWidthRef.current;
     draggedAdvisorWidthRef.current = null;
-    if (resizing || w === null) return;
+    if (w === null) return;
     setAdvisorWidth(w);
     try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
   }, []);
@@ -404,11 +403,19 @@ const Main = ({
   }, []);
 
   const advisorCssWidth = `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`;
-  const rightShift = isAdvisorOpen ? `calc(${advisorCssWidth} + 0.5rem)` : "0.5rem";
-  // The HUD beside the drawer eases along when it opens or closes, but follows
-  // a drag instantly: an eased follow restarts on every pointermove, so the
-  // widgets trail the pointer by the length of the animation.
-  const rightShiftTransition = `right ${isAdvisorResizing ? "0s" : "0.35s"} cubic-bezier(0.4, 0, 0.2, 1)`;
+  // Where the HUD beside the drawer (date widget, flag, advisor button) sits.
+  // It is always placed at the drawer's edge, and pushed back to the screen
+  // edge while the drawer is shut by the same transform the drawer uses: the
+  // same distance (the drawer's width), duration and easing, started in the
+  // same frame and run by the compositor, so opening and closing move them as
+  // one. A drag changes only the width, which `right` follows with no
+  // transition at all. (Easing `right` instead made the HUD cover less
+  // distance than the drawer in the same time, on the busy main thread.)
+  const advisorDockStyle = useMemo(() => ({
+    right: `calc(${advisorCssWidth} + 0.5rem)`,
+    transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+    transition: `transform ${ADVISOR_SLIDE}`,
+  }), [advisorCssWidth, isAdvisorOpen]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -424,8 +431,7 @@ const Main = ({
         mapRef={mapRef}
         onSetPanel={setActiveBottomPanel}
         onTogglePanel={toggleBottomPanel}
-        rightShift={rightShift}
-        rightShiftTransition={rightShiftTransition}
+        dockStyle={advisorDockStyle}
         topOffset={TOP_BAR_OFFSET}
       />
       <Toolbar
@@ -434,7 +440,7 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         mapRef={mapRef}
       />
-      <Other rightShift={rightShift} rightShiftTransition={rightShiftTransition} />
+      <Other dockStyle={advisorDockStyle} />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
@@ -444,8 +450,7 @@ const Main = ({
       />
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
-        rightShift={rightShift}
-        rightShiftTransition={rightShiftTransition}
+        dockStyle={advisorDockStyle}
         onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
       />
       <Suspense fallback={null}>
@@ -456,7 +461,7 @@ const Main = ({
             onClose={() => setIsAdvisorOpen(false)}
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
-            onResizingChange={handleAdvisorResizingChange}
+            onResizeEnd={handleAdvisorResizeEnd}
             onOpenActions={() => setActiveBottomPanel("actions")}
             onOpenProjects={() => setActiveBottomPanel("projects")}
             requestedPrompt={pendingAdvisorPrompt}
