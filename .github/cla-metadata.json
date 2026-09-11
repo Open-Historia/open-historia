@@ -1,0 +1,38 @@
+{
+  "name": {
+    "title": "Full legal name",
+    "type": "string",
+    "githubKey": "name",
+    "required": true
+  },
+  "email": {
+    "title": "E-mail address",
+    "type": "string",
+    "githubKey": "email",
+    "required": true
+  },
+  "category": {
+    "title": "How are you signing?",
+    "type": {
+      "enum": [
+        "On my own behalf, as an individual.",
+        "On behalf of a legal entity (my employer or organization)."
+      ]
+    },
+    "required": true
+  },
+  "entity": {
+    "title": "Legal entity name",
+    "description": "Only if you are signing on behalf of an entity: its full legal name.",
+    "type": "string"
+  },
+  "authority": {
+    "title": "I am authorized to bind the entity named above to this Agreement (entity signers only).",
+    "type": "boolean"
+  },
+  "agreement": {
+    "title": "I have read the Open Historia Contributor License Agreement and agree to be bound by it, including the assignment of the copyright in my Contributions to the Open Historia Organisation in Section 2.",
+    "type": "boolean",
+    "required": true
+  }
+}
