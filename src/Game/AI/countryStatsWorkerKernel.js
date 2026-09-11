@@ -40,6 +40,10 @@ const STATS_MACRO_MAX_BUCKETS = 12;
 const STATS_MACRO_TARGET_COMPONENTS = 30;
 const STATS_MACRO_SAMPLE_NAMES = 10;
 const STATS_MACRO_PARTIAL_SAMPLE_REGIONS = 4;
+// At or below this many components the model splits a macro bucket between its
+// components semantically; above it (large empires) the native weights do. On the
+// built-in modern map the largest polities have 12 and 195 of 207 have one.
+export const STATS_COMPONENT_SPLIT_MAX_COMPONENTS = 24;
 
 const statsSphericalVector = (lng, lat) => {
   const lon = (Number(lng) || 0) * Math.PI / 180;
@@ -340,7 +344,14 @@ const buildStatsMacroPlan = (plannedRows = []) => {
   if (!buckets.length) buckets.push(...clusterSpatially(rows, desired));
 
   buckets.sort((a, b) => b.lat - a.lat || a.lng - b.lng || a.members[0].geography.localeCompare(b.members[0].geography));
-  return buckets.map((bucket, index) => ({ index: index + 1, ...bucket }));
+  // Members in the order the prompt lists them, numbered [C1]..[Cn] across the
+  // whole plan: the id a per-component split row answers with.
+  let componentNumber = 0;
+  return buckets.map((bucket, index) => ({
+    index: index + 1,
+    ...bucket,
+    members: orderMacroMembers(bucket.members).map((member) => ({ ...member, componentId: `C${(componentNumber += 1)}` })),
+  }));
 };
 
 // A component is named by its base geography — the country its map regions
@@ -351,6 +362,16 @@ const buildStatsMacroPlan = (plannedRows = []) => {
 // much of it is held, and a partial one names what it is.
 const macroMemberIsPartial = (member) =>
   Number(member?.totalRegions) > 0 && Number(member?.heldRegions) < Number(member?.totalRegions);
+
+// The one order the members of a bucket are shown and numbered in: partial
+// components first, then by weight, then by name.
+const orderMacroMembers = (members) => {
+  const byWeight = (a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography);
+  return [
+    ...members.filter(macroMemberIsPartial).sort(byWeight),
+    ...members.filter((member) => !macroMemberIsPartial(member)).sort(byWeight),
+  ];
+};
 
 const macroMemberLabel = (member) => {
   const held = Number(member?.heldRegions) || 0;
@@ -377,18 +398,23 @@ const macroBucketCenterText = (members) => {
   return `; center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}`;
 };
 
-const buildStatsMacroContext = (macroPlan = []) => normalizeArray(macroPlan).map((bucket) => {
-  const members = normalizeArray(bucket?.members);
-  const byWeight = (a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography);
+// With few components (componentDetail) every one is listed with its [C#] id, so
+// the model can split the bucket between them. A huge empire keeps the bounded
+// "representative places" sample: per-component output would not scale.
+const buildStatsMacroContext = (macroPlan = [], { componentDetail = false } = {}) => normalizeArray(macroPlan).map((bucket) => {
+  const members = orderMacroMembers(normalizeArray(bucket?.members));
+  const head = `[M${bucket.index}] ${members.length} live component(s)${macroBucketCenterText(members)}`;
+  if (componentDetail) {
+    return `${head}; components: ${members.map((member) => `[${member.componentId}] ${macroMemberLabel(member)}`).join("; ")}`;
+  }
   // Partial components first and never cut, however many whole ones the bucket
   // has: they are the ones a name alone misrepresents.
-  const partial = members.filter(macroMemberIsPartial).sort(byWeight);
-  const whole = members.filter((member) => !macroMemberIsPartial(member)).sort(byWeight);
-  const shown = [...partial, ...whole.slice(0, Math.max(0, STATS_MACRO_SAMPLE_NAMES - partial.length))];
+  const partialCount = members.filter(macroMemberIsPartial).length;
+  const shown = members.slice(0, Math.max(partialCount, STATS_MACRO_SAMPLE_NAMES));
   const unshown = members.length - shown.length;
   const places = shown.map(macroMemberLabel).join("; ")
     + (unshown > 0 ? `; and ${unshown} more whole component(s)` : "");
-  return `[M${bucket.index}] ${members.length} live component(s)${macroBucketCenterText(members)}; representative places: ${places}`;
+  return `${head}; representative places: ${places}`;
 }).join("\n");
 
 const statsPolityAliases = (world, canonicalName) => {
@@ -1163,7 +1189,8 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
   });
 
   const macroPlan = buildStatsMacroPlan(plannedRows);
-  const macroContext = buildStatsMacroContext(macroPlan);
+  const componentDetail = plannedRows.length <= STATS_COMPONENT_SPLIT_MAX_COMPONENTS;
+  const macroContext = buildStatsMacroContext(macroPlan, { componentDetail });
   console.info(
     `[stats 8B.2.18.1] ${target}: ${plannedRows.length} authoritative live component(s) -> ${macroPlan.length} bounded demographic macro bucket(s) (${mode}); AI output no longer scales with province count.`,
   );
@@ -1281,10 +1308,16 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
       lng: bucket.lng,
       lat: bucket.lat,
       members: bucket.members.map((member) => ({
+        componentId: member.componentId,
         geography: member.geography,
+        // Which slice of the geography a stored split was made for (gameplay.js).
+        heldRegions: member.heldRegions,
         weight: member.weight,
       })),
     })),
+    // Few enough components for the model to split each bucket between them
+    // (gameplay.js decides WHEN a split is asked for).
+    componentDetail,
     fingerprint: `territory-${stableStatsHash(fingerprintSource)}`,
     mode,
     referenceContext: referenceLines.slice(0, 24).join("\n") + (referenceLines.length > 24 ? `\n(+${referenceLines.length - 24} more donor anchors retained natively but omitted from the bounded AI context)` : ""),

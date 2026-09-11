@@ -153,6 +153,7 @@ import {
   mergeCountryStatPatch,
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
+  decodeTerritorialComponentSplit,
   expandTerritorialMacroEstimates,
 } from "../../runtime/countryStats.js";
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
@@ -880,6 +881,32 @@ const withDiplomaticLedgerMigration = (bundle) => {
 // The Stats tool answers with a bounded set of demographic macro buckets; native
 // code expands them into the exact live-map component ledger before the sheet
 // is validated and persisted (see generateCountryStatSheet).
+
+// The contract block for the per-component split generateCountryStatSheet asks
+// for when a small polity's ledger has no semantic split yet (countryStats.js
+// decodeTerritorialComponentSplit). Empty when no bucket needs one.
+const buildStatsComponentSplitContract = (splitBucketsInput) => {
+  const splitBuckets = normalizeArray(splitBucketsInput)
+    .map((bucket) => ({
+      index: Math.trunc(Number(bucket?.index)),
+      ids: normalizeArray(bucket?.members).map((member) => normalizeString(member?.componentId)).filter(Boolean),
+    }))
+    .filter((bucket) => Number.isInteger(bucket.index) && bucket.ids.length > 1);
+  if (!splitBuckets.length) return "";
+  const bucketLines = splitBuckets.map((bucket) => `  - M${bucket.index}: ${bucket.ids.join(", ")}`).join("\n");
+  const [first] = splitBuckets;
+  const example = first.ids.slice(0, 2);
+  return `- PER-COMPONENT SPLIT — REQUIRED for ${splitBuckets.map((bucket) => `M${bucket.index}`).join(", ")}. These components have no stored split yet. Native code saves this split ONCE and rescales it at later reassessments, so it is the population and economy a territorial transfer carries with each component.
+- Also return territorialComponentSplitText with EXACTLY ONE row for EVERY component listed here, in this exact transport format: componentId~sharePercent~group~gdpPerCapita
+${bucketLines}
+- sharePercent is the component's share of ITS OWN macro bucket's population. The shares within one bucket sum to 100. The macro row still sets the bucket's total population.
+- Estimate where the people actually live: cities, farmland, deserts, mountains, islands. NEVER split by how many map regions a component has or by its land area.
+- For a component marked PARTIAL, the share covers ONLY its listed held regions.
+- group and gdpPerCapita are the component's OWN values: a distant island, colony, or dependency does not inherit the mainland's group or productivity. Native code rescales the components' gdpPerCapita so their population-weighted average equals the bucket's macro gdpPerCapita, keeping the ratios between them.
+- Example rows: ${example[0]}~92.5~core~38000 then ${example[1] || example[0]}~7.5~overseas/dependent~21000
+`;
+};
+
 const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
   const nativePlan = normalizeArray(macroPlan)
     .map((entry, index) => ({
@@ -1802,11 +1829,11 @@ BOUNDED REGIONAL METHOD — REQUIRED:
 - index MUST be the supplied macro integer. Do not return province-by-province rows. Do not add, omit, split, or merge macro buckets.
 - NON-TERRITORIAL COMPATIBILITY: if the authoritative basis explicitly says NON-TERRITORIAL and no mapped macro buckets exist, territorialMacroComponentsText may use group~geography~population~gdpPerCapita rows ONLY for a genuinely campaign-supported distributed people, organization, workforce, exile community, or other non-map economic/demographic scope. If no defensible quantitative scope exists, return exactly NONE. Never invent a fake province, population, or GDP merely to satisfy the schema.
 - Allowed group values: core | integrated | overseas/dependent.
-- Estimate each macro bucket from its representative places, spatial center, scenario canon, and any prior macro baseline. Prefer checkable regional magnitudes over a single historical whole-country headline total.
+- Estimate each macro bucket from its listed components or representative places, spatial center, scenario canon, and any prior macro baseline. Prefer checkable regional magnitudes over a single historical whole-country headline total.
 - A component marked PARTIAL is only part of that country: the polity holds just the listed regions. Estimate ONLY their population and economy — never the whole country the component is named after.
 - Do NOT force the macro-bucket sum to a remembered country/empire headline. A historical headline is usable only as a cross-check when its territorial definition exactly matches the live macro scope; otherwise the regional estimates win.
 - The SUM of macro-bucket populations becomes the national population. Native JavaScript expands each macro estimate deterministically back across ALL exact live-map components, preserving prior local proportions where a campaign ledger already exists.
-- Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
+${buildStatsComponentSplitContract(variables?.statsComponentSplitBuckets)}- Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
 - group is only an economic/display bucket. It is NOT a sovereignty, alliance, customs-union, recognition, or constitutional judgment.
 - gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-EUR accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED by native JavaScript after regional expansion.
@@ -2079,6 +2106,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       let statsCoverageError = "";
       let statsCalibrationError = "";
       let statsEconomicCalibrationError = "";
+      let statsSplitError = "";
       if (taskKey === "countryStatSheet" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const macroPlan = normalizeArray(variables?.statsTerritorialMacroPlan);
         const decoded = decodeCountryStatMacroEstimates(
@@ -2088,11 +2116,41 @@ This live instruction supersedes older frozen country-stat prompts and all earli
         statsCoverageError = normalizeString(decoded?.error);
         let components = decoded?.components || [];
 
+        // The per-component split, when generateCountryStatSheet asked for one
+        // (countryStats.js decodeTerritorialComponentSplit). A bucket whose rows do
+        // not validate is sent back once with the reason; on the final attempt it
+        // keeps the native weights, is not recorded as split, and is asked again at
+        // its next assessment.
+        const splitBuckets = normalizeArray(variables?.statsComponentSplitBuckets);
+        let componentSplits = null;
+        let splitGeographies = [];
+        if (splitBuckets.length && macroPlan.length > 0 && !statsCoverageError) {
+          const { splits, rejected } = decodeTerritorialComponentSplit(parsed.territorialComponentSplitText, splitBuckets);
+          const rejectedText = rejected.map((entry) => `M${entry.index}: ${entry.reason}`).join("; ");
+          if (rejected.length && outputAttempt === 1) {
+            statsSplitError =
+              `territorialComponentSplitText must give every listed component exactly one componentId~sharePercent~group~gdpPerCapita row, and each bucket's shares must sum to 100 (${rejectedText}).`;
+          } else {
+            if (rejected.length) {
+              console.warn(
+                `[stats split] ${normalizeString(variables?.statsCalibrationTargetName) || "polity"}: per-component split rejected (${rejectedText}); `
+                  + "those bucket(s) keep the native weights this time and will be asked for a split again.",
+              );
+            }
+            componentSplits = splits;
+            splitGeographies = [...splits.values()].flat().map((entry) => entry.geography);
+          }
+        }
+
         if (!statsCoverageError && macroPlan.length > 0) {
           const expanded = expandTerritorialMacroEstimates(
             macroPlan,
             decoded?.estimates || [],
-            { previousComponents: variables?.statsPreviousTerritorialComponents },
+            {
+              previousComponents: variables?.statsPreviousTerritorialComponents,
+              componentSplits,
+              splitGeographies: variables?.statsStoredSplitComponents,
+            },
           );
           statsCoverageError = normalizeString(expanded?.error);
           if (!statsCoverageError) components = expanded.components;
@@ -2165,6 +2223,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
           economicCalibration: _economicCalibration,
           territorialMacroComponentsText: _territorialMacroComponentsText,
           territorialComponentsText: _territorialComponentsText,
+          territorialComponentSplitText: _territorialComponentSplitText,
           ...statFields
         } = parsed;
         const plannedComponentCount = normalizeArray(variables?.statsTerritorialPlan).length;
@@ -2176,6 +2235,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
           territorialScope,
           territorialComponents: components,
         });
+        // Keyed by the payload itself: the answer runJsonTask returns may be an
+        // earlier attempt's (the salvage pass), and only that answer's split counts.
+        variables?.statsComponentSplitOutcome?.set?.(parsed, splitGeographies);
 
         const finalizedComponentCount = normalizeArray(parsed?.territorialComponents).length;
         if (!statsCoverageError && plannedComponentCount > 0 && finalizedComponentCount !== plannedComponentCount) {
@@ -2186,10 +2248,10 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       let validation = parsed
         ? validateGameplayPayload(taskKey, parsed)
         : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
-      if (validation.valid && (statsCoverageError || statsCalibrationError || statsEconomicCalibrationError)) {
+      if (validation.valid && (statsCoverageError || statsCalibrationError || statsEconomicCalibrationError || statsSplitError)) {
         validation = {
           valid: false,
-          error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError].filter(Boolean).join(" "),
+          error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError, statsSplitError].filter(Boolean).join(" "),
         };
       }
       if (transportDecodeError) {
@@ -8335,6 +8397,41 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
 
   await statsYieldToMainThread(signal);
 
+  // The per-component split (countryStats.js decodeTerritorialComponentSplit).
+  // Only when the prompt lists each component by id (a polity small enough for
+  // the kernel's componentDetail), and only for a bucket with a component that
+  // needs one: on a fresh baseline or hard audit, every component; otherwise one
+  // that is new to the ledger, has only ever had the native weights, or now holds
+  // a different number of regions than when it was split. Everything else keeps
+  // its stored split and is rescaled deterministically.
+  const splitKey = (geography) => normalizeString(geography).toLocaleLowerCase();
+  const heldRegionCount = (member) => Math.max(0, Math.trunc(Number(member?.heldRegions) || 0));
+  const storedSplits = normalizeArray(previous?.continuity?.semanticSplitComponents);
+  const storedSplitRegions = new Map(storedSplits.map((entry) => [splitKey(entry?.geography), Number(entry?.regions)]));
+  const previousComponentKeys = new Set(
+    normalizeArray(previous?.territorialComponents)
+      .filter((component) => Number(component?.population) > 0)
+      .map((component) => splitKey(component?.geography)),
+  );
+  const liveMembers = territorialMacroPlan.flatMap((bucket) => normalizeArray(bucket?.members));
+  const needsSplit = new Set(
+    liveMembers
+      .filter((member) => populationCalibrationRequested
+        || !previousComponentKeys.has(splitKey(member?.geography))
+        || storedSplitRegions.get(splitKey(member?.geography)) !== heldRegionCount(member))
+      .map((member) => splitKey(member?.geography)),
+  );
+  const componentSplitBuckets = territorialBasis.componentDetail
+    ? territorialMacroPlan
+      .filter((bucket) => normalizeArray(bucket?.members).length > 1)
+      .filter((bucket) => normalizeArray(bucket.members).some((member) => needsSplit.has(splitKey(member?.geography))))
+      .map((bucket) => ({
+        index: bucket.index,
+        members: normalizeArray(bucket.members).map((member) => ({ componentId: member.componentId, geography: member.geography })),
+      }))
+    : [];
+  const componentSplitOutcome = new WeakMap();
+
   const statsAiStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   const { payload } = await runJsonTask("countryStatSheet", {
     signal,
@@ -8351,6 +8448,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       statsTerritorialContext: territorialContext,
       statsTerritorialPlan: territorialPlan,
       statsTerritorialMacroPlan: territorialMacroPlan,
+      statsComponentSplitBuckets: componentSplitBuckets,
+      statsComponentSplitOutcome: componentSplitOutcome,
+      statsStoredSplitComponents: storedSplits.map((entry) => entry?.geography),
       statsPreviousTerritorialComponents: normalizeArray(previous?.territorialComponents),
       statsTerritorialBasisMode: territorialBasisMode,
       statsTerritorialReferenceContext: territorialReferenceContext,
@@ -8370,6 +8470,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   console.info(`[stats 8B.2.18.1 perf] ${target}: bounded Stats AI ${(Math.max(0, statsAiEndedAt - statsAiStartedAt)).toFixed(1)} ms.`);
 
   throwIfAborted(signal);
+  const freshlySplitKeys = new Set(normalizeArray(payload && componentSplitOutcome.get(payload)).map(splitKey));
   const finalized = finalizeCountryStatSheet(payload);
 
   // Fail closed if any future normalization/schema regression drops authoritative
@@ -8400,6 +8501,13 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
         elapsedYears,
         evidenceText: evidenceContext,
         territoryChanged,
+        // A component's first semantic split replaces a region-count placeholder
+        // (or a split made for a different slice of it); the jump away from that is
+        // the fix, not a discontinuity. Its bucket-mates re-split alongside it are
+        // still held to the band.
+        freshlySplitGeographies: liveMembers
+          .map((member) => member.geography)
+          .filter((geography) => freshlySplitKeys.has(splitKey(geography)) && needsSplit.has(splitKey(geography))),
       });
 
   if (guarded.restored?.length) {
@@ -8435,6 +8543,15 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
           ? { populationCalibrationVersion: previousPopulationCalibrationVersion }
           : {}),
       accountedEventIds: accountedNow,
+      // Components whose share of the ledger came from a semantic split, with the
+      // regions they held then: the ones split just now, plus earlier ones still
+      // holding the same slice. A component left on the native weights, or whose
+      // holding changed without a new split, is not listed, so it is asked again.
+      semanticSplitComponents: liveMembers
+        .filter((member) => freshlySplitKeys.has(splitKey(member?.geography))
+          || (previousComponentKeys.has(splitKey(member?.geography))
+            && storedSplitRegions.get(splitKey(member?.geography)) === heldRegionCount(member)))
+        .map((member) => ({ geography: member.geography, regions: heldRegionCount(member) })),
     };
 
     try {

@@ -48,19 +48,33 @@ test("a polity holding only whole components has nothing marked partial", async 
 });
 
 test("a partial component is never cut to make room for whole ones", async () => {
-  // Twelve whole one-region components outweigh the partial one and exceed the
-  // ten-name cap; the partial one must still be listed, and first.
+  // A polity too big to list every component (30 whole one-region isles) keeps
+  // the ten-name sample; the partial one must still be listed, and first.
   const catalog = [
-    ...Array.from({ length: 12 }, (_, index) => region(`w${index}`, `Isle ${String.fromCharCode(65 + index)}`)),
+    ...Array.from({ length: 30 }, (_, index) => region(`w${index}`, `Isle ${index}`)),
     ...regionsOf("Borduria", 10, "b"),
   ];
   const overrides = Object.fromEntries([
-    ...Array.from({ length: 12 }, (_, index) => [`w${index}`, "Ruritania"]),
+    ...Array.from({ length: 30 }, (_, index) => [`w${index}`, "Ruritania"]),
     ["b1", "Ruritania"],
   ]);
-  const line = bucketLine((await basis(catalog, overrides)).context);
+  const { context, componentDetail } = await basis(catalog, overrides);
+  assert.equal(componentDetail, false);
+  const line = bucketLine(context);
   assert.match(line, /representative places: Borduria \(PARTIAL: only 1 of its 10 regions/);
-  assert.match(line, /and 3 more whole component\(s\)$/);
+  assert.match(line, /and 21 more whole component\(s\)$/);
+});
+
+test("a small polity lists every component with the id a split row answers with", async () => {
+  const catalog = [...regionsOf("Ruritania", 5, "r"), ...regionsOf("Borduria", 10, "b"), region("i1", "Isle")];
+  const { context, macroPlan, componentDetail } = await basis(catalog, { b1: "Ruritania", i1: "Ruritania" });
+  assert.equal(componentDetail, true);
+  // Partial first, then by weight; numbered in that order.
+  assert.match(bucketLine(context), /; components: \[C1\] Borduria \(PARTIAL[^;]*; count ONLY these, not all of Borduria\); \[C2\] Ruritania \(whole, 5 regions\); \[C3\] Isle \(whole, 1 region\)$/);
+  assert.deepEqual(
+    macroPlan.flatMap((bucket) => bucket.members.map((member) => `${member.componentId}=${member.geography}`)),
+    ["C1=Borduria", "C2=Ruritania", "C3=Isle"],
+  );
 });
 
 test("a large partial holding names a few regions and counts the rest", async () => {
@@ -101,7 +115,7 @@ test("the worker's catalog takes a map point when there is one, the shape when t
 test("a bucket with no located component gets no centre, not 0.0°N 0.0°E", async () => {
   const { context } = await basis(regionsOf("Ruritania", 3, "r"));
   assert.doesNotMatch(bucketLine(context), /center/);
-  assert.match(bucketLine(context), /^\[M1\] 1 live component\(s\); representative places:/);
+  assert.match(bucketLine(context), /^\[M1\] 1 live component\(s\); components: \[C1\] Ruritania/);
 });
 
 test("a bucket's centre is where its located regions are", async () => {
