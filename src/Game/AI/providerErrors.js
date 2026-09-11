@@ -219,6 +219,49 @@ export const toolStreamRefusalError = (providerLabel, error, retried) => {
     return refusal;
 };
 
+// A web page where an API reply should be. It means the endpoint address points
+// at a website rather than its API: a gateway's own 404 page, a login screen, a
+// proxy's error page, or — when the address has no http(s):// — the game's own
+// server answering "Cannot POST /inference.example.com/v1/chat/completions".
+//
+// The page used to become the error message verbatim. A field report's log
+// carried a 10 KB Next.js 404 page in every failed call, a dozen times over,
+// until the log had nearly spent its whole 1 MB budget on one misconfigured
+// endpoint — and the player saw a wall of markup rather than "check the address".
+//
+// Returns "" for anything that is not an HTML page, so callers fall back to
+// what they did before.
+const HTML_PAGE_START = /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype\s+html|html|head|body)\b/i;
+
+const decodeBasicEntities = (text) => text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#x27;|&#39;|&apos;/gi, "'");
+
+export const describeHtmlErrorPage = (text, fallback) => {
+    const body = String(text ?? "");
+    if (!HTML_PAGE_START.test(body)) return "";
+    // What a person would read on the page: no head (its title is usually the
+    // site's marketing line), no scripts or styles, no tags.
+    const visible = decodeBasicEntities(body
+        .replace(/<head\b[\s\S]*?<\/head>/gi, " ")
+        .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1>/gi, " ")
+        .replace(/<[^>]+>/g, " "))
+        .replace(/\s+/g, " ")
+        .trim();
+    const title = decodeBasicEntities(body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const quoted = (visible || title).slice(0, 160);
+    return `${fallback ? `${fallback}: ` : ""}the endpoint answered with a web page instead of an API reply`
+        + `${quoted ? ` ("${quoted}${(visible || title).length > 160 ? "…" : ""}")` : ""}. `
+        + "Check the endpoint address in Settings — it should be the provider's API base URL, "
+        + "starting with https:// and usually ending in /v1.";
+};
+
 // Did the provider reject the request because it was STREAMED (rather than for
 // anything about its content)? Tool calls stream so a long timeline jump keeps
 // the connection warm, but a few gateways refuse stream and tools together, and

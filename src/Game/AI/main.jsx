@@ -27,6 +27,7 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     busyProviderMessage,
     contextWindowMessage,
+    describeHtmlErrorPage,
     errorPayloadText,
     isBusyErrorPayload,
     isContextWindowErrorPayload,
@@ -127,11 +128,27 @@ async function readErrorPayload(response) {
 
 function extractErrorMessage(payload, fallback) {
     if (!payload) return fallback;
-    if (typeof payload === "string" && payload.trim()) return payload.trim();
+    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
     if (payload.error?.message) return payload.error.message;
     if (payload.message) return payload.message;
-    if (typeof payload.rawText === "string" && payload.rawText.trim()) return payload.rawText.trim();
+    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
+        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
+    }
     return fallback;
+}
+
+// The body of a reply that claimed success. A 200 carrying a web page (a gateway
+// landing page, a proxy's error screen) used to surface as JSON.parse's
+// "Unexpected token '<', "<!doctype "... is not valid JSON" — true, and no help.
+async function readJsonAnswer(response, providerLabel) {
+    const text = await response.text();
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        const page = describeHtmlErrorPage(text, `${providerLabel} request failed (${response.status})`);
+        if (page) throw new Error(page);
+        throw error;
+    }
 }
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
@@ -903,7 +920,7 @@ async function callGemini(systemPrompt, history, {
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readGeminiStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
@@ -1229,7 +1246,7 @@ async function callOpenAIStyleChatCompletions({
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
             ? await readOpenAIStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
         const text = extractOpenAIMessageText(data);
 
@@ -1612,7 +1629,7 @@ async function callAnthropic(systemPrompt, history, {
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
@@ -1829,7 +1846,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
