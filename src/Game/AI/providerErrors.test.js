@@ -13,12 +13,72 @@ import {
   looksLikeDeliberation,
   providerErrorReplyMessage,
   retryDelayMsFromPayload,
+  toolStreamRefusalError,
+  describeHtmlErrorPage,
 } from "./providerErrors.js";
 import {
     contextWindowMessage,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
 } from "./providerErrors.js";
+
+// Both pages are from the same field report's log, abridged. The first is a
+// gateway's own Next.js 404 (the base URL pointed at the website, not the API);
+// it went into the log verbatim, about 10 KB, on every failed call.
+const GATEWAY_404_PAGE = '<!DOCTYPE html><html lang="en" class="dark"><head><meta charSet="utf-8"/>'
+  + '<title>ModelRouter | Unified AI API and Model Catalog</title>'
+  + '<script type="application/ld+json">{"@context":"https://schema.org"}</script></head>'
+  + '<body><div class="min-h-screen"><a href="/"><span>ModelRouter</span></a><div class="text-center">'
+  + '<h1>404</h1><p>This page doesn&#x27;t exist.</p><a href="/models">Browse Models</a></div></div>'
+  + '<script>self.__next_f.push([1,"lots of framework state"])</script></body></html>';
+
+// The second: the endpoint typed without https://, so the request went to the
+// game's own server, which answered with Express's default error page.
+const MISSING_SCHEME_PAGE = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n'
+  + '<body>\n<pre>Cannot POST /inference.dahl.global/v1/chat/completions</pre>\n</body>\n</html>\n';
+
+test("a gateway's 404 page is summarised to what it says, with the fix, not pasted whole", () => {
+  const message = describeHtmlErrorPage(GATEWAY_404_PAGE, "OpenAI Compatible request failed (404)");
+  assert.match(message, /^OpenAI Compatible request failed \(404\): the endpoint answered with a web page/);
+  assert.match(message, /"ModelRouter 404 This page doesn't exist\. Browse Models"/);
+  assert.match(message, /Check the endpoint address in Settings/);
+  assert.doesNotMatch(message, /<|schema\.org|__next_f|Unified AI API/, "no markup, scripts or head in the message");
+  assert.ok(message.length < 400, `summary is ${message.length} chars`);
+});
+
+test("the page the game's own server sends back shows the bad address it was given", () => {
+  const message = describeHtmlErrorPage(MISSING_SCHEME_PAGE, "OpenAI Compatible request failed (404)");
+  assert.match(message, /"Cannot POST \/inference\.dahl\.global\/v1\/chat\/completions"/);
+});
+
+test("anything that is not an HTML page is left to the caller", () => {
+  assert.equal(describeHtmlErrorPage('{"error":{"message":"nope"}}', "x"), "");
+  assert.equal(describeHtmlErrorPage("Rate limit exceeded (10 RPM on free plan).", "x"), "");
+  assert.equal(describeHtmlErrorPage("", "x"), "");
+  assert.equal(describeHtmlErrorPage("error code: 502", "x"), "");
+});
+
+// A DeepSeek V4 Flash field report: a tool call refused mid-stream, retried once,
+// refused again — and the task was handed an empty "answer" that it then blamed
+// on the model. What the providers throw instead must say it was the provider,
+// and carry the flag the task runner reads to re-ask rather than fall back.
+test("a tool call the provider refused twice becomes a flagged busy error, not an empty answer", () => {
+  const error = toolStreamRefusalError(
+    "OpenAI Compatible",
+    { message: "An internal error occurred. Please try again later." },
+    true,
+  );
+  assert.equal(error.providerRefusal.busy, true);
+  assert.equal(error.providerRefusal.detail, "An internal error occurred. Please try again later.");
+  assert.equal(error.message, busyProviderMessage("OpenAI Compatible", "An internal error occurred. Please try again later.", true));
+  assert.match(error.message, /overloaded/);
+});
+
+test("a refusal that is not about load is quoted as the provider's error, still flagged", () => {
+  const error = toolStreamRefusalError("Gemini", { message: "Invalid argument in request." }, false);
+  assert.equal(error.providerRefusal.busy, false);
+  assert.equal(error.message, providerErrorReplyMessage("Gemini", "Invalid argument in request."));
+});
 
 // The frame that started this: an OpenAI-compatible gateway answering HTTP 200
 // and then refusing inside the stream. The advisor used to report it as "no

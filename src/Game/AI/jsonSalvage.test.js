@@ -147,3 +147,25 @@ ${ANSWER_SENTINEL}
 test("the directive actually names the marker it asks for", () => {
   assert.ok(ANSWER_SENTINEL_DIRECTIVE.includes(ANSWER_SENTINEL));
 });
+
+// A DeepSeek V4 Flash field report: copying the board prompt's `Operation "Name"`
+// title into its answer left one unescaped pair of quotes, and the whole reply
+// stopped being JSON — which held the turn. Verbatim from the log.
+test("a quote copied into a string without its backslash no longer sinks the reply", () => {
+  const raw = '{"projectOps":[{"op":"update","projectId":"project-0-mtuaa589-l1rt3ud","name":"Operation "Саммит Нормандской четвёрки"","eventIndex":0,"progress":18,"lastUpdate":"Инициатива начала реализацию."}]}';
+  const parsed = extractJsonPayload(raw);
+  assert.equal(parsed?.projectOps?.[0]?.name, 'Operation "Саммит Нормандской четвёрки"');
+  assert.equal(parsed.projectOps[0].projectId, "project-0-mtuaa589-l1rt3ud");
+  assert.equal(parsed.projectOps[0].progress, 18);
+});
+
+test("a quote mid-string is content; only a quote before a separator closes the string", () => {
+  assert.deepEqual(
+    extractJsonPayload('{"note":"he called it "the plan" in public","ok":true}'),
+    { note: 'he called it "the plan" in public', ok: true },
+  );
+});
+
+test("quotes that were escaped properly are left exactly as they were", () => {
+  assert.deepEqual(extractJsonPayload('{"note":"a \\"b\\" c"}'), { note: 'a "b" c' });
+});

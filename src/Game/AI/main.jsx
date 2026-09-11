@@ -27,6 +27,7 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import {
     busyProviderMessage,
     contextWindowMessage,
+    describeHtmlErrorPage,
     errorPayloadText,
     isBusyErrorPayload,
     isContextWindowErrorPayload,
@@ -38,6 +39,7 @@ import {
     providerErrorReplyMessage,
     retryDelayMsFromPayload,
     TOOL_CALL_INSISTENCE,
+    toolStreamRefusalError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
@@ -126,11 +128,27 @@ async function readErrorPayload(response) {
 
 function extractErrorMessage(payload, fallback) {
     if (!payload) return fallback;
-    if (typeof payload === "string" && payload.trim()) return payload.trim();
+    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
     if (payload.error?.message) return payload.error.message;
     if (payload.message) return payload.message;
-    if (typeof payload.rawText === "string" && payload.rawText.trim()) return payload.rawText.trim();
+    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
+        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
+    }
     return fallback;
+}
+
+// The body of a reply that claimed success. A 200 carrying a web page (a gateway
+// landing page, a proxy's error screen) used to surface as JSON.parse's
+// "Unexpected token '<', "<!doctype "... is not valid JSON" — true, and no help.
+async function readJsonAnswer(response, providerLabel) {
+    const text = await response.text();
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        const page = describeHtmlErrorPage(text, `${providerLabel} request failed (${response.status})`);
+        if (page) throw new Error(page);
+        throw error;
+    }
 }
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
@@ -902,7 +920,7 @@ async function callGemini(systemPrompt, history, {
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readGeminiStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
@@ -923,6 +941,8 @@ async function callGemini(systemPrompt, history, {
                 await sleep(OVERLOADED_RETRY_DELAY, signal);
                 continue;
             }
+            // Still refusing: say so, rather than hand back an empty "answer".
+            if (!streamedText && streamedError) throw toolStreamRefusalError("Gemini", streamedError, retriedAfterOverload);
 
             return { rawText: streamedText, toolInput: null };
         }
@@ -1226,7 +1246,7 @@ async function callOpenAIStyleChatCompletions({
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
             ? await readOpenAIStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
         const text = extractOpenAIMessageText(data);
 
@@ -1255,6 +1275,12 @@ async function callOpenAIStyleChatCompletions({
                 console.warn(`[ai] ${providerLabel} reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
                 await sleep(OVERLOADED_RETRY_DELAY, signal);
                 continue;
+            }
+            // Still refusing after that retry (or no time left for one): say so,
+            // rather than hand the task an empty "answer" to spend an attempt on.
+            // A partial tool call is left to the salvage pass, as before.
+            if (!text && streamedError && !extractOpenAIToolRaw(data, tool)) {
+                throw toolStreamRefusalError(providerLabel, streamedError, retriedAfterOverload);
             }
 
             // The model talked itself out of answering: no tool call, and the text
@@ -1603,7 +1629,7 @@ async function callAnthropic(systemPrompt, history, {
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
@@ -1627,7 +1653,10 @@ async function callAnthropic(systemPrompt, history, {
                     partialChars: data.partialToolJson.length,
                 }, { verbose: true });
             }
-            return { rawText: extractAnthropicText(data), toolInput: null };
+            // Still refusing: say so, rather than hand back an empty "answer".
+            const anthropicToolText = extractAnthropicText(data);
+            if (!anthropicToolText && data?.error) throw toolStreamRefusalError("Anthropic", data.error, retriedAfterOverload);
+            return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
 
@@ -1817,7 +1846,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
             ? await readAnthropicStreamedResponse(response, onActivity)
-            : await response.json();
+            : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
@@ -1843,6 +1872,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
             }
 
             const anthropicText = extractAnthropicText(data);
+            // Still refusing: say so, rather than hand back an empty "answer".
+            if (!anthropicText && data?.error) throw toolStreamRefusalError("Anthropic Compatible", data.error, retriedAfterOverload);
             // No tool call, and what came back is a planning monologue rather
             // than anything a salvage pass could parse. The proxy accepted
             // tool_choice without enforcing it, so asking again more firmly

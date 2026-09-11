@@ -78,6 +78,21 @@ test("an explicitly emptied list is still an instruction, not an omission", () =
   assert.deepEqual(applyProjectOps([before], [{ op: "create", name: before.name, tags: [] }], {})[0].tags, []);
 });
 
+// The board prompt titles entries `Operation "Name"`, and a model copies the whole
+// title — label, quotes, and in a Russian game a translated label. Without an id
+// that update used to match nothing and vanish.
+test("an op naming a project by its displayed title still finds it", () => {
+  const before = applyProjectOps([], [{ op: "create", name: "Standing Watch", kind: "operation", summary: "s" }], {})[0];
+  for (const name of ['Operation "Standing Watch"', 'Операция "Standing Watch"', 'Operation «Standing Watch»']) {
+    const after = applyProjectOps([before], [{ op: "update", name, progress: 70 }], {});
+    assert.equal(after.length, 1, name);
+    assert.equal(after[0].progress, 70, name);
+  }
+  // The label may already be part of the name, in which case the prompt quotes the whole thing.
+  const labelled = applyProjectOps([], [{ op: "create", name: "Operation Kingfisher", kind: "operation", summary: "s" }], {})[0];
+  assert.equal(applyProjectOps([labelled], [{ op: "update", name: '"Operation Kingfisher"', progress: 40 }], {})[0].progress, 40);
+});
+
 test("a genuinely new project still receives its defaults", () => {
   const fresh = applyProjectOps([], [{ op: "create", name: "Fresh", summary: "s" }], {})[0];
   assert.equal(fresh.status, "active");
