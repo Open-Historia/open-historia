@@ -6,10 +6,12 @@ import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
+import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import StatsPane from "./stats.jsx";
 
@@ -805,7 +807,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     </div>
 ));
 
-const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
+const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResizeEnd, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -835,11 +837,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
     const inputRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
+    const isMobile = useIsMobile();
 
     // Drag the drawer's left edge to resize it. The panel is docked right, so the
     // new width is simply (viewport width − pointer x); the parent (main.jsx) clamps
-    // and persists it. Pointer capture keeps the drag alive if the cursor leaves the
-    // 10px handle. Works for mouse, touch and pen.
+    // it, and persists it when told the drag is over. Pointer capture keeps the drag
+    // alive if the cursor leaves the 10px handle. Works for mouse, touch and pen.
     const handleResizeStart = React.useCallback((e) => {
         if (typeof onResize !== "function") return;
         e.preventDefault();
@@ -849,6 +852,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         const onMove = (ev) => onResize(window.innerWidth - ev.clientX);
         const onUp = () => {
             setIsResizing(false);
+            onResizeEnd?.();
             target.removeEventListener("pointermove", onMove);
             target.removeEventListener("pointerup", onUp);
             target.removeEventListener("pointercancel", onUp);
@@ -856,7 +860,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         target.addEventListener("pointermove", onMove);
         target.addEventListener("pointerup", onUp);
         target.addEventListener("pointercancel", onUp);
-    }, [onResize]);
+    }, [onResize, onResizeEnd]);
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();
@@ -1170,18 +1174,25 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
             // Slide via transform: the old right: calc(-min(...) - 1rem) was
             // INVALID CSS (a min() can't be negated like that), so the closed
             // position was silently dropped and the drawer never slid away.
-            transform: isAdvisorOpen ? "translateX(0)" : "translateX(calc(100% + 2rem))",
+            // Closed, it sits exactly its own width off-screen: the HUD beside it
+            // slides that same distance (main.jsx), so they move as one. The
+            // shadow, which would show past the edge, fades out with it instead.
+            transform: isAdvisorOpen ? "translateX(0)" : "translateX(100%)",
             // Full height now the in-game top bar is gone — it used to stop 64px
             // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
             // above, so height: 100vh reaches the top edge.
-            width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH, height: "100vh",
+            width: width || ADVISOR_PANEL_WIDTH, height: "100vh",
             backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
-            // Above every HUD button/panel (toolbar 9999, forces 10000,
-            // library panels 10031) so nothing covers the open drawer on
-            // phones; below the editor (10050) and server-down (10060) overlays.
-            zIndex: 10040, borderLeft: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
-            transition: "transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+            // Phones: above every HUD button/panel (toolbar 9999, forces 10000,
+            // library panels 10031) so nothing covers the near-full-width
+            // drawer; below the editor (10050) and server-down (10060) overlays.
+            // Desktop: the drawer can be dragged wide, so it sits under every
+            // HUD button, panel and menu (9998 and up: Actions, Projects,
+            // diplomacy chat, timeline panels, settings) and over only the map
+            // and the session pill (9996).
+            zIndex: isMobile ? 10040 : 9997, borderLeft: "1px solid rgba(255,255,255,0.1)",
+            boxShadow: isAdvisorOpen ? "-4px 0 24px rgba(0,0,0,0.4)" : "none",
+            transition: `transform ${ADVISOR_SLIDE}, box-shadow ${ADVISOR_SLIDE}`,
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>

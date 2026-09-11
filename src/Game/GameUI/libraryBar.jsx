@@ -2048,7 +2048,8 @@ const LibraryTopBar = () => {
           remains is a compact floating cluster beside the ⋮ settings button: a
           small sleek pill with the session summary, plus Exit Game.
           Below the settings menu and date widget (z 9998/9999) so opening
-          either covers it instead of the other way around. */}
+          either covers it instead of the other way around, and below the
+          desktop advisor drawer (9997) so a wide drawer covers it too. */}
       {!menuOpen && !isMobile && (
         <div
           style={{
@@ -2059,7 +2060,7 @@ const LibraryTopBar = () => {
             left: "5rem",
             position: "fixed",
             top: "0.5rem",
-            zIndex: 9997,
+            zIndex: 9996,
           }}
         >
           <div

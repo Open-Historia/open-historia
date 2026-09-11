@@ -1,5 +1,5 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
@@ -13,6 +13,7 @@ import { Other } from "./other";
 import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
+import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -28,11 +29,26 @@ import {
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
 // Width is kept in px so the drag maps 1:1 to the pointer, persisted in
-// localStorage, and clamped to a readable min and the current viewport.
+// localStorage, and clamped to a readable min and a max that keeps the HUD
+// in view.
+const ADVISOR_WIDTH_VAR = "--oh-advisor-width";
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
+// The drawer may cover the map but not the HUD on its left. The tightest fit is
+// the top edge: the 18rem date widget moves left with the drawer and must stop
+// short of the 4rem game-menu button at 0.5rem. 0.5 + 4 + 0.5 gap + 18 + 0.5 =
+// 23.5rem, which also clears the bottom-left toolbar and search button.
+const ADVISOR_LEFT_CLEARANCE_REM = 23.5;
 const clampAdvisorWidth = (px) => {
-  const max = (typeof window !== "undefined" ? window.innerWidth : 1280) - 16;
+  const viewport = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const rem = typeof document !== "undefined"
+    ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+    : 16;
+  // A window too narrow to leave that room (a phone) still gets the default width.
+  const max = Math.max(
+    viewport - ADVISOR_LEFT_CLEARANCE_REM * rem,
+    Math.min(ADVISOR_DEFAULT_WIDTH, viewport - 16),
+  );
   return Math.round(Math.min(Math.max(px, Math.min(ADVISOR_MIN_WIDTH, max)), max));
 };
 const readAdvisorWidth = () => {
@@ -140,7 +156,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -148,13 +164,17 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
     onClick={onToggle}
     style={{
       ...baseStyle,
-      bottom: "0.5rem", right: rightShift,
+      ...dockStyle,
+      bottom: "0.5rem",
+      // Rides beside the advisor drawer, so a wide drawer carries it over the
+      // Actions/Projects/chat panels (9998); an open panel stays on top.
+      zIndex: 9997,
       height: "4rem", width: "4rem",
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen
         ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
         : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
-      transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease",
+      transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
     <AdvisorDockIcon />
@@ -346,13 +366,33 @@ const Main = ({
     if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
 
+  // The drawer's width and the offset of the HUD beside it both read one CSS
+  // variable, so they are always laid out from the same number in the same
+  // frame. React state holds the width at rest; a drag writes the variable
+  // directly and commits to state when it ends, so no pointermove re-renders
+  // the game UI.
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(ADVISOR_WIDTH_VAR, `${advisorWidth}px`);
+  }, [advisorWidth]);
+
+  // The width the current drag has reached, committed when it ends.
+  const draggedAdvisorWidthRef = useRef(null);
+
   // Called on every pointermove while the user drags the advisor's edge.
   const handleAdvisorResize = useCallback((px) => {
-    setAdvisorWidth(() => {
-      const w = clampAdvisorWidth(px);
-      try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
-      return w;
-    });
+    const w = clampAdvisorWidth(px);
+    draggedAdvisorWidthRef.current = w;
+    document.documentElement.style.setProperty(ADVISOR_WIDTH_VAR, `${w}px`);
+  }, []);
+
+  // Committed and saved once, when the drag ends. The variable already holds
+  // it, so nothing moves on release.
+  const handleAdvisorResizeEnd = useCallback(() => {
+    const w = draggedAdvisorWidthRef.current;
+    draggedAdvisorWidthRef.current = null;
+    if (w === null) return;
+    setAdvisorWidth(w);
+    try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
   }, []);
 
   // Keep the saved width valid if the window shrinks below it.
@@ -362,7 +402,20 @@ const Main = ({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const rightShift = isAdvisorOpen ? `calc(${advisorWidth}px + 0.5rem)` : "0.5rem";
+  const advisorCssWidth = `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`;
+  // Where the HUD beside the drawer (date widget, flag, advisor button) sits.
+  // It is always placed at the drawer's edge, and pushed back to the screen
+  // edge while the drawer is shut by the same transform the drawer uses: the
+  // same distance (the drawer's width), duration and easing, started in the
+  // same frame and run by the compositor, so opening and closing move them as
+  // one. A drag changes only the width, which `right` follows with no
+  // transition at all. (Easing `right` instead made the HUD cover less
+  // distance than the drawer in the same time, on the busy main thread.)
+  const advisorDockStyle = useMemo(() => ({
+    right: `calc(${advisorCssWidth} + 0.5rem)`,
+    transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+    transition: `transform ${ADVISOR_SLIDE}`,
+  }), [advisorCssWidth, isAdvisorOpen]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -378,7 +431,7 @@ const Main = ({
         mapRef={mapRef}
         onSetPanel={setActiveBottomPanel}
         onTogglePanel={toggleBottomPanel}
-        rightShift={rightShift}
+        dockStyle={advisorDockStyle}
         topOffset={TOP_BAR_OFFSET}
       />
       <Toolbar
@@ -387,7 +440,7 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         mapRef={mapRef}
       />
-      <Other rightShift={rightShift} />
+      <Other dockStyle={advisorDockStyle} />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
@@ -397,7 +450,7 @@ const Main = ({
       />
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
-        rightShift={rightShift}
+        dockStyle={advisorDockStyle}
         onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
       />
       <Suspense fallback={null}>
@@ -406,8 +459,9 @@ const Main = ({
             isAdvisorOpen={isAdvisorOpen}
             mapRef={mapRef}
             onClose={() => setIsAdvisorOpen(false)}
-            width={advisorWidth}
+            width={advisorCssWidth}
             onResize={handleAdvisorResize}
+            onResizeEnd={handleAdvisorResizeEnd}
             onOpenActions={() => setActiveBottomPanel("actions")}
             onOpenProjects={() => setActiveBottomPanel("projects")}
             requestedPrompt={pendingAdvisorPrompt}
