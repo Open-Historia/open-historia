@@ -1,5 +1,5 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
@@ -30,6 +30,7 @@ import {
 // Width is kept in px so the drag maps 1:1 to the pointer, persisted in
 // localStorage, and clamped to a readable min and a max that keeps the HUD
 // in view.
+const ADVISOR_WIDTH_VAR = "--oh-advisor-width";
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
 // The drawer may cover the map but not the HUD on its left. The tightest fit is
@@ -361,19 +362,35 @@ const Main = ({
     if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
 
+  // The drawer's width and the offset of the HUD beside it both read one CSS
+  // variable, so they are always laid out from the same number in the same
+  // frame. React state holds the width at rest; a drag writes the variable
+  // directly and commits to state when it ends, so no pointermove re-renders
+  // the game UI.
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(ADVISOR_WIDTH_VAR, `${advisorWidth}px`);
+  }, [advisorWidth]);
+
+  // The width the current drag has reached, committed when it ends.
+  const draggedAdvisorWidthRef = useRef(null);
+
   // Called on every pointermove while the user drags the advisor's edge.
   const handleAdvisorResize = useCallback((px) => {
-    setAdvisorWidth(clampAdvisorWidth(px));
+    const w = clampAdvisorWidth(px);
+    draggedAdvisorWidthRef.current = w;
+    document.documentElement.style.setProperty(ADVISOR_WIDTH_VAR, `${w}px`);
   }, []);
 
-  // The width is saved once, when the drag ends, rather than on every move.
+  // Committed and saved once, when the drag ends. The state lands in the same
+  // render that turns the HUD's easing back on, and the variable already holds
+  // it, so nothing moves on release.
   const handleAdvisorResizingChange = useCallback((resizing) => {
     setIsAdvisorResizing(resizing);
-    if (resizing) return;
-    setAdvisorWidth((w) => {
-      try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
-      return w;
-    });
+    const w = draggedAdvisorWidthRef.current;
+    draggedAdvisorWidthRef.current = null;
+    if (resizing || w === null) return;
+    setAdvisorWidth(w);
+    try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
   }, []);
 
   // Keep the saved width valid if the window shrinks below it.
@@ -383,7 +400,8 @@ const Main = ({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const rightShift = isAdvisorOpen ? `calc(${advisorWidth}px + 0.5rem)` : "0.5rem";
+  const advisorCssWidth = `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`;
+  const rightShift = isAdvisorOpen ? `calc(${advisorCssWidth} + 0.5rem)` : "0.5rem";
   // The HUD beside the drawer eases along when it opens or closes, but follows
   // a drag instantly: an eased follow restarts on every pointermove, so the
   // widgets trail the pointer by the length of the animation.
@@ -433,7 +451,7 @@ const Main = ({
             isAdvisorOpen={isAdvisorOpen}
             mapRef={mapRef}
             onClose={() => setIsAdvisorOpen(false)}
-            width={advisorWidth}
+            width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizingChange={handleAdvisorResizingChange}
             onOpenActions={() => setActiveBottomPanel("actions")}

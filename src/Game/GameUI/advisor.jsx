@@ -1176,7 +1176,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // Full height now the in-game top bar is gone — it used to stop 64px
             // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
             // above, so height: 100vh reaches the top edge.
-            width: typeof width === "number" ? `${width}px` : ADVISOR_PANEL_WIDTH, height: "100vh",
+            width: width || ADVISOR_PANEL_WIDTH, height: "100vh",
             backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
             // Above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the open drawer on
