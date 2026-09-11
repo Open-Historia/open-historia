@@ -164,6 +164,9 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, rightShiftTransition, onTogg
     style={{
       ...baseStyle,
       bottom: "0.5rem", right: rightShift,
+      // Rides beside the advisor drawer, so a wide drawer carries it over the
+      // Actions/Projects/chat panels (9998); an open panel stays on top.
+      zIndex: 9997,
       height: "4rem", width: "4rem",
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen

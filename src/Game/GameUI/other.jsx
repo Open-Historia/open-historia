@@ -177,6 +177,9 @@ const Other = memo(function Other({
             ...baseStyle,
             bottom: "4.75rem",
             right: rightShift,
+            // Rides beside the advisor drawer, so a wide drawer carries it over
+            // the Actions/Projects/chat panels (9998); an open panel stays on top.
+            zIndex: 9997,
             height: "2.75rem",
             width: "2.75rem",
             padding: "0.35rem",
