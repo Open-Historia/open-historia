@@ -28,11 +28,25 @@ import {
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
 // Width is kept in px so the drag maps 1:1 to the pointer, persisted in
-// localStorage, and clamped to a readable min and the current viewport.
+// localStorage, and clamped to a readable min and a max that keeps the HUD
+// in view.
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
+// The drawer may cover the map but not the HUD on its left. The tightest fit is
+// the top edge: the 18rem date widget moves left with the drawer and must stop
+// short of the 4rem game-menu button at 0.5rem. 0.5 + 4 + 0.5 gap + 18 + 0.5 =
+// 23.5rem, which also clears the bottom-left toolbar and search button.
+const ADVISOR_LEFT_CLEARANCE_REM = 23.5;
 const clampAdvisorWidth = (px) => {
-  const max = (typeof window !== "undefined" ? window.innerWidth : 1280) - 16;
+  const viewport = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const rem = typeof document !== "undefined"
+    ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+    : 16;
+  // A window too narrow to leave that room (a phone) still gets the default width.
+  const max = Math.max(
+    viewport - ADVISOR_LEFT_CLEARANCE_REM * rem,
+    Math.min(ADVISOR_DEFAULT_WIDTH, viewport - 16),
+  );
   return Math.round(Math.min(Math.max(px, Math.min(ADVISOR_MIN_WIDTH, max)), max));
 };
 const readAdvisorWidth = () => {
