@@ -273,18 +273,32 @@ This last one is the most powerful field in the editor. It is where you write th
 <p><strong>Polities</strong> — a registry of every country in the scenario, edited in one place rather than by
 painting regions one at a time. On beta the region owner field also takes a name that does not
 exist yet and creates the polity from it, so you can still work map-first.</p>
+<p>A polity exists <strong>on the map or not at all</strong>. Only countries that own a region, or claim a
+disputed one, are written into the scenario — a record left holding nothing is dropped rather
+than shipped as a phantom government in exile that keeps writing to the player. Paint it back in
+the same session and its name, aliases and lore return. Creating a polity puts it on the map: with
+regions selected it takes them, and without a selection it is handed to the paint tool. Its
+delete button is <strong>Remove from the map</strong> — its regions become unowned, its claims are dropped, and
+the record goes with its colour, flag and tags.</p>
 <p><strong>Topology</strong> — tools for the relationships between regions: adjacency and the structure that sits
 underneath the geometry.</p>
 <p><strong>Province import</strong> — turns a raster image into provinces. Feed it a map coloured by province and
 it traces the regions out for you, which is dramatically faster than drawing a few hundred by
-hand.</p>
+hand. It also takes GeoJSON, and <strong>Import explicit city Point markers</strong> brings that file&#39;s cities
+in as real cities — replacing the current ones or merging with them — so they ship with the
+scenario like hand-placed ones.</p>
+<p><strong>Saving waits for the map.</strong> A scenario&#39;s own map streams in after the Workshop opens, and a
+large one takes a while. Until it has loaded, Save reads <strong>Loading map…</strong> and Save &amp; Exit and
+Apply &amp; Play are disabled, so an early click cannot write an empty map over your scenario.</p>
 <p>If you are authoring a large historical scenario, these are the reason to build it on beta even
 if you play on stable — a scenario is portable between the two.</p>
 <h2 id="sharing-what-you-make">Sharing what you make</h2>
 <p>Export a bundle and publish it to the <a href="/wiki/community-hub/">Community Hub</a>. Bundles carry the
 map, cities, colours, flags and any custom basemap, so someone importing it gets exactly what you
 built.</p>
-<h2 id="next">Next</h2>
+<p class="beta-note"><b>On beta every export is full-size.</b> Stable's bundles leave out a map
+uploaded as a tile archive (<code>.pmtiles</code>) rather than drawn in the editor. Beta has no
+light mode and always includes it.</p><h2 id="next">Next</h2>
 <ul>
 <li><a href="/wiki/community-hub/">The community hub</a> — publishing it.</li>
 <li><a href="/wiki/territory/">Territory</a> — what regions and claims mean in play.</li>
@@ -296,7 +310,7 @@ built.</p>
         <a class="next" href="/wiki/community-hub/"><span>Next →</span><b>The community hub</b></a>
       </nav>
     <p class="wiki-stale">Open Historia is under active development on two channels, and this
-      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-11</b> · main <code>5ee1ab55</code> · beta <code>0b6db0ac</code>. If something
       here does not match what you see in the game, trust the game and
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>

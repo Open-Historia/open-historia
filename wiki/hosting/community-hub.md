@@ -47,7 +47,8 @@ then on it behaves exactly like a built-in scenario — it is yours, it works of
 edit or clone it.
 
 A bundle carries the map, cities, colours, flags and any custom basemap the author used, so what
-you get is what they built.
+you get is what they built. The one exception is on stable: a map the author uploaded as a tile
+archive rather than drew in the editor is left out. Beta always includes it.
 
 ## Updates
 

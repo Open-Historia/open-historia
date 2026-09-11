@@ -137,6 +137,11 @@ When you catch one, it appears in the Spy tab and **waits for your decision**:
 Turning is the more interesting option and the more useful one, but it requires you to keep
 feeding it plausible material.
 
+<p class="beta-note"><b>On beta</b>, typing a story before you turn the agent changes the button to
+<b>Turn &amp; plant story</b>, so the first report home is yours from the start. A turned agent's
+<b>Save</b> is greyed out while the field matches what it already reports and reads "Saved" for a
+moment after you save; Enter in the field saves too.</p>
+
 ## Reading intercepts
 
 You rarely get a clean transcript. How much of an intercepted message you can read depends on

@@ -27,6 +27,9 @@ Work through these in order:
 3. **Is the model name right?** OpenAI and OpenAI Compatible have no default model — you must
    type one, and it must exist on that provider.
 4. **Is the endpoint right?** Compatible providers need the base URL, usually ending `/v1`.
+   An address that points at the service's website rather than its API gets a web page back
+   instead of an answer. On beta the error quotes a line of that page and tells you to check the
+   address, which should start with `https://` and usually end in `/v1`.
 5. **Are you in the browser build with a provider that needs a relay?** The hosted website
    cannot relay. Gemini and Anthropic work there; OpenAI and most compatible endpoints do not.
    Use the desktop app. See [connecting an AI provider](/wiki/ai-setup/).
@@ -37,6 +40,10 @@ This is almost always the model failing to produce valid structured output.
 
 - **Your model is too small.** Below about 7B this is common. See
   [AI providers and models](/wiki/ai-providers/).
+- **Its context window is too small.** A turn's prompt is large, and a model limited to a few
+  thousand tokens cannot take it. A turn needs **32k tokens or more**. On beta the error says the
+  context window was exceeded and how big the request was; on stable it usually shows up as
+  *"Response did not contain parseable JSON or tool arguments."*
 - **Toggle Strict tool schema** (Settings). Some gateways and local servers handle the strict
   form of structured output badly, and flipping this fixes it outright.
 - **Try a different model on the same provider.** Some are far better at this than others.
@@ -68,8 +75,9 @@ question is asked again — you do not retype anything, and if it succeeds the t
 though the error never happened.
 
 ![An advisor request that failed, with Retry](/wiki/img/retry-advisor.jpg)
-*Your question is kept above the error, so Retry re-asks it as written. **Copy for a bug report**
-puts the failure and its context on the clipboard in one go.*
+*Your question is kept above the error, so Retry re-asks it as written. The button beside it is
+**💾 Save logging file** while the diagnostics log is on, and **Copy for a bug report** when it is
+off — see [reporting a bug](#reporting-a-bug).*
 
 Retry is offered on the **newest** error only. Most advisor failures are the transport or an
 overloaded provider rather than anything about your question, and the transport has already
@@ -123,6 +131,11 @@ Symptoms: turns fail intermittently, or stall on long jumps while short ones wor
 Free tiers have per-minute limits that a long jump can exceed. Options: use the smaller/faster
 model in the family (limits are usually more generous), take shorter jumps, or move to a paid
 tier.
+
+<p class="beta-note"><b>On beta, a busy provider is named as busy.</b> When a provider refuses
+partway through an answer because it is overloaded, beta says so in the log, waits 15 seconds,
+and asks once more — rather than treating it as a model that answered with nothing and re-sending
+straight away.</p>
 
 ## CORS errors with a local model
 
@@ -193,10 +206,17 @@ usually the difference between a report someone can act on and one that cannot b
 [the settings reference](/wiki/settings/#detailed-logging).
 
 Then copy the **Diagnostics Log** from the cheats panel and open an issue at
-[GitHub](https://github.com/Open-Historia/open-historia/issues). On beta, an advisor or chat
-error also has **Copy for a bug report** on the error itself, which grabs that failure and its
-context without going near the log. The
+[GitHub](https://github.com/Open-Historia/open-historia/issues). The
 [Discord](https://discord.gg/QaqAK7fQAg) is faster for "is this just me?".
+
+<p class="beta-note"><b>On beta, the failure itself hands you the file.</b> A turn that fell back
+to canned events, a failed advisor reply and a board update the advisor could not apply each have
+a <b>💾 Save logging file</b> button. It saves the whole diagnostics log as a file, with that
+failure's details — for a turn, the model's raw response in full — in a <i>Reported problem</i>
+block at the top. Attach the file. With the diagnostics log turned off there is no log to save, so
+the button copies the one failure instead, under its old label (<b>Copy debugging message</b> or
+<b>Copy for a bug report</b>). The Android app cannot save files, so there it copies the whole log
+and says so.</p>
 
 Include your platform, your build (stable or beta), your provider and model, and what you were
 doing.

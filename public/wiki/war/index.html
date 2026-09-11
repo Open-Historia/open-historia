@@ -159,7 +159,10 @@ resume one that is not in ceasefire, or end one that has already ended.</p>
 <h3 id="combat-requires-a-war">Combat requires a war</h3>
 <p>This is the rule that makes the ledger worth having. <strong>An event that narrates battlefield
 combat must name an active canonical war and the countries fighting on each side.</strong> Battles,
-invasions, offensives, bombardments, active fronts and unit attacks all qualify.</p>
+invasions, offensives, bombardments, active fronts and unit attacks all qualify. An offensive
+that is plainly not military — diplomatic, economic, trade, legal, media, a charm or peace
+offensive — does not, so a <em>&quot;diplomatic offensive for sanctions relief&quot;</em> is not mistaken for a
+battle. A cyber offensive still counts as hostile.</p>
 <p>An event describing a battle with no war behind it is rejected while the turn still has a retry
 left, as is one pointing at a war that is in ceasefire or already over. On the final attempt the
 turn is repaired rather than thrown away: a war record that still cannot be bound to an event is
@@ -270,6 +273,11 @@ offence.</p>
 </tr>
 </tbody></table></div>
 <p>Each is <code>active</code>, <code>suspended</code>, <code>ended</code> or <code>expired</code>.</p>
+<p>The register only holds what earlier turns recorded. If a turn tries to end, suspend or update an
+agreement that was never recorded, the game re-aims it at the one recorded agreement with exactly
+the same parties and type, if there is exactly one. Otherwise that single change is dropped, with
+a note in the diagnostics log, and the rest of the turn stands. It would rather lose one change
+than end the wrong treaty.</p>
 <p>This is what turns &quot;we agreed to an alliance in a conversation twelve turns ago&quot; into something
 the world still knows about and can be held to.</p>
 <h2 id="storylines">Storylines</h2>
@@ -281,6 +289,12 @@ from 0 to 100, and a date at which it is next due attention. Every live war gets
 storyline. At most <strong>96</strong> are kept.</p>
 <p>Storylines are why a beta campaign has continuity between turns that nothing in the event log
 explains: something has been building for six turns and is now due.</p>
+<p><strong>They are not allowed to stall.</strong> An active war, or any storyline at pressure <strong>55</strong> or above,
+that goes <strong>45 days</strong> of game time without a visible milestone has to move: link a real event,
+change status, or shift pressure by at least 4 points or momentum by at least 6. If a time skip
+leaves one stuck, the game makes a short repair call for it once the skip is done, with up to
+<strong>ten minutes</strong> in total per skip. A repair that fails or runs out of time leaves the storyline
+where it was and overdue for the next turn. It never costs you the turn itself.</p>
 <h2 id="what-this-changes-to-play">What this changes to play</h2>
 <ul>
 <li><strong>Wars have a beginning.</strong> You cannot drift into one; someone declared it, and the ledger
@@ -309,7 +323,7 @@ say they do, and the world&#39;s memory of them comes from the
         <a class="next" href="/wiki/territory/"><span>Next →</span><b>Territory</b></a>
       </nav>
     <p class="wiki-stale">Open Historia is under active development on two channels, and this
-      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-11</b> · main <code>5ee1ab55</code> · beta <code>0b6db0ac</code>. If something
       here does not match what you see in the game, trust the game and
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>

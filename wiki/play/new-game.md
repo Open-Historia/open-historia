@@ -24,6 +24,12 @@ One scenario can seed as many games as you like, and playing one never changes i
 Open the **Community** tab in the main menu, find one, and hit **Import & Play**. It downloads
 into your library and behaves exactly like a built-in scenario from then on.
 
+<p class="beta-note"><b>Beta's Modern Day is redrawn.</b> Stable plays Modern Day on the stock
+world map and starts you as Russia. Beta ships a hand-drawn world instead — 4,848 regions, 202
+countries with their own colours, about 2,500 cities — still starting on 1 January 2016, with the
+United States as the default country. Campaigns you began on the old map are not lost: they move
+to a copy called <b>Modern Day (classic map)</b> and carry on there.</p>
+
 If a scenario you imported gets updated by its author, an **⬆ Update** button appears on its
 card. Updating is safe — games already in progress keep working on the version they started on.
 

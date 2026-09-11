@@ -89,6 +89,11 @@ Stat sheets are generated on demand for the country you are looking at, from the
 state, and cached so that reopening the panel does not regenerate them. There is a **↻** control
 to force a fresh one.
 
+On a brand-new game the world is still writing its backstory for the first few moments. Open
+Stats then and the sheet waits for it — *"Waiting for the world to finish updating, then
+compiling the stat sheet…"* — rather than running a second AI call alongside it and describing a
+world with no history yet.
+
 They then move through events. When a turn changes a country's circumstances, the event carries
 the statistical change with it — and only the fields that actually changed, so everything else
 keeps its previous value.
@@ -187,6 +192,17 @@ sharply, and the sheet shows both rather than picking one.
 
 **Landless polities work.** A government-in-exile, a rebel movement or an organisation with no
 mapped territory used to fail to produce a sheet at all. They now get a valid one.
+
+**Population follows the land.** When territory changes hands, its people and economy go with
+it, so the game keeps track of how much of a country sits in each piece of its territory. For a
+country with up to 24 such pieces — every country on the modern map — the model estimates that
+split once, from where people actually live, never from how many map regions or how much area a
+piece covers. The game checks the answer and keeps it, asking again only when a piece changes
+size. Sprawling historical empires are split by the game's own weights instead. A piece of
+territory also keeps its own income level, so Puerto Rico
+is not credited with mainland American productivity. And a country holding part of another's land
+is assessed on **that part only**: Russia holding Crimea is not handed the whole of Ukraine's
+population.
 
 ## Next
 

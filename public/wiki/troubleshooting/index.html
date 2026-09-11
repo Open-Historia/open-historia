@@ -143,7 +143,10 @@ remote desktop, WebGL is often unavailable.</p>
 <li><strong>Is the key right?</strong> Paste it fresh; keys often pick up whitespace.</li>
 <li><strong>Is the model name right?</strong> OpenAI and OpenAI Compatible have no default model — you must
 type one, and it must exist on that provider.</li>
-<li><strong>Is the endpoint right?</strong> Compatible providers need the base URL, usually ending <code>/v1</code>.</li>
+<li><strong>Is the endpoint right?</strong> Compatible providers need the base URL, usually ending <code>/v1</code>.
+An address that points at the service&#39;s website rather than its API gets a web page back
+instead of an answer. On beta the error quotes a line of that page and tells you to check the
+address, which should start with <code>https://</code> and usually end in <code>/v1</code>.</li>
 <li><strong>Are you in the browser build with a provider that needs a relay?</strong> The hosted website
 cannot relay. Gemini and Anthropic work there; OpenAI and most compatible endpoints do not.
 Use the desktop app. See <a href="/wiki/ai-setup/">connecting an AI provider</a>.</li>
@@ -153,6 +156,10 @@ Use the desktop app. See <a href="/wiki/ai-setup/">connecting an AI provider</a>
 <ul>
 <li><strong>Your model is too small.</strong> Below about 7B this is common. See
 <a href="/wiki/ai-providers/">AI providers and models</a>.</li>
+<li><strong>Its context window is too small.</strong> A turn&#39;s prompt is large, and a model limited to a few
+thousand tokens cannot take it. A turn needs <strong>32k tokens or more</strong>. On beta the error says the
+context window was exceeded and how big the request was; on stable it usually shows up as
+<em>&quot;Response did not contain parseable JSON or tool arguments.&quot;</em></li>
 <li><strong>Toggle Strict tool schema</strong> (Settings). Some gateways and local servers handle the strict
 form of structured output badly, and flipping this fixes it outright.</li>
 <li><strong>Try a different model on the same provider.</strong> Some are far better at this than others.</li>
@@ -174,8 +181,9 @@ Beta&#39;s answer is that <strong>a failure should cost you the thing that faile
 question is asked again — you do not retype anything, and if it succeeds the thread reads as
 though the error never happened.</p>
 <p><img src="/wiki/img/retry-advisor.jpg" alt="An advisor request that failed, with Retry">
-<em>Your question is kept above the error, so Retry re-asks it as written. <strong>Copy for a bug report</strong>
-puts the failure and its context on the clipboard in one go.</em></p>
+<em>Your question is kept above the error, so Retry re-asks it as written. The button beside it is
+<strong>💾 Save logging file</strong> while the diagnostics log is on, and <strong>Copy for a bug report</strong> when it is
+off — see <a href="#reporting-a-bug">reporting a bug</a>.</em></p>
 <p>Retry is offered on the <strong>newest</strong> error only. Most advisor failures are the transport or an
 overloaded provider rather than anything about your question, and the transport has already
 waited and tried once by the time you see this.</p>
@@ -214,7 +222,10 @@ held again if the <strong>board</strong> fails a second time.</p>
 <p>Free tiers have per-minute limits that a long jump can exceed. Options: use the smaller/faster
 model in the family (limits are usually more generous), take shorter jumps, or move to a paid
 tier.</p>
-<h2 id="cors-errors-with-a-local-model">CORS errors with a local model</h2>
+<p class="beta-note"><b>On beta, a busy provider is named as busy.</b> When a provider refuses
+partway through an answer because it is overloaded, beta says so in the log, waits 15 seconds,
+and asks once more — rather than treating it as a model that answered with nothing and re-sending
+straight away.</p><h2 id="cors-errors-with-a-local-model">CORS errors with a local model</h2>
 <p>The error will name a blocked cross-origin request.</p>
 <ul>
 <li><strong>Ollama</strong> — usually works as-is at <code>http://localhost:11434/v1</code>.</li>
@@ -267,11 +278,16 @@ far more than the normal log, including the full text of the exchange that went 
 usually the difference between a report someone can act on and one that cannot be diagnosed. See
 <a href="/wiki/settings/#detailed-logging">the settings reference</a>.</p>
 <p>Then copy the <strong>Diagnostics Log</strong> from the cheats panel and open an issue at
-<a href="https://github.com/Open-Historia/open-historia/issues">GitHub</a>. On beta, an advisor or chat
-error also has <strong>Copy for a bug report</strong> on the error itself, which grabs that failure and its
-context without going near the log. The
+<a href="https://github.com/Open-Historia/open-historia/issues">GitHub</a>. The
 <a href="https://discord.gg/QaqAK7fQAg">Discord</a> is faster for &quot;is this just me?&quot;.</p>
-<p>Include your platform, your build (stable or beta), your provider and model, and what you were
+<p class="beta-note"><b>On beta, the failure itself hands you the file.</b> A turn that fell back
+to canned events, a failed advisor reply and a board update the advisor could not apply each have
+a <b>💾 Save logging file</b> button. It saves the whole diagnostics log as a file, with that
+failure's details — for a turn, the model's raw response in full — in a <i>Reported problem</i>
+block at the top. Attach the file. With the diagnostics log turned off there is no log to save, so
+the button copies the one failure instead, under its old label (<b>Copy debugging message</b> or
+<b>Copy for a bug report</b>). The Android app cannot save files, so there it copies the whole log
+and says so.</p><p>Include your platform, your build (stable or beta), your provider and model, and what you were
 doing.</p>
 
     <nav class="wiki-pager" aria-label="Pagination">
@@ -279,7 +295,7 @@ doing.</p>
         <span></span>
       </nav>
     <p class="wiki-stale">Open Historia is under active development on two channels, and this
-      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-11</b> · main <code>5ee1ab55</code> · beta <code>0b6db0ac</code>. If something
       here does not match what you see in the game, trust the game and
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>

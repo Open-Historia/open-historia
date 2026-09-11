@@ -123,12 +123,26 @@ The beta editor adds three panels for building a world's politics rather than it
 painting regions one at a time. On beta the region owner field also takes a name that does not
 exist yet and creates the polity from it, so you can still work map-first.
 
+A polity exists **on the map or not at all**. Only countries that own a region, or claim a
+disputed one, are written into the scenario — a record left holding nothing is dropped rather
+than shipped as a phantom government in exile that keeps writing to the player. Paint it back in
+the same session and its name, aliases and lore return. Creating a polity puts it on the map: with
+regions selected it takes them, and without a selection it is handed to the paint tool. Its
+delete button is **Remove from the map** — its regions become unowned, its claims are dropped, and
+the record goes with its colour, flag and tags.
+
 **Topology** — tools for the relationships between regions: adjacency and the structure that sits
 underneath the geometry.
 
 **Province import** — turns a raster image into provinces. Feed it a map coloured by province and
 it traces the regions out for you, which is dramatically faster than drawing a few hundred by
-hand.
+hand. It also takes GeoJSON, and **Import explicit city Point markers** brings that file's cities
+in as real cities — replacing the current ones or merging with them — so they ship with the
+scenario like hand-placed ones.
+
+**Saving waits for the map.** A scenario's own map streams in after the Workshop opens, and a
+large one takes a while. Until it has loaded, Save reads **Loading map…** and Save & Exit and
+Apply & Play are disabled, so an early click cannot write an empty map over your scenario.
 
 If you are authoring a large historical scenario, these are the reason to build it on beta even
 if you play on stable — a scenario is portable between the two.
@@ -138,6 +152,10 @@ if you play on stable — a scenario is portable between the two.
 Export a bundle and publish it to the [Community Hub](/wiki/community-hub/). Bundles carry the
 map, cities, colours, flags and any custom basemap, so someone importing it gets exactly what you
 built.
+
+<p class="beta-note"><b>On beta every export is full-size.</b> Stable's bundles leave out a map
+uploaded as a tile archive (<code>.pmtiles</code>) rather than drawn in the editor. Beta has no
+light mode and always includes it.</p>
 
 ## Next
 

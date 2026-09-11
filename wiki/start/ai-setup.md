@@ -108,6 +108,12 @@ Use the **OpenAI Compatible** provider for all of these.
 
 Provider **OpenAI Compatible**, endpoint `http://localhost:8080/v1`, no key.
 
+Started like that, `llama-server` names its model after the file, so the game may remember a
+path such as `F:\Models\model.gguf` as the model id. If you later run it in **router mode**,
+which serves models by name, you do not need to clear that out: the game checks a remembered file
+path against the names the server lists and uses the matching one. If nothing matches, it sends
+the id unchanged and the server's own "not found" message tells you what it offers.
+
 ### Be realistic about model size
 
 Open Historia asks a lot of the model: it has to return strictly structured data describing

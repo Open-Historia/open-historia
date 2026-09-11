@@ -197,7 +197,7 @@ equivalent on stable.
 
 | Setting | |
 |---|---|
-| **Keep a diagnostics log** | On by default. Records errors, API failures and the exact context the model was given, copyable for a bug report. Off means nothing is recorded and the stored log is thrown away. |
+| **Keep a diagnostics log** | On by default. Records errors, API failures and the exact context the model was given. **Copy log** or **Save as file** to send it with a bug report; the 💾 **Save logging file** button on a failed turn or advisor reply saves the same file with that failure attached. Off means nothing is recorded and the stored log is thrown away. |
 | **Detailed logging** | Off by default. See below — **please turn it on if you are going to report a bug**. |
 | **Let other devices connect** | Opens the server to your network. Beta binds to loopback only by default; stable is open with no toggle and no password. See [hosting a server](/wiki/self-hosting/). |
 
@@ -219,8 +219,9 @@ difference between a bug report someone can act on and one that just says the ga
 ### Please turn it on before reporting a bug
 
 If you are about to report something — especially anything about the advisor, diplomacy or a turn
-going wrong — switch it on, reproduce the problem, then copy the log out. A maintainer can very
-often find the cause immediately from a detailed log and not at all from a normal one.
+going wrong — switch it on, reproduce the problem, then save the log as a file and attach it. A
+maintainer can very often find the cause immediately from a detailed log and not at all from a
+normal one.
 
 ### What it adds
 

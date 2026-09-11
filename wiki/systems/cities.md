@@ -6,6 +6,9 @@ and **structures**, which get built during a campaign.
 Cities come from the scenario. Modern Day uses a stock set of roughly seventy thousand; a custom
 scenario can ship its own, or import from the same database.
 
+<p class="beta-note"><b>On beta</b>, Modern Day's <a href="/wiki/new-game/">redrawn map</a> carries
+its own list instead: about 2,500 cities, with their 2014 populations.</p>
+
 They appear from about zoom 3.4 and get denser as you zoom in. Click one for its name,
 population, whether it is a capital, and its tier.
 

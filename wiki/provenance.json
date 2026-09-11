@@ -17,10 +17,10 @@
     "every file it touches — the goal is 'this page probably needs a look', not a build graph."
   ],
   "verifiedAgainst": {
-    "main": "c3efe872747317b1afa86669b9e31738dd85295c",
-    "beta": "e8c6632da32649d0cc921de4a027a603889b19e5",
-    "date": "2026-09-06",
-    "note": "Written from source and from driving both builds. Beta was verified by reading source and exercising its menus, not by playing a campaign through turns. Six pages carry a newer per-page record in pageVerified — see that field."
+    "main": "5ee1ab55ad87332024644389f64fe8733632a602",
+    "beta": "0b6db0ac3529eed82f6c57cf4f565bd138b34016",
+    "date": "2026-09-11",
+    "note": "Written from source and from driving both builds. Beta was verified by reading source and exercising its menus, not by playing a campaign through turns. The 2026-09-11 pass read every commit since the previous record (main c3efe87, beta e8c6632) and the non-licence diff of every cited file; most of the flagged churn was the AGPL relicense's file banners. No screenshots were re-taken in that pass."
   },
   "pages": {
     "index.md": [
@@ -36,6 +36,7 @@
     "start/ai-setup.md": [
       "src/Game/AI/providerConfig.js",
       "src/Game/AI/main.jsx",
+      "src/Game/AI/modelIds.js",
       "src/Game/GameUI/apiSetupPrompt.jsx"
     ],
     "start/how-to-play.md": [
@@ -52,7 +53,9 @@
       "src/Game/GameUI/libraryBar.jsx",
       "src/Game/GameUI/FactionCreator.jsx",
       "src/Game/GameUI/CountryPickerMap.jsx",
-      "src/runtime/difficulty.js"
+      "src/runtime/difficulty.js",
+      "server/seed/default",
+      "server/data/scenarios/default"
     ],
     "play/interface.md": [
       "src/Game/GameUI/main.jsx",
@@ -70,6 +73,8 @@
     "play/time.md": [
       "src/Game/GameUI/time.jsx",
       "src/Game/AI/gameplay.js",
+      "src/runtime/jumpDates.js",
+      "src/runtime/gameDates.js",
       "src/runtime/mapSettings.js"
     ],
     "play/orders.md": [
@@ -116,7 +121,8 @@
     ],
     "systems/statistics.md": [
       "src/Game/GameUI/stats.jsx",
-      "src/runtime/countryStats.js"
+      "src/runtime/countryStats.js",
+      "src/Game/AI/countryStatsWorkerKernel.js"
     ],
     "systems/countries.md": [
       "src/runtime/gameState.js",
@@ -127,7 +133,8 @@
     "systems/cities.md": [
       "src/Game/Map/Cities.jsx",
       "src/Game/Map/MarkersLayer.jsx",
-      "src/runtime/cityFeatures.js"
+      "src/runtime/cityFeatures.js",
+      "server/seed/default/cities.geojson"
     ],
     "systems/advisor.md": [
       "src/Game/GameUI/advisor.jsx",
@@ -158,6 +165,7 @@
     ],
     "hosting/community-hub.md": [
       "src/Game/GameUI/communityHub.jsx",
+      "server/libraryStore.js",
       "hub-templates"
     ],
     "hosting/self-hosting.md": [
@@ -180,7 +188,9 @@
       "src/Game/GameUI/chat.jsx",
       "src/Game/GameUI/time.jsx",
       "src/Game/AI/gameplay.js",
-      "src/runtime/debugLog.js"
+      "src/Game/AI/providerErrors.js",
+      "src/runtime/debugLog.js",
+      "src/runtime/saveDebugLog.js"
     ]
   },
   "images": {
@@ -337,27 +347,6 @@
     "Beta was verified from source and by driving its menus, not by playing a campaign through turns."
   ],
   "pageVerified": {
-    "_comment": "Pages re-verified against a commit NEWER than verifiedAgainst. wiki:check skips a page for a channel whose recorded commit here is at or past the current tip. Only add a page you actually re-read.",
-    "systems/advisor.md": {
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    },
-    "systems/statistics.md": {
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    },
-    "systems/diplomacy.md": {
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    },
-    "tools/saves.md": {
-      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    },
-    "start/install.md": {
-      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    },
-    "reference/troubleshooting.md": {
-      "main": "c3efe872747317b1afa86669b9e31738dd85295c",
-      "beta": "9f72b63e2b1850c58c0d133287111049d6051a22"
-    }
+    "_comment": "Pages re-verified against a commit NEWER than verifiedAgainst. wiki:check skips a page for a channel whose recorded commit here is at or past the current tip. Only add a page you actually re-read. Emptied on 2026-09-11, when the global record moved past every entry that was here."
   }
 }

@@ -6,6 +6,10 @@ way it is coloured tells you who holds what.
 Every region is painted in the colour of whoever administers it, at a constant 72% opacity over
 the basemap, so you can still read the terrain underneath.
 
+<p class="beta-note"><b>On beta the fill strengthens as you zoom in</b> — about 46% with the whole
+world in view, 72% at regional zoom and 84% close in — so relief and seas read from far out and
+ownership reads clearly up close. Disputed-region stripes are drawn lighter, too.</p>
+
 Colours are resolved in a fixed order: the scenario's own palette first, then any colour set on
 the country, then a match against known aliases, and finally a colour derived from the country's
 name. That last fallback is why an invented faction always gets *a* colour even if you never

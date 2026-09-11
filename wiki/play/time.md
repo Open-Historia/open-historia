@@ -20,15 +20,20 @@ Open the time panel with **»** on the date pill, top right.
 | 6 months | 180 |
 | 1 year | 365 |
 
-Each one shows the date you will land on, so you can see what you are committing to.
+Each one shows the date you will land on, so you can see what you are committing to — and it is
+the date the jump actually reaches, worked out by the same rule the jump uses.
 
 Note that a "month" is a flat 30 days and a "year" is 365 — the game does not track calendar
-month lengths for jump sizing.
+month lengths for jump sizing. So from 1 January, **1 month** lands on **31 January**, not
+1 February, and the button says so.
 
 ## Custom jumps
 
 Type an amount and pick a unit: **hours, days, weeks, months** or **years**. The conversions are
 the same flat ones — an hour is 1/24 of a day, a week is 7, a month is 30, a year is 365.
+
+The row shows **Lands on** with the resulting date before you press Go, the same way the presets
+do. A part-day amount is rounded to whole days, so a 12-hour skip moves the date to tomorrow.
 
 Useful when you want to land on a specific date, or when a fixed preset is slightly wrong for
 what is happening.
@@ -119,6 +124,12 @@ same save always replays the same way.
 
 The date is stored as plain text, so scenarios can use non-Gregorian dates such as "1200 BCE"
 without the clock breaking. Loosely formatted dates get repaired rather than rejected.
+
+<p class="beta-note"><b>On beta, BC dates are real dates.</b> A year before AD 1 is written with a
+leading minus and counts backwards with no year zero: <code>-0218-03-01</code> is 1 March 218 BC.
+Jumps, the timeline, the war and treaty records and the stat history all do proper arithmetic
+across the boundary, and the date is shown as "3/1/218 BC". Prose dates such as "Third Age 3019"
+still pass through untouched.</p>
 
 ## The first turn is special
 

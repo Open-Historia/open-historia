@@ -25,7 +25,10 @@ resume one that is not in ceasefire, or end one that has already ended.
 
 This is the rule that makes the ledger worth having. **An event that narrates battlefield
 combat must name an active canonical war and the countries fighting on each side.** Battles,
-invasions, offensives, bombardments, active fronts and unit attacks all qualify.
+invasions, offensives, bombardments, active fronts and unit attacks all qualify. An offensive
+that is plainly not military — diplomatic, economic, trade, legal, media, a charm or peace
+offensive — does not, so a *"diplomatic offensive for sanctions relief"* is not mistaken for a
+battle. A cyber offensive still counts as hostile.
 
 An event describing a battle with no war behind it is rejected while the turn still has a retry
 left, as is one pointing at a war that is in ceasefire or already over. On the final attempt the
@@ -83,6 +86,12 @@ A register of what has actually been signed:
 
 Each is `active`, `suspended`, `ended` or `expired`.
 
+The register only holds what earlier turns recorded. If a turn tries to end, suspend or update an
+agreement that was never recorded, the game re-aims it at the one recorded agreement with exactly
+the same parties and type, if there is exactly one. Otherwise that single change is dropped, with
+a note in the diagnostics log, and the rest of the turn stands. It would rather lose one change
+than end the wrong treaty.
+
 This is what turns "we agreed to an alliance in a conversation twelve turns ago" into something
 the world still knows about and can be held to.
 
@@ -98,6 +107,13 @@ storyline. At most **96** are kept.
 
 Storylines are why a beta campaign has continuity between turns that nothing in the event log
 explains: something has been building for six turns and is now due.
+
+**They are not allowed to stall.** An active war, or any storyline at pressure **55** or above,
+that goes **45 days** of game time without a visible milestone has to move: link a real event,
+change status, or shift pressure by at least 4 points or momentum by at least 6. If a time skip
+leaves one stuck, the game makes a short repair call for it once the skip is done, with up to
+**ten minutes** in total per skip. A repair that fails or runs out of time leaves the storyline
+where it was and overdue for the next turn. It never costs you the turn itself.
 
 ## What this changes to play
 

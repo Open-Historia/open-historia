@@ -169,12 +169,16 @@ button, and only as far as you tell it to.</p>
 <td>365</td>
 </tr>
 </tbody></table></div>
-<p>Each one shows the date you will land on, so you can see what you are committing to.</p>
+<p>Each one shows the date you will land on, so you can see what you are committing to — and it is
+the date the jump actually reaches, worked out by the same rule the jump uses.</p>
 <p>Note that a &quot;month&quot; is a flat 30 days and a &quot;year&quot; is 365 — the game does not track calendar
-month lengths for jump sizing.</p>
+month lengths for jump sizing. So from 1 January, <strong>1 month</strong> lands on <strong>31 January</strong>, not
+1 February, and the button says so.</p>
 <h2 id="custom-jumps">Custom jumps</h2>
 <p>Type an amount and pick a unit: <strong>hours, days, weeks, months</strong> or <strong>years</strong>. The conversions are
 the same flat ones — an hour is 1/24 of a day, a week is 7, a month is 30, a year is 365.</p>
+<p>The row shows <strong>Lands on</strong> with the resulting date before you press Go, the same way the presets
+do. A part-day amount is rounded to whole days, so a 12-hour skip moves the date to tomorrow.</p>
 <p>Useful when you want to land on a specific date, or when a fixed preset is slightly wrong for
 what is happening.</p>
 <h2 id="auto-jump">Auto-jump</h2>
@@ -261,7 +265,11 @@ internally to seed deterministic outcomes such as espionage rolls and combat, wh
 same save always replays the same way.</p>
 <p>The date is stored as plain text, so scenarios can use non-Gregorian dates such as &quot;1200 BCE&quot;
 without the clock breaking. Loosely formatted dates get repaired rather than rejected.</p>
-<h2 id="the-first-turn-is-special">The first turn is special</h2>
+<p class="beta-note"><b>On beta, BC dates are real dates.</b> A year before AD 1 is written with a
+leading minus and counts backwards with no year zero: <code>-0218-03-01</code> is 1 March 218 BC.
+Jumps, the timeline, the war and treaty records and the stat history all do proper arithmetic
+across the boundary, and the date is shown as "3/1/218 BC". Prose dates such as "Third Age 3019"
+still pass through untouched.</p><h2 id="the-first-turn-is-special">The first turn is special</h2>
 <p>On round 1, a scenario that has a <em>World Before Round One</em> briefing generates its own backstory
 before play begins — the recent history that led to the situation you have inherited. It happens
 once, and it gives the world something to refer back to.</p>
@@ -277,7 +285,7 @@ once, and it gives the world something to refer back to.</p>
         <a class="next" href="/wiki/orders/"><span>Next →</span><b>Giving orders</b></a>
       </nav>
     <p class="wiki-stale">Open Historia is under active development on two channels, and this
-      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-06</b> · main <code>c3efe872</code> · beta <code>e8c6632d</code>. If something
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-11</b> · main <code>5ee1ab55</code> · beta <code>0b6db0ac</code>. If something
       here does not match what you see in the game, trust the game and
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
   </main>
