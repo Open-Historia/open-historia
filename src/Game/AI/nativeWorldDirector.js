@@ -1292,6 +1292,18 @@ const clampNextReviewDate = ({ stopDate, pressure, momentum, status, requested, 
 const STORYLINE_RECORD_SEPARATOR = "~";
 const MAX_STORYLINE_UPDATES_PER_JUMP = 16;
 
+// A storyline state is a sentence; a kind, a title and a list of polity names
+// are not. The longest comma-separated stretch decides it: the longest official
+// polity name ("United Kingdom of Great Britain and Northern Ireland") is eight
+// words, so a list of names never reaches nine, and a stretch of six or more
+// words that ends like a sentence is prose. A list that happens to end "U.S."
+// stays a list, because none of its names is six words long.
+const looksLikeStorylineStateProse = (value) => {
+  const text = normalizeString(value);
+  const longest = Math.max(0, ...text.split(",").map((part) => part.trim().split(/\s+/).filter(Boolean).length));
+  return longest >= 9 || (longest >= 6 && /[.!?]$/.test(text));
+};
+
 const parseStorylineRecord = (line, index = 0) => {
   const text = normalizeString(line);
   if (!text) return null;
@@ -1302,11 +1314,13 @@ const parseStorylineRecord = (line, index = 0) => {
   // can be preserved rather than corrupting the record.
   const fields = [];
   let rest = text;
+  let separators = 9;
   for (let cut = 0; cut < 9; cut += 1) {
     const pos = rest.indexOf(STORYLINE_RECORD_SEPARATOR);
     if (pos < 0) {
       fields.push(rest);
       rest = "";
+      separators = cut;
       break;
     }
     fields.push(rest.slice(0, pos));
@@ -1314,6 +1328,25 @@ const parseStorylineRecord = (line, index = 0) => {
   }
   while (fields.length < 9) fields.push("");
   fields.push(rest);
+
+  // Two or more empty positional fields left out. The one-short shape (state in
+  // the event-number slot) is recovered below; a model that also drops an empty
+  // kind/title/participants field pushes the state further left — a player's
+  // turn came back as "id~active~20~75~2024-01-09~~~<state>", seven separators,
+  // which put every state into participantsCSV and cost the whole jump to
+  // "record 1 must describe the process state". The line's final field is where
+  // the model put the state; move it home when that is plainly what it is.
+  // Only kind, title and participants are recovered: a record short enough to
+  // put its state in startedDate or earlier is too broken to read positionally.
+  if (
+    separators >= 5 &&
+    separators <= 7 &&
+    !normalizeString(fields[9]) &&
+    looksLikeStorylineStateProse(fields[separators])
+  ) {
+    fields[9] = fields[separators];
+    fields[separators] = "";
+  }
 
   const [
     idRaw,
@@ -2363,10 +2396,25 @@ export const validateWorldStorylinePayload = (
     // claim that several weeks passed while its status, numeric trajectory,
     // visible milestones, AND semantic state all remained unchanged.
     const prior = existingById.get(id) || normalizeStorylineForDirector(selected);
+    const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
 
     // Hidden numeric direction must agree with the linked visible development.
     // Failed talks + renewed threats cannot quietly lower crisis pressure unless
     // the same event establishes a concrete de-escalatory fact.
+    //
+    // Only for a storyline that is actually a crisis: pressure already at the
+    // high-pressure threshold, or a war. The cue list is plain keywords, and on
+    // a quiet programme they fire on ordinary words — a player's Iranian cyber
+    // programme at pressure 18 lost a whole jump to the canned fallback because
+    // its event "deploys" new cryptographic hardware and it eased from 18 to 14.
+    // A low-pressure process drifting a few points lower is not crisis pressure
+    // being quietly erased. "Crisis" is judged from the numbers the engine keeps,
+    // not from the storyline's kind label: the model writes that label freely
+    // and could call a hardware rollout a crisis.
+    const crisisStoryline =
+      activeWar ||
+      normalizeString(prior?.kind).toLowerCase() === "war" ||
+      clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD;
     const linkedEventText = normalizeArray(update?.eventIndexes)
       .map((eventIndex) => normalizeArray(candidate?.events)[eventIndex])
       .filter(Boolean)
@@ -2377,6 +2425,7 @@ export const validateWorldStorylinePayload = (
     const pressureDelta =
       clampPercent(update?.pressure) - clampPercent(prior?.pressure);
     if (
+      crisisStoryline &&
       pressureDelta <= -4 &&
       STORYLINE_ESCALATION_OR_FAILURE_RE.test(linkedEventText) &&
       !STORYLINE_DEESCALATION_RE.test(linkedEventText)
@@ -2393,7 +2442,6 @@ export const validateWorldStorylinePayload = (
     }
 
     const stagnationAgeAtStop = storylineStagnationAgeDays(prior, stopDate);
-    const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
     if (
       enforceAntiStasis &&
       storylineAtAntiStasisBackstop(prior, stopDate, world) &&

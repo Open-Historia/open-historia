@@ -8,6 +8,7 @@ import {
   applyWarUpdates,
   buildCanonicalWarContext,
   decodeWarUpdates,
+  eventNarratesHardCombat,
   reconcileCombatWarState,
   validateWarLedgerPayload,
 } from "./nativeWarLedger.js";
@@ -110,6 +111,48 @@ test("a readiness event naming two allies is not combat and creates no war", () 
   assert.equal(repair.sanitized, 1);
   assert.deepEqual(candidate.events[0].combatants, []);
   assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+});
+
+// Transcribed from a player's debug report (Iran, round 55): the event the model
+// wrote for the player's own queued action. It was read as a launched military
+// offensive with no combatants, so the retry was spent on a phantom battle and
+// the final attempt dropped the event from the turn.
+test("a diplomatic offensive is not a battle; a military offensive still is", () => {
+  const diplomatic = {
+    id: "segment-1-event-2",
+    date: "2026-07-18",
+    kind: "diplomacy",
+    title: "Ministry of Foreign Affairs Launches European Diplomatic Offensive for Sanctions Relief",
+    description: "The Ministry of Foreign Affairs, in close coordination with Omani backchannel delegates, launches an active diplomatic offensive across European capitals, formally demanding the immediate lifting of unilateral Western sanctions against the sovereign Bahraini Republic and the unified government of Yemen.",
+  };
+  assert.equal(eventNarratesHardCombat(diplomatic), false);
+  const candidate = { events: [diplomatic], warUpdates: "" };
+  assert.deepEqual(reconcileCombatWarState(candidate, { world }).unresolved, []);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+
+  for (const phrase of ["charm offensive", "media counter-offensive", "peace offensive"]) {
+    assert.equal(
+      eventNarratesHardCombat({ kind: "diplomacy", title: `Tokyo launches a ${phrase} in Seoul`, description: "" }),
+      false,
+      phrase,
+    );
+  }
+
+  assert.equal(eventNarratesHardCombat({
+    kind: "military",
+    title: "Germany launches an offensive on the Marne",
+    description: "German armies open a counter-offensive against French positions.",
+  }), true, "a military offensive is still combat");
+  assert.equal(eventNarratesHardCombat({
+    kind: "diplomacy",
+    title: "Paris opens a diplomatic offensive as armies clash on the border",
+    description: "",
+  }), true, "real fighting in the same event is still combat");
+  assert.equal(eventNarratesHardCombat({
+    kind: "military",
+    title: "Moscow launches a cyber offensive against Kyiv's grid",
+    description: "",
+  }), true, "a cyber offensive is a hostile act, not a figure of speech");
 });
 
 test("ceasefire, resume and end move the status; a second start on a live war is refused", () => {

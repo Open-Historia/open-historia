@@ -379,10 +379,24 @@ const NON_BATTLEFIELD_ACTION_TERMS_RE = new RegExp(
   "gi",
 );
 
+// "Offensive" is also the ordinary word for a concerted non-military campaign.
+// A player's Iran game queued a démarche for sanctions relief and the model
+// wrote it up faithfully — "Ministry of Foreign Affairs Launches European
+// Diplomatic Offensive for Sanctions Relief" — which ACTIVE_OFFENSIVE_RE read as
+// a launched military offensive with no combatants. The correction the retry
+// sent was about that phantom battle, and on the final attempt the salvage
+// dropped the player's own action from the turn. A qualifier that makes the
+// campaign non-military masks it; real fighting in the same event still trips
+// the battlefield terms, which this leaves untouched. "Cyber" is deliberately
+// not on the list: a cyber offensive is a hostile act, not a figure of speech.
+const NON_BATTLEFIELD_OFFENSIVE_RE =
+  /\b(?:diplomatic|charm|peace|political|media|public[- ]relations|propaganda|information|legal|lobbying|economic|trade|investment|marketing|publicity|messaging)\s+(?:counter[- ]?)?offensives?\b/gi;
+
 const combatSemanticText = (event) =>
   `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
     .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ")
-    .replace(NON_BATTLEFIELD_ACTION_TERMS_RE, " military-exercise ");
+    .replace(NON_BATTLEFIELD_ACTION_TERMS_RE, " military-exercise ")
+    .replace(NON_BATTLEFIELD_OFFENSIVE_RE, " non-military-campaign ");
 
 // Semantic WHAT: does the event itself actually describe battlefield combat?
 // This deliberately ignores impacts.unitOps. A post-processor may implement

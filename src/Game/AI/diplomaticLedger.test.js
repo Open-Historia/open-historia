@@ -6,9 +6,15 @@ import assert from "node:assert/strict";
 import {
   applyDiplomaticUpdates,
   buildBoundedDiplomaticContext,
+  decodeAgreementUpdates,
+  decodeRelationUpdates,
   migrateLegacyDiplomaticState,
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
+
+// The agreement records a validated candidate is left holding (the validator
+// hands them back event-bound, as objects rather than transport text).
+const agreementIds = (candidate) => decodeAgreementUpdates(candidate.agreementUpdates).map((update) => update.id);
 
 // The relation and agreement ledgers ride the same compact line transport as
 // wars: a record must resolve both polities and bind to a real causal event
@@ -65,9 +71,142 @@ test("relation and agreement lines bind to their event and merge into the world"
   assert.match(text, /franco-russian-alliance \| ACTIVE \| alliance \| Franco-Russian Alliance/);
 });
 
-test("a lifecycle change on an agreement that does not exist is a validation error", () => {
-  const candidate = { events: alliance(), relationUpdates: "", agreementUpdates: "phantom-pact~end~alliance~France,Russia~1~Phantom Pact~gone" };
-  assert.match(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), /Agreement phantom-pact does not exist/);
+test("a lifecycle change on an agreement that does not exist is refused for the GM and dropped in simulation", () => {
+  const row = "phantom-pact~end~alliance~France,Russia~1~Phantom Pact~gone";
+  const strict = { events: alliance(), relationUpdates: "", agreementUpdates: row };
+  assert.match(validateDiplomaticLedgerPayload(strict, { world }), /Agreement phantom-pact does not exist/);
+
+  const simulated = { events: alliance(), relationUpdates: "", agreementUpdates: row };
+  assert.equal(validateDiplomaticLedgerPayload(simulated, { world, allowNativeBinding: true }), "");
+  assert.deepEqual(agreementIds(simulated), [], "there is nothing to end, so the row goes and the turn stays");
+});
+
+// The rows below are transcribed from a player's debug report (round 53 of an
+// Iran game): the model evicted the United States from Bahrain, then "ended" a
+// pact no turn had ever recorded, and the whole jump fell back to canned events.
+test("ending an unrecorded pact drops the row and keeps the turn (field report)", () => {
+  const gulf = {
+    polityOverrides: {
+      Iran: { code: "Iran", name: "Iran" },
+      "United States": { code: "United States", name: "United States" },
+      Bahrain: { code: "Bahrain", name: "Bahrain" },
+    },
+    regionOwnershipOverrides: { r1: "Iran", r2: "United States", r3: "Bahrain" },
+    relations: [],
+    agreements: [],
+  };
+  const candidate = {
+    events: [{
+      id: "segment-1-event-7",
+      date: "2026-02-25",
+      kind: "military",
+      title: "United States Completes Evacuation of Naval Assets from Bahrain Following Transition Directive",
+      description: "United States naval and military commands complete the withdrawal and relocation of personnel and assets from naval installations in Bahrain, complying with the transitional government's eviction decree and ending long-standing basing rights.",
+    }],
+    relationUpdates: "United States~Bahrain~-65~hostile~1~Complete military withdrawal and termination of bilateral defense arrangements following transitional government eviction decree.",
+    agreementUpdates: "us-bahrain-security-pact-2026~end~military_cooperation~United States, Bahrain~~Termination of Bilateral Security Cooperation~Bilateral security arrangements and status-of-forces agreements are formally terminated following the transitional government's eviction decree.",
+  };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world: gulf, allowNativeBinding: true }), "");
+  assert.deepEqual(agreementIds(candidate), []);
+  const relations = decodeRelationUpdates(candidate.relationUpdates);
+  assert.equal(relations.length, 1, "the rupture is still recorded as a relation change");
+  assert.equal(relations[0].score, -65);
+});
+
+// A recorded ledger for the re-aim cases: one active Franco-Russian alliance.
+const allied = (agreements = [{
+  id: "franco-russian-alliance",
+  title: "Franco-Russian Alliance",
+  type: "alliance",
+  status: "active",
+  parties: ["France", "Russia"],
+  startedDate: "1894-01-04",
+  terms: "Mutual military assistance against Germany",
+}]) => ({ ...world, agreements });
+
+const breach = () => [{
+  id: "e9",
+  date: "1896-05-01",
+  title: "Russia repudiates the alliance with France",
+  description: "St Petersburg formally renounces its military convention with Paris.",
+  kind: "diplomacy",
+}];
+
+const endRow = (id, type, parties) => `${id}~end~${type}~${parties}~1~Termination~The alliance is renounced.`;
+
+test("an unknown id is re-aimed only at the one agreement with the same parties and type", () => {
+  const ledger = allied();
+  const candidate = { events: breach(), relationUpdates: "", agreementUpdates: endRow("dual-alliance-pact", "alliance", "Russia,France") };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world: ledger, allowNativeBinding: true }), "");
+  assert.deepEqual(agreementIds(candidate), ["franco-russian-alliance"]);
+
+  const merge = applyDiplomaticUpdates({
+    world: ledger,
+    relationUpdates: "",
+    agreementUpdates: candidate.agreementUpdates,
+    events: candidate.events,
+    stopDate: "1896-05-31",
+    round: 4,
+  });
+  assert.equal(merge.agreements.length, 1);
+  assert.equal(merge.agreements[0].id, "franco-russian-alliance");
+  assert.equal(merge.agreements[0].status, "ended");
+});
+
+test("any doubt about which agreement is meant drops the row instead of guessing", () => {
+  const dropped = (label, ledger, agreementUpdates) => {
+    const candidate = { events: breach(), relationUpdates: "", agreementUpdates };
+    assert.equal(validateDiplomaticLedgerPayload(candidate, { world: ledger, allowNativeBinding: true }), "", label);
+    assert.deepEqual(agreementIds(candidate), [], `${label}: the row is dropped, not re-aimed`);
+  };
+
+  dropped("type left blank", allied(), endRow("x", "", "France,Russia"));
+  dropped("type other", allied(), endRow("x", "other", "France,Russia"));
+  dropped("a different type", allied(), endRow("x", "trade_economic", "France,Russia"));
+  dropped("an extra party", allied(), endRow("x", "alliance", "France,Russia,Germany"));
+  dropped("a party that does not resolve", allied(), endRow("x", "alliance", "France,Russia,Atlantis"));
+  dropped("a single party", allied(), endRow("x", "alliance", "Russia"));
+  dropped("two agreements fit equally", allied([
+    { id: "a1", title: "First", type: "alliance", status: "active", parties: ["France", "Russia"] },
+    { id: "a2", title: "Second", type: "alliance", status: "suspended", parties: ["Russia", "France"] },
+  ]), endRow("x", "alliance", "France,Russia"));
+  dropped("the only match has already ended", allied([
+    { id: "a1", title: "First", type: "alliance", status: "ended", parties: ["France", "Russia"] },
+  ]), endRow("x", "alliance", "France,Russia"));
+  dropped("resume of an agreement that is not suspended", allied(), "x~resume~alliance~France,Russia~1~Resumed~");
+});
+
+test("a guarantee is re-aimed only in its own direction", () => {
+  const ledger = allied([{
+    id: "french-guarantee-of-russia",
+    title: "French Guarantee",
+    type: "guarantee",
+    status: "active",
+    parties: ["France", "Russia"],
+    guarantor: "France",
+    beneficiary: "Russia",
+  }]);
+  const reversed = { events: breach(), relationUpdates: "", agreementUpdates: endRow("x", "guarantee", "Russia,France") };
+  assert.equal(validateDiplomaticLedgerPayload(reversed, { world: ledger, allowNativeBinding: true }), "");
+  assert.deepEqual(agreementIds(reversed), [], "Russia guaranteeing France is a different instrument");
+
+  const same = { events: breach(), relationUpdates: "", agreementUpdates: endRow("x", "guarantee", "France,Russia") };
+  assert.equal(validateDiplomaticLedgerPayload(same, { world: ledger, allowNativeBinding: true }), "");
+  assert.deepEqual(agreementIds(same), ["french-guarantee-of-russia"]);
+});
+
+test("an id started in the same response is never re-aimed at an older agreement", () => {
+  const candidate = {
+    events: breach(),
+    relationUpdates: "",
+    agreementUpdates: [
+      "new-pact~start~alliance~France,Russia~1~New Pact~Renewed terms",
+      endRow("new-pact", "alliance", "France,Russia"),
+    ].join("\n"),
+  };
+  const error = validateDiplomaticLedgerPayload(candidate, { world: allied(), allowNativeBinding: true });
+  assert.deepEqual(agreementIds(candidate), ["new-pact", "new-pact"]);
+  assert.match(error, /new-pact/);
 });
 
 test("a relation update that names an unresolvable polity is rejected", () => {
