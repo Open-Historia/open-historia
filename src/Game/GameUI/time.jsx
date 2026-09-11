@@ -12,9 +12,8 @@ import {
 } from "../../runtime/assets.js";
 import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplay.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
-import { getProviderField, getStoredProvider } from "../AI/providerConfig.js";
-import { copyToClipboard } from "../../runtime/clipboard.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
+import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import { isMainMenuOpen } from "./libraryBar";
 import {
@@ -473,8 +472,8 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
-        // Only ever non-empty on a fallback turn (see gameplay.js) — the "Copy
-        // debugging message" button's reason for existing.
+        // Only ever non-empty on a fallback turn (see gameplay.js) — the main
+        // thing the fallback warning's "Save logging file" button attaches.
         rawResponse: entry.rawResponse || "",
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
@@ -1290,7 +1289,7 @@ const TimelineHistoryPanel = ({
     lookups,
     onClose,
     canRollbackTurn,
-    onCopyDebugMessage,
+    buildDebugIncident,
     onRollbackTurn,
     record,
     topOffset,
@@ -1323,16 +1322,12 @@ const TimelineHistoryPanel = ({
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
     const lastVisibleEventRef = React.useRef(null);
-    // idle | copying | copied | failed — resets to idle shortly after a result
-    // so the button doesn't get stuck reading "Copied!" forever.
-    const [copyState, setCopyState] = useState("idle");
-    const handleCopyClick = async () => {
-        if (copyState === "copying" || typeof onCopyDebugMessage !== "function") return;
-        setCopyState("copying");
-        const succeeded = await onCopyDebugMessage();
-        setCopyState(succeeded ? "copied" : "failed");
-        setTimeout(() => setCopyState("idle"), 2000);
-    };
+    // Save the log with this fallback attached, or — logging off — copy the
+    // fallback alone under the button's old label (runtime/saveDebugLog.js).
+    const report = useFailureReportButton({
+        buildIncident: () => buildDebugIncident?.() ?? null,
+        copyIdleLabel: "📋 Copy debugging message",
+    });
     // idle | working — the undo runs without switching panels, so this button is
     // the only place the player can see that anything is happening.
     const [rollbackState, setRollbackState] = useState("idle");
@@ -1381,18 +1376,20 @@ const TimelineHistoryPanel = ({
             >
             {warning}
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.6rem" }}>
-            {typeof onCopyDebugMessage === "function" && (
+            {typeof buildDebugIncident === "function" && (
                 <button
                 type="button"
-                onClick={handleCopyClick}
-                title="Copies everything needed to debug this — what was attempted, game/provider context, and the raw model response — so it can be pasted straight to Claude, no DevTools needed."
+                onClick={report.onClick}
+                title={report.loggingOn
+                    ? "Saves the diagnostics log as a file, with this turn's details — what was attempted and the raw model response — at the top. Attach the file to your bug report. No API key is included; the model's response may quote your campaign."
+                    : "Copies this turn's details — what was attempted, game/provider context, and the raw model response. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."}
                 style={{
                     alignItems: "center",
-                    background: copyState === "copied" ? "rgba(34,197,94,0.16)" : "rgba(251,191,36,0.1)",
-                    border: `1px solid ${copyState === "copied" ? "rgba(74,222,128,0.4)" : "rgba(251,191,36,0.3)"}`,
+                    background: report.done ? "rgba(34,197,94,0.16)" : "rgba(251,191,36,0.1)",
+                    border: `1px solid ${report.done ? "rgba(74,222,128,0.4)" : "rgba(251,191,36,0.3)"}`,
                     borderRadius: "8px",
-                    color: copyState === "copied" ? "#86efac" : "#fde68a",
-                    cursor: copyState === "copying" ? "default" : "pointer",
+                    color: report.done ? "#86efac" : "#fde68a",
+                    cursor: report.busy ? "default" : "pointer",
                     display: "flex",
                     fontFamily: "sans-serif",
                     fontSize: "0.72rem",
@@ -1402,7 +1399,7 @@ const TimelineHistoryPanel = ({
                     transition: "background 0.15s, border-color 0.15s, color 0.15s",
                 }}
                 >
-                {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy — try again" : copyState === "copying" ? "Copying…" : "📋 Copy debugging message"}
+                {report.label}
                 </button>
             )}
             {/* Only offered while a restore point actually exists — a fallback on
@@ -1785,9 +1782,10 @@ const DateWidget = ({
             if (result.generation?.source === "fallback") {
                 setFallbackWarning(`Turn generated by fallback: ${result.generation.fallbackReason || "structured AI output was unavailable"}`);
                 // A fallback is the single most reported bug in the game, and the
-                // reason is otherwise only reachable through the history panel's
-                // own Copy button — which covers the LAST turn only, so a session
-                // with three fallbacks could report exactly one of them.
+                // reason is otherwise only reachable through the details the
+                // history panel's Save button attaches — which cover the LAST
+                // turn only, so a session with three fallbacks could report
+                // exactly one of them.
                 logDebugEvent("turn", `Turn FELL BACK after ${elapsed}: ${result.generation.fallbackReason || "structured AI output was unavailable"}`, {
                     round: result.game?.round ?? 0,
                     toDate: result.game?.gameDate || "",
@@ -2106,73 +2104,59 @@ const DateWidget = ({
         });
     }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
 
-    // "Copy debugging message" (TimelineHistoryPanel, next to the fallback
-    // warning): everything a report needs in one paste — what was attempted,
-    // the game/provider context, and the raw model response — so a fallback
-    // can be diagnosed with no DevTools, no log-hunting, one click and one
-    // paste. Built lazily on click, not kept in state, since it's read-only
-    // derived data that only ever matters if the button is actually pressed.
-    const buildFallbackDebugMessage = () => {
+    // "Save logging file" (TimelineHistoryPanel, next to the fallback warning):
+    // the diagnostics log, with this fallback's own details attached at the top —
+    // what was attempted and the raw model response — so a fallback can be
+    // diagnosed from the one file the player sends. With logging off the same
+    // details are copied on their own instead ("Copy debugging message"). Built
+    // lazily on click, not kept in state, since it only ever matters if the
+    // button is pressed.
+    //
+    // Only what the log's header does not already say. Provider, model, polity
+    // and difficulty all sit in that header — and in the copied report's, which
+    // reads the same context — so they are not repeated here; the round is
+    // passed and dropped by the log if it matches.
+    const buildFallbackIncident = () => {
         const record = latestTurnRecord;
-        if (!record) return "";
-        const provider = getStoredProvider();
-        const model = getProviderField(provider, "model") || "(default)";
+        if (!record) return null;
         const actionsList = record.plannedActions.length
         ? record.plannedActions.map((action) =>
-            `- ${action.title}${action.text && action.text !== action.title ? `: ${action.text}` : ""}`).join("\n")
+            `- ${action.title}${action.text && action.text !== action.title ? `: ${action.text}` : ""}`)
         : "(none queued)";
         // The events THIS fallback turn produced are generic canned text (no
         // diagnostic value) — exclude them and show what actually led up to it.
         const recordEventIds = new Set(record.events.map((event) => event.id));
         const priorEvents = events.filter((event) => !recordEventIds.has(event.id)).slice(-3);
         const recentEvents = priorEvents.length
-        ? priorEvents.map((event) => `- ${event.date || "undated"}: ${event.title}`).join("\n")
+        ? priorEvents.map((event) => `- ${event.date || "undated"}: ${event.title}`)
         : "(none)";
 
-        return [
-            "OPEN HISTORIA — AI TURN FALLBACK DEBUG REPORT",
-            `Generated: ${new Date().toISOString()}`,
-            "",
-            "-- What happened --",
-            `Mode: ${record.mode}`,
-            `Requested range: ${record.fromDate || "unknown"} -> ${record.toDate || "unknown"}`,
-            `Round: ${record.round}`,
-            `Failure reason: ${record.fallbackReason || "(unknown)"}`,
-            "",
-            "-- Game context --",
-            `Player polity: ${playerCountry || gameData?.country || "unknown"}`,
-            `Difficulty: ${gameData?.difficulty || "standard"}`,
-            `AI provider: ${provider}`,
-            `Model: ${model}`,
-            "",
-            "-- Player's queued actions this round --",
-            actionsList,
-            "",
-            "-- Most recent prior events --",
-            recentEvents,
-            "",
-            // A transport failure has no response to show, so do not label the
-            // note that explains that as one — it sent readers hunting for a
-            // parsing bug when the real cause was the provider config.
-            record.rawResponse === NO_RESPONSE_BODY_NOTE
-                ? "-- Model response --"
-                : "-- Raw model response that was rejected (failed to parse or to validate) --",
-            // Every fallback now fills this in — with the raw text when there was
-            // one, or with a note saying no response body arrived (gameplay.js).
-            // So an empty field can only be a turn recorded before that, and this
-            // line must not claim to know which failure it was.
-            record.rawResponse || "(not captured — recorded by an older build that only saved the failure reason; re-run the turn to capture the response, or the note explaining that none arrived)",
-        ].join("\n");
-    };
-
-    // Through the shared helper, not navigator.clipboard directly: that API needs a
-    // secure context, and a browser reaching this game over plain http on the LAN —
-    // which Settings → Network now offers as a supported setup — does not have one.
-    // The button whose whole point is "no DevTools needed" failed every time there.
-    const handleCopyDebugMessage = async () => {
-        const message = buildFallbackDebugMessage();
-        if (!message) return false;
-        return copyToClipboard(message);
+        return {
+            kind: "turn-fallback",
+            title: "AI turn fell back",
+            fields: [
+                ["Failure reason", record.fallbackReason || "(unknown)"],
+                ["Mode", record.mode],
+                ["Requested range", `${record.fromDate || "unknown"} -> ${record.toDate || "unknown"}`],
+                ["Round", String(record.round ?? "")],
+                ["Player's queued actions this round", actionsList],
+                ["Most recent prior events", recentEvents],
+                [
+                    // A transport failure has no response to show, so do not label
+                    // the note that explains that as one — it sent readers hunting
+                    // for a parsing bug when the real cause was the provider config.
+                    record.rawResponse === NO_RESPONSE_BODY_NOTE
+                        ? "Model response"
+                        : "Raw model response that was rejected (failed to parse or to validate)",
+                    // Every fallback now fills this in — with the raw text when
+                    // there was one, or with a note saying no response body arrived
+                    // (gameplay.js). So an empty field can only be a turn recorded
+                    // before that, and this line must not claim to know which
+                    // failure it was.
+                    record.rawResponse || "(not captured — recorded by an older build that only saved the failure reason; re-run the turn to capture the response, or the note explaining that none arrived)",
+                ],
+            ],
+        };
     };
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     // Any game date, BC included ("March 1st, 218 BC"); prose dates show verbatim.
@@ -2383,7 +2367,7 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={lookups}
         onClose={() => setPanel(null)}
-        onCopyDebugMessage={handleCopyDebugMessage}
+        buildDebugIncident={buildFallbackIncident}
         // A fallback turn is usually a turn the player wants gone; the undo it
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.

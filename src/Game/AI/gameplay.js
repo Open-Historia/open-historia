@@ -2288,9 +2288,10 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
   // Capped so one runaway response can't bloat world.json (this rides along on
   // every recent fallback's simulationHistory entry, see applySimulationResult)
-  // or flood the console. Surfaced to the player as the "Copy debugging
-  // message" button next to the fallback warning (time.jsx) — that button, not
-  // DevTools, is the primary way this reaches anyone now.
+  // or flood the console. Surfaced to the player through the "Save logging
+  // file" button next to the fallback warning (time.jsx), which attaches it to
+  // the saved log — that button, not DevTools, is the primary way this reaches
+  // anyone now.
   const RAW_RESPONSE_LIMIT = 12000;
   const capturedRawText = lastRawText.length > RAW_RESPONSE_LIMIT
     ? `${lastRawText.slice(0, RAW_RESPONSE_LIMIT)}\n…[${lastRawText.length - RAW_RESPONSE_LIMIT} more characters truncated]`
@@ -4779,8 +4780,8 @@ const applySimulationResult = async ({
           mode: normalizeString(result.mode) || "jump",
           plannedActions: plannedActionSnapshot,
           // The raw model response that failed to parse (runJsonTask), so the
-          // fallback warning's "Copy debugging message" button (time.jsx) has
-          // something to copy even after a reload — only ever non-empty on a
+          // fallback warning's "Save logging file" button (time.jsx) has
+          // something to attach even after a reload — only ever non-empty on a
           // fallback turn; a normal AI turn carries nothing here.
           rawResponse: normalizeString(result.generation?.rawResponse),
           round: nextGame.round,

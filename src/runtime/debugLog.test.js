@@ -21,7 +21,9 @@ globalThis.localStorage = {
 
 const {
     buildDebugLogReport,
+    buildIncidentReport,
     clearDebugLog,
+    debugLogFilename,
     getDebugLogBytes,
     getDebugLogEntries,
     isDebugLogEnabled,
@@ -449,4 +451,84 @@ test("P4 absent context lines are omitted rather than printed empty", () => {
     logDebugEvent("app", "hello");
     const report = buildDebugLogReport();
     assert.equal(/^Scenario:\s*$/m.test(report), false);
+});
+
+// ---- Group I: an incident attached to the saved log ------------------------
+
+const fallbackIncident = (rawResponse = "{\"events\": [") => ({
+    kind: "turn-fallback",
+    title: "AI turn fell back",
+    fields: [
+        ["Failure reason", "JSON did not parse"],
+        ["Requested range", "1914-06-01 -> 1914-07-01"],
+        ["Round", "4"],
+        ["AI model", "gemini-3.5-flash-lite"],
+        ["Player's queued actions this round", ["- Mobilise the army"]],
+        ["Raw model response", rawResponse],
+    ],
+});
+
+test("I1 the incident sits between the header and the log", () => {
+    reset();
+    logDebugEvent("turn", "Jump started");
+    const report = buildDebugLogReport({ incident: fallbackIncident() });
+    const header = report.indexOf("OPEN HISTORIA — DIAGNOSTICS LOG");
+    const incident = report.indexOf("-- Reported problem: AI turn fell back --");
+    const log = report.indexOf("-- Log (oldest first) --");
+    assert.ok(header < incident && incident < log);
+    assert.match(report, /Failure reason: JSON did not parse/);
+    assert.match(report, /Player's queued actions this round:\n {2}- Mobilise the army/);
+    assert.ok(report.indexOf("Jump started") > log);
+});
+
+test("I2 fields the header already states are not repeated, fields that differ are", () => {
+    reset();
+    setDebugLogContext({ round: "4", model: "gemini-3.5-pro" });
+    const report = buildDebugLogReport({ incident: fallbackIncident() });
+    const incidentBlock = report.slice(report.indexOf("-- Reported problem"), report.indexOf("-- Log (oldest first) --"));
+    // Same round as the header: dropped. A different model: kept, because it
+    // says the failure happened on a model the player has since moved off.
+    assert.equal(/^Round:/m.test(incidentBlock), false);
+    assert.match(incidentBlock, /AI model: gemini-3\.5-flash-lite/);
+    assert.match(report, /^Round: 4$/m);
+});
+
+test("I3 the raw response is attached whole, not clipped like a log entry", () => {
+    reset();
+    const raw = `{"events": [${"x".repeat(5000)}`;
+    assert.ok(buildDebugLogReport({ incident: fallbackIncident(raw) }).includes(raw));
+});
+
+test("I4 an incident is redacted like everything else", () => {
+    reset();
+    store.set("openai_api_key", "sk-proj-incidentkey1234567");
+    const report = buildDebugLogReport({ incident: fallbackIncident("error for sk-proj-incidentkey1234567") });
+    assert.equal(report.includes("sk-proj-incidentkey1234567"), false);
+});
+
+test("I5 with logging off the saved file says why the log is empty", () => {
+    reset();
+    setDebugLogEnabled(false);
+    const report = buildDebugLogReport({ incident: fallbackIncident() });
+    assert.match(report, /Failure reason: JSON did not parse/);
+    assert.match(report, /logging is turned off in Settings → Diagnostics/);
+});
+
+test("I6 the copied incident report carries the context and every field", () => {
+    reset();
+    setDebugLogContext({ round: "4", model: "gemini-3.5-flash-lite", provider: "Gemini", playerCountry: "France" });
+    const report = buildIncidentReport(fallbackIncident());
+    assert.match(report, /^OPEN HISTORIA — AI TURN FELL BACK$/m);
+    assert.match(report, /AI provider: Gemini/);
+    assert.match(report, /Player polity: France/);
+    // No header to deduplicate against, so the round stays.
+    assert.match(report, /^Round: 4$/m);
+    assert.match(report, /Raw model response: \{"events": \[/);
+    assert.equal(buildIncidentReport(null), "");
+});
+
+test("I7 the filename says what the log was saved for", () => {
+    assert.match(debugLogFilename("turn-fallback"), /^open-historia-log-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-turn-fallback\.txt$/);
+    assert.match(debugLogFilename(), /^open-historia-log-[\dT-]+\.txt$/);
+    assert.match(debugLogFilename("Advisor error!"), /-advisor-error\.txt$/);
 });
