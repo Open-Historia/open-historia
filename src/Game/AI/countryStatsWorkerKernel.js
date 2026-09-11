@@ -649,7 +649,19 @@ const buildStatsWorkerMiddleContext = ({
   };
 };
 
-export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioCatalog = [], fallbackCatalog = [] } = {}) => {
+// The one implementation of the Stats territorial basis. The worker runs it
+// straight through; the main-thread fallback (gameplay.js, when no worker is
+// available) passes `pause`, an async UI budget awaited inside the per-region
+// loops, because on a 4,848-region map this takes ~850 ms and must not freeze the
+// page. `debug` turns on the full component-plan dump.
+export const buildTargetStatsTerritorialBasisKernel = async ({
+  bundle,
+  code,
+  scenarioCatalog = [],
+  fallbackCatalog = [],
+  pause = null,
+  debug = false,
+} = {}) => {
   const world = bundle?.world || {};
   const target = canonicalStatsPolity(code, world);
   if (!target) {
@@ -712,6 +724,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
       });
     }
 
+    if (pause) await pause();
   }
 
   const mergedCatalog = renderedCatalog.length ? [] : normalizeArray(fallbackCatalog);
@@ -813,6 +826,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   };
 
   for (let catalogIndex = 0; catalogIndex < catalog.length; catalogIndex += 1) {
+    if (pause) await pause();
     const region = catalog[catalogIndex];
     const regionId = normalizeString(region?.id);
     const baseGeography = normalizeString(region?.baseGeography) || normalizeString(region?.name) || regionId;
@@ -885,6 +899,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   let lifecycleEstablished = false;
   let foundingTerritoryEstablished = false;
   for (const event of normalizeArray(bundle?.events)) {
+    if (pause) await pause();
     const changes = normalizeArray(event?.impacts?.polityChanges);
     const establishesTarget = changes.some((change) => {
       const operation = normalizeString(change?.operation).toLowerCase();
@@ -1033,8 +1048,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
   console.info(
     `[stats 8B.2.18.1] ${target}: ${plannedRows.length} authoritative live component(s) -> ${macroPlan.length} bounded demographic macro bucket(s) (${mode}); AI output no longer scales with province count.`,
   );
-  // eslint-disable-next-line no-constant-condition
-  if (false) {
+  if (debug) {
     console.debug(
       `[stats 8B.2.18.1 debug] ${target}: full authoritative component plan`,
       plannedRows.map((row) => ({
@@ -1125,8 +1139,7 @@ export const buildTargetStatsTerritorialBasisKernel = ({ bundle, code, scenarioC
 
   if (referenceLines.length) {
     console.info(`[stats 8B.2.18.1] ${target}: ${referenceLines.length} donor/reference component anchor(s) available.`);
-    // eslint-disable-next-line no-constant-condition
-    if (false) {
+    if (debug) {
       console.debug(`[stats 8B.2.18.1 debug] ${target}: donor/reference component anchors`, referenceLines);
     }
   }
@@ -1270,7 +1283,7 @@ export const projectCountryStatsScenarioCatalog = (geojson) => {
   return entries;
 };
 
-export const prepareCountryStatsKernel = (payload = {}) => {
+export const prepareCountryStatsKernel = async (payload = {}) => {
   const common = {
     bundle: payload.bundle || {},
     code: payload.code || "",
@@ -1278,7 +1291,7 @@ export const prepareCountryStatsKernel = (payload = {}) => {
     fallbackCatalog: payload.fallbackCatalog || [],
   };
 
-  const territorialBasis = buildTargetStatsTerritorialBasisKernel(common);
+  const territorialBasis = await buildTargetStatsTerritorialBasisKernel(common);
   return {
     territorialBasis,
     dossier: buildTargetDossierKernel(common),
